@@ -7,7 +7,7 @@
 //! refuses a premise IRI the workspace IRI parser does not read as absolute, naming it,
 //! and each one still accepts the neighbouring absolute IRI.
 
-use purrdf_validate::regime::consistency_to_string;
+use purrdf_validate::regime::{ReasoningError, consistency_to_string};
 use purrdf_validate::{
     MaterializeLimits, certain_answers_to_string, check_premise_iris, graph_entails_to_string,
     materialize_to_nquads_string_with, premise_import_map,
@@ -21,7 +21,10 @@ const PATTERN: &str = "?s <http://example.org/p> ?o .\n";
 const REFUSED: [&str; 4] = ["::bad", "lib", "../lib", ""];
 
 /// Every service that takes `premise_iris`, run over `premise` with nothing imported.
-fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
+fn every_service(
+    premise: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> [(&'static str, Result<(), ReasoningError>); 5] {
     let limits = MaterializeLimits::default();
     let premise_iris = [premise];
     [
@@ -31,12 +34,20 @@ fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
         ),
         (
             "materialize_to_nquads_string_with",
-            materialize_to_nquads_string_with("rdfs", DOC, "", &[], &premise_iris, &limits)
-                .map(drop),
+            materialize_to_nquads_string_with(
+                "rdfs",
+                DOC,
+                "",
+                &[],
+                &premise_iris,
+                &limits,
+                control,
+            )
+            .map(drop),
         ),
         (
             "consistency_to_string",
-            consistency_to_string(DOC, &[], &premise_iris, 0, 0).map(drop),
+            consistency_to_string(DOC, &[], &premise_iris, 0, 0, control).map(drop),
         ),
         (
             "certain_answers_to_string",
@@ -52,10 +63,17 @@ fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
 #[test]
 fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
     for premise in REFUSED {
-        for (service, outcome) in every_service(premise) {
+        for (service, outcome) in every_service(
+            premise,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             let error = outcome.expect_err(&format!("{service} accepted premise IRI {premise:?}"));
             assert!(
-                error.contains("premise IRI") && error.contains(&format!("{premise:?}")),
+                error.to_string().contains("premise IRI")
+                    && error.to_string().contains(&format!("{premise:?}")),
                 "{service}: {premise:?}: {error}"
             );
         }
@@ -64,7 +82,10 @@ fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
 
 #[test]
 fn an_absolute_premise_iri_is_accepted_by_every_service() {
-    for (service, outcome) in every_service(ONTOLOGY) {
+    for (service, outcome) in every_service(
+        ONTOLOGY,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         outcome.unwrap_or_else(|error| panic!("{service} refused {ONTOLOGY:?}: {error}"));
     }
     // And an import of the premise's own IRI still resolves in place, which is what the
@@ -84,13 +105,24 @@ fn the_presentation_nests_the_iri_parser_condition() {
     ] {
         let error = check_premise_iris(&[ONTOLOGY, premise]).expect_err(premise);
         assert_eq!(error.iri(), premise);
+        let original = purrdf_validate::native_error::to_json(&error)
+            .expect("the original premise refusal is inspectable");
+        assert_eq!(original["code"].as_str(), Some("premise-iri-not-absolute"));
+        assert_eq!(original["fields"]["iri"]["value"].as_str(), Some(premise));
+        assert_eq!(
+            original["fields"]["cause"]["value"],
+            purrdf_validate::native_error::to_json(error.cause())
+                .expect("the original IRI condition is inspectable")
+        );
         let presentation = error.presentation();
         assert_eq!(presentation.message_id(), "premise-iri-not-absolute");
         // The message every host renders IS the presentation's English, and it is the
         // string the shared boundary refuses with.
         assert_eq!(presentation.english(), error.to_string());
         assert_eq!(
-            premise_import_map(&[], &[premise]).expect_err(premise),
+            premise_import_map(&[], &[premise])
+                .expect_err(premise)
+                .to_string(),
             error.to_string()
         );
         let nested = presentation.detail().expect("the IRI parser's condition");
@@ -123,8 +155,8 @@ fn every_absolute_premise_iri_passes_the_check() {
 fn premise_iris_are_judged_before_the_import_table() {
     // Both arguments are bad; the premise IRI is the one reported, on every host.
     let error = premise_import_map(&[("lib", DOC)], &["::bad"]).expect_err("two bad arguments");
-    assert!(error.contains("premise IRI"), "{error}");
+    assert!(error.to_string().contains("premise IRI"), "{error}");
     // The neighbour: with the premise IRI fixed, the import table's own refusal surfaces.
     let error = premise_import_map(&[("lib", DOC)], &[ONTOLOGY]).expect_err("a relative key");
-    assert!(error.contains("import key <"), "{error}");
+    assert!(error.to_string().contains("import key <"), "{error}");
 }

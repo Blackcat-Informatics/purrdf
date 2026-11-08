@@ -46,6 +46,7 @@
 //! Fixtures use `example.org` throughout; every block tag and stratum IRI below
 //! is fixture configuration, never a minted vocabulary.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -54,10 +55,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, CompiledRetrieval, CrossingRank, DecayRule, DepthCause,
-    DomainTag, DuplicatePolicy, ExclusionVerdict, Fixed, FusedRow, FusionError, FusionProfile,
+    DomainTag, DuplicatePolicy, ExclusionVerdict, FusedRow, FusionError, FusionProfile,
     FusionResult, FusionTrailer, Iri, PfAttestation, Plan, PlanId, PlannedResolution,
     ProducerReceipt, ProducerStatus, ProtocolError, RECIP_K, RankFidelity, RankedRow, RankedStream,
-    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, SearchError,
+    RankedStreamAdapter, ReadBound, RequestTerm, RetrievalRequest, RowBlock, Score, SearchError,
     Statistics, StratumUnit, StreamContract, Term, TopK, compile, contribution_under, execute,
     fuse, observed_resolution, plan, search, threshold_at,
 };
@@ -74,7 +75,7 @@ mod lookup;
 #[path = "support/registry.rs"]
 mod registry;
 
-use lookup::{domain_tag, scored, strata};
+use lookup::{ceiling_at, domain_tag, scored, strata};
 use purrdf_retrieval::block_on;
 use purrdf_retrieval::fixture::iri;
 use registry::kernel_iri;
@@ -115,8 +116,8 @@ fn ex(suffix: &str) -> String {
 /// recomputed in floating point disagrees with it at exactly the boundary this
 /// file is about — the rank where a doubled threshold ties a single lower bound
 /// instead of falling below it.
-fn sum_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Fixed {
-    threshold_at(decay, weights, rank).expect("fixture thresholds are in range")
+fn sum_at(decay: DecayRule, weights: &[Score], rank: u64) -> Score {
+    threshold_at(decay, PRECISION_12, weights, rank).expect("fixture thresholds are in range")
 }
 
 /// The smallest head rank `r` at which a candidate sitting at `at_rank` in every
@@ -137,15 +138,21 @@ fn sum_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Fixed {
 /// A stratum that names the candidate is also a stratum that shares its block,
 /// so `naming ⊆ sharing` for every fixture here; the two are separate arguments
 /// because the gap between them is the whole phenomenon.
-fn crossing_rank_at(decay: DecayRule, naming: &[Fixed], at_rank: u64, sharing: &[Fixed]) -> u64 {
+fn crossing_rank_at(
+    decay: DecayRule,
+    precision: purrdf_retrieval::Precision,
+    naming: &[Score],
+    at_rank: u64,
+    sharing: &[Score],
+) -> u64 {
     crossed(purrdf_retrieval::crossing_rank_at(
-        decay, naming, at_rank, sharing,
+        decay, precision, naming, at_rank, sharing,
     ))
 }
 
 /// [`crossing_rank_at`] for the head of a stream: the candidate at rank one.
-fn crossing_rank(decay: DecayRule, naming: &[Fixed], sharing: &[Fixed]) -> u64 {
-    crossing_rank_at(decay, naming, 1, sharing)
+fn crossing_rank(decay: DecayRule, naming: &[Score], sharing: &[Score]) -> u64 {
+    crossing_rank_at(decay, PRECISION_12, naming, 1, sharing)
 }
 
 /// The rank a crossing this file expects to exist reports.
@@ -171,7 +178,11 @@ const fn decay() -> DecayRule {
 #[test]
 fn a_candidate_whose_block_only_its_namer_admits_crosses_at_the_second_rank() {
     assert_eq!(
-        crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE]),
+        crossing_rank(
+            decay(),
+            &[PRECISION_12.score(PRECISION_12.scale())],
+            &[PRECISION_12.score(PRECISION_12.scale())]
+        ),
         2,
         "one namer bounded by its own head alone is beaten by the next rank down"
     );
@@ -185,8 +196,14 @@ fn a_candidate_both_sharers_named_crosses_at_the_second_rank_too() {
     assert_eq!(
         crossing_rank(
             decay(),
-            &[Fixed::ONE, Fixed::ONE],
-            &[Fixed::ONE, Fixed::ONE]
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ],
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ]
         ),
         2,
         "a candidate that collected from every stream admitting its block is \
@@ -207,7 +224,14 @@ fn a_candidate_both_sharers_named_crosses_at_the_second_rank_too() {
 #[test]
 fn a_candidate_one_of_two_sharers_named_crosses_only_past_the_smoothing_constant() {
     assert_eq!(
-        crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
+        crossing_rank(
+            decay(),
+            &[PRECISION_12.score(PRECISION_12.scale())],
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ]
+        ),
         63,
         "a lower bound measured against twice its own weight has to outlast the \
          smoothing constant"
@@ -216,8 +240,15 @@ fn a_candidate_one_of_two_sharers_named_crosses_only_past_the_smoothing_constant
     // The tie at the rank below, stated as the arithmetic rather than as a
     // claim about it: this is why the answer is 63 and not 62.
     assert_eq!(
-        sum_at(decay(), &[Fixed::ONE], 1),
-        sum_at(decay(), &[Fixed::ONE, Fixed::ONE], 62),
+        sum_at(decay(), &[PRECISION_12.score(PRECISION_12.scale())], 1),
+        sum_at(
+            decay(),
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ],
+            62
+        ),
         "at the rank below the crossing the two sides are equal, and a strict \
          comparison does not emit on equality"
     );
@@ -875,6 +906,7 @@ fn generational_registry(
                 stratum: kernel_iri(stratum.as_str()),
                 accepted_terms: accepted_terms(predicate),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -928,9 +960,9 @@ fn fixture_statistics() -> FixtureStatistics {
 fn fixture_profile() -> FusionProfile {
     let weights = strata()
         .into_iter()
-        .map(|stratum| (stratum, Fixed::ONE))
+        .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    FusionProfile::with_decay(weights, decay()).expect("the fixture profile is valid")
+    FusionProfile::with_decay(weights, decay(), PRECISION_12).expect("the fixture profile is valid")
 }
 
 /// The emitted row ceiling of one compiled unit, parsed out of the text the
@@ -1041,7 +1073,7 @@ impl Measured {
 
     /// The answer, as the thing two reads of one configuration have to agree on:
     /// the rows, their scores, and their order.
-    fn answer(&self) -> Vec<(String, Fixed)> {
+    fn answer(&self) -> Vec<(String, Score)> {
         self.rows
             .iter()
             .map(|row| (row.entity.as_str().to_owned(), row.score))
@@ -1298,16 +1330,6 @@ fn render(config: Configuration, measured: &Measured) -> String {
     )
 }
 
-/// The status a fusion that stopped a live stream writes, at the contribution
-/// its head was sitting on. Computed from the profile's own law over the rank
-/// the run really reached, never read back out of the trailer.
-fn ceiling_at(rank: u64) -> ProducerStatus {
-    ProducerStatus::CeilingReached {
-        bound: contribution_under(decay(), Fixed::ONE, rank)
-            .expect("the fixture contribution is in range"),
-    }
-}
-
 /// **The control, and the solved case.** Different blocks, different candidates.
 ///
 /// Every candidate lies in exactly one declared block, so the planner's merge
@@ -1365,7 +1387,13 @@ fn distinct_blocks_disjoint_results_read_only_what_the_bound_needs() {
         "disjoint blocks mean one namer per candidate — {report}"
     );
     assert_eq!(
-        crossing_rank_at(decay(), &[Fixed::ONE], deepest, &[Fixed::ONE]),
+        crossing_rank_at(
+            decay(),
+            PRECISION_12,
+            &[PRECISION_12.score(PRECISION_12.scale())],
+            deepest,
+            &[PRECISION_12.score(PRECISION_12.scale())]
+        ),
         measured.both("the ranks pulled", &measured.ranks_pulled),
         "the threshold derivation predicts the read — {report}"
     );
@@ -1440,9 +1468,16 @@ fn shared_block_intersecting_results_answer_at_the_sixth_rank_reading_six_rows()
     assert_eq!(
         crossing_rank_at(
             decay(),
-            &[Fixed::ONE, Fixed::ONE],
+            PRECISION_12,
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ],
             deepest,
-            &[Fixed::ONE, Fixed::ONE]
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ]
         ),
         measured.both("the ranks pulled", &measured.ranks_pulled),
         "the threshold derivation predicts the read — {report}"
@@ -1518,7 +1553,16 @@ fn shared_block_disjoint_results_drain_both_streams_unbounded_control() {
         "the fifth row of an alternating answer — {report}"
     );
     assert_eq!(
-        crossing_rank_at(decay(), &[Fixed::ONE], deepest, &[Fixed::ONE, Fixed::ONE]),
+        crossing_rank_at(
+            decay(),
+            PRECISION_12,
+            &[PRECISION_12.score(PRECISION_12.scale())],
+            deepest,
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ]
+        ),
         66,
         "the threshold alone would have licensed a stop at the sixty-sixth \
          rank; finality is what forced the drain — {report}"
@@ -1596,7 +1640,7 @@ fn a_lookup_answered_by_a_moved_index_is_refused_and_one_at_the_pinned_generatio
         stable.ranks_pulled.values().sum::<u64>() < control.ranks_pulled.values().sum::<u64>(),
         "and its answers shortened the read — {report}"
     );
-    let answer = |measured: &Measured| -> Vec<(String, Fixed)> {
+    let answer = |measured: &Measured| -> Vec<(String, Score)> {
         measured
             .rows
             .iter()
@@ -1684,7 +1728,7 @@ fn a_lookup_from_an_index_found_short_is_refused_and_one_from_the_attested_short
         asked.fused_lookups.values().sum::<u64>() > 0,
         "the short index was asked, and answered — {report}"
     );
-    let answer = |measured: &Measured| -> Vec<(String, Fixed)> {
+    let answer = |measured: &Measured| -> Vec<(String, Score)> {
         measured
             .rows
             .iter()
@@ -1714,7 +1758,7 @@ fn the_declaration_alone_moves_every_measured_number() {
 
     // First the sameness, so the difference below is known to come from the
     // declaration: the two runs return the same answer.
-    let answer = |measured: &Measured| -> Vec<(String, Fixed)> {
+    let answer = |measured: &Measured| -> Vec<(String, Score)> {
         measured
             .rows
             .iter()
@@ -2029,6 +2073,7 @@ fn declared_registry(strata: &[Declared]) -> PropertyFunctionRegistry<'static> {
                 stratum: kernel_iri(entry.stratum().as_str()),
                 accepted_terms: accepted_terms(entry.name),
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: entry.duplicates,
                 fidelity: RankFidelity::EXACT,
@@ -2070,9 +2115,9 @@ fn declared_statistics(strata: &[Declared]) -> FixtureStatistics {
 fn declared_profile(strata: &[Declared]) -> FusionProfile {
     let weights = strata
         .iter()
-        .map(|entry| (entry.stratum(), Fixed::ONE))
+        .map(|entry| (entry.stratum(), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    FusionProfile::with_decay(weights, decay()).expect("the fixture profile is valid")
+    FusionProfile::with_decay(weights, decay(), PRECISION_12).expect("the fixture profile is valid")
 }
 
 /// What one run of a declared configuration is measured on.
@@ -2082,7 +2127,7 @@ struct DeclaredRun {
     /// The cause the plan itself reports for each of those depths.
     causes: BTreeMap<Iri, DepthCause>,
     /// The answer, as the thing two runs have to agree on: rows, scores, order.
-    answer: Vec<(String, Fixed)>,
+    answer: Vec<(String, Score)>,
 }
 
 /// Run one declared configuration through `plan` → `compile` → `execute` → `fuse`
@@ -2190,7 +2235,7 @@ fn assert_depths(what: &str, run: &DeclaredRun, expected: &[(&Declared, u32, Dep
 }
 
 /// The top five rows of `run`'s answer.
-fn top_five(run: &DeclaredRun) -> Vec<(String, Fixed)> {
+fn top_five(run: &DeclaredRun) -> Vec<(String, Score)> {
     run.answer.iter().take(5).cloned().collect()
 }
 
@@ -2519,7 +2564,7 @@ struct OracleStratum {
     name: &'static str,
     /// The blocks this stream declares. Every item it holds lies in one of them.
     tags: Vec<&'static str>,
-    weight: Fixed,
+    weight: Score,
     /// Its items, in rank order.
     items: Vec<String>,
 }
@@ -2605,7 +2650,8 @@ fn oracle_profile(instance: &Instance) -> FusionProfile {
         .iter()
         .map(|entry| (oracle_stratum_iri(entry.name), entry.weight))
         .collect();
-    FusionProfile::with_decay(weights, decay()).expect("the generated profile is valid")
+    FusionProfile::with_decay(weights, decay(), PRECISION_12)
+        .expect("the generated profile is valid")
 }
 
 /// The instance's streams, each cut to `depths[index]` rows and declaring that
@@ -2649,6 +2695,7 @@ fn oracle_streams(instance: &Instance, depths: &[usize]) -> Vec<(Iri, ScriptedSt
                         rows_emitted: emitted,
                     },
                     contract: StreamContract::new(
+                        purrdf_sparql_eval::RankLaw::Ordinal,
                         DuplicatePolicy::Unique,
                         RankFidelity::EXACT,
                         CandidateDomains::within(entry.tags.iter().map(|tag| {
@@ -2736,13 +2783,13 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 8),
                 },
                 OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("person", 1, 8),
                 },
             ],
@@ -2756,13 +2803,13 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 8),
                 },
                 OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 8).into_iter().rev().collect(),
                 },
             ],
@@ -2775,13 +2822,13 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 8),
                 },
                 OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 5, 8),
                 },
             ],
@@ -2795,19 +2842,19 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 6),
                 },
                 OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("person", 1, 6),
                 },
                 OracleStratum {
                     name: "prior",
                     tags: vec![BLOCK_DOCS, BLOCK_PEOPLE],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 3)
                         .into_iter()
                         .zip(items("person", 1, 3))
@@ -2825,13 +2872,13 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 4),
                 },
                 OracleStratum {
                     name: "people",
                     tags: vec![BLOCK_PEOPLE],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("person", 1, 12),
                 },
             ],
@@ -2845,13 +2892,13 @@ fn instances() -> Vec<Instance> {
                 OracleStratum {
                     name: "docs",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 1, 8),
                 },
                 OracleStratum {
                     name: "titles",
                     tags: vec![BLOCK_DOCS],
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     items: items("doc", 100, 8),
                 },
             ],
@@ -3132,7 +3179,16 @@ fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
         deepest, 3,
         "the fifth row of an alternating answer — {report}"
     );
-    let licensed = crossing_rank_at(decay(), &[Fixed::ONE], deepest, &[Fixed::ONE, Fixed::ONE]);
+    let licensed = crossing_rank_at(
+        decay(),
+        PRECISION_12,
+        &[PRECISION_12.score(PRECISION_12.scale())],
+        deepest,
+        &[
+            PRECISION_12.score(PRECISION_12.scale()),
+            PRECISION_12.score(PRECISION_12.scale()),
+        ],
+    );
     assert_eq!(
         measured.both("the ranks pulled", &measured.ranks_pulled),
         licensed,
@@ -3202,7 +3258,16 @@ fn membership_lookups_stop_the_drain_where_the_threshold_licenses() {
 /// every other use reads it from here.
 fn stopping_read_depth() -> u64 {
     let k = u64::try_from(TOP_K.get()).expect("the fixture bound fits a u64");
-    crossing_rank_at(decay(), &[Fixed::ONE], k, &[Fixed::ONE, Fixed::ONE])
+    crossing_rank_at(
+        decay(),
+        PRECISION_12,
+        &[PRECISION_12.score(PRECISION_12.scale())],
+        k,
+        &[
+            PRECISION_12.score(PRECISION_12.scale()),
+            PRECISION_12.score(PRECISION_12.scale()),
+        ],
+    )
 }
 
 /// Plan and compile one configuration exactly as [`search`] does, for the
@@ -3313,6 +3378,7 @@ fn planned_stopping_ranks(config: Configuration) -> u64 {
                 .expect("the fixture profile weights every stratum");
             crossing_rank_at(
                 decay(),
+                PRECISION_12,
                 &[own],
                 k,
                 &vec![own; resolution.sharing_weights.len()],
@@ -3367,12 +3433,27 @@ fn the_lookups_answer_the_drained_configuration_reading_only_the_ranks_the_fusio
     // The closed form, as the arithmetic: the tie one rank shallower, and the
     // crossing at the rank the ceiling is.
     assert_eq!(
-        sum_at(decay(), &[Fixed::ONE], 5),
-        sum_at(decay(), &[Fixed::ONE, Fixed::ONE], 70),
+        sum_at(decay(), &[PRECISION_12.score(PRECISION_12.scale())], 5),
+        sum_at(
+            decay(),
+            &[
+                PRECISION_12.score(PRECISION_12.scale()),
+                PRECISION_12.score(PRECISION_12.scale())
+            ],
+            70
+        ),
         "at rank seventy both heads together tie one stream's fifth contribution"
     );
     assert!(
-        sum_at(decay(), &[Fixed::ONE], 5) > sum_at(decay(), &[Fixed::ONE, Fixed::ONE], 71),
+        sum_at(decay(), &[PRECISION_12.score(PRECISION_12.scale())], 5)
+            > sum_at(
+                decay(),
+                &[
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    PRECISION_12.score(PRECISION_12.scale())
+                ],
+                71
+            ),
         "and at seventy-one they fall strictly below it"
     );
     assert_eq!(
@@ -3782,18 +3863,21 @@ fn reported_rows(measured: &Measured, stratum: &Iri) -> u64 {
 /// its own, so two producers declaring one block share a threshold and two
 /// declaring different ones do not. This is the test's independent derivation of
 /// the set the planner surfaces, and the two are asserted equal.
-fn declared_sharing(config: Configuration) -> Vec<Fixed> {
+fn declared_sharing(config: Configuration) -> Vec<Score> {
     match config.blocks {
-        Blocks::Distinct => vec![Fixed::ONE],
-        Blocks::Shared | Blocks::Undeclared => vec![Fixed::ONE, Fixed::ONE],
+        Blocks::Distinct => vec![PRECISION_12.score(PRECISION_12.scale())],
+        Blocks::Shared | Blocks::Undeclared => vec![
+            PRECISION_12.score(PRECISION_12.scale()),
+            PRECISION_12.score(PRECISION_12.scale()),
+        ],
     }
 }
 
 /// The weights of the strata that named the deepest row of an answer, as the
 /// threshold derivation takes them. Every stratum in this file carries unit
 /// weight, so this is the count read off the answer.
-fn naming_weights(measured: &Measured) -> Vec<Fixed> {
-    vec![Fixed::ONE; measured.namers_of_deepest_row()]
+fn naming_weights(measured: &Measured) -> Vec<Score> {
+    vec![PRECISION_12.score(PRECISION_12.scale()); measured.namers_of_deepest_row()]
 }
 
 /// **The two-run oracle for `ranks_pulled` and the read-work figure.**
@@ -4079,8 +4163,14 @@ fn the_plan_surfaces_the_crossing_and_it_predicts_the_read_that_reaches_it() {
             // The derivation, run here, against the derivation the plan
             // surfaces. Both are the library's; what is under test is that the
             // planner feeds it the right terms.
-            let predicted = crossing_rank_at(decay(), &naming, deepest, &sharing);
-            let surfaced = crossing_rank_at(decay(), &naming, deepest, &planned.sharing_weights);
+            let predicted = crossing_rank_at(decay(), PRECISION_12, &naming, deepest, &sharing);
+            let surfaced = crossing_rank_at(
+                decay(),
+                PRECISION_12,
+                &naming,
+                deepest,
+                &planned.sharing_weights,
+            );
             assert_eq!(
                 predicted,
                 surfaced,
@@ -4163,7 +4253,7 @@ fn a_host_learns_the_crossing_its_declarations_condemn_it_to_without_reading_a_r
                 .expect("the fixture profile weights every planned stratum");
             answers.push(crossing_rank(
                 decay(),
-                &[Fixed::ONE],
+                &[PRECISION_12.score(PRECISION_12.scale())],
                 &resolution.sharing_weights,
             ));
         }
@@ -4176,10 +4266,32 @@ fn a_host_learns_the_crossing_its_declarations_condemn_it_to_without_reading_a_r
     assert_eq!(
         answers,
         vec![
-            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE]),
-            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE]),
-            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
-            crossing_rank(decay(), &[Fixed::ONE], &[Fixed::ONE, Fixed::ONE]),
+            crossing_rank(
+                decay(),
+                &[PRECISION_12.score(PRECISION_12.scale())],
+                &[PRECISION_12.score(PRECISION_12.scale())]
+            ),
+            crossing_rank(
+                decay(),
+                &[PRECISION_12.score(PRECISION_12.scale())],
+                &[PRECISION_12.score(PRECISION_12.scale())]
+            ),
+            crossing_rank(
+                decay(),
+                &[PRECISION_12.score(PRECISION_12.scale())],
+                &[
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    PRECISION_12.score(PRECISION_12.scale())
+                ]
+            ),
+            crossing_rank(
+                decay(),
+                &[PRECISION_12.score(PRECISION_12.scale())],
+                &[
+                    PRECISION_12.score(PRECISION_12.scale()),
+                    PRECISION_12.score(PRECISION_12.scale())
+                ]
+            ),
         ],
         "a declaration that shares a block condemns the read to outlast the \
          smoothing constant, and the plan says so before anything runs"
@@ -4313,8 +4425,9 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
     );
 
     // Every term of the expected text, from a source that is not the trailer.
-    // The collision count is the one term that is a zero, and it is DERIVED
-    // rather than copied: this profile still separates adjacent ranks far past
+    // The ordinal declaration makes row and rank counts equal and shared ranks
+    // zero. The collision count is also derived rather than copied: this
+    // profile still separates adjacent ranks far past
     // anything this run pulls, so no adjacent pair it read could have collided.
     // (The oracle that shows the counter moves off zero is in `fusion.rs`, over
     // a profile that collides inside the stream it fuses; there is no such
@@ -4336,6 +4449,7 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
     let deepest = measured.deepest_emitted_rank();
     let predicted_ranks = crossing_rank_at(
         decay(),
+        PRECISION_12,
         &naming_weights(&measured),
         deepest,
         &declared_sharing(SHARED_BLOCK_INTERSECTING_RESULTS_WITH_LOOKUPS),
@@ -4349,7 +4463,8 @@ fn the_rendered_observed_resolution_carries_every_counter_a_caller_pays_for() {
             .map_or_else(|| "beyond-any-plan".to_owned(), |rank| rank.to_string());
         writeln!(
             expected,
-            "{stratum} separates_to={separates_to} ranks_pulled={predicted_ranks} \
+            "{stratum} rows_pulled={predicted_ranks} shared_ranks_observed=0 \
+             separates_to={separates_to} ranks_pulled={predicted_ranks} \
              collisions_observed=0 exclusion_lookups={lookups} \
              rows_materialised={rows}",
             lookups = measured.served_lookups[&stratum],

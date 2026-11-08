@@ -220,7 +220,7 @@ impl PageCounts {
     /// [`SummaryDefect`] rather than panicking: `page` arrives from a
     /// [`PageProvider`](super::PageProvider), and the one entry point whose whole
     /// purpose is certifying content it does not trust must return a typed refusal.
-    fn accumulate(page: &RdfDataset) -> Result<Self, SummaryDefect> {
+    fn accumulate(page: &RdfDataset) -> Result<Self, SummarySealError> {
         let term_count = page.term_count();
         let graphs: Box<[TermId]> = page.named_graphs().collect();
 
@@ -441,6 +441,8 @@ fn graph_index(graphs: &[TermId], g: TermId) -> Result<usize, SummaryDefect> {
 /// silent bug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PageSummary {
+    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
+    pub(super) intervals: [Vec<crate::annotation_range::ValueInterval<TermId>>; 2],
     /// Complete immutable statistics in the page's original local dictionary.
     pub(super) statistics: super::super::statistics::LocalStatistics,
     /// The page's named graphs, ascending — exactly `RdfDataset::named_graphs()`
@@ -523,6 +525,11 @@ impl PageSummary {
         let mut admission = Resident;
         let statistics = source.clone_admitted(&mut Memory::new(&mut admission))?;
         Ok(Self {
+            snapshot_identity: page.frozen_snapshot_identity(),
+            intervals: [
+                crate::annotation_range::seal_intervals(page, page.quads())?,
+                crate::annotation_range::seal_intervals(page, page.annotation_quads())?,
+            ],
             statistics,
             subject: IntVector::from_values(&counts.subject),
             predicate: IntVector::from_values(&counts.predicate),
@@ -553,7 +560,7 @@ impl PageSummary {
     /// # Errors
     ///
     /// [`SummaryDefect`], exactly as [`seal`](Self::seal).
-    pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, SummaryDefect> {
+    pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, SummarySealError> {
         Ok(PageCounts::accumulate(page)?.digest(page.predicate_statistics()))
     }
 
@@ -575,7 +582,9 @@ impl PageSummary {
     /// walk.
     #[must_use]
     pub(crate) fn first_disagreeing_field(&self, other: &Self) -> Option<&'static str> {
-        let checks: [(&'static str, bool); 13] = [
+        // Report the specific structural drift before the encompassing identity:
+        // any content change also changes that identity, obscuring useful fields.
+        let checks: [(&'static str, bool); 15] = [
             ("graphs", self.graphs == other.graphs),
             ("subject", self.subject == other.subject),
             ("predicate", self.predicate == other.predicate),
@@ -607,6 +616,14 @@ impl PageSummary {
                 self.default_annotation_rows == other.default_annotation_rows,
             ),
             ("statistics", self.statistics == other.statistics),
+            (
+                "annotation value intervals",
+                self.intervals == other.intervals,
+            ),
+            (
+                "snapshot content identity",
+                self.snapshot_identity == other.snapshot_identity,
+            ),
         ];
         checks
             .into_iter()

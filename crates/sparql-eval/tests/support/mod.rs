@@ -9,6 +9,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod boundary_joins;
+pub mod fallible;
 #[cfg(target_os = "linux")]
 pub mod governor_counts;
 pub mod governor_workloads;
@@ -225,7 +226,7 @@ pub fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlRe
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
 }
@@ -390,6 +391,11 @@ impl PollCountdown {
             polls: AtomicUsize::new(0),
             latched: AtomicBool::new(false),
         })
+    }
+
+    /// Polls observed before the signal latched, including its firing poll.
+    pub fn polls(&self) -> usize {
+        self.polls.load(Ordering::Relaxed)
     }
 }
 

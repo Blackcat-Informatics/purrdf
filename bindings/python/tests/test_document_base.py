@@ -136,7 +136,7 @@ def test_query_triples_serialize_carries_the_same_base() -> None:
 def test_rdf_dataset_constructor_takes_the_base() -> None:
     dataset = purrdf.RdfDataset(RELATIVE_TURTLE, RdfFormat.TURTLE, base=BASE)
     assert dataset.quad_count() == 1
-    assert f"<{BASE}rel>" in dataset.to_nquads()
+    assert f"<{BASE}rel>" in dataset.to_nquads(canonical_search="1000000").value
 
     with pytest.raises(ValueError) as excinfo:
         purrdf.RdfDataset(RELATIVE_TURTLE, RdfFormat.TURTLE)
@@ -207,7 +207,7 @@ def test_the_base_is_the_same_parameter_across_parse_surfaces() -> None:
     )
     assert expected in purrdf.RdfDataset(
         RELATIVE_TURTLE, RdfFormat.TURTLE, base=BASE
-    ).to_nquads()
+    ).to_nquads(canonical_search="1000000").value
     assert {str(q.subject) for q in store} == {expected}
 
 
@@ -331,8 +331,8 @@ def test_dump_keeps_the_statement_layer_under_a_base_and_a_selection() -> None:
 
     # And it round-trips back to the same statement layer.
     back = purrdf.RdfDataset(dumped, RdfFormat.TRIG, base=BASE)
-    assert "reifies" in back.to_nquads()
-    assert "confidence" in back.to_nquads()
+    assert "reifies" in back.to_nquads(canonical_search="1000000").value
+    assert "confidence" in back.to_nquads(canonical_search="1000000").value
 
 
 def test_mutable_dump_keeps_the_statement_layer_under_a_base() -> None:
@@ -502,5 +502,5 @@ def test_dataset_checks_every_iri_position_and_the_constructor_too() -> None:
     assert len(seeded) == 1
     seeded.add(_quad(purrdf.BlankNode("notAbsolute"), _abs("p"), purrdf.Literal("../x")))
     assert len(seeded) == 2
-    seeded.canonicalize(purrdf.CanonicalizationAlgorithm.UNSTABLE)
+    seeded.canonicalize(canonical_search="1000000").value
     assert len(seeded) == 2

@@ -100,7 +100,7 @@
 //! Run with `--nocapture` for the scoreboard:
 //! `cargo test -p purrdf-shapes --test product_corpus_equivalence -- --nocapture`
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -338,7 +338,7 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
         &shapes_text,
         Some(&file_iri(&case.shapes_path)),
     )
-    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+    .map_err(|errors| format!("shapes graph parse error: {errors}"))?;
     // Under the case's own law, as the grading harness loads it: the 2017 entries
     // under the Recommendation, the SHACL 1.2 entries under the editor's draft.
     let shapes = purrdf_shapes::shapes::from_dataset_with_options(
@@ -386,7 +386,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&data_nt)
-        .map_err(|errors| format!("data graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| format!("data graph parse error: {errors}"))?;
 
     Ok(Loaded {
         shapes: Arc::new(shapes),
@@ -426,7 +426,10 @@ fn run_lane(shapes: &Shapes, data: &RdfDataset) -> LaneOutcome {
 fn classify(loaded: &Loaded) -> Bucket {
     let parsed = PreparedShapes::new(Arc::clone(&loaded.shapes));
 
-    let bytes = match parsed.to_product(&ShapesProfile::CORE) {
+    let bytes = match parsed.to_product(
+        &ShapesProfile::CORE,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         Ok(bytes) => bytes,
         Err(e) => return Bucket::Refused(e),
     };

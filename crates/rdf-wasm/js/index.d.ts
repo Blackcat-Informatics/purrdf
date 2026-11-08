@@ -107,6 +107,10 @@ export interface GovernorOptions {
   readonly maxScratchBytes?: GovernorCeiling | null;
   /** Requests issued to remote or federated endpoints. */
   readonly maxRemoteRequests?: GovernorCeiling | null;
+  /** Inclusive logical user-function depth; the default is thirty-two. */
+  readonly maxUdfDepth?: GovernorCeiling | null;
+  /** Remove the logical depth ceiling. Cannot be combined with maxUdfDepth. */
+  readonly unlimitedUdfDepth?: boolean;
   /** A cancellation bit the host can flip. The engine is handed a share of it. */
   readonly cancel?: CancellationToken | null;
 }
@@ -129,7 +133,7 @@ export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
  */
 export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
 
-export interface QueryOptions {
+interface EvaluationOptions {
   readonly base?: string | null;
   /**
    * The dated native XPath law `REGEX` and `REPLACE` evaluate under, by its stable name.
@@ -142,6 +146,11 @@ export interface QueryOptions {
    */
   readonly xpathRegex?: XPathRegexLaw | null;
 }
+
+export interface QueryOptions extends EvaluationOptions, QueryCoordinateOptions {}
+
+/** Exact execution coordinates apply to the complete UPDATE request. */
+export interface UpdateOptions extends EvaluationOptions, QueryCoordinateOptions {}
 
 /**
  * Anchors the additive `purrdf` provenance extension on a SELECT/ASK result
@@ -185,6 +194,9 @@ export interface GovernedQueryOptions
     GovernorOptions,
     AggregateNamespaceOption {}
 
+export interface GovernedUpdateOptions
+  extends UpdateOptions, GovernorOptions, AggregateNamespaceOption {}
+
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
@@ -207,15 +219,17 @@ export interface EntailmentQueryOptions extends GovernedQueryOptions {
   readonly premiseIris?: readonly string[] | null;
   /**
    * The closure's stored-fact limit for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, as
-   * `entailMaterialize` takes it; omitted, this target's default (131072). A closure past
+   * `entailMaterialize` takes it; omitted, no logical ceiling. A closure past
    * it throws naming `queryEntailmentGoverned's maxStoredFacts`.
    */
   readonly maxStoredFacts?: bigint | number | null;
   /**
-   * The closure's join-step limit (default 1048576); a closure past it throws naming
+   * The closure's join-step limit (unlimited when omitted); a closure past it throws naming
    * `queryEntailmentGoverned's maxJoinSteps`.
    */
   readonly maxJoinSteps?: bigint | number | null;
+  /** Maximum bytes of interned term spellings in the entailment closure. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -343,7 +357,21 @@ export interface PartialAnswers {
  * throwing it would discard the rows the budget already paid for and tell the caller the
  * engine misbehaved.
  */
+/** Actual execution coordinates; decimal seed strings retain every unsigned bit. */
+export type ExecutionReceipt =
+  | { readonly state: "not-started" }
+  | {
+      readonly state: "started";
+      readonly now: string;
+      readonly entropySeed: string;
+      readonly suppliedNow: boolean;
+      readonly suppliedEntropySeed: boolean;
+      readonly executionIdentity: string | null;
+      readonly snapshotIdentity: string | null;
+    };
+
 export interface QueryOutcome {
+  readonly executionReceipt: ExecutionReceipt;
   readonly isComplete: boolean;
   /** The COMPLETE result. Absent when a governor stopped the execution. */
   readonly result?: QueryResult;
@@ -373,6 +401,7 @@ export interface EntailmentQueryOutcome {
  * `isApplied === false` means NOTHING applied, never "not all of it applied".
  */
 export interface UpdateOutcome {
+  readonly executionReceipt: ExecutionReceipt;
   readonly isApplied: boolean;
   readonly tripped?: TrippedGovernor;
   readonly evidence: GovernorEvidence;
@@ -408,6 +437,7 @@ export interface QueryBindingRows extends IterableIterator<QueryBindingRow> {
 }
 
 export interface SelectResult {
+  readonly executionReceipt?: ExecutionReceipt;
   readonly kind: "select";
   readonly variables: string[];
   readonly rowCount: number;
@@ -417,14 +447,20 @@ export interface SelectResult {
 }
 
 export interface AskResult {
+  readonly executionReceipt?: ExecutionReceipt;
   readonly kind: "ask";
   readonly boolean: boolean;
 }
 
 export interface GraphResult {
+  readonly executionReceipt?: ExecutionReceipt;
   readonly kind: "graph";
   readonly dataset: Dataset;
 }
+
+export interface RawQueryResult { readonly body: string; readonly executionReceipt: ExecutionReceipt; }
+export interface RawQueryBytesResult { readonly body: Uint8Array; readonly executionReceipt: ExecutionReceipt; }
+export interface AppliedUpdateResult { readonly dataset: Dataset; readonly executionReceipt: ExecutionReceipt; }
 
 export type QueryResult = SelectResult | AskResult | GraphResult;
 
@@ -697,7 +733,7 @@ export class DataFactory {
 export class Dataset implements Iterable<Quad> {
   /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
   constructor(rememberEmptyGraphs?: boolean);
-  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean): Dataset;
+  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean, inputOptions?: string | null): Dataset;
   /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
   readonly rememberEmptyGraphs: boolean;
   static from(quads?: Iterable<Quad> | null): Dataset;
@@ -789,14 +825,14 @@ export class Dataset implements Iterable<Quad> {
    * `xpathRegex` selects the dated native XPath law `REGEX`/`REPLACE` evaluate under, as
    * {@link QueryOptions.xpathRegex} does.
    */
-  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null): string;
+  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null, now?: string | null, entropySeed?: bigint | number | null): RawQueryResult;
   /**
    * The asynchronous twin of `query`: the same document (SPARQL Results JSON for
    * SELECT/ASK, Turtle — TriG for a result carrying a named graph — for
    * CONSTRUCT/DESCRIBE), evaluated as an asynchronous job, so `options` can supply the
    * `SERVICE`/`LOAD` handlers and an `AbortSignal`. Needs JSPI — see `hasAsyncQueries`.
    */
-  queryAsync(sparql: string, options?: AsyncQueryOptions | null): Promise<string>;
+  queryAsync(sparql: string, options?: AsyncQueryOptions | null): Promise<RawQueryResult>;
   /**
    * This dataset's identity: unique within the wasm instance, fixed for its lifetime,
    * never reused.
@@ -824,8 +860,8 @@ export class Dataset implements Iterable<Quad> {
    * refusal is a thrown `Error` naming the cause; it never aborts the
    * module.
    */
-  canonicalize(): string;
-  isomorphic(other: Dataset): boolean;
+  canonicalize(canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<string>;
+  isomorphic(other: Dataset, canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<boolean>;
   toStream(): AsyncIterableIterator<Quad>;
   [Symbol.iterator](): IterableIterator<Quad>;
   free(): void;
@@ -932,12 +968,138 @@ export class ProjectionLift {
   free(): void;
 }
 
+/** A computed YAML source root and an ordinary mutable Dataset. */
+export class YamlSourceExport {
+  private constructor();
+  readonly root: string;
+  /** Move the Dataset out once. It survives freeing this result. */
+  takeDataset(): Dataset | undefined;
+  free(): void;
+}
+
+/** Original diagnostic-backed native failure and its retained admission. */
+export class YamlSourceCause {
+  private constructor();
+  /** Typed native fields, including exact codes and byte/line/column positions. */
+  readonly json: string;
+  free(): void;
+}
+
+export interface NativeDiagnosticFailure extends Error {
+  readonly code: string;
+  readonly diagnostic: object;
+  readonly nativeCauseJson?: string;
+  /** Free this owned cause when it is no longer needed. */
+  readonly nativeCause?: YamlSourceCause;
+}
+
+export interface YamlSourceFailure extends NativeDiagnosticFailure {}
+
+/**
+ * Expand original JSON-LD/YAML-LD bytes using closed version-one request JSON
+ * bytes, returning expanded JSON document text without an RDF dataset.
+ * Request decoding/context compilation precedes source capture. Buffers must be
+ * Uint8Array views over non-shared ArrayBuffer storage; detached views refuse.
+ * Host buffers/string glue, admitted bridge copies, request, native expansion
+ * and bounded output storage have separate authorities.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function expandDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Compact source bytes under the required output_context expression in the
+ * version-one request. Null is an explicit context reset. Input buffers and
+ * native error/cause ownership follow expandDocument. Output-context compilation
+ * follows expansion so output_base input uses the effective document base.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function compactDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Flatten source bytes, returning an expanded array when output_context is absent
+ * or null; a non-null expression applies ordinary compaction exactly once.
+ * Input buffers and native error/cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function flattenDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Frame separate source/frame bytes under a closed version-one request. The one
+ * format and Basic YAML profile govern both documents with separate native parses.
+ * Request checks/context compilation precede either admitted document capture.
+ * Output context comes only from the frame's own @context. Buffers, returned text
+ * and retained native-cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function frameDocument(source: Uint8Array, frame: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Export original YAML bytes under an explicit absolute source IRI and a closed
+ * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
+ * version, name, profile_version and vocabulary; bounds are optional.
+ *
+ * Rust checks the 16 KiB profile cap before copying profile bytes, decodes the
+ * profile, then checks its source-byte cap before copying source bytes. Captured
+ * buffers must be Uint8Array views over non-shared ArrayBuffer storage; detached
+ * or invalidated views throw. Copies use fallible admitted native storage held
+ * through the operation. Host buffers/string glue, bridge copies, Dataset
+ * ownership and native phase accounts remain separate.
+ *
+ * @throws {YamlSourceFailure | TypeError} Native refusals retain typed causes;
+ *   host buffer failures are caught exceptions and leave the instance reusable.
+ */
+export function yamlSourceExport(
+  source: Uint8Array,
+  sourceIri: string,
+  profileJson: Uint8Array,
+): YamlSourceExport;
+
+/**
+ * Reconstruct the current native Dataset snapshot under an explicit root/profile.
+ * Returns independently owned original bytes after native verification succeeds.
+ * Profile admission matches yamlSourceExport; snapshot and decode/reparse accounts
+ * remain separate. Later Dataset mutations cannot change the returned Uint8Array.
+ */
+export function yamlSourceReconstruct(
+  dataset: Dataset,
+  root: string,
+  profileJson: Uint8Array,
+): Uint8Array;
+
 /**
  * One closure of one document under one SPARQL entailment regime: the canonical
  * N-Quads and the byte-stable rendered reasoning report. Returned by
  * `entailMaterialize`.
  */
+/**
+ * Required canonicalSearch values are "unlimited" or canonical unsigned decimal u64
+ * text, without leading zeros. Each constituent run has an independent ceiling.
+ * Synchronous calls block callbacks on the same JavaScript event loop; cancellation
+ * observes an already signaled token, and does not promise same-event-loop preemption.
+ */
+export class CanonicalResult<T = unknown> {
+  readonly value: T;
+  readonly canonicalizationJson: string;
+  free(): void;
+}
+
+/** Original native failure ownership, including its retained admission grant. */
+export class CanonicalCause {
+  readonly json: string;
+  free(): void;
+}
+
+/** A canonicalizing request's refusal, with evidence even when no run started. */
+export interface CanonicalizationFailure extends Error {
+  readonly canonicalizationJson: string;
+  readonly nativeCauseJson?: string;
+  /** Free this owned native cause when the refusal is no longer needed. */
+  readonly nativeCause?: CanonicalCause | YamlSourceCause;
+}
+
 export class RegimeClosure {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
   private constructor();
   /** The materialized dataset (input quads + inferred triples) as canonical N-Quads. */
   readonly nquads: string;
@@ -955,6 +1117,8 @@ export class RegimeClosure {
  * `entailVerifyEntailment`.
  */
 export class ReasoningAnswer {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
   private constructor();
   /**
    * The service's answer, in the service's own line-oriented rendering. A
@@ -1039,15 +1203,15 @@ export class Reasoner {
    *
    * Throws on a session that records nothing: open it with `Reasoner.withProofs`.
    */
-  prove(service: ProofService | string, argument: string): ReasoningAnswer;
-  consistency(): ReasoningAnswer;
-  classify(): ReasoningAnswer;
-  realize(): ReasoningAnswer;
-  instances(class_: string): ReasoningAnswer;
-  entails(axiom: string): ReasoningAnswer;
+  prove(service: ProofService | string, argument: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  consistency(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  classify(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  realize(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  instances(class_: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  entails(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
   profile(): ReasoningAnswer;
-  extractModule(signature: string, method: string): ReasoningAnswer;
-  justify(axiom: string): ReasoningAnswer;
+  extractModule(signature: string, method: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  justify(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
   explainConclusion(regime: string, conclusion: string): ReasoningAnswer;
   free(): void;
 }
@@ -1126,11 +1290,11 @@ export class QueryEngine {
   divisionPolicy: string;
   query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
   select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
-  ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): boolean;
-  construct(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
-  describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
-  update(dataset: Dataset, sparql: string, options?: QueryOptions | null): Dataset;
-  queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): string;
+  ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): AskResult;
+  construct(dataset: Dataset, sparql: string, options?: QueryOptions | null): GraphResult;
+  describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): GraphResult;
+  update(dataset: Dataset, sparql: string, options?: UpdateOptions | null): AppliedUpdateResult;
+  queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): RawQueryResult;
   /**
    * Run a SPARQL query under caller-supplied execution governors.
    *
@@ -1181,7 +1345,7 @@ export class QueryEngine {
   updateGoverned(
     dataset: Dataset,
     sparql: string,
-    options?: GovernedQueryOptions | null,
+    options?: GovernedUpdateOptions | null,
   ): UpdateOutcome;
   /**
    * The engine's charge ledger for a query, rendered as text: the join orders it chose,
@@ -1189,7 +1353,7 @@ export class QueryEngine {
    * a budget is sized before it is set — the query runs metered, not bounded, so the
    * numbers are measurements rather than predictions.
    */
-  explainQuery(dataset: Dataset, sparql: string, options?: QueryOptions | null): string;
+  explainQuery(dataset: Dataset, sparql: string, options?: QueryOptions | null): RawQueryResult;
   queryRawConfigured(
     dataset: Dataset,
     sparql: string,
@@ -1197,7 +1361,9 @@ export class QueryEngine {
     format: "jsonld" | "yamlld" | string,
     optionsJson: string,
     xpathRegex?: XPathRegexLaw | null,
-  ): string;
+    now?: string | null,
+    entropySeed?: bigint | number | null,
+  ): RawQueryResult;
   queryRawWithContext(
     dataset: Dataset,
     sparql: string,
@@ -1206,7 +1372,9 @@ export class QueryEngine {
     context: CompiledJsonLdContext,
     yamlSchemaUrl?: string | null,
     xpathRegex?: XPathRegexLaw | null,
-  ): string;
+    now?: string | null,
+    entropySeed?: bigint | number | null,
+  ): RawQueryResult;
 
   // The asynchronous twins. Each runs the operation its synchronous twin runs, over a
   // snapshot of `dataset` taken when the call starts, as a job that suspends on the
@@ -1223,7 +1391,8 @@ export class QueryEngine {
   // (the fixed budget kept under the JavaScript engine's call stack, which V8 sizes the
   // same for a job as for the synchronous lane) are the synchronous twin's refusals word
   // for word; a cancellation through `signal` rejects with
-  // `signal.reason` (an `AbortError` without one); a handler that threw, rejected or
+  // an `AbortError` carrying `signal.reason` as `cause` (`TimeoutError` for a timeout
+  // signal); a handler that threw, rejected or
   // answered something unrecognizable fails its own invocation (`native-sparql-host-fault`
   // or `native-sparql-load-fault` without `SILENT`); a fault — a broken delivery protocol,
   // or frames no stack check guards running outside the job's region or past its base —
@@ -1253,19 +1422,19 @@ export class QueryEngine {
     options?: AsyncQueryOptions | null,
   ): Promise<SelectResult>;
   /** The twin of `ask`. */
-  askAsync(dataset: Dataset, sparql: string, options?: AsyncQueryOptions | null): Promise<boolean>;
+  askAsync(dataset: Dataset, sparql: string, options?: AsyncQueryOptions | null): Promise<AskResult>;
   /** The twin of `construct`. */
   constructAsync(
     dataset: Dataset,
     sparql: string,
     options?: AsyncQueryOptions | null,
-  ): Promise<Dataset>;
+  ): Promise<GraphResult>;
   /** The twin of `describe`. */
   describeAsync(
     dataset: Dataset,
     sparql: string,
     options?: AsyncQueryOptions | null,
-  ): Promise<Dataset>;
+  ): Promise<GraphResult>;
   /**
    * The twin of `queryRaw` — and, with `optionsJson` (which needs `format`), of
    * `queryRawConfigured`.
@@ -1274,13 +1443,13 @@ export class QueryEngine {
     dataset: Dataset,
     sparql: string,
     options?: AsyncQueryRawOptions | null,
-  ): Promise<string>;
+  ): Promise<RawQueryResult>;
   /** `queryRawAsync` delivered as the document's UTF-8 bytes, for a host that sends them on. */
   queryRawBytesAsync(
     dataset: Dataset,
     sparql: string,
     options?: AsyncQueryRawOptions | null,
-  ): Promise<Uint8Array>;
+  ): Promise<RawQueryBytesResult>;
   /** The twin of `queryRawWithContext`. */
   queryRawWithContextAsync(
     dataset: Dataset,
@@ -1288,7 +1457,7 @@ export class QueryEngine {
     format: "jsonld" | "yamlld" | string,
     context: CompiledJsonLdContext,
     options?: AsyncQueryRawWithContextOptions | null,
-  ): Promise<string>;
+  ): Promise<RawQueryResult>;
   /**
    * The twin of `queryGoverned`. `deadlineMs` spans the time spent awaiting the host's
    * handlers as well as evaluation.
@@ -1333,7 +1502,7 @@ export class QueryEngine {
     dataset: Dataset,
     sparql: string,
     options?: AsyncQueryOptions | null,
-  ): Promise<string>;
+  ): Promise<RawQueryResult>;
   /**
    * The twin of `update`: resolves to `dataset` once the update is applied. One
    * asynchronous update of a dataset may be in flight at a time: beginning another while
@@ -1345,7 +1514,7 @@ export class QueryEngine {
     dataset: Dataset,
     sparql: string,
     options?: AsyncUpdateOptions | null,
-  ): Promise<Dataset>;
+  ): Promise<AppliedUpdateResult>;
   /**
    * The twin of `updateGoverned`, claiming and applied as `updateAsync` is. `maxAnswers`
    * is refused, exactly as on `updateGoverned`.
@@ -1353,7 +1522,7 @@ export class QueryEngine {
   updateGovernedAsync(
     dataset: Dataset,
     sparql: string,
-    options?: AsyncGovernedQueryOptions | null,
+    options?: (GovernedUpdateOptions & AsyncHostOptions) | null,
   ): Promise<AsyncUpdateOutcome>;
   free(): void;
 }
@@ -1411,17 +1580,31 @@ export class ServiceCatalog {
  * (`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on `message`.
  */
 export interface PurrdfError extends Error {
+  readonly executionReceipt?: ExecutionReceipt;
+  readonly executionReceiptJson?: string;
   readonly code: string;
   /**
-   * Original `purrdf-diagnostic-v1` record for native storage refusal. Its optional
+   * Original `purrdf-diagnostic-v1` record for native semantic or resource failure. Its optional
    * `capacity` record carries `space`, `attempted` and `limit`; both counts are exact
-   * decimal strings. Present on synchronous and asynchronous storage failures alike.
+   * decimal strings. Original line positions are exact decimal strings.
    */
   readonly diagnostic?: {
     readonly schema: "purrdf-diagnostic-v1";
     readonly severity: string;
     readonly code: string;
     readonly message: string;
+    readonly location?: {
+      readonly path?: string;
+      readonly logical?: string;
+      readonly subject?: string;
+      readonly line?: string;
+      readonly column?: number;
+      readonly gtsTermId?: string;
+      readonly gtsQuadIndex?: string;
+      readonly gtsReifierId?: string;
+      readonly gtsFrameIndex?: string;
+      readonly gtsSegmentIndex?: string;
+    };
     readonly capacity?: {
       readonly space: string;
       readonly attempted: string;
@@ -1744,9 +1927,17 @@ export interface AsyncHostOptions {
   readonly cancel?: never;
 }
 
-export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions {}
+/** Caller inputs for query, UPDATE or rule execution; omitted fields retain native defaults. */
+export interface QueryCoordinateOptions {
+  /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
+  readonly now?: string | null;
+  /** Unsigned 64-bit seed: bigint, or a non-negative safe integral number. Zero is supplied. */
+  readonly entropySeed?: bigint | number | null;
+}
 
-export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions {
+export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {}
+
+export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions, QueryCoordinateOptions {
   /**
    * A `JsonLdSerializeOptions` document (`JSON.stringify` it) configuring a JSON-LD or
    * YAML-LD `format`, as `queryRawConfigured` takes it. Needs `format`; not combinable
@@ -1755,12 +1946,13 @@ export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions 
   readonly optionsJson?: string | null;
 }
 
-export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions {
+export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {
   readonly yamlSchemaUrl?: string | null;
 }
 
 export interface AsyncGovernedQueryOptions
   extends QueryOptions,
+    QueryCoordinateOptions,
     Omit<GovernorOptions, "cancel">,
     AggregateNamespaceOption,
     AsyncHostOptions {}
@@ -1778,9 +1970,11 @@ export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
   readonly maxStoredFacts?: bigint | number | null;
   /** The closure's join-step limit, exactly as on `EntailmentQueryOptions`. */
   readonly maxJoinSteps?: bigint | number | null;
+  /** The closure's term-arena byte limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxTermArenaBytes?: bigint | number | null;
 }
 
-export interface AsyncUpdateOptions extends QueryOptions, AsyncHostOptions {}
+export interface AsyncUpdateOptions extends UpdateOptions, AsyncHostOptions {}
 
 export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
   /** The client's `Accept` header; absent means the SPARQL Protocol defaults. */
@@ -1847,6 +2041,7 @@ export interface NegotiatedBody {
  * exhausted budget carrying the typed partial answers it reached. Never a thrown trip.
  */
 export interface AsyncNegotiatedQueryOutcome {
+  readonly executionReceipt: ExecutionReceipt;
   readonly isComplete: boolean;
   /** The complete answer. Absent when a governor stopped the execution. */
   readonly body?: NegotiatedBody;
@@ -1867,7 +2062,7 @@ export interface AsyncUpdateOutcome extends UpdateOutcome {
  * `"Error"` for a failure or a fault, `"AbortError"` for a cancellation without a
  * `signal.reason`, `"TimeoutError"` for an ungoverned job's deadline, and
  * `"NotAcceptableError"` for a negotiated query whose result no acceptable format can carry.
- * A cancellation with a `signal.reason` rejects with that reason itself, untouched.
+ * A cancellation rejects with an AbortError carrying the original `signal.reason` as its cause.
  * `code` is the stable code the failure is reported under (see `PurrdfError`).
  */
 export interface AsyncJobError extends PurrdfError {
@@ -2025,8 +2220,7 @@ export type EntailmentRegime =
  *
  * `maxStoredFacts` bounds the facts each evaluation store may hold and `maxJoinSteps` the
  * candidate solutions the rules may enumerate, for the `"rdf"`, `"rdfs"`, `"owl-rl"` and
- * `"d"` regimes. Omitted, each is this target's default: 131072 facts and 1048576 join
- * steps (a native build's defaults are 4194304 and 1048576). A run past either throws
+ * `"d"` regimes. Omitted settings impose no logical capacity ceiling. A run past either throws
  * naming the limit, the numbers and the argument that raises it; the report's
  * `contract-hash` names the calculus under the limits in force.
  *
@@ -2044,8 +2238,12 @@ export function entailMaterialize(
   importIris: readonly string[],
   importDocuments: readonly string[],
   premiseIris: readonly string[],
-  maxStoredFacts?: bigint,
-  maxJoinSteps?: bigint,
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
+  /** Retained term-surface bytes; omitted, no logical ceiling. */
+  maxTermArenaBytes: bigint | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -2057,8 +2255,16 @@ export function entailImplementedRules(regime: EntailmentRegime | string): strin
  * sound rule the table happens not to list. `[]` for a lane with nothing added to it.
  */
 export function entailExtensions(regime: EntailmentRegime | string): string[];
-export function entailCheckGoldenVectors(): void;
-export function entailCheckInconsistentRefusal(): void;
+export function entailCheckGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+export function entailCheckInconsistentRefusal(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Run the committed proof golden-vector artifact through this build and throw on the
@@ -2069,7 +2275,11 @@ export function entailCheckInconsistentRefusal(): void;
  * a rendered proof carries the proof term's own canonical encoding, so a divergence
  * here is a divergence in the TERM rather than in a rendering of one.
  */
-export function entailCheckProofGoldenVectors(): void;
+export function entailCheckProofGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Prove that an answer nobody asked to record is NOT presentable as a verified one,
@@ -2078,7 +2288,11 @@ export function entailCheckProofGoldenVectors(): void;
  * An unrecorded answer must carry `availability not-recorded`, `entailCheckProof` must
  * refuse that document by name, and the same question asked WITH a proof must check.
  */
-export function entailCheckAbsentProof(): void;
+export function entailCheckAbsentProof(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /** The seven Description-Logic services a proof term can be about. */
 export type ProofService =
@@ -2109,6 +2323,8 @@ export function entailProve(
   argument: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2133,7 +2349,9 @@ export function entailCheckProof(
   answer: string,
   certificate: string,
   proof: string,
-): string;
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<string>;
 
 /** The `bot`/`top`/`star` locality-module extraction methods `entailExtractModule` accepts. */
 export type ModuleExtractionMethod = "bot" | "top" | "star";
@@ -2164,6 +2382,8 @@ export function entailConsistency(
   premiseIris: readonly string[],
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2177,6 +2397,8 @@ export function entailClassify(
   document: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2189,6 +2411,8 @@ export function entailRealize(
   document: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2207,6 +2431,8 @@ export function entailInstances(
   classTerm: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2225,6 +2451,8 @@ export function entailEntails(
   axiom: string,
   stepCap: number,
   workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2247,6 +2475,8 @@ export function entailExtractModule(
   document: string,
   signature: string,
   method: ModuleExtractionMethod | string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ReasoningAnswer;
 
 /**
@@ -2256,7 +2486,11 @@ export function entailExtractModule(
  * Throws if the ontology does not entail the axiom, or if the tableau could not
  * decide it.
  */
-export function entailJustify(document: string, axiom: string): ReasoningAnswer;
+export function entailJustify(
+  document: string, axiom: string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
 
 /**
  * `entailExplainConclusion(document, regime, conclusion)` → WHY one triple of a
@@ -2326,8 +2560,9 @@ export function entailExplainConclusion(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailCertainAnswers's maxStoredFacts` or `entailCertainAnswers's maxJoinSteps`.
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -2338,6 +2573,7 @@ export function entailCertainAnswers(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2361,8 +2597,9 @@ export function entailCertainAnswers(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailGraphEntails's maxStoredFacts` or `entailGraphEntails's maxJoinSteps`.
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
@@ -2373,6 +2610,7 @@ export function entailGraphEntails(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2391,8 +2629,9 @@ export function entailGraphEntails(
  *
  * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
  * answered with — the premise's closure and each re-chase a mechanism beyond the rule
- * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
- * A run past one throws naming `entailVerifyEntailment's maxStoredFacts` or `entailVerifyEntailment's maxJoinSteps`.
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
  */
 export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
@@ -2403,6 +2642,7 @@ export function entailVerifyEntailment(
   premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -2436,6 +2676,9 @@ export function entailVerifyEntailment(
  * in this package the instance owns wasm memory — call `free()` when done.
  */
 export class ShaclImportError {
+  /** Free this owned native cause after inspecting its typed JSON fields. */
+  readonly nativeCause?: YamlSourceCause;
+  readonly nativeCauseJson?: string;
   readonly kind:
     | "unresolved-import"
     | "unreached-import"
@@ -2482,18 +2725,23 @@ export class ShaclImportError {
  * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
  * throws with the resource's code and no dataset.
  */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
 export function shaclEntail(
   shapesTtl: string,
   dataNt: string,
-  shapesBase?: string,
-  importIris?: readonly string[],
-  importDocuments?: readonly string[],
-  shapesGraph?: string,
-  maxTermGeneratingRounds?: bigint,
-  maxGeneratedTerms?: bigint,
-  maxStoredFacts?: bigint,
-  maxJoinSteps?: bigint,
-  xpathRegex?: XPathRegexLaw,
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  maxTermGeneratingRounds: bigint | undefined,
+  maxGeneratedTerms: bigint | undefined,
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
+  xpathRegex: XPathRegexLaw | undefined,
+  now: string | null | undefined,
+  entropySeed: bigint | number | null | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
 ): ShaclEntailment;
 
 /**
@@ -2501,6 +2749,9 @@ export function shaclEntail(
  * memory: call `free()`.
  */
 export class ShaclEntailment {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
+  readonly executionReceiptJson: string;
   free(): void;
   /**
    * The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
@@ -2519,6 +2770,7 @@ export class ShaclEntailment {
  * wasm memory: call `free()`.
  */
 export class ShaclRulesInference {
+  readonly executionReceiptJson: string;
   free(): void;
   /**
    * The INFERENCE GRAPH — the inferred triples only, never the data graph — as
@@ -2559,9 +2811,7 @@ export class ShaclRulesInference {
  *
  * `maxStoredFacts` bounds the facts the evaluation store may hold — the data graph, a rule
  * set's data and every inferred triple — and `maxJoinSteps` the candidate solutions the
- * rule bodies may enumerate. Omitted, each is this target's default: 131072 facts and
- * 1048576 join steps, sized for one WebAssembly linear memory (a native build's defaults
- * are 4194304 and 1048576). A run past either throws naming the limit, the numbers and
+ * rule bodies may enumerate. Omitted settings impose no logical capacity ceiling. A run past either throws naming the limit, the numbers and
  * the argument that raises it.
  *
  * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
@@ -2583,6 +2833,7 @@ export class ShaclRulesInference {
  * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
  * throws with the resource's code and no inference.
  */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
 export function shaclApplyRules(
   dataNt: string,
   shapesTtl?: string,
@@ -2598,6 +2849,8 @@ export function shaclApplyRules(
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
   xpathRegex?: XPathRegexLaw,
+  now?: string | null,
+  entropySeed?: bigint | number | null,
 ): ShaclRulesInference;
 
 /**
@@ -2981,11 +3234,13 @@ export class ShaclProductRefusal {
  */
 export function shaclPackProduct(
   shapesTtl: string,
-  shapesBase?: string,
-  importIris?: readonly string[],
-  importDocuments?: readonly string[],
-  shapesGraph?: string,
-): Uint8Array;
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<Uint8Array>;
 
 /**
  * What a prepared product says it was compiled from, as deterministic `key value`
@@ -3005,7 +3260,11 @@ export function shaclProductExplain(product: Uint8Array): string;
  *
  * Throws a `ShaclProductRefusal`.
  */
-export function shaclProductCertify(product: Uint8Array): void;
+export function shaclProductCertify(
+  product: Uint8Array,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
 
 /**
  * Restore a prepared product and validate an N-Triples data graph with it, returning
@@ -3106,14 +3365,22 @@ export function shaclProductValidateToSarifExpecting(
 /**
  * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
  * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
- * (`AbortSignal.timeout(ms)`). Every argument of the synchronous twin stays positional,
- * where the synchronous twin takes it; the host options follow them.
+ * (`AbortSignal.timeout(ms)`). Document and limit arguments stay positional; XPath law and execution inputs
+ * travel in the options object.
  */
-export interface AsyncShaclOptions extends AsyncHostOptions {}
+export interface AsyncShaclOptions extends AsyncHostOptions {
+  readonly now?: never;
+  readonly entropySeed?: never;
+}
+
+/** Execution inputs apply only to the entailment and rule-application twins. */
+export interface AsyncShaclRuleOptions extends AsyncHostOptions, QueryCoordinateOptions {
+  readonly xpathRegex?: XPathRegexLaw | null;
+  readonly shaclProfile?: never;
+}
 
 /**
- * The options of a SHACL twin that evaluates patterns — every validation, entailment, rules
- * and node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
+ * The options of a SHACL validation or node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
  * synchronous twin takes as its trailing argument. It travels in the options object so
  * the options keep following the positional arguments.
  */
@@ -3180,15 +3447,16 @@ export function shaclValidateChangesToSarifAsync(
 export function shaclEntailAsync(
   shapesTtl: string,
   dataNt: string,
-  shapesBase?: string | null,
-  importIris?: readonly string[] | null,
-  importDocuments?: readonly string[] | null,
-  shapesGraph?: string | null,
-  maxTermGeneratingRounds?: bigint | null,
-  maxGeneratedTerms?: bigint | null,
-  maxStoredFacts?: bigint | null,
-  maxJoinSteps?: bigint | null,
-  options?: AsyncShaclValidationOptions | null,
+  shapesBase: string | null | undefined,
+  importIris: readonly string[] | null | undefined,
+  importDocuments: readonly string[] | null | undefined,
+  shapesGraph: string | null | undefined,
+  maxTermGeneratingRounds: bigint | null | undefined,
+  maxGeneratedTerms: bigint | null | undefined,
+  maxStoredFacts: bigint | null | undefined,
+  maxJoinSteps: bigint | null | undefined,
+  canonicalSearch: string,
+  options?: AsyncShaclRuleOptions | null,
 ): Promise<ShaclEntailment>;
 
 /**
@@ -3210,7 +3478,7 @@ export function shaclApplyRulesAsync(
   maxGeneratedTerms?: bigint | null,
   maxStoredFacts?: bigint | null,
   maxJoinSteps?: bigint | null,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclRuleOptions | null,
 ): Promise<ShaclRulesInference>;
 
 /**

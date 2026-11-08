@@ -129,6 +129,7 @@ pub mod entails;
 pub mod explain;
 pub(crate) mod interner;
 pub(crate) mod lists;
+pub use lists::{CollectionError, CollectionPhase};
 pub(crate) mod owl_dl;
 pub mod reasoner;
 pub mod report;
@@ -150,7 +151,8 @@ pub use entails::{
     certain_answers_with, entails, entails_with, rif_resolver, verify,
 };
 pub use explain::{
-    BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
+    BackwardCheck, ChaseProof, ExplainError, ExplanationSession, Justification,
+    PreparedExplanations, explain_conclusion, justify, prepare_explanations,
 };
 pub use owl_dl::proof::source as proof_source;
 pub use owl_dl::proof::{
@@ -160,13 +162,14 @@ pub use owl_dl::proof::{
     DlProofError, MAX_CHECK_WORK as DL_MAX_CHECK_WORK, MAX_RECORDED_STEPS as DL_MAX_RECORDED_STEPS,
     MergeCause, MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative,
     ProofAnswer, ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
-    TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, ontology_identity,
-    prove_consistency, try_ontology_identity, try_ontology_identity_with_stop,
+    TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, prove_consistency,
+    try_ontology_identity,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
-    Certified, Claim, ClaimBasis, ClaimSubject, ClassHierarchy, ConservativeKeep, DlAxiom,
-    DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod, OwlProfile, ProfileCertificate,
+    Certified, Claim, ClaimBasis, ClaimSubject, ClassAnalysis, ClassHierarchy, ConservativeKeep,
+    DirectnessRefusal, DlAxiom, DlCertificate, DlCompleteness, ModuleExtraction, ModuleMethod,
+    ObjectPropertyHierarchy, OwlProfile, OwnedDirectnessRefusal, ProfileCertificate,
     ProfileViolation, Question, Realization, Reasoner, RunAssumptions, RunProof, Service,
     ServiceProof, ServiceReplay, StopCause, StopReceipt, Verdict, extract_module,
     extract_module_with_proofs, profile,
@@ -176,10 +179,13 @@ pub use report::{
     TerminationCertificate, WitnessTriple,
 };
 pub use rif::{
-    Atom, Fact, RifTerm, Rule, RuleSet, materialize_rif, materialize_rif_until,
+    Atom, Fact, RifTerm, RifVariableError, Rule, RuleSet, materialize_rif, materialize_rif_until,
     materialize_rif_with,
 };
-pub use rif_xml::{ParsedRifDocument, RifImport, parse_rif_xml, resolve_rif_imports};
+pub use rif_xml::{
+    ParsedRifDocument, RifComponent, RifImport, RifIriPhase, RifXmlError, parse_rif_xml,
+    resolve_rif_imports,
+};
 pub use rules::{ParseRuleIdError, RuleId, extensions, implemented, rules};
 
 /// A SPARQL entailment regime (`sparql:entailmentRegime`), by its W3C IRI's local
@@ -339,10 +345,38 @@ impl Materialization<'_> {
     }
 }
 
+/// Original key-membership source and preparation-phase mismatch data.
+pub use owl_dl::key_proofs::{KeyMembershipError, KeyMembershipPhase};
+/// Native OWL expression and data-range extraction refusals.
+pub use owl_dl::parser::OwlSyntaxError;
 /// The typed refusal of an object-property hierarchy before reasoning starts.
 pub use owl_dl::roles::RoleHierarchyError;
 
+/// The dataset-producing operation that retained an original RDF diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatasetFailurePhase {
+    /// Building a derived dataset through the shared RDF boundary.
+    Build,
+    /// Freezing the query-directed augmented dataset.
+    AugmentedFreeze,
+}
+
+impl purrdf_hash::error::StructuredError for DatasetFailurePhase {
+    purrdf_hash::error_visit! {
+        Build => "entailment-dataset-build" {},
+        AugmentedFreeze => "entailment-augmented-freeze" {},
+    }
+}
+
 /// Why a closure could not be produced.
+///
+/// [`purrdf_hash::error::StructuredError`] exposes the original variant, fields
+/// and nested causes without formatting or cloning them. Generic source-read
+/// failures remain the caller's type and are inspectable when that type provides
+/// the same trait. Inconsistent runs retain both their original witness and
+/// complete reasoning report, including the native budget and calculus identity.
+/// Existing string payloads remain explicit messages; inspection does not parse
+/// those messages into reconstructed causes.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum EntailError<E = std::convert::Infallible> {
@@ -350,12 +384,36 @@ pub enum EntailError<E = std::convert::Infallible> {
     Storage(purrdf_lex::allocation::StorageError),
     /// Building the derived dataset failed.
     Build(String),
-    /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
-    /// class-expression graph or an unrecognized RIF construct).
+    /// An original RDF build diagnostic, with its native payload and reporting metadata.
+    Dataset {
+        /// The operation that refused to publish a dataset.
+        phase: DatasetFailurePhase,
+        /// The original diagnostic, retained without rendering or copying.
+        cause: purrdf_core::RdfDiagnostic,
+    },
+    /// A caller-authored or legacy parse failure carrying only a message.
+    /// Native OWL and RIF producers retain their typed causes in the variants below.
     Parse(String),
+    /// Native OWL syntax refusal, retaining original terms, counts and parser causes.
+    OwlSyntax(Box<OwlSyntaxError>),
+    /// Original XML, IRI, structural or variable refusal of a RIF document.
+    RifXml(Box<RifXmlError>),
+    /// An original RIF variable without a binding in this operation.
+    RifVariable(RifVariableError),
+    /// An incomplete OWL decision, with its original native certificate.
+    Decision(Box<DlCertificate>),
+    /// A key-membership check presented to a different source or preparation phase.
+    KeyMembership(Box<KeyMembershipError>),
     /// An object-property hierarchy is malformed, nonregular, or physically
     /// refused before the regular-language program could be constructed.
     RoleHierarchy(RoleHierarchyError),
+    /// The source does not determine one consistent property kind for classification.
+    PropertyKind {
+        /// Original named property requiring an explicit, consistent declaration.
+        property: String,
+        /// True for contradictory evidence, false for insufficient evidence.
+        conflict: bool,
+    },
     /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
     ///
     /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
@@ -375,7 +433,7 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// evaluator, and that evaluator refuses rather than approximates: a program it has no
     /// semantics for, and — the case a caller will actually meet — an input that passes
     /// the stored-fact or join-step limit in force ([`materialize_with`] states them; the
-    /// target's defaults otherwise) or the fixed term-arena ceiling. A limit refusal is
+    /// unlimited capacity otherwise) or a caller-selected term-arena ceiling. A limit refusal is
     /// TOTAL, which is why
     /// it is an error and not a boundary: there is no partial closure to hand back with a
     /// note attached, and a truncated closure presented as a complete one is exactly the
@@ -383,6 +441,10 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which limit, what the run
     /// had consumed when it stopped, and the knob that raises it.
     Evaluate(purrdf_datalog::seminaive::EvalError),
+    /// Original signed model-maintenance refusal at a refutation boundary.
+    Maintenance(
+        Box<purrdf_datalog::seminaive::MaintenanceError<purrdf_datalog::store::TermExpired>>,
+    ),
     /// The declared calculus states an EXISTENTIAL rule the restricted chase refused.
     ///
     /// `rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` conclude about a FRESH blank node, and a
@@ -393,12 +455,15 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// [`ChaseError::BudgetExhausted`](purrdf_datalog::chase::ChaseError::BudgetExhausted)
     /// — carrying an accurate report. The one refusal that is about the CALCULUS rather
     /// than the input is
-    /// [`ChaseError::NonTerminating`](purrdf_datalog::chase::ChaseError::NonTerminating):
+    /// [`ChaseError::Termination`](purrdf_datalog::chase::ChaseError::Termination):
     /// the chase computes its own termination class from the clause set and runs only a
     /// program it certified, so a rule set whose position dependency graph puts an
     /// existential edge in a cycle is named rather than looped on. Neither declared lane
     /// is such a program, which is a CHECKED fact rather than a hope.
     Chase(purrdf_datalog::chase::ChaseError),
+    /// A caller-supplied collection diagnostic message.
+    /// Native OWL collection producers return [`Self::Collection`].
+    MalformedList(String),
     /// An RDF collection an OWL 2 axiom points at is not a well-formed collection.
     ///
     /// `owl:intersectionOf`, `owl:unionOf`, `owl:oneOf`, `owl:members`,
@@ -409,9 +474,9 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// edge, or a cycle is a refusal
     /// rather than a truncation: reasoning over the well-formed PREFIX of a broken
     /// collection would answer a question the caller did not ask, and it would do so
-    /// silently. The message names the collection's head, the cell the walk stopped at,
-    /// and the fault.
-    MalformedList(String),
+    /// silently. The native payload retains the original head, failed cell,
+    /// ordered members and fault in source-independent RDF term coordinates.
+    Collection(Box<CollectionError>),
     /// A term id of the input view did not resolve to a value: the view handed back a
     /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
     /// reasoned over a term the input does not actually hold.
@@ -543,9 +608,52 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// the OWL-DL proof producers, which canonicalize the caller's dataset to bind every
     /// proof to it; [`Reasoner::new`](reasoner::Reasoner::new) never canonicalizes anything
     /// and so never returns this. The caller's data is wholly untrusted here — a document
-    /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
-    /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
+    /// parsed at a wasm/Python/C-ABI boundary — so the original typed refusal is retained.
     Canonicalization(purrdf_core::CanonError<E>),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for EntailError<E>
+{
+    purrdf_hash::error_visit! {
+        Storage(cause) => "entailment-storage" { "cause" => Cause(cause) },
+        Build(message) => "entailment-build" { "message" => Message(message) },
+        Dataset { phase, cause } => "entailment-dataset" {
+            "phase" => Record(phase), "cause" => Cause(cause),
+        },
+        Parse(message) => "entailment-parse" { "message" => Message(message) },
+        OwlSyntax(cause) => "entailment-owl-syntax" { "cause" => Cause(cause.as_ref()) },
+        RifXml(cause) => "entailment-rif-xml" { "cause" => Cause(cause.as_ref()) },
+        RifVariable(cause) => "entailment-rif-variable" { "cause" => Cause(cause) },
+        Decision(report) => "entailment-owl-decision" { "report" => Record(report.as_ref()) },
+        KeyMembership(cause) => "entailment-key-membership" { "cause" => Cause(cause.as_ref()) },
+        RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
+        PropertyKind { property, conflict } => "entailment-property-kind" {
+            "property" => Iri(property), "conflict" => Boolean(*conflict),
+        },
+        ProofsNotRecorded => "entailment-proofs-not-recorded" {},
+        Evaluate(cause) => "entailment-evaluate" { "cause" => Cause(cause) },
+        Maintenance(cause) => "entailment-maintenance" { "cause" => Cause(cause.as_ref()) },
+        Chase(cause) => "entailment-chase" { "cause" => Cause(cause) },
+        MalformedList(message) => "entailment-malformed-list" { "message" => Message(message) },
+        Collection(cause) => "entailment-collection" { "cause" => Cause(cause.as_ref()) },
+        ForeignTerm(cause) => "entailment-foreign-term" { "cause" => Cause(cause) },
+        SourceRead(cause) => "entailment-source-read" { "cause" => Cause(cause) },
+        Inconsistent(run) => "entailment-inconsistent" { "run" => Record(run.as_ref()) },
+        Unsatisfiable => "entailment-unsatisfiable" {},
+        UnsupportedRegime(regime) => "entailment-unsupported-regime" { "regime" => Code(regime.name()) },
+        UnresolvedImport(iri) => "entailment-unresolved-import" { "iri" => Iri(iri) },
+        UnreachedImport { iris, unanchored } => "entailment-unreached-import" {
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+            "unanchored" => List(unanchored.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+        },
+        IncompatibleImports(conflicts) => "entailment-incompatible-imports" {
+            "conflicts" => List(conflicts.iter().map(|conflict| purrdf_hash::error::ErrorValue::Record(conflict))),
+        },
+        MatchBudget => "entailment-match-budget" {},
+        Stopped => "entailment-stopped" {},
+        Canonicalization(cause) => "entailment-canonicalization" { "cause" => Cause(cause) },
+    }
 }
 
 impl<E> EntailError<E> {
@@ -574,12 +682,23 @@ impl EntailError {
         match self {
             Self::Storage(cause) => EntailError::Storage(cause),
             Self::Build(reason) => EntailError::Build(reason),
+            Self::Dataset { phase, cause } => EntailError::Dataset { phase, cause },
             Self::Parse(reason) => EntailError::Parse(reason),
+            Self::OwlSyntax(cause) => EntailError::OwlSyntax(cause),
+            Self::RifXml(cause) => EntailError::RifXml(cause),
+            Self::RifVariable(cause) => EntailError::RifVariable(cause),
+            Self::Decision(report) => EntailError::Decision(report),
+            Self::KeyMembership(cause) => EntailError::KeyMembership(cause),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
+            Self::PropertyKind { property, conflict } => {
+                EntailError::PropertyKind { property, conflict }
+            }
             Self::ProofsNotRecorded => EntailError::ProofsNotRecorded,
             Self::Evaluate(cause) => EntailError::Evaluate(cause),
+            Self::Maintenance(cause) => EntailError::Maintenance(cause),
             Self::Chase(cause) => EntailError::Chase(cause),
             Self::MalformedList(reason) => EntailError::MalformedList(reason),
+            Self::Collection(cause) => EntailError::Collection(cause),
             Self::ForeignTerm(cause) => EntailError::ForeignTerm(cause),
             Self::SourceRead(never) => match never {},
             Self::Inconsistent(run) => EntailError::Inconsistent(run),
@@ -598,12 +717,21 @@ impl EntailError {
 }
 
 purrdf_lex::variant_from!(impl<E> EntailError<E> { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { OwlSyntax(OwlSyntaxError) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> {
+    Maintenance(purrdf_datalog::seminaive::MaintenanceError<purrdf_datalog::store::TermExpired>) via Box::new
+});
+purrdf_lex::variant_from!(impl<E> EntailError<E> { RifXml(RifXmlError) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { RifVariable(RifVariableError) });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { Decision(DlCertificate) via Box::new });
+purrdf_lex::variant_from!(impl<E> EntailError<E> { KeyMembership(KeyMembershipError) via Box::new });
 
 impl<E> From<purrdf_core::RdfDiagnostic> for EntailError<E> {
     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
-        error
-            .storage_error()
-            .map_or_else(|| Self::Build(error.to_string()), Self::Storage)
+        Self::Dataset {
+            phase: DatasetFailurePhase::Build,
+            cause: error,
+        }
     }
 }
 
@@ -621,16 +749,44 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
         match self {
             Self::Storage(error) => write!(f, "entailment storage error: {error}"),
             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
+            Self::Dataset { phase, cause } => match phase {
+                DatasetFailurePhase::Build => match cause.storage_error() {
+                    Some(storage) => write!(f, "entailment storage error: {storage}"),
+                    None => write!(f, "entailment build error: {cause}"),
+                },
+                DatasetFailurePhase::AugmentedFreeze => write!(
+                    f,
+                    "entailment build error: freeze augmented dataset: {cause}"
+                ),
+            },
             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
+            Self::OwlSyntax(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::RifXml(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::RifVariable(cause) => write!(f, "entailment parse error: {cause}"),
+            Self::Decision(_) => {
+                f.write_str("entailment build error: OWL-Direct decision could not complete")
+            }
+            Self::KeyMembership(cause) => write!(f, "entailment build error: {cause}"),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
+            Self::PropertyKind { property, conflict } => write!(
+                f,
+                "cannot classify property <{property}>: {} kind evidence; provide consistent object, data or annotation property declarations",
+                if *conflict {
+                    "conflicting"
+                } else {
+                    "unresolved"
+                }
+            ),
             Self::ProofsNotRecorded => write!(
                 f,
                 "this reasoner records no proofs, so it has no ontology identity to check one \
                  against; build it with Reasoner::with_proofs"
             ),
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
+            Self::Maintenance(error) => write!(f, "entailment maintenance error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
+            Self::Collection(cause) => cause.fmt(f),
             Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
             Self::SourceRead(error) => write!(f, "entailment source read error: {error}"),
             Self::Inconsistent(run) => write!(
@@ -732,36 +888,33 @@ impl<E> From<purrdf_core::TermLookupError<E>> for EntailError<E> {
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
-    /// The wrapped cause, for the variants that carry one.
+    /// The original native cause, when this variant wraps another failure.
     ///
-    /// Two of these variants exist ONLY to carry another crate's diagnostic —
-    /// `Evaluate` holds the evaluator's ceiling report, `Chase` holds the termination
-    /// analysis — and without this the standard chain stopped at the outermost message.
-    /// A caller printing `{:#}`, or walking `Error::source`, saw "the chase refused"
-    /// and could not reach WHICH ceiling refused it, though the value was right there;
-    /// the only way through was to match this enum's concrete variant, which is what a
-    /// trait-object error exists to avoid.
-    ///
-    /// The rest return `None` because they genuinely have no cause to name.
-    /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — `UnreachedImport` carries the unused table keys,
-    /// `IncompatibleImports` carries the conflicting
-    /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
-    /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
-    /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
-    /// that the premise has no model, and the run it describes succeeded at producing
-    /// it, so calling it the cause of this error would misdescribe both. `Canonicalization`
-    /// carries [`purrdf_core::CanonError`], which DOES have a cause to name.
+    /// `Build`, `Parse` and `MalformedList` retain diagnostic messages.
+    /// `UnresolvedImport` and `UnreachedImport` retain original IRI keys;
+    /// `IncompatibleImports` retains the conflicting document pairs. These
+    /// payloads describe the refusal itself rather than a nested error.
+    /// `Inconsistent` carries the original successful run's inconsistency
+    /// witness and report. Unit refusals also have no nested cause.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Storage(inner) => Some(inner),
+            Self::Dataset { cause, .. } => Some(cause),
             Self::Evaluate(inner) => Some(inner),
+            Self::Maintenance(inner) => Some(inner.as_ref()),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
             Self::ForeignTerm(inner) => Some(inner),
             Self::RoleHierarchy(inner) => Some(inner),
+            Self::OwlSyntax(inner) => Some(inner.as_ref()),
+            Self::RifXml(inner) => Some(inner.as_ref()),
+            Self::RifVariable(inner) => Some(inner),
+            Self::KeyMembership(inner) => Some(inner.as_ref()),
+            Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
+            | Self::PropertyKind { .. }
+            | Self::Decision(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
             | Self::Inconsistent(_)
@@ -943,10 +1096,8 @@ pub fn materialize_until<D: DatasetView>(
 ///
 /// The four rule-table lanes — `Rdf`, `Rdfs`, `OwlRl` and `D` — are evaluated by
 /// `purrdf-datalog`, each graph of the dataset in its own store, and every one of those
-/// evaluations runs under `options`. Unstated, a limit is the target's default: 4,194,304
-/// stored facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`
-/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
-/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). A run
+/// evaluations runs under `options`. Unstated fact, join and arena settings impose
+/// no logical ceiling on any target; physical storage admission still applies. A run
 /// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the
 /// limit, the numbers and `EvalOptions`' knob; a run inside them returns exactly the
 /// closure any larger limits would, and its report's
@@ -1107,6 +1258,15 @@ mod tests {
         type TermGuard<'a> = TermRef<'a>;
         type ProbePlan = ();
 
+        fn reserve_owned_workspace(
+            &self,
+            _bytes: u64,
+        ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
+        {
+            // Reads fail independently; this resident fixture admits retained payloads.
+            Some(Ok(purrdf_core::NoopReservation::owned()))
+        }
+
         fn read_error(&self) -> Option<Self::ReadError> {
             self.failed.get().then(|| Arc::clone(&self.cause))
         }
@@ -1172,7 +1332,13 @@ mod tests {
                     1,
                 );
                 let error = if recorded {
-                    Reasoner::with_proofs(&source)
+                    Reasoner::with_proofs(
+                        &source,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
                 } else {
                     Reasoner::new(&source)
                 }
@@ -1250,17 +1416,37 @@ mod tests {
     fn proof_context_retains_native_source_failures_before_and_after_identity() {
         let data = dataset(&[(X, RDF_TYPE, A)]);
         let complete = FailingSource::new(Arc::clone(&data), false, usize::MAX);
-        try_ontology_identity(&complete).expect("complete identity");
+        try_ontology_identity(
+            &complete,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("complete identity");
         let identity_passes = complete.passes.get();
         assert!(identity_passes > 0);
-        DlProofContext::of_ontology(&complete).expect("complete checking context");
+        DlProofContext::of_ontology(
+            &complete,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("complete checking context");
 
         for fail_term in [false, true] {
             for fail_on_pass in [1, identity_passes + 1] {
                 let source = FailingSource::new(Arc::clone(&data), fail_term, fail_on_pass);
                 let cause = Arc::clone(&source.cause);
-                let error = DlProofContext::of_ontology(&source)
-                    .expect_err("an incomplete source cannot publish a checking context");
+                let error = DlProofContext::of_ontology(
+                    &source,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect_err("an incomplete source cannot publish a checking context");
                 drop(source);
                 let native = match &error {
                     DlProofError::SourceRead(native)
@@ -1904,24 +2090,33 @@ mod tests {
         let rdfs = materialize(&ds, Materialization::Rdfs).expect("closed").1;
         let rdf_certificate = rdf.termination().expect("the RDF lane is chased");
         let rdfs_certificate = rdfs.termination().expect("the RDFS lane is chased");
-        assert!(rdf_certificate.existential_edges() > 0);
-        assert!(rdf_certificate.positions() > 0);
+        assert_eq!(
+            rdf_certificate.criterion(),
+            purrdf_datalog::chase::TerminationCriterion::WeaklyAcyclic
+        );
+        assert_eq!(
+            rdf_certificate.law_version(),
+            purrdf_datalog::chase::WA_LAW_VERSION
+        );
+        assert!(rdf_certificate.summary().is_certified());
+        let rdf_edges = rdf_certificate.existential_edges().expect("WA statistics");
+        let rdf_positions = rdf_certificate.positions().expect("WA statistics");
+        assert!(rdf_edges > 0);
+        assert!(rdf_positions > 0);
         assert_ne!(
             rdf_certificate, rdfs_certificate,
             "the certificate is a function of the CLAUSE SET, so two different rule tables \
              must not prove the same thing"
         );
         assert!(
-            rdfs_certificate.existential_edges() > rdf_certificate.existential_edges(),
+            rdfs_certificate.existential_edges().expect("WA statistics") > rdf_edges,
             "RDFS states rdfs14/rdfs14a besides rdfD1/rdfD1a"
         );
         // It is `purrdf-datalog`'s own sentence, not a second spelling of it.
         assert_eq!(
             rdf_certificate.to_string(),
             format!(
-                "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
-                rdf_certificate.positions(),
-                rdf_certificate.existential_edges()
+                "weakly acyclic: {rdf_positions} refined position(s), {rdf_edges} existential edge(s), none in a cycle"
             )
         );
         // It does NOT vary with the data — a certificate that moved per input would be
@@ -2791,23 +2986,13 @@ mod tests {
     /// exists to prevent, so an exhausted limit is [`EntailError::Chase`] (or
     /// [`EntailError::Evaluate`]) and the closure is not produced at all.
     ///
-    /// The input is a cross product past the `wasm32` default stored-fact limit: `p`
-    /// carries 360 `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must
-    /// conclude 136 800 typings — more than the 131,072 facts
-    /// [`WASM_DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS)
-    /// admits, and well inside the native default. Under the `wasm32` limit, stated, the
-    /// run is refused naming the knob, and the report carries the OBSERVATION that proved
-    /// the limit was passed rather than the limit itself, because a figure rounded down to
-    /// the limit would tell a caller nothing about how far over they are. Under the native
-    /// stored-fact default the run passes the default join-step limit instead, naming that
-    /// knob, and completes when it is raised too; its report names the calculus under the
-    /// limits in force.
+    /// Caller-selected fact and join ceilings refuse the cross product with
+    /// exact observations. Larger settings admit every required typing, and the
+    /// report identifies the effective calculus rather than a target preset.
     #[test]
     fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
         use purrdf_datalog::chase::ChaseError;
-        use purrdf_datalog::seminaive::{
-            BudgetResource, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS,
-        };
+        use purrdf_datalog::seminaive::BudgetResource;
 
         /// `rdfs:domain` declarations on `p`.
         const CLASSES: usize = 360;
@@ -2831,20 +3016,17 @@ mod tests {
         // The `RDFS` lane runs through the restricted chase (it states four existential
         // rules), so its limit refusal is the chase's — the SAME limits, charged the same
         // way, refused by name rather than truncated.
-        let wasm = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let wasm = EvalOptions::default().with_max_stored_facts(131_072);
         let refused = materialize_with(&ds, Materialization::Rdfs, &wasm, None)
             .expect_err("a cross product past the limit must be refused, not truncated");
         let EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) = &refused else {
             panic!("expected the chase's limit refusal, got {refused:?}");
         };
         assert_eq!(*resource, BudgetResource::StoredFacts);
-        assert!(
-            report.stored_facts() as u64 > WASM_DEFAULT_MAX_STORED_FACTS,
-            "the report must carry the observation that passed the limit, not the limit: \
-             {} vs {WASM_DEFAULT_MAX_STORED_FACTS}",
-            report.stored_facts()
-        );
-        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(report.stored_facts() as u64, 131_072);
+        assert_eq!(report.observed_stored_facts() as u64, 131_072 + 1);
+        assert_eq!(resource.observed(*report), 131_072 + 1);
+        assert_eq!(report.stored_fact_limit(), 131_072);
         let rendered = refused.to_string();
         assert!(
             rendered.contains("131072 permitted (the caller's limit)")
@@ -2852,13 +3034,14 @@ mod tests {
             "{rendered}"
         );
 
-        // The valid neighbour: the native stored-fact default holds every typing. The chase
-        // enumerates more candidates than the default join-step limit admits, so that is
+        // The valid neighbour: the selected fact allowance holds every typing. The chase
+        // enumerates more candidates than the selected join allowance admits, so that is
         // refused naming its own knob, and a raised join-step limit admits the run.
-        let native_facts =
-            EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let native_facts = EvalOptions::default()
+            .with_max_stored_facts(4_194_304)
+            .with_max_join_steps(1_048_576);
         let steps = materialize_with(&ds, Materialization::Rdfs, &native_facts, None)
-            .expect_err("the default join-step limit is passed")
+            .expect_err("the selected finite join-step limit is passed")
             .to_string();
         assert!(
             steps.ends_with("raise it with EvalOptions::with_max_join_steps"),
@@ -2878,10 +3061,7 @@ mod tests {
             CLASSES * TRIPLES,
             "rdfs2 types every subject by every class"
         );
-        assert_eq!(
-            report.budget().stored_fact_limit(),
-            NATIVE_DEFAULT_MAX_STORED_FACTS
-        );
+        assert_eq!(report.budget().stored_fact_limit(), 4_194_304);
         assert_eq!(
             report.contract_hash(),
             purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &native)
@@ -2992,7 +3172,7 @@ mod tests {
                 "{regime:?}: a term was fabricated for the triple term"
             );
             // Opacity is the licensed part, and it is REPORTED: the chase never reasons
-            // into the quoted triple. rdfs14 / rdfs14a do fire over it, but each concludes
+            // into the quoted triple. `rdfs14` / `rdfs14a` do fire over it, but each concludes
             // about a fresh surrogate the answer may not bind, so nothing they draw reaches
             // the closure and the run says so with the triple-term boundary.
             assert!(

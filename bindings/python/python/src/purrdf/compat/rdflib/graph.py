@@ -703,11 +703,11 @@ class Graph:
         for subj in self.subjects(predicate, object):
             yield from self.transitive_subjects(predicate, subj, remember)
 
-    def isomorphic(self, other: Graph) -> bool:
+    def isomorphic(self, other: Graph, *, canonical_search: str) -> bool:
         """Return whether this graph is isomorphic to ``other`` (RDFC-1.0)."""
         from .compare import isomorphic
 
-        return isomorphic(self, other)
+        return isomorphic(self, other, canonical_search=canonical_search)
 
     # ── graph topology / views ─────────────────────────────────────────────────────
 
@@ -1117,6 +1117,8 @@ class Graph:
         path_relations: dict[str, object] | None = None,
         aggregate_namespace: str | None = None,
         division: str | None = None,
+        now: str | None = None,
+        entropy_seed: int | None = None,
         xpath_regex: str | None = None,
         **kwargs: object,
     ) -> Result:
@@ -1156,13 +1158,15 @@ class Graph:
             path_relations=path_relations,
             aggregate_namespace=aggregate_namespace,
             division=division,
+            now=now,
+            entropy_seed=entropy_seed,
             named_graphs=isinstance(self, Dataset),
             default_graph=_native_subject(self._graph_name) if self._graph_name is not None else None,
             default_union=getattr(self, "default_union", False),
             xpath_regex=xpath_regex,
         )
         if isinstance(res, purrdf.QueryBoolean):
-            return Result("ASK", ask=bool(res))
+            return Result("ASK", ask=bool(res), execution_receipt_json=res.execution_receipt_json)
         if isinstance(res, purrdf.QueryTriples):
             constructed = Graph()
             nt = res.serialize(_NT)
@@ -1171,7 +1175,7 @@ class Graph:
             form = (
                 "DESCRIBE" if _query_form(query_object) == "DESCRIBE" else "CONSTRUCT"
             )
-            return Result(form, graph=constructed)
+            return Result(form, graph=constructed, execution_receipt_json=res.execution_receipt_json)
         if isinstance(res, purrdf.QueryQuads):
             # A quad template (`CONSTRUCT { GRAPH ?g { ... } }` — a first-party
             # extension, NOT defined by SPARQL 1.2) wrote at least one named
@@ -1183,14 +1187,14 @@ class Graph:
             nq = res.serialize(_NQ)
             if nq:
                 dataset._store.load(nq, format=_NQ)
-            return Result("CONSTRUCT", graph=dataset)
+            return Result("CONSTRUCT", graph=dataset, execution_receipt_json=res.execution_receipt_json)
         variables = list(res.variables)
         var_names = tuple(Variable(v.value) for v in variables)
         rows = [
             ResultRow(tuple(from_native(sol[index]) for index in range(len(variables))), var_names)
             for sol in res
         ]
-        return Result("SELECT", rows=rows, variables=var_names)
+        return Result("SELECT", rows=rows, variables=var_names, execution_receipt_json=res.execution_receipt_json)
 
     def update(
         self,
@@ -1201,8 +1205,10 @@ class Graph:
         extension_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
         xpath_regex: str | None = None,
+        now: str | None = None,
+        entropy_seed: int | None = None,
         **kwargs: object,
-    ) -> None:
+    ) -> purrdf.UpdateOutcome:
         """Run a SPARQL UPDATE against this graph.
 
         ``Store.update`` has no native ``substitutions`` kwarg (unlike
@@ -1213,6 +1219,9 @@ class Graph:
         ``xpath_regex`` are the native engine configuration knobs (see
         ``Store.update``) and are forwarded verbatim. Any other keyword is a param the native surface
         genuinely cannot honor, so it raises rather than being swallowed.
+        ``now`` and ``entropy_seed`` select exact request coordinates. Native
+        decoding precedes snapshots and execution, after the nonmutating prefix
+        and bindings preprocessing above.
         """
         if kwargs:
             raise TypeError(
@@ -1223,13 +1232,16 @@ class Graph:
             update_object = prefix_block + update_object
         if initBindings:
             update_object = _inline_bound_variables(update_object, initBindings)
-        self._store.update(
+        outcome = self._store.update(
             update_object,
             extension_namespaces=extension_namespaces,
             standpoint_predicates=standpoint_predicates,
             xpath_regex=xpath_regex,
+            now=now,
+            entropy_seed=entropy_seed,
         )
         self._reconcile_literal_terms()
+        return outcome
 
     def _reconcile_literal_terms(self) -> None:
         """Prune literal provenance whose backing quad no longer exists.

@@ -53,26 +53,52 @@
 //! `N = 1,280` and `2N = 2,560`. The "before" column is this same file, unchanged,
 //! run against the revision this one replaced:
 //!
-//! | surface | allocations before | after | historical requested bytes before | after |
+//! | surface | historical allocations before | current allocations | historical requested bytes before | historical requested bytes after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 77 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 79 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 43 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 99 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 55 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 97 | 13,393 | 6,744 |
 //!
-//! The "after" column is the figure pinned below, which is a live number rather
-//! than a historical one: it moves whenever the evaluator's per-query setup gets
-//! cheaper, and the pins move with it.
+//! The current allocations column is pinned below and moves whenever the
+//! evaluator's per-query setup changes. The byte columns retain their historical
+//! measurements.
 //! Historically, moving short BIND loops to the sequential path made the expression fixture
 //! requests 5,737,974 bytes at N and 11,496,054 at 2N, with 85 allocations per
 //! focus node; its governed counterpart has 110 allocations per focus node.
 //!
 //! Native ownership now retains unchanged immutable schemas through unions and
 //! projections, instead of cloning their columns and allocating another outer
-//! control. The current expression cost is79 per focus node, six fewer across
-//! its two scalar calls; ASK is77. The governed costs are56/97/64/104. Existing
+//! control. Before execution receipts, this brought expression cost to 79 per
+//! focus node and ASK to 77; governed costs were 56/97/64/103. Existing
 //! filtered schemas still construct their exact admitted layout before birth.
-//! The entry constants and every N/2N/4N closed-form assertion are unchanged.
+//! Borrowed delta-view IRI lookup removes one focus resolution copy from each
+//! expression's path-values evaluation and four setup copies from its governed
+//! change expansion. Its entry constant is now 37; every N/2N/4N closed-form
+//! assertion still uses exact equality, with no tolerance.
+//!
+//! Execution receipts now identify every effective binding, including unused
+//! bindings and repeated names. `capture_query` grounds value-door bindings under
+//! the original memory account before hashing the shared algebra token stream.
+//! In these fixtures each owned text needs its bytes and shared control: two for an IRI
+//! or blank label, four for a plain or typed literal including its datatype.
+//! Already-grounded id-door bindings share their immutable text without allocation.
+//! Thus the per-focus increases are exactly 2 for `sh:sparql` (current shape),
+//! 20 for ASK (two runs, each with current shape 2, boolean parameter 4 and value 4),
+//! 6 for SELECT (current shape 2 and boolean parameter 4), and 16 for the expression
+//! (two runs with two literals at 4 each). Both lanes pay the same increments:
+//! 42/97/54/95 ungoverned and 58/117/70/119 governed at that revision. Entry and
+//! doubling terms are unchanged. Receipt grounding is separate from the rewrite's
+//! retained probes.
+//!
+//! The heap driver now retains nested operator continuations in an admitted
+//! spill buffer. A symbolized allocation trace over 512 warmed SELECT calls
+//! identifies one such allocation per query. The expression reentry classifier
+//! keeps its first 32 pending parts inline, removing its two avoidable allocations
+//! on these fixtures. Current ungoverned costs are 43/99/55/97: one additional
+//! allocation for each query, including the two calls made by ASK and expression.
+//! Restored seeded positive execution brings governed costs to 46/101/58/101.
+//! Entry and doubling terms, exact equality and conformance checks are unchanged.
 //!
 //! # What a run does not pay for
 //!
@@ -83,7 +109,8 @@
 //! that does hold one (the `sh:ask` validator's `isLiteral($value) && $askParam`) is
 //! compiled on each run into the tables of the program it compiled last. A parameter
 //! that is bound to the same term on consecutive runs (the shape and shapes-graph
-//! context a validator binds per focus node) is grounded once and shared. What each
+//! context a validator binds per focus node) is grounded once and shared by the
+//! rewrite; receipt identity separately grounds its effective binding. What each
 //! figure is made of is the query's evaluation itself: grounding the focus node, the
 //! seed row, the basic graph pattern and its join onto the seed, the `FILTER`'s link
 //! and rows, and the SHACL side's binding and result materialization.
@@ -264,9 +291,9 @@
 //! * SHACL validation fans focus nodes over `rayon` above its parallel threshold,
 //!   so a per-thread window would miss every worker. Every measurement here uses a
 //!   [`WholeProcessWindow`].
-//! * That window reads one process-global ledger and `cargo test` runs a binary's
-//!   tests concurrently, so [`MEASURE_LOCK`] serializes every measured region in
-//!   this binary. Poisoning is absorbed, so one failure does not cascade.
+//! * The shared serial runner executes cases and reporting synchronously on
+//!   the same thread, keeping runner allocation traffic outside each window.
+//!   Concurrent test requests are refused; Rayon workers remain parallel.
 //! * [`FOCUS_NODES`] and its double both sit above [`PARALLEL_MIN_FOCUS_NODES`],
 //!   checked when the file compiles, and [`assert_parallel_path_is_reachable`]
 //!   refuses to report a figure from a host whose pool cannot take that path.
@@ -307,7 +334,7 @@ mod measured;
 
 use std::sync::Arc;
 
-use measured::{assert_parallel_path_is_reachable, measure_lock, measure_min};
+use measured::{assert_parallel_path_is_reachable, measure_min};
 
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
@@ -474,16 +501,18 @@ struct SparqlCase {
     /// three, whatever their query text — which is the reading that says this is
     /// the ENTRY's own cost (the `GovernorState`, the scope guard, the expansion's
     /// return at the opacity check, and the evidence read back afterwards) and not
-    /// the query's. The one surface whose footprint is boundable measures **41**,
+    /// the query's. The one surface whose footprint is boundable measures **37**,
     /// and it is the one taking the other lane: its expansion really walks the
     /// change instead of returning at that check. It was 39 until every shapes
     /// graph's footprint gained the `sh:shape` read (SHACL 1.2 Core, "Explicit
     /// shape targets": a data-graph `n sh:shape <shape>` makes `n` a focus node),
-    /// whose predicate the walking expansion resolves once — one allocation on a
-    /// delta-backed view, which builds the owned term it looks up. It was 40 until
+    /// whose predicate the walking expansion resolves once — formerly one
+    /// allocation on a delta-backed view to build the owned term. It was 40 until
     /// the walking expansion also asked whether the change moves a data-graph
     /// `sh:shapesGraph` link (SHACL 1.2 Core section 6.4, which changes the shapes
-    /// graph itself): the same one owned-term lookup, of that predicate.
+    /// graph itself): the same one owned-term lookup, of that predicate. Borrowed
+    /// delta lookup then removed four fixed spelling copies from this expansion;
+    /// its predicates no longer construct owned terms merely to ask for an IRI.
     ///
     /// Per case rather than shared for exactly that reason. A single number would
     /// have to be wrong for one of the two lanes, and a number loose enough to
@@ -526,8 +555,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 40,
-        governed_per_focus_node: 56,
+        per_focus_node: 43,
+        governed_per_focus_node: 46,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -546,12 +575,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 77,
+        per_focus_node: 99,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 97,
+        governed_per_focus_node: 101,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -574,8 +603,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 48,
-        governed_per_focus_node: 64,
+        per_focus_node: 55,
+        governed_per_focus_node: 58,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -592,9 +621,9 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 79,
-        governed_per_focus_node: 104,
-        governed_entry: 41,
+        per_focus_node: 97,
+        governed_per_focus_node: 101,
+        governed_entry: 37,
         footprint_is_boundable: true,
         results_per_violation: 1,
     },
@@ -831,25 +860,29 @@ fn warm_every_worker(fixture: &Fixture, case: usize) {
 ///
 /// # Why a second `rayon::broadcast`, not the flag alone
 ///
-/// The flag is a thread-local: setting it on the calling (test) thread does nothing
-/// for the pool workers the parallel validation path actually runs on. This reuses
+/// The flag is a thread-local. Governed validation runs on the calling thread;
+/// ordinary parallel validation runs on the pool workers. The window brackets
+/// both. Setting the caller's flag alone does nothing for the workers. This reuses
 /// exactly the mechanism [`warm_every_worker`] already uses to reach every worker
 /// deterministically before a window opens — a `rayon::broadcast` call runs its
 /// closure once on every thread in the pool, so no worker is left with the oracle
 /// on (or, afterwards, left with it off) by chance of which workers a chunked pass
 /// happened to schedule onto.
 ///
-/// # Scope: exactly this window, exactly these workers
+/// # Scope: exactly this window, on the caller and pool workers
 ///
-/// The flag is restored with a second broadcast before returning, including on a
+/// The caller's flag and all worker flags are restored before returning, including on a
 /// panicking `operation` (`std::panic::catch_unwind` plus a resume), so a failing
 /// assertion inside `operation` cannot leave a later, unrelated test's oracle
-/// silently disabled. Nothing outside the broadcasts is touched: a thread that is
-/// never a worker in this pool (there is only one process-wide `rayon` pool, so
-/// that means no other thread at all) never sees the flag change.
+/// silently disabled. Threads outside the calling thread and this worker pool
+/// never see the flag change. Every call outside the measured window retains
+/// its ordinary differential verification.
 fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    {
+        purrdf_sparql_eval::set_memo_verification_enabled(false);
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    }
     // `AssertUnwindSafe`, not a real `UnwindSafe` bound: `operation` only reads the
     // fixture (validation takes `&self`) and this function never inspects any state
     // `operation` touched after a panic, it only resumes the payload unchanged — the
@@ -857,7 +890,10 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     // half-written) does not apply to a caller that never looks.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    {
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+        purrdf_sparql_eval::set_memo_verification_enabled(true);
+    }
     match result {
         Ok(value) => value,
         Err(payload) => std::panic::resume_unwind(payload),
@@ -885,9 +921,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// file's module documentation for what remains and why removing it was out of
 /// reach here. Stating the achievable invariant exactly beats stating the
 /// unachievable one loosely.
-#[test]
 fn every_sparql_surface_costs_a_constant_per_conforming_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = Fixture::build(focus_nodes(2), VIOLATIONS);
@@ -1188,8 +1222,8 @@ fn warm_every_worker_governed(case: usize) {
 /// every pin in this workspace. It is not now.
 ///
 /// Pinned like the headline and for the same reasons: a closed form rather than a
-/// ratio, asserted as an exact equality with no tolerance, over the same
-/// [`measure_lock`], the same [`measure_min`], the same two-stage warm-up and the
+/// ratio, asserted as an exact equality with no tolerance, under the same
+/// serial runner, the same [`measure_min`], the same two-stage warm-up and the
 /// same [`without_memo_verification`] bracket.
 ///
 /// Two structural differences, both forced by the entry point rather than chosen.
@@ -1207,9 +1241,7 @@ fn warm_every_worker_governed(case: usize) {
 /// A third size settles it by measurement rather than by assumption, exactly as
 /// `tests/change_path_alloc.rs` uses four change sizes so its per-row term "cannot
 /// be confused with" a doubling one.
-#[test]
 fn every_sparql_surface_costs_a_constant_per_governed_change_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let mut report = String::new();
@@ -1263,9 +1295,7 @@ fn every_sparql_surface_costs_a_constant_per_governed_change_focus_node() {
 /// satisfied perfectly by a governed lane that stopped evaluating. The measured
 /// fixture above is all-conforming, so this is the only thing standing between that
 /// figure and a validator that answers `conforms` without running a query.
-#[test]
 fn every_sparql_surface_still_reports_its_violations_when_governed() {
-    let _guard = measure_lock();
     let violating: Vec<String> = (0..VIOLATIONS).map(|i| format!("{NS}v{i}")).collect();
 
     for (case, spec) in CASES.iter().enumerate() {
@@ -1368,7 +1398,7 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `86` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `99` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared
@@ -1388,7 +1418,14 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// program, and the rest to the engine entry and the SHACL side's value terms.
 /// That trace was taken at 212; a query the seed alone reaches now skips the
 /// rewrite's expression walk, which took 12 of the rewrite's share.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 198;
+/// Execution receipt capture adds 20 to the previous pin of 198: each of two
+/// runs grounds the focus IRI (2), literal value (4), and both occurrences of the
+/// current-shape IRI (2 each). Unlike the prepared door, this fallback carries
+/// the focus as an owned value too. Repeated names remain part of the request
+/// identity; neither binding is discarded.
+/// The admitted continuation spill adds one allocation per query, making the
+/// current two-run cost 220. The classifier's short walk stays inline.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 220;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.
@@ -1504,13 +1541,11 @@ fn warm_every_worker_fallback(fixture: &FallbackFixture) {
 /// invisible as the governed lane's was before `1b` above closed that gap for
 /// the prepared door.
 ///
-/// Same harness as the headline: [`measure_lock`] first, [`warm_every_worker_fallback`]
+/// Same serial runner as the headline: [`warm_every_worker_fallback`]
 /// outside the window, [`without_memo_verification`] bracketing the two
 /// [`measure_min`] calls, and an EXACT closed-form equality at both
 /// populations — no tolerance, for the same reason the headline gives.
-#[test]
 fn ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = FallbackFixture::build(focus_nodes(2), VIOLATIONS);
@@ -1565,9 +1600,7 @@ fn ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node() {
 /// population through [`PreparedValidator::validate_focus_node_ids`] — the surface
 /// the measurement uses, not a convenience wrapper beside it — and pins the focus
 /// node and the reported value of every result.
-#[test]
 fn every_sparql_surface_still_reports_its_violations() {
-    let _guard = measure_lock();
     let fixture = Fixture::build(focus_nodes(1), VIOLATIONS);
     let violating: Vec<String> = (0..VIOLATIONS).map(|i| format!("{NS}v{i}")).collect();
 
@@ -1601,9 +1634,7 @@ fn every_sparql_surface_still_reports_its_violations() {
 /// file's figures would be invisible, and the largest of the savings this revision
 /// makes is exactly there. So the fixture's own shape is asserted rather than
 /// assumed: this is the fact the ASK row's attribution rests on.
-#[test]
 fn the_fixture_gives_every_focus_node_two_value_nodes() {
-    let _guard = measure_lock();
     let dataset = build_dataset(4, 1);
     let name = dataset
         .term_id_by_iri(&format!("{NS}name"))
@@ -1625,10 +1656,6 @@ fn the_fixture_gives_every_focus_node_two_value_nodes() {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// 4. The regression guard: every test in this binary holds MEASURE_LOCK first
-// ---------------------------------------------------------------------------
 
 /// `text` with comment markers and line breaks flattened away, so a claim that
 /// wraps across lines is one searchable string.
@@ -1685,10 +1712,7 @@ fn flattened(text: &str) -> String {
 ///
 /// Whitespace and comment markers are flattened first, because the same
 /// sentence is wrapped differently in Markdown and in rustdoc.
-#[test]
 fn every_registered_prose_site_quotes_the_measured_figures() {
-    let _guard = measure_lock();
-
     let readme = flattened(include_str!("../README.md"));
     let rustdoc = flattened(include_str!("../src/engine.rs"));
     let design_doc = flattened(include_str!(
@@ -1844,39 +1868,12 @@ fn every_registered_prose_site_quotes_the_measured_figures() {
     );
 }
 
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
-#[test]
-fn every_test_in_this_binary_takes_the_measure_lock_first() {
-    let _guard = measure_lock();
-    let source = include_str!("sparql_path_alloc.rs");
-    let (tests, offenders) = measured::tests_and_unlocked(source);
-
-    assert!(
-        tests > 0,
-        "the scan found no #[test] function in this file at all, so this guard is reading \
-         nothing"
-    );
-
-    assert!(
-        offenders.is_empty(),
-        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
-         body, so they can allocate concurrently with another test's WholeProcessWindow and \
-         silently shift its pinned figure: {offenders:?}"
-    );
-}
+purrdf_testkit::harness_main!(serial;
+    every_sparql_surface_costs_a_constant_per_conforming_focus_node,
+    every_sparql_surface_costs_a_constant_per_governed_change_focus_node,
+    every_sparql_surface_still_reports_its_violations_when_governed,
+    ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node,
+    every_sparql_surface_still_reports_its_violations,
+    the_fixture_gives_every_focus_node_two_value_nodes,
+    every_registered_prose_site_quotes_the_measured_figures,
+);

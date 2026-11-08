@@ -460,7 +460,18 @@ fn result_image(result: &SparqlResult) -> String {
     match result {
         SparqlResult::Boolean(value) => format!("boolean {value}"),
         SparqlResult::Graph(graph) => {
-            format!("graph\n{}", purrdf_core::canonicalize(graph).nquads)
+            format!(
+                "graph\n{}",
+                purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
+            )
         }
         SparqlResult::Solutions {
             variables,
@@ -468,7 +479,15 @@ fn result_image(result: &SparqlResult) -> String {
             aux,
         } => format!(
             "solutions {variables:?} {rows:?}\naux\n{}",
-            purrdf_core::canonicalize(aux).nquads
+            purrdf_core::try_canonicalize(
+                aux,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads()
         ),
     }
 }
@@ -480,7 +499,7 @@ fn governed(
     governors: &QueryGovernors,
 ) -> Result<GovernedOutcome, String> {
     NativeSparqlEngine::new()
-        .query_governed(dataset, request(query), QueryOptions::EMPTY, governors)
+        .query_governed(dataset, request(query), &QueryOptions::EMPTY, governors)
         .map_err(|diagnostic| diagnostic.to_string())
 }
 

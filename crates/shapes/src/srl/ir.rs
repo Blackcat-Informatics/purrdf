@@ -37,6 +37,10 @@
 //! inside a producer against the graph the rule runs over. So the IR has no aggregate
 //! literal and the stratifier needs no aggregation stratum.
 
+mod well_formed;
+use well_formed::Condition;
+pub use well_formed::WellFormednessError;
+
 use purrdf_sparql_algebra::{Expression, Flow, NodeRef, Visit, walk_pre_post};
 
 use crate::rules::{OrderKey, Rule as ShaclRule};
@@ -380,17 +384,13 @@ impl ElementRule {
     ///
     /// # Errors
     ///
-    /// A message naming the first violated condition.
-    pub fn check_well_formed(&self) -> Result<(), String> {
+    /// The first violated condition and its original variable operands.
+    pub fn check_well_formed(&self) -> Result<(), WellFormednessError> {
         let all = check_sequence(&self.body, &[], false)?;
         for template in &self.head {
             for variable in template.variable_names() {
                 if !all.contains(&variable) {
-                    return Err(format!(
-                        "head variable ?{variable} is not bound by the rule body (SPARQL 1.2 \
-                         RL: \"each variable in a triple template of the rule head is an \
-                         element of Vall\")"
-                    ));
+                    return Err(WellFormednessError::new(Condition::Head(variable)));
                 }
             }
         }
@@ -412,7 +412,7 @@ fn check_sequence(
     elements: &[Element],
     initial: &[String],
     inside_negation: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, WellFormednessError> {
     let mut bound: Vec<String> = initial.to_vec();
     for element in elements {
         match element {
@@ -423,11 +423,7 @@ fn check_sequence(
                 refuse_exists(expression)?;
                 for variable in expression_variables(expression) {
                     if !bound.contains(&variable) {
-                        return Err(format!(
-                            "filter reads ?{variable} before any earlier element binds it \
-                             (SPARQL 1.2 RL: \"every variable mentioned in a filter element is \
-                             an element of Vi-1\")"
-                        ));
+                        return Err(WellFormednessError::new(Condition::Filter(variable)));
                     }
                 }
             }
@@ -436,37 +432,29 @@ fn check_sequence(
                 expression,
             } => {
                 if inside_negation {
-                    return Err(format!(
-                        "an assignment to ?{variable} inside a negation element; a negation \
-                         element body is \"comprised of a sequence of triple pattern elements \
-                         and filter elements\""
-                    ));
+                    return Err(WellFormednessError::new(Condition::NegatedAssignment(
+                        variable.clone(),
+                    )));
                 }
                 refuse_exists(expression)?;
                 for read in expression_variables(expression) {
                     if !bound.contains(&read) {
-                        return Err(format!(
-                            "assignment to ?{variable} reads ?{read} before any earlier element \
-                             binds it"
-                        ));
+                        return Err(WellFormednessError::new(Condition::AssignmentRead {
+                            variable: variable.clone(),
+                            read,
+                        }));
                     }
                 }
                 if bound.contains(variable) {
-                    return Err(format!(
-                        "assignment to ?{variable}, which an earlier element already binds \
-                         (SPARQL 1.2 RL: \"the assignment variable is an not element of \
-                         Vi-1\")"
-                    ));
+                    return Err(WellFormednessError::new(Condition::Rebound(
+                        variable.clone(),
+                    )));
                 }
                 bound.push(variable.clone());
             }
             Element::Negation { elements, .. } => {
                 if inside_negation {
-                    return Err(
-                        "a negation element nested inside a negation element; its body holds \
-                         triple patterns and filters only"
-                            .to_owned(),
-                    );
+                    return Err(WellFormednessError::new(Condition::NestedNegation));
                 }
                 check_sequence(elements, &bound, true)?;
             }
@@ -476,13 +464,9 @@ fn check_sequence(
 }
 
 /// Refuse an `EXISTS` inside a rule-element expression (see [`expression_has_exists`]).
-fn refuse_exists(expression: &Expression) -> Result<(), String> {
+fn refuse_exists(expression: &Expression) -> Result<(), WellFormednessError> {
     if expression_has_exists(expression) {
-        return Err(
-            "an EXISTS pattern inside a rule-element expression; SPARQL 1.2 RL expresses \
-             absence with its negation element (NOT { … })"
-                .to_owned(),
-        );
+        return Err(WellFormednessError::new(Condition::Exists));
     }
     Ok(())
 }
@@ -543,7 +527,14 @@ mod tests {
                 Element::Pattern(pattern(var("x"), "p", var("v"))),
             ],
         );
-        assert!(early.check_well_formed().is_err());
+        let failure = early.check_well_formed().unwrap_err();
+        drop(early);
+        let captured = purrdf_testkit::error_capture::Capture::read(&failure);
+        assert_eq!(captured.code, "srl-filter-unbound");
+        assert!(matches!(
+            captured.field("variable"),
+            purrdf_hash::error::ErrorValue::Text("v")
+        ));
 
         // An assignment rebinding a variable.
         let rebind = rule(

@@ -15,6 +15,7 @@ mod format;
 mod query;
 mod session;
 mod stack;
+pub(crate) use query::SegmentedSourceVersion;
 
 pub use build::{SegmentedBuildLimits, SegmentedBuilder, SegmentedImage};
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,6 +138,8 @@ pub enum SegmentedError {
     Storage(purrdf_lex::allocation::StorageError),
     /// Original malformed statistical-record or domain-codec failure.
     Statistics(super::pack::bits::PackBitsError),
+    /// Original native failure while decoding a compressed dictionary block.
+    Compression(purrdf_deflate::Error),
     /// The host could not complete a requested read.
     Provider {
         /// Fixed host operation label; retaining an error never allocates text.
@@ -178,6 +181,34 @@ pub enum SegmentedError {
     Stopped(StopCause),
 }
 
+impl purrdf_hash::error::StructuredError for SegmentedError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "segmented-storage" { "cause" => Cause(cause) },
+        Statistics(cause) => "segmented-statistics" { "cause" => Cause(cause) },
+        Compression(cause) => "segmented-compression" { "cause" => Cause(cause) },
+        Provider { operation, host_code } => "segmented-provider" {
+            "operation" => Text(operation),
+            "host_code" => Value(host_code.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |code| purrdf_hash::error::ErrorValue::Signed(i128::from(code)))),
+        },
+        Corrupt(message) => "segmented-corrupt" { "message" => Text(message) },
+        SnapshotMismatch => "segmented-snapshot-mismatch" {},
+        AddressExhausted => "segmented-address-exhausted" {},
+        AllocationFailed(construct) => "segmented-allocation-failed" { "construct" => Text(construct) },
+        SharedOwnership(cause) => "segmented-shared-ownership" { "cause" => Cause(cause) },
+        Residency { requested, limit } => "segmented-residency" {
+            "requested" => ByteCount(u128::from(*requested)), "limit" => ByteCount(u128::from(*limit)),
+        },
+        IoBytes { requested, limit } => "segmented-io-bytes" {
+            "requested" => ByteCount(u128::from(*requested)), "limit" => ByteCount(u128::from(*limit)),
+        },
+        PinnedBlocks => "segmented-pinned-blocks" {},
+        EvidenceExhausted => "segmented-evidence-exhausted" {},
+        ConstructionLimit => "segmented-construction-limit" {},
+        Stopped(cause) => "segmented-stopped" { "cause" => Record(cause) },
+    }
+}
+
 impl SegmentedError {
     fn from_rdf(error: crate::RdfDiagnostic, invalid: &'static str) -> Self {
         let result = error
@@ -193,6 +224,9 @@ impl std::fmt::Display for SegmentedError {
         match self {
             Self::Storage(error) => error.fmt(f),
             Self::Statistics(error) => write!(f, "invalid segmented statistics: {error}"),
+            Self::Compression(error) => {
+                write!(f, "invalid compressed segmented dictionary: {error}")
+            }
             Self::Provider {
                 operation,
                 host_code,
@@ -228,6 +262,7 @@ impl std::fmt::Display for SegmentedError {
 purrdf_lex::error_source!(SegmentedError {
     Storage,
     Statistics,
+    Compression,
     SharedOwnership
 });
 

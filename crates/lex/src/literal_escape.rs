@@ -261,12 +261,23 @@ fn write_from<W: TextOut + ?Sized>(
 ) {
     let bytes = value.as_bytes();
     let find = finder(carrier);
-    while let Some(offset) = find(&bytes[at..]) {
+    while at < bytes.len() {
+        let end = at.saturating_add(out.scan_limit().max(1)).min(bytes.len());
+        if !out.checkpoint(end - at) {
+            return;
+        }
+        let Some(offset) = find(&bytes[at..end]) else {
+            at = end;
+            continue;
+        };
         let hit = at + offset;
         match escape_at(bytes, hit, carrier) {
             Some((escape, len)) => {
                 out.push_str(&value[run..hit]);
                 push_escape(escape, out);
+                if out.failed() {
+                    return;
+                }
                 at = hit + len;
                 run = at;
             }

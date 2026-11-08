@@ -137,14 +137,11 @@
 //! be green while measuring nearly nothing. Every measurement here therefore uses
 //! a [`WholeProcessWindow`], which counts every thread.
 //!
-//! That window reads one process-global ledger, and `cargo test` runs a binary's
-//! test functions concurrently, so a second test measuring at the same time would
-//! land its traffic inside the first one's figures — and so would a test that
-//! takes no measurement at all but allocates while someone else's window is open.
-//! [`MEASURE_LOCK`] serializes every measured region in this binary AND every
-//! test that does enough work to be seen from one; each takes it first and holds
-//! it for its whole body. Poisoning is absorbed rather than propagated, so one
-//! failing test does not cascade into unrelated failures that hide it.
+//! That window reads one process-global ledger. The shared serial runner executes
+//! each case and its reporting synchronously on the same thread, so runner
+//! allocation traffic cannot overlap a measurement. A test-body mutex alone
+//! cannot isolate libtest reporting or thread lifecycle outside that body.
+//! Concurrent test requests are refused; Rayon workers remain parallel.
 //!
 //! [`FOCUS_NODES`] and its double are both above [`PARALLEL_MIN_FOCUS_NODES`], so
 //! the invariant is stated over the parallel path rather than over a
@@ -199,7 +196,7 @@ mod measured;
 
 use std::sync::Arc;
 
-use measured::{measure, measure_lock, measure_min};
+use measured::{measure, measure_min};
 
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
@@ -422,11 +419,28 @@ const BIND_ALLOC_CONST: u64 = 59;
 ///
 /// Product admission restores its own fixed shapes graph through `restore_pack`,
 /// which freezes the native RDF tables and their predicate/domain metadata.
-/// Sealing that metadata adds fifteen allocations for this product: the measured
-/// restore is 292 for both instance sizes. This is work on the carried product,
-/// not a scan or copy of the instance dataset. The equality across sizes and the
-/// live restored-validator checks below remain part of the contract.
-const ADMIT_ALLOC_CONST: u64 = 292;
+/// Predicate/domain metadata adds fifteen allocations for this product. Its
+/// independent source metadata adds one more: a source-record buffer reserved
+/// once for the fixed carried graph's sixteen asserted rows. There are no
+/// annotations, so normalized keys reuse that same directory. A directory below
+/// 32 rows needs no checkpoint, and scalar term hashing needs no pending buffer.
+/// This replaces eleven source allocations from two growing record vectors,
+/// traversal scratch and two resized checkpoint vectors. The measured restore
+/// retains its complete original definition domain once. A graph with no function
+/// class needs no function parser or prefix-map copies, and an edgeless strong
+/// ownership graph needs no SCC scratch. Identity refresh hashes the canonical
+/// framing directly, without serialization buffers. Scalar-registry fingerprints
+/// now stream into SHA-256 too. Admission fingerprints these empty populations
+/// five times: once for host admission, twice when checking installed declarations,
+/// and twice when checking the restored identity. Each previously allocated a
+/// domain frame and then grew its buffer for the population frame. Streaming
+/// removes those ten allocations; the resident capability and empty declaration
+/// ordering allocate nothing. The measured restore is therefore 220 for both
+/// instance sizes. This is work
+/// on the carried product rather than a scan or copy of the instance dataset. The
+/// equality across sizes and the live restored-validator checks below remain
+/// part of the contract.
+const ADMIT_ALLOC_CONST: u64 = 220;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
@@ -1395,9 +1409,7 @@ fn allocation_exclusion(case: &str) -> Option<&'static str> {
 /// An exclusion keyed by a name no case carries is invisible: it excludes
 /// nothing, reads as if it excludes something, and would just as happily survive
 /// the case being renamed out from under the assertion it was meant to skip.
-#[test]
 fn every_allocation_exclusion_names_a_real_case() {
-    let _guard = measure_lock();
     for (name, reason) in ALLOCATION_EXCLUSIONS {
         assert!(
             CASES.iter().any(|case| case.name == *name),
@@ -1750,6 +1762,33 @@ fn validate_conforming(
     report
 }
 
+/// Original-model admission is shared even with a worker that has never seen
+/// this model. One focus keeps the callback serial, so the current-thread
+/// ledger measures the whole validation without thread-launch traffic.
+fn a_fresh_worker_reuses_original_model_admission() {
+    let case = CASES
+        .iter()
+        .find(|case| case.name == "node_by_expression")
+        .expect("the data-dependent shape reference case exists");
+    let fixture = build_case(case, 1, 0);
+    drop(validate_conforming(&fixture, ChangePath::Ids, 1, case.name));
+    let sample = || {
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let report = validate_conforming(&fixture, ChangePath::Ids, 1, case.name);
+        (report, window.close())
+    };
+    let (report, warm) = sample();
+    drop(report);
+    let (report, fresh) =
+        std::thread::scope(|scope| scope.spawn(sample).join().expect("fresh worker completes"));
+    drop(report);
+    assert_eq!(
+        fresh.allocations, warm.allocations,
+        "a fresh worker repeated original-model admission: warm {warm:?}, fresh {fresh:?}"
+    );
+    assert_eq!(fresh.requested_bytes, warm.requested_bytes);
+}
+
 // ---------------------------------------------------------------------------
 // 1. The headline
 // ---------------------------------------------------------------------------
@@ -1766,9 +1805,7 @@ fn validate_conforming(
 /// exactly the term this test exists to forbid to hide.
 ///
 /// Both change-path entry points are driven, and the failure message names which.
-#[test]
 fn conforming_change_path_allocation_has_no_growth_term_in_focus_count() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     for case in CASES {
@@ -1842,9 +1879,7 @@ fn conforming_change_path_allocation_has_no_growth_term_in_focus_count() {
 ///
 /// The two populations are varied one at a time and never traded against each
 /// other; [`CaseFixture::focus_set`] says why that distinction is not cosmetic.
-#[test]
 fn violating_change_path_allocation_scales_with_violations_not_focus_count() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     for case in CASES {
@@ -1964,10 +1999,7 @@ const _: () = assert!(
 /// The non-vacuity check is the same one the rest of the file uses, and it
 /// matters more here than anywhere: a `sh:pattern` that never ran would have a
 /// beautifully flat slope.
-#[test]
 fn pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold() {
-    let _guard = measure_lock();
-
     let name = "pattern";
     let case = CASES
         .iter()
@@ -2080,21 +2112,13 @@ const EXPANSION_EMPTY_CHAIN_SHAPES: &str = "ex:Shape a sh:NodeShape ; sh:targetC
 
 /// The expansion's fixed cost, independent of how many rows changed.
 ///
-/// One of the three is the `sh:shape` trigger every shapes graph carries: the
-/// data graph's `n sh:shape <shape>` statements (SHACL 1.2 Core, "Explicit shape
-/// targets") can make any node a focus node of any shape, so the footprint reads
-/// them for every shapes graph. The expansion resolves each trigger's predicate
-/// once per call, and on a delta-backed view that lookup builds the owned term it
-/// asks for — one allocation, charged once, whatever the change's size. It adds
-/// nothing to the per-row or per-doubling terms.
-///
-/// A fourth is the same kind of lookup for `sh:shapesGraph`. A change that adds or
-/// retracts a data-graph link (SHACL 1.2 Core section 6.4) changes the shapes graph
-/// itself, so the expansion first asks whether the snapshot interns that predicate at all
-/// — one owned term on a delta-backed view, charged once per call. A snapshot that does
-/// not intern it has no link on either side of the change, and the question costs nothing
-/// further.
-const EXPANSION_CONST: u64 = 4;
+/// The shapes-graph link check constructs one owned `sh:shapesGraph` term.
+/// Trigger predicate lookups borrow their IRIs, including on delta views.
+const EXPANSION_CONST: u64 = 1;
+
+/// The changed-row and affected-id vectors each start at capacity four, so their
+/// doubling series each needs one fewer allocation than `log2(N)`.
+const EXPANSION_VECTOR_STARTUP: u64 = 2;
 
 /// What ONE changed row costs the expansion once it has a chain to walk back.
 ///
@@ -2132,12 +2156,16 @@ const EXPANSION_PER_DOUBLING: u64 = 3;
 
 /// The expansion's measured cost for `changes` changed rows.
 ///
-/// `EXPANSION_CONST + EXPANSION_PER_ROW * N + EXPANSION_PER_DOUBLING * log2(N)`.
+/// `1 + 2N + 3 log2(N) - 2`.
 /// Exact at every size in [`EXPANSION_CHANGE_SIZES`], with no tolerance: an
 /// allocation count is a fact about the code.
 fn expansion_alloc_model(changes: usize) -> u64 {
-    let doublings = u64::from(changes.ilog2());
-    EXPANSION_CONST + EXPANSION_PER_ROW * changes as u64 + EXPANSION_PER_DOUBLING * doublings
+    EXPANSION_PER_ROW * changes as u64 + expansion_growth_alloc_model(changes)
+}
+
+/// Fixed cost and collection growth shared by expansions with and without paths.
+fn expansion_growth_alloc_model(changes: usize) -> u64 {
+    EXPANSION_CONST + EXPANSION_PER_DOUBLING * u64::from(changes.ilog2()) - EXPANSION_VECTOR_STARTUP
 }
 
 /// A delta-bound validator over [`EXPANSION_FOCUS_NODES`] focus nodes whose mutation
@@ -2228,7 +2256,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
     ids.len()
 }
 
-/// **Expanding a change costs `3 + 2N + 3·log2(N)` allocations for `N` changed
+/// **Expanding a change costs `1 + 2N + 3·log2(N) - 2` allocations for `N` changed
 /// rows — and the `2N` is the delta view's type-erased probe, not the walk.**
 ///
 /// `affected_focus_node_ids` is the surface the incremental soundness claim rests
@@ -2238,7 +2266,7 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// building a `HashSet` frontier table per changed row — while the validation
 /// beside it ran the lowered one. Measured on this revision before that was fixed,
 /// the same fixture cost `4 + 4N + 3·log2(N)`: 278 allocations for 64 changed rows
-/// and 537 for 128, against 149 and 280 now.
+/// and 537 for 128, against 145 and 276 now.
 ///
 /// A closed form rather than a flat `alloc(2N) == alloc(N)`, for the reason
 /// `tests/sparql_path_alloc.rs` states for its three surfaces: the residual terms
@@ -2250,21 +2278,23 @@ fn expand(fixture: &ExpansionFixture, expected: usize) -> usize {
 /// term in the CHANGE.
 ///
 /// [`ShaclDatasetView`]: ../src/data_view.rs
-#[test]
 fn change_expansion_allocation_matches_its_pinned_closed_form() {
-    let _guard = measure_lock();
-
+    let mut samples = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
     for changes in EXPANSION_CHANGE_SIZES {
         let fixture = expansion_fixture(EXPANSION_SHAPES, changes);
         // Warm-up, outside the window and with the exact arguments measured below.
         assert_eq!(expand(&fixture, changes), changes);
 
         let (_, measured) = measure_min(|| expand(&fixture, changes));
+        samples.push((changes, measured));
+    }
+    for (changes, measured) in samples {
         assert_eq!(
             measured.allocations,
             expansion_alloc_model(changes),
             "expanding {changes} changed rows allocated {}, and the pinned closed form \
-             ({EXPANSION_CONST} + {EXPANSION_PER_ROW}N + {EXPANSION_PER_DOUBLING}·log2 N) says \
+             ({EXPANSION_CONST} + {EXPANSION_PER_ROW}N + {EXPANSION_PER_DOUBLING}·log2 N \
+             - {EXPANSION_VECTOR_STARTUP}) says \
              {}. A HIGHER per-row coefficient means the expansion has gone back to walking a \
              chain it rebuilds and re-resolves per changed row; a lower one is welcome and should \
              move these constants\n  {measured:?}",
@@ -2283,15 +2313,12 @@ fn change_expansion_allocation_matches_its_pinned_closed_form() {
 /// matching trigger is anchored AT the changed row's subject, so the expansion takes
 /// the branch that performs no pattern lookup at all.
 ///
-/// Measured on this revision the per-row term is then exactly zero — 18 allocations
-/// for 32 changed rows and 27 for 256, which is `3 + 3·log2(N)`: the three doubling
-/// series, and a constant of 3 that includes the `sh:shape` trigger's predicate
-/// lookup and the `sh:shapesGraph` link lookup [`EXPANSION_CONST`] describes. So the `2N` above really is one probe per row, and a
+/// Measured on this revision the per-row term is then exactly zero — 14 allocations
+/// for 32 changed rows and 23 for 256, which is `1 + 3 log2(N) - 2`: the three
+/// doubling series with their initial capacities and the fixed link check.
+/// So the `2N` above really is one probe per row, and a
 /// per-row term that ever appeared HERE would be the expansion's own.
-#[test]
 fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
-    let _guard = measure_lock();
-
     let mut measured = Vec::with_capacity(EXPANSION_CHANGE_SIZES.len());
     for changes in EXPANSION_CHANGE_SIZES {
         let fixture = expansion_fixture(EXPANSION_EMPTY_CHAIN_SHAPES, changes);
@@ -2301,12 +2328,12 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
     }
 
     for (changes, sample) in &measured {
-        let doublings = u64::from(changes.ilog2());
         assert_eq!(
             sample.allocations,
-            3 + EXPANSION_PER_DOUBLING * doublings,
+            expansion_growth_alloc_model(*changes),
             "expanding {changes} changed rows through an EMPTY chain allocated {}, not the \
-             3 + {EXPANSION_PER_DOUBLING}·log2 N this control is pinned at. A per-row term here \
+             {EXPANSION_CONST} + {EXPANSION_PER_DOUBLING}·log2 N - {EXPANSION_VECTOR_STARTUP} \
+             this control is pinned at. A per-row term here \
              is the expansion's own, and it would mean the {EXPANSION_PER_ROW} charged per row \
              in change_expansion_allocation_matches_its_pinned_closed_form is no longer the \
              probe it is attributed to\n  {sample:?}",
@@ -2326,17 +2353,9 @@ fn change_expansion_with_no_chain_to_walk_costs_no_path_probe() {
 /// "the change path got cheaper" can never be satisfied by "the change path
 /// stopped saying anything".
 ///
-/// It takes no measurement of its own and still takes [`MEASURE_LOCK`], for the
-/// other half of that lock's job. [`WholeProcessWindow`] counts EVERY thread, and
-/// `cargo test` runs this binary's test functions concurrently, so this test's
-/// own allocation traffic would otherwise land inside a sibling's window and be
-/// reported as the change path's cost. Serializing it out is not a tolerance: it
-/// removes traffic that provably is not the measured region's, and it makes the
-/// figures the other tests print smaller and more stable rather than more
-/// permissive.
-#[test]
+/// The shared serial runner also isolates this case's allocation traffic from
+/// every whole-process measurement in the binary.
 fn change_path_report_bytes_match_pinned_golden() {
-    let _guard = measure_lock();
     let rendered = render_golden();
     assert_eq!(
         rendered, GOLDEN,
@@ -2434,10 +2453,7 @@ fn carried_report_text(report: &ValidationReport) -> String {
 /// timing threshold: an allocation count is a fact about the code, reproducible on
 /// any host at any core count, so asserting it costs nothing in flakiness and buys
 /// a build failure the day binding starts allocating per triple.
-#[test]
 fn bind_allocation_is_independent_of_dataset_size_beyond_the_catalog() {
-    let _guard = measure_lock();
-
     let shapes = Arc::new(parse_shapes(&seam_shapes_source(), None).expect("seam shapes parse"));
     let prepared = PreparedShapes::new(shapes);
     let small = seam_dataset(SEAM_FOCUS_NODES);
@@ -2499,14 +2515,17 @@ fn bind_allocation_is_independent_of_dataset_size_beyond_the_catalog() {
 /// path it is sold as. The measurement is therefore taken with a bound validator
 /// over each dataset size held live, so a figure that started depending on the
 /// data in scope would move.
-#[test]
 fn admit_allocation_is_independent_of_dataset_size() {
-    let _guard = measure_lock();
-
     let shapes = Arc::new(parse_shapes(&seam_shapes_source(), None).expect("seam shapes parse"));
     let prepared = PreparedShapes::new(shapes);
     let product = prepared
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the seam shapes graph encodes as a product");
     let host = HostBindings::empty();
 
@@ -2553,47 +2572,6 @@ fn admit_allocation_is_independent_of_dataset_size() {
         "admit's constant term moved from {ADMIT_ALLOC_CONST} to {}; this is a determinism pin, so \
          the question is what changed in admission, not what the number should be now",
         small.allocations,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 6. The regression guard: every test in this binary holds MEASURE_LOCK first
-// ---------------------------------------------------------------------------
-
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
-#[test]
-fn every_test_in_this_binary_takes_the_measure_lock_first() {
-    let _guard = measure_lock();
-    let source = include_str!("change_path_alloc.rs");
-    let (tests, offenders) = measured::tests_and_unlocked(source);
-
-    assert!(
-        tests > 0,
-        "the scan found no #[test] function in this file at all, so this guard is reading \
-         nothing"
-    );
-
-    assert!(
-        offenders.is_empty(),
-        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
-         body, so they can allocate concurrently with another test's WholeProcessWindow and \
-         silently shift its pinned figure: {offenders:?}"
     );
 }
 
@@ -2694,14 +2672,20 @@ fn all_constraint_kind_names() -> Vec<String> {
 /// would change existing `CASES` entries, which must stay fixed, so the
 /// mapping is recorded instead.
 ///
-/// `sh:qualifiedValueShape` is the one case: `PlannedConstraint::QualifiedValueShape`
+/// `PlannedConstraint::QualifiedValueShape`
 /// carries the shape, its siblings, both counts and the disjointness flag as
 /// ONE constraint, but `CASES` exercises it through two scenarios named for
-/// which count it violates.
-const KIND_NAME_ALIASES: &[(&str, &[&str])] = &[(
-    "qualified_value_shape",
-    &["qualified_min_count", "qualified_max_count"],
-)];
+/// which count it violates. Identity references execute in the `node` fixture's
+/// referenced target body; property references execute in the nested `property`
+/// fixture. Both retain those fixtures' existing allocation ceilings.
+const KIND_NAME_ALIASES: &[(&str, &[&str])] = &[
+    ("reference", &["node"]),
+    ("property_reference", &["property"]),
+    (
+        "qualified_value_shape",
+        &["qualified_min_count", "qualified_max_count"],
+    ),
+];
 
 /// One [`SIBLING_FILE_COVERAGE`] entry: a kind, the sibling file that measures
 /// it (repository-relative to this crate, i.e. relative to `CARGO_MANIFEST_DIR`),
@@ -2736,7 +2720,7 @@ type SiblingCoverageEntry = (
 /// decomposed against the historical baseline term of 96/214/116/194 — the
 /// figure this surface measured before the reductions recorded in
 /// `tests/sparql_path_alloc.rs`'s module documentation, which have since moved it
-/// to the current 40/77/48/79 — and it is not one
+/// to the current 43/99/55/97 — and it is not one
 /// thing. Per focus node the pre-binding rewrite — the algebra clone, the term
 /// materialization, the pushdown, the seed and the expression walk together — is
 /// 27% to 51% of the charge depending on the surface, and the algebra clone
@@ -2867,9 +2851,7 @@ fn sibling_case_names(path: &str) -> Vec<String> {
 /// satisfying [`every_constraint_kind_is_covered_by_an_allocation_case`] while
 /// the kind it claims to cover quietly went unmeasured — exactly the failure
 /// shape this whole guard exists to rule out.
-#[test]
 fn every_sibling_file_coverage_entry_names_a_real_case() {
-    let _guard = measure_lock();
     for (kind, path, case_names, reason) in SIBLING_FILE_COVERAGE {
         assert!(
             !reason.trim().is_empty(),
@@ -2969,9 +2951,7 @@ fn covered_kind_names() -> FastSet<String> {
 /// constraint kind carries an allocation measurement" enforceable from here on,
 /// rather than a claim someone has to remember to re-check. A future kind that
 /// arrives without one fails HERE, by name.
-#[test]
 fn every_constraint_kind_is_covered_by_an_allocation_case() {
-    let _guard = measure_lock();
     let covered = covered_kind_names();
     let mut uncovered: Vec<String> = all_constraint_kind_names()
         .into_iter()
@@ -2984,3 +2964,18 @@ fn every_constraint_kind_is_covered_by_an_allocation_case() {
         "constraint kinds with no allocation coverage anywhere in this crate: {uncovered:?}"
     );
 }
+
+purrdf_testkit::harness_main!(serial;
+    a_fresh_worker_reuses_original_model_admission,
+    every_allocation_exclusion_names_a_real_case,
+    conforming_change_path_allocation_has_no_growth_term_in_focus_count,
+    violating_change_path_allocation_scales_with_violations_not_focus_count,
+    pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold,
+    change_expansion_allocation_matches_its_pinned_closed_form,
+    change_expansion_with_no_chain_to_walk_costs_no_path_probe,
+    change_path_report_bytes_match_pinned_golden,
+    bind_allocation_is_independent_of_dataset_size_beyond_the_catalog,
+    admit_allocation_is_independent_of_dataset_size,
+    every_sibling_file_coverage_entry_names_a_real_case,
+    every_constraint_kind_is_covered_by_an_allocation_case,
+);

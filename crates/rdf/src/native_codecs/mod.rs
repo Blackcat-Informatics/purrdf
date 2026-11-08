@@ -40,6 +40,8 @@ pub mod okf;
 // First-party N-Triples / N-Quads / Turtle / TriG text parser: lowers
 // directly to the in-memory GtsGraph the statement-layer fold consumes, replacing the
 // purrdf-gts text codecs for the line/Turtle family.
+mod acquisition;
+mod retained;
 mod text_parse;
 // First-party RDF/XML codec: implements the W3C RDF/XML grammar in-repo on
 // the workspace's one XML reader (`purrdf_lex::xml`), parsing straight into the frozen IR through the
@@ -57,6 +59,7 @@ mod hextuples;
 // Opt-in triple → source-position side table (SARIF source tracing). A runtime option,
 // NOT a Cargo feature; the default `NoSpans` collector monomorphizes the recording out
 // so the pre-existing parse path is byte-identical.
+mod source_occurrence;
 mod span;
 mod syntax;
 // Per-format codec dispatch: the single `NativeRdfFormat` → behavior chokepoint. Holds
@@ -71,11 +74,18 @@ mod codec;
 // resident. Non-line-oriented grammars are read whole, as their syntax requires.
 mod stream;
 
+pub use acquisition::{NativeParseError, TextError as ParseControlError};
 pub use media_type::{NativeRdfFormat, classify};
 pub use parse::{
-    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_reporting_failure, parse_dataset_with,
+    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_controlled,
+    parse_dataset_reporting_failure, parse_dataset_with,
 };
+pub use retained::{BorrowedReadError, BorrowedSource, ParseRefusal, RetainedParse};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
+pub use source_occurrence::{
+    SourceAssociationError, SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind,
+    SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind, SourceTermOrigin,
+};
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
@@ -211,7 +221,15 @@ mod tests {
     fn assert_round_trips(dataset: &RdfDataset, media_type: &str) {
         let reparsed = round_trip(dataset, media_type);
         assert!(
-            datasets_isomorphic(dataset, &reparsed),
+            datasets_isomorphic(
+                dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "round-trip via {media_type} must be isomorphic"
         );
     }
@@ -223,6 +241,9 @@ mod tests {
         let p = b.intern_iri("https://e/p").unwrap();
         let o = b.intern_iri("https://e/o").unwrap();
         b.push_quad(s, p, o, None).unwrap();
+        let rdf_type = b.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+        let class = b.intern_iri("https://example.org/Type").unwrap();
+        b.push_quad(s, rdf_type, class, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // Every bidirectional format round-trips a basic graph isomorphically — JSON-LD /
         // YAML-LD alongside the FULL declared peer set (including TriX / HexTuples).
@@ -286,6 +307,9 @@ mod tests {
             .unwrap();
         b.push_reifier(r, triple).unwrap();
         b.push_annotation(r, conf, val).unwrap();
+        let rdf_type = b.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+        let class = b.intern_iri("https://example.org/Review").unwrap();
+        b.push_annotation(r, rdf_type, class).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/n-triples");
         assert_round_trips(&ds, "text/turtle");
@@ -381,11 +405,7 @@ mod tests {
         let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
             .expect_err("@annotation inside a @triple component must be rejected");
         assert_eq!(err.code, "native-jsonld-decode");
-        assert!(
-            err.message
-                .contains("not permitted inside a @triple component"),
-            "unexpected error: {err}"
-        );
+        assert_eq!(err.message, "triple components cannot carry annotations");
     }
 
     #[test]
@@ -412,10 +432,9 @@ mod tests {
         let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
             .expect_err("@annotation directly inside a @triple object must be rejected");
         assert_eq!(err.code, "native-jsonld-decode");
-        assert!(
-            err.message
-                .contains("not permitted inside a @triple object"),
-            "unexpected error: {err}"
+        assert_eq!(
+            err.message,
+            "@triple requires exactly @subject, @predicate and @object"
         );
     }
 
@@ -597,7 +616,15 @@ mod tests {
                 .expect("generic parse");
             let reparsed = sink.into_dataset().expect("sink finished");
             assert!(
-                datasets_isomorphic(&ds, &reparsed),
+                datasets_isomorphic(
+                    &ds,
+                    &reparsed,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
                 "GtsCodecBackend round-trip via {media_type} must be isomorphic"
             );
         }
@@ -759,7 +786,15 @@ mod tests {
         );
         assert_eq!(reparsed.quad_count(), 5, "all five nodes survive the cycle");
         assert!(
-            datasets_isomorphic(&ds, &reparsed),
+            datasets_isomorphic(
+                &ds,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "round trip via N-Triples must be isomorphic"
         );
     }

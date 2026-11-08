@@ -659,7 +659,7 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
     for filler in [20_usize, 2_000] {
         let index = grown_index(filler);
         let candidates = select(
-            &index,
+            &*index,
             &Analyzer::empty_lexicon()
                 .terms(needle)
                 .expect("valid text analysis"),
@@ -713,7 +713,10 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
             (lexical(&streamed_row[2]), lexical(&streamed_row[5])),
             "the in-place score and matched count are the ranked reading's, exactly"
         );
-        let document = index.documents_with_subject(&d3)[0];
+        let document = index
+            .documents_with_subject(&d3)
+            .next()
+            .expect("the indexed subject has a document");
         let scored = candidates
             .iter()
             .find(|row| row.document == document)
@@ -828,7 +831,7 @@ fn engine_answer_over(dataset: &RdfDataset, query: &str) -> (usize, [u64; 6]) {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry)
                     .expect("the fixture declarations read cleanly"),
             ),

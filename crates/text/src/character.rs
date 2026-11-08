@@ -42,9 +42,8 @@ pub struct HanMatchEvidence {
     pub generation: [u8; 32],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HanOccurrence {
-    pub document: u32,
     pub literal: [u8; 32],
     pub projection: Projection,
 }
@@ -63,7 +62,10 @@ impl HanCharacterIndex {
     pub fn from_dataset<D: DatasetView>(
         dataset: &D,
         config: &TextIndexConfig,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         Self::from_dataset_with_ranking(dataset, config, RankingProfile::single_field())
     }
 
@@ -75,7 +77,10 @@ impl HanCharacterIndex {
         dataset: &D,
         config: &TextIndexConfig,
         ranking: RankingProfile,
-    ) -> Result<Self, TextError> {
+    ) -> Result<Self, TextError>
+    where
+        D::ReadError: purrdf_hash::error::StructuredError,
+    {
         Ok(Self {
             index: Arc::new(TextIndex::from_dataset_with_ranking(
                 dataset,
@@ -102,11 +107,8 @@ impl HanCharacterIndex {
     #[must_use]
     pub fn evidence(&self, document: u32, canonical: &str) -> Vec<HanMatchEvidence> {
         self.index
-            .han_occurrences
-            .iter()
-            .filter(|occurrence| {
-                occurrence.document == document && occurrence.projection.text == canonical
-            })
+            .han_occurrences(document)
+            .filter(|occurrence| occurrence.projection.text == canonical)
             .map(|occurrence| HanMatchEvidence {
                 document,
                 literal: occurrence.literal,

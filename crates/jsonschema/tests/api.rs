@@ -7,11 +7,14 @@
 use std::sync::OnceLock;
 
 use purrdf_jsonschema::{
-    Dialect, EvaluationCause, MAX_REF_CHAIN, Metaschemas, OutputFormat, OutputUnit, Registry,
-    Schema, SchemaError,
+    Dialect, EvaluationCause, EvaluationPolicy, MAX_REF_CHAIN, Metaschemas, OutputFormat,
+    OutputUnit, Registry, Schema, SchemaError,
     ecma::{MatchLimits, PatternError},
 };
 use purrdf_lex::json::{self as lexjson, Object, Value};
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 const DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 const DRAFT_2019_09: &str = "https://json-schema.org/draft/2019-09/schema";
@@ -223,6 +226,33 @@ fn a_recursive_ref_other_than_the_root_is_refused_and_the_root_is_followed() {
     .expect("the root compiles");
     assert!(tree.is_valid(&json("[[], [[]]]")).expect("evaluation"));
     assert!(!tree.is_valid(&json("[[1]]")).expect("evaluation"));
+    let policy = EvaluationPolicy::default().with_reference_chain_limit(1);
+    assert!(
+        tree.is_valid_with_policy(&json("[[], [[]]]"), policy)
+            .expect("descent resets")
+    );
+    assert!(
+        !tree
+            .evaluate_with_policy(&json("[[1]]"), policy)
+            .expect("admitted invalid instance")
+            .is_valid()
+    );
+    let error = tree
+        .evaluate_with_policy(&json("[[]]"), policy.with_reference_chain_limit(0))
+        .expect_err("first reference refused");
+    assert_eq!(
+        error.cause,
+        EvaluationCause::ReferenceChain {
+            attempted: 1,
+            maximum: 0
+        }
+    );
+    assert_eq!(error.instance_location, "/0");
+    assert!(error.keyword_location.ends_with("/items/$recursiveRef"));
+    assert!(
+        tree.is_valid_with_policy(&json("[]"), policy.with_reference_chain_limit(0))
+            .expect("no reference needed")
+    );
 }
 
 fn a_draft_07_id_with_a_pointer_fragment_is_refused_and_a_plain_name_is_an_anchor() {
@@ -570,6 +600,17 @@ fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
         EvaluationCause::Pattern(PatternError::Resource { .. })
     ));
     assert!(schema.evaluate_with_limits(&input, limits).is_err());
+    let policy = EvaluationPolicy::default().with_pattern_limits(limits);
+    assert_eq!(
+        schema.is_valid_with_policy(&input, policy),
+        Err(error.clone())
+    );
+    assert_eq!(
+        schema
+            .evaluate_with_policy(&input, policy)
+            .expect_err("budget exceeded"),
+        error
+    );
 }
 
 fn overdeep_regex_format_is_a_resource_error() {
@@ -593,24 +634,24 @@ fn overdeep_regex_format_is_a_resource_error() {
 
 /// A schema whose root starts a chain of `links` references, each to the
 /// next definition, ending at a definition that requires a string.
-fn reference_chain(links: usize) -> Value {
+fn reference_chain(links: usize, keyword: &str) -> Value {
     let mut definitions = Object::new();
     for link in 1..links {
         definitions.insert(
             format!("d{link}"),
-            Object::new().with("$ref", format!("#/$defs/d{}", link + 1)),
+            Object::new().with(keyword, format!("#/$defs/d{}", link + 1)),
         );
     }
     definitions.insert(format!("d{links}"), json(r#"{"type": "string"}"#));
     Value::from(
         Object::new()
-            .with("$ref", "#/$defs/d1")
+            .with(keyword, "#/$defs/d1")
             .with("$defs", definitions),
     )
 }
 
 fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
-    let at_bound = compile(reference_chain(MAX_REF_CHAIN)).expect("schema");
+    let at_bound = compile(reference_chain(MAX_REF_CHAIN, "$ref")).expect("schema");
     assert!(at_bound.is_valid(&json(r#""text""#)).expect("evaluation"));
     assert!(!at_bound.is_valid(&json("1")).expect("evaluation"));
     assert!(
@@ -620,17 +661,114 @@ fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
             .is_valid()
     );
 
-    let past = compile(reference_chain(MAX_REF_CHAIN + 1)).expect("schema");
+    let past = compile(reference_chain(MAX_REF_CHAIN + 1, "$ref")).expect("schema");
     let error = past.is_valid(&json(r#""text""#)).expect_err("chain bound");
-    assert_eq!(error.cause, EvaluationCause::ReferenceChain);
+    assert_eq!(
+        error.cause,
+        EvaluationCause::ReferenceChain {
+            attempted: MAX_REF_CHAIN + 1,
+            maximum: MAX_REF_CHAIN
+        }
+    );
     assert!(error.keyword_location.ends_with("/$ref"), "{error}");
     assert_eq!(error.instance_location, "");
     assert_eq!(
         past.evaluate(&json(r#""text""#))
             .expect_err("chain bound")
             .cause,
-        EvaluationCause::ReferenceChain
+        EvaluationCause::ReferenceChain {
+            attempted: MAX_REF_CHAIN + 1,
+            maximum: MAX_REF_CHAIN
+        }
     );
+}
+
+fn caller_policy_admits_long_chains_and_retains_truthful_refusals() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    for keyword in ["$ref", "$dynamicRef"] {
+        let length = MAX_REF_CHAIN + 20;
+        let schema = compile(reference_chain(length, keyword)).expect("schema");
+        let policy = EvaluationPolicy::default().with_reference_chain_limit(length);
+        for (input, valid) in [(json(r#""text""#), true), (json("1"), false)] {
+            assert_eq!(
+                schema
+                    .is_valid_with_policy(&input, policy)
+                    .expect("admitted"),
+                valid
+            );
+            let output = schema
+                .evaluate_with_policy(&input, policy)
+                .expect("admitted");
+            assert_eq!(output.is_valid(), valid);
+            for format in [
+                OutputFormat::Flag,
+                OutputFormat::Basic,
+                OutputFormat::Detailed,
+            ] {
+                assert_eq!(output.to_json(format)["valid"], Value::Bool(valid));
+            }
+            let error = schema
+                .is_valid_with_policy(&input, policy.with_reference_chain_limit(2))
+                .expect_err("selected maximum");
+            assert_eq!(
+                error.cause,
+                EvaluationCause::ReferenceChain {
+                    attempted: 3,
+                    maximum: 2
+                }
+            );
+            assert!(
+                error
+                    .keyword_location
+                    .ends_with(&format!("/$defs/d2/{keyword}")),
+                "{error}"
+            );
+            assert_eq!(error.instance_location, "");
+            let captured = Capture::read(&error).child("cause");
+            assert_eq!(captured.code, "schema-evaluation-reference-chain");
+            assert!(matches!(
+                captured.field("attempted"),
+                ErrorValue::Unsigned(3)
+            ));
+            assert!(matches!(captured.field("maximum"), ErrorValue::Unsigned(2)));
+            assert_eq!(
+                schema
+                    .evaluate_with_policy(&input, policy.with_reference_chain_limit(2))
+                    .expect_err("selected maximum"),
+                error
+            );
+        }
+    }
+}
+
+fn admitted_reference_chain_resource_growth() {
+    // Schema compilation and instance ownership are outside each evaluation
+    // window. Keep output alive until close to measure retained result state.
+    for length in [32, 128, 512] {
+        let schema = compile(reference_chain(length, "$ref")).expect("schema");
+        let input = json(r#""text""#);
+        let policy = EvaluationPolicy::default().with_reference_chain_limit(length);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let valid = schema
+            .is_valid_with_policy(&input, policy)
+            .expect("admitted");
+        let flag = window.close();
+        assert!(valid);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let output = schema
+            .evaluate_with_policy(&input, policy)
+            .expect("admitted");
+        let full = window.close();
+        assert!(output.is_valid());
+        // Exact source-derived work for this acyclic, same-instance fixture:
+        // each follow scans every preceding link, without an early cycle hit.
+        let probes = length * (length - 1) / 2;
+        println!(
+            "chain={length} visits={length} membership_probes={probes} flag={flag:?} full={full:?}"
+        );
+    }
 }
 
 fn descending_into_the_instance_starts_a_new_reference_chain() {
@@ -648,6 +786,18 @@ fn descending_into_the_instance_starts_a_new_reference_chain() {
         instance = Value::Array(vec![instance]);
     }
     assert!(schema.is_valid(&instance).expect("evaluation"));
+    let policy = EvaluationPolicy::default().with_reference_chain_limit(1);
+    assert!(
+        schema
+            .is_valid_with_policy(&instance, policy)
+            .expect("descent resets")
+    );
+    assert!(
+        schema
+            .evaluate_with_policy(&instance, policy)
+            .expect("descent resets")
+            .is_valid()
+    );
 }
 
 /// `depth` single-property objects nested inside one another.
@@ -975,6 +1125,20 @@ fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
             )
         })
     }));
+    for maximum in [2, MAX_REF_CHAIN + 20] {
+        let policy = EvaluationPolicy::default().with_reference_chain_limit(maximum);
+        assert!(
+            !schema
+                .is_valid_with_policy(&json("1"), policy)
+                .expect("true cycle is invalid")
+        );
+        assert_eq!(
+            schema
+                .evaluate_with_policy(&json("1"), policy)
+                .expect("cycle output"),
+            output
+        );
+    }
     let consuming = compile(json(r##"{"$defs": {"tree": {"type": "array", "items": {"$ref": "#/$defs/tree"}}}, "$ref": "#/$defs/tree"}"##))
         .expect("a consuming cycle compiles");
     assert!(consuming.is_valid(&json("[[[]], []]")).expect("evaluation"));
@@ -1289,6 +1453,8 @@ purrdf_testkit::harness_main!(
     matcher_exhaustion_is_an_error_not_an_invalid_verdict,
     overdeep_regex_format_is_a_resource_error,
     a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates,
+    caller_policy_admits_long_chains_and_retains_truthful_refusals,
+    admitted_reference_chain_resource_growth,
     descending_into_the_instance_starts_a_new_reference_chain,
     a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack,
     output_units_ten_thousand_deep_clone_compare_and_format_on_a_small_stack,

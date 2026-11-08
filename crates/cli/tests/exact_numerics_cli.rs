@@ -340,6 +340,10 @@ fn shex_numeric_facets_compare_every_digit() {
 
 #[test]
 fn owl_dl_tells_two_sixty_digit_values_apart() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ontology = |second: &str| {
         format!(
@@ -356,7 +360,16 @@ fn owl_dl_tells_two_sixty_digit_values_apart() {
         "differ.ttl",
         &ontology(&format!("1{}1", "0".repeat(58))),
     );
-    let out = run(&["consistency", &differ]);
+    let out = run(&[
+        "consistency",
+        &differ,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
         stdout(&out).starts_with("consistency false\n"),
@@ -369,7 +382,16 @@ fn owl_dl_tells_two_sixty_digit_values_apart() {
         "same.ttl",
         &ontology(&format!("01{}", "0".repeat(59))),
     );
-    let out = run(&["consistency", &same]);
+    let out = run(&[
+        "consistency",
+        &same,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
         stdout(&out).starts_with("consistency true\n"),

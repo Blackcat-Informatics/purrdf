@@ -219,7 +219,7 @@ fn run(query: &str) -> Result<Vec<Vec<Option<TermValue>>>, String> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_functions(&registry),
+            &QueryOptions::new().with_functions(&registry),
         )
         .map_err(|error| error.to_string())?;
     let SparqlResult::Solutions { rows, .. } = result else {

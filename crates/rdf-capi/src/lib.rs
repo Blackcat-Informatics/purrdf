@@ -25,11 +25,11 @@
 //!   (`PurrdfStr`) point into library-owned memory — the C side
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
-//!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.11.0 (beta)**; the minor
+//!   `include/purrdf.h` is the contract. The current ABI is **0.20.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
-//!   Pre-1.0, an incompatible change rides a MINOR bump — see
-//!   [`version::PURRDF_ABI_MAJOR`] for the rule and
+//!   Workspace v4 preserves the ABI 0.20.0 signatures and layouts even while the
+//!   ABI version remains beta. Additive exports update MINOR; a version bump
+//!   does not authorize a v4 break. See [`version::PURRDF_ABI_MAJOR`] for the rule and
 //!   `tests/abi_signatures.rs` for the snapshot that enforces it.
 //!
 //! ## Thread-safety (per handle)
@@ -86,8 +86,31 @@ macro_rules! ffi_guard {
     }};
 }
 
+/// Execute one explicit canonical-search request after checking every output slot.
+macro_rules! ffi_canonical_try {
+    ($err_out:expr, $policy:expr, $cancel:expr, $evidence:expr,
+     [$($output:expr),* $(,)?], $control:ident, $body:block) => {{
+        ffi_try!($err_out, {
+            $crate::canonical::check_outputs(&[
+                $evidence as usize,
+                $($output as usize,)*
+            ], $err_out as usize)?;
+            let (status, receipts) = $crate::canonical::run(
+                $policy, $cancel, ::core::convert::identity,
+                |$control| -> Result<$crate::status::PurrdfStatus, $crate::error::PurrdfError> { $body },
+            )?;
+            *$evidence = $crate::handles::into_handle(
+                $crate::buffer::PurrdfBuffer::from(receipts.into_bytes()),
+            );
+            Ok(status)
+        })
+    }};
+}
+
 pub mod buffer;
+mod canonical;
 pub mod cursor;
+pub mod document_expansion;
 pub mod entail;
 pub mod error;
 pub mod geo;
@@ -106,6 +129,7 @@ pub mod status;
 pub mod term;
 pub mod version;
 pub mod xsd;
+pub mod yaml_source;
 
 /// Render a caught panic payload as a human-readable message.
 pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -232,3 +256,7 @@ mod tests {
         assert_eq!(error.code, PurrdfStatus::NullPointer);
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/receipt.rs"]
+mod receipt;

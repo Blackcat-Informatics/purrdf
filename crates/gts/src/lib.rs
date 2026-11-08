@@ -70,15 +70,17 @@ pub mod compact;
 pub mod cose;
 pub mod dict;
 pub mod event_stream;
-// emojihash + randomart now live in the standalone `visual-hashing` crate;
-// re-exported here so `purrdf_gts::emojihash::…` paths keep resolving.
-pub use visual_hashing as emojihash;
+/// Fallible native visual fingerprints; key callers render original key bytes.
+pub use purrdf_lex::visual_fingerprint as emojihash;
 pub mod examples;
 pub mod files;
 #[doc(hidden)]
 pub mod fixture;
 pub mod from_tar;
+mod lattice;
 pub mod mldsa65;
+/// Native FIPS 203 ML-KEM-1024 with caller-supplied entropy.
+pub mod mlkem1024;
 pub mod mmr;
 pub mod model;
 pub mod nested;
@@ -97,6 +99,7 @@ mod rfc3339;
 pub mod segment_decode;
 pub mod stream;
 pub mod tar;
+mod term_table;
 pub mod transport;
 pub mod ulid;
 pub mod verify;

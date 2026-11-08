@@ -18,7 +18,11 @@ use purrdf_shapes::json_schema::{
 use purrdf_shapes::shapes::from_dataset;
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
-fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaCompileError> {
+fn compile_pattern(
+    pattern: &str,
+    flags: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<CompiledSchema, SchemaCompileError> {
     let turtle = format!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
@@ -41,12 +45,10 @@ fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaC
         SchemaSurfaceMode::ShapedOnly,
         SchemaSurfaceMode::OntologyComplete,
     ] {
-        let result = compile_schema(&SchemaCompileRequest::new(
-            &shapes,
-            &namespaces,
-            &dataset,
-            mode,
-        ));
+        let result = compile_schema(
+            &SchemaCompileRequest::new(&shapes, &namespaces, &dataset, mode),
+            control,
+        );
         match (&compiled, result) {
             (Ok(expected), Ok(actual)) => {
                 assert_eq!(actual.compiled.schema_json, expected.schema_json);
@@ -59,7 +61,12 @@ fn compile_pattern(pattern: &str, flags: &str) -> Result<CompiledSchema, SchemaC
 }
 
 fn emitted(pattern: &str, flags: &str) -> String {
-    let compiled = compile_pattern(pattern, flags).expect("faithful compilation");
+    let compiled = compile_pattern(
+        pattern,
+        flags,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("faithful compilation");
     assert!(
         compiled.losses.is_empty(),
         "{}",

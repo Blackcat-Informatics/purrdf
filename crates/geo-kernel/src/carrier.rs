@@ -14,7 +14,9 @@ mod storage;
 mod term;
 pub(crate) mod writer;
 pub use admission::{CarrierStorage, ParseAdmission as InputAdmission, ParseReceipt};
-pub(crate) use admission::{JsonProgress, ParseAdmission, whitespace_only, with_storage};
+pub(crate) use admission::{
+    JsonProgress, ParseAdmission, parse_in_policy, whitespace_only, with_storage,
+};
 pub(crate) use output::{MaterializationStorage, MaterializedLiteral};
 #[cfg(test)]
 pub(crate) use storage::owned_coordinates_storage;
@@ -274,6 +276,8 @@ fn parse_admitted(
 /// datatype or non-literal term. [`GeoError::WktSyntax`] retains WKT grammar
 /// failures and [`GeoError::JsonSyntax`] retains JSON grammar failures.
 /// Structural and GeoJSON shape failures retain their literal-error channel.
+/// WKT and GeoJSON use their parsers' default geometry resource limits; use
+/// [`geometry_arg_in_policy`] for an explicit policy.
 pub fn geometry_arg(vocab: &GeoVocab, value: &TermValue) -> Result<GeometryLiteral, GeoError> {
     geometry_arg_inner(vocab, value, None)
 }
@@ -289,7 +293,13 @@ fn geometry_arg_inner(
         unreachable!("the original carrier-format boundary admits only literals");
     };
     match format {
+        CarrierFormat::Wkt if admission.is_none() => {
+            wkt::parse(lexical_form, vocab.default_wkt_crs())
+        }
         CarrierFormat::Wkt => wkt::parse_admitted(lexical_form, vocab.default_wkt_crs(), admission),
+        CarrierFormat::GeoJson if admission.is_none() => {
+            geojson::parse(lexical_form, vocab.geojson_crs())
+        }
         CarrierFormat::GeoJson => {
             geojson::parse_admitted(lexical_form, vocab.geojson_crs(), admission)
         }

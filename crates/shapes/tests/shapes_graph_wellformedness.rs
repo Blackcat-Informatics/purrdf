@@ -1369,10 +1369,25 @@ fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule()
         );
         let input = turtle::data(PREFIXES, "ex:a a ex:C .");
         let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("rules run");
-        purrdf_rdf::canonicalize(entailed.as_ref()).nquads
+        purrdf_rdf::try_canonicalize(
+            entailed.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     };
-    assert!(!entail("true").contains("<http://example.org/ns#q>"));
-    assert!(entail("false").contains("<http://example.org/ns#q>"));
+    assert!(
+        !entail("true")
+            .nquads()
+            .contains("<http://example.org/ns#q>")
+    );
+    assert!(
+        entail("false")
+            .nquads()
+            .contains("<http://example.org/ns#q>")
+    );
 }
 
 // ── sh:targetNode as a node expression ───────────────────────────────────────
@@ -1921,7 +1936,12 @@ fn an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs() {
         "the SPARQL function ran: only ex:bad's tripled amount exceeds 100"
     );
     let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("the rules run");
-    let nquads = purrdf_rdf::canonicalize(entailed.as_ref()).nquads;
+    let nquads_owner = purrdf_rdf::try_canonicalize(
+        entailed.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let nquads = nquads_owner.nquads();
     assert!(
         nquads.contains(
             "<http://example.org/ns#childCount> \"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"
@@ -2014,7 +2034,9 @@ fn iri_valued_property_pairs_answer_as_before() {
     assert!(conforming.conforms, "{:?}", conforming.results);
     // The parsed constraint is the predicate path of the IRI.
     let parsed = turtle::loads_neighbour(PREFIXES, shapes);
-    let property = &parsed.node_shapes[0].property_shapes[0];
+    let property = turtle::properties(&parsed, &parsed.node_shapes[0])
+        .next()
+        .unwrap();
     assert!(property.constraints.iter().any(|c| matches!(
         c,
         purrdf_shapes::shapes::Constraint::Equals(purrdf_shapes::shapes::Path::Predicate(n))

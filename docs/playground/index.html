@@ -61,6 +61,12 @@
       object-position quoted triples losslessly.
     </p>
 
+    <div class="field">
+      <label for="canonical-search">Canonical search limit</label>
+      <input id="canonical-search" class="input" type="text" placeholder="Enter a call limit or unlimited" aria-describedby="canonical-search-help" />
+      <p id="canonical-search-help">Required for graph identity, round-trip comparison and SHACL entailment. A finite limit stops difficult blank-node searches; unlimited removes that limit.</p>
+    </div>
+
     <nav class="tabs" aria-label="Console panes">
       <div role="tablist" aria-label="Console panes">
         <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab">Input</button>

@@ -4,14 +4,14 @@
 //! Owned reachable term data for a diagnostic that outlives its source arena.
 
 use core::hash::BuildHasher;
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 use purrdf_hash::fixed::FixedState;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
 use purrdf_lex::walk::WorkList;
 
-use super::{NodeData, TermDag};
-use crate::id::NodeId;
+use super::{NodeData, TermDag, TermRead};
+use crate::id::{NodeId, SymId};
 
 /// A self-contained reachable subgraph, including the original symbol text.
 ///
@@ -22,14 +22,23 @@ use crate::id::NodeId;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RetainedTerm {
     root: NodeId,
+    graph: RetainedGraph,
+}
+
+/// A complete reachable graph retained once across any number of roots.
+/// Local node, symbol and metavariable labels retain the source graph's sharing.
+/// No copied node is minted into a different arena. Strings are owned once per
+/// original symbol; RDF atoms retain their original immutable native owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetainedGraph {
     nodes: Vec<RetainedNode>,
+    symbols: Vec<(SymId, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RetainedNode {
     id: NodeId,
     data: NodeData,
-    symbol: Option<String>,
 }
 
 impl RetainedTerm {
@@ -41,9 +50,39 @@ impl RetainedTerm {
     /// # Panics
     /// Panics if `root` was not minted by `dag`.
     pub fn capture(dag: &TermDag, root: NodeId) -> Result<Self, StorageError> {
+        Ok(Self {
+            root,
+            graph: RetainedGraph::capture(dag, &[root])?,
+        })
+    }
+
+    /// The original local root handle, resolved through [`Self::graph`].
+    #[must_use]
+    pub fn root(&self) -> NodeId {
+        self.root
+    }
+
+    /// The retained graph, independent of the source arena's lifetime.
+    #[must_use]
+    pub fn graph(&self) -> &RetainedGraph {
+        &self.graph
+    }
+}
+
+impl RetainedGraph {
+    /// Retain every node reachable from the original roots, exactly once.
+    ///
+    /// # Errors
+    /// Returns storage refusal before publishing a partial graph.
+    /// # Panics
+    /// Panics if a root does not belong to `dag`.
+    pub fn capture(dag: &TermDag, roots: &[NodeId]) -> Result<Self, StorageError> {
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        let mut pending = WorkList::<NodeId, 16>::with(root);
+        let mut pending = WorkList::<NodeId, 16>::default();
+        for &root in roots {
+            pending.try_push_admitted(root, &mut memory)?;
+        }
         let mut seen = HashTable::<NodeId>::new();
         let mut nodes = Vec::new();
         while let Some(id) = pending.pop() {
@@ -54,35 +93,24 @@ impl RetainedTerm {
             seen.try_reserve(1, |&previous| FixedState::new().hash_one(previous))
                 .map_err(|_| StorageError::AllocationFailed)?;
             seen.insert_unique(hash, id, |&previous| FixedState::new().hash_one(previous));
-            let (data, symbol) = match dag.data(id) {
-                NodeData::Leaf(symbol) => (
-                    NodeData::Leaf(*symbol),
-                    Some(memory.string(dag.symbol(*symbol))?),
-                ),
-                NodeData::Free(symbol) => (
-                    NodeData::Free(*symbol),
-                    Some(memory.string(dag.symbol(*symbol))?),
-                ),
-                NodeData::Meta(meta) => (NodeData::Meta(*meta), None),
-                NodeData::Bound { debruijn, slot } => (
-                    NodeData::Bound {
-                        debruijn: *debruijn,
-                        slot: *slot,
-                    },
-                    None,
-                ),
+            let data = match dag.data(id) {
+                NodeData::Rdf(value) => NodeData::Rdf(value.clone()),
+                NodeData::Leaf(symbol) => NodeData::Leaf(*symbol),
+                NodeData::Free(symbol) => NodeData::Free(*symbol),
+                NodeData::Meta(meta) => NodeData::Meta(*meta),
+                NodeData::Bound { debruijn, slot } => NodeData::Bound {
+                    debruijn: *debruijn,
+                    slot: *slot,
+                },
                 NodeData::App { op, args } => {
                     pending.try_push_admitted(*op, &mut memory)?;
                     for &arg in args {
                         pending.try_push_admitted(arg, &mut memory)?;
                     }
-                    (
-                        NodeData::App {
-                            op: *op,
-                            args: memory.collect(args.iter().copied())?,
-                        },
-                        None,
-                    )
+                    NodeData::App {
+                        op: *op,
+                        args: memory.collect(args.iter().copied())?,
+                    }
                 }
                 NodeData::Binder { op, sorts, body } => {
                     pending.try_push_admitted(*op, &mut memory)?;
@@ -90,49 +118,107 @@ impl RetainedTerm {
                     for &sort in sorts {
                         pending.try_push_admitted(sort, &mut memory)?;
                     }
-                    (
-                        NodeData::Binder {
-                            op: *op,
-                            sorts: memory.collect(sorts.iter().copied())?,
-                            body: *body,
-                        },
-                        None,
-                    )
+                    NodeData::Binder {
+                        op: *op,
+                        sorts: memory.collect(sorts.iter().copied())?,
+                        body: *body,
+                    }
                 }
             };
-            memory.push(&mut nodes, RetainedNode { id, data, symbol })?;
+            memory.push(&mut nodes, RetainedNode { id, data })?;
         }
         nodes.sort_unstable_by_key(|node| node.id);
-        Ok(Self { root, nodes })
+        let mut ids: Vec<SymId> =
+            memory.collect(nodes.iter().filter_map(|node| match node.data {
+                NodeData::Leaf(id) | NodeData::Free(id) => Some(id),
+                _ => None,
+            }))?;
+        ids.sort_unstable();
+        ids.dedup();
+        let mut symbols = Vec::new();
+        for id in ids {
+            let text = memory.string(dag.symbol(id))?;
+            memory.push(&mut symbols, (id, text))?;
+        }
+        Ok(Self { nodes, symbols })
+    }
+
+    /// Inspect an original local node, if it is present in the retained graph.
+    #[must_use]
+    pub fn get(&self, id: NodeId) -> Option<&NodeData> {
+        self.nodes
+            .binary_search_by_key(&id, |node| node.id)
+            .ok()
+            .map(|index| &self.nodes[index].data)
+    }
+
+    /// Number of distinct retained nodes, including all shared roots.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether the graph has no reachable nodes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    fn visit_nodes<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        visitor.begin_list(Some("nodes"), self.nodes.len());
+        for node in &self.nodes {
+            visitor.begin_record(None, "datalog-retained-node");
+            self.visit_node(node, visitor);
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
+
+impl TermRead for RetainedGraph {
+    fn data(&self, node: NodeId) -> &NodeData {
+        self.get(node)
+            .expect("the term belongs to this retained graph")
+    }
+    fn symbol(&self, id: SymId) -> &str {
+        let index = self
+            .symbols
+            .binary_search_by_key(&id, |(symbol, _)| *symbol)
+            .expect("the symbol belongs to this retained graph");
+        &self.symbols[index].1
     }
 }
 
 impl StructuredError for RetainedTerm {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
-        let Self { root, nodes } = self;
+        let Self { root, graph } = self;
         visitor.variant("datalog-retained-term");
         visitor.value(Some("root"), ErrorValue::Unsigned(u128::from(root.index())));
-        purrdf_hash::error::visit_list(
-            visitor,
-            Some("nodes"),
-            nodes.iter().map(|node| ErrorValue::Record(node)),
-        );
+        graph.visit_nodes(visitor);
     }
 }
 
-impl StructuredError for RetainedNode {
-    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
-        let Self { id, data, symbol } = self;
-        visitor.variant("datalog-retained-node");
+impl RetainedGraph {
+    fn visit_node<'error>(
+        &'error self,
+        node: &'error RetainedNode,
+        visitor: &mut dyn ErrorVisitor<'error>,
+    ) {
+        let RetainedNode { id, data } = node;
         visitor.value(Some("id"), ErrorValue::Unsigned(u128::from(id.index())));
         visitor.value(
             Some("symbol"),
-            symbol
-                .as_deref()
-                .map_or(ErrorValue::Absent, ErrorValue::Text),
+            match data {
+                NodeData::Leaf(id) | NodeData::Free(id) => ErrorValue::Text(self.symbol(*id)),
+                _ => ErrorValue::Absent,
+            },
         );
         visitor.begin_record(Some("data"), "datalog-node-data");
         match data {
+            NodeData::Rdf(value) => {
+                visitor.value(Some("kind"), ErrorValue::Code("rdf"));
+                visitor.value(Some("value"), ErrorValue::Term(value.value()));
+            }
             NodeData::Leaf(value) | NodeData::Free(value) => {
                 visitor.value(
                     Some("kind"),

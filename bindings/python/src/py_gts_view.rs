@@ -286,7 +286,7 @@ impl PyGtsFoldView {
                 view.relational_rows()
                     .map(|rows| (rows, crate::gts_view::term_directions(view.graph())))
             })
-            .map_err(PyValueError::new_err)?;
+            .map_err(crate::py_gts::native_gts_error)?;
         relational_rows_dict(py, rows, directions)
     }
 }
@@ -316,51 +316,8 @@ fn gts_relational_rows_from_bytes<'py>(
             crate::gts_view::relational_rows(&graph)
                 .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(crate::py_gts::native_gts_error)?;
     relational_rows_dict(py, rows, directions)
-}
-
-/// Authoritative scoped import and canonical native v1 projection.
-///
-/// The first pass discovers inline identities only. It is dropped before the
-/// scope-preserving importer verifies and retains their payloads. This eager
-/// convenience keeps the selected import's explicit 1024-blob/1-GiB bounds.
-fn canonical_gts_projection(data: &[u8]) -> PyResult<ColumnarProjection> {
-    let digests: Vec<_> = purrdf_gts::reader::read(data, true, None)
-        .blobs
-        .into_iter()
-        .map(|(digest, _)| digest)
-        .collect();
-    let selectors: Vec<_> = digests
-        .iter()
-        .map(|digest| crate::GtsBlobSelector::Digest(digest))
-        .collect();
-    let imported = crate::import_gts_events_with_blobs(
-        data,
-        &selectors,
-        crate::GtsBlobLimits::new(256 * 1024 * 1024, 1024 * 1024 * 1024),
-    )
-    .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    if !imported.refused.is_empty() {
-        return Err(PyValueError::new_err(
-            "inline blob payload exceeds canonical export budgets",
-        ));
-    }
-    let mut blobs = purrdf_core::ContentStore::new();
-    for blob in imported.blobs {
-        // The selected importer verified the GTS BLAKE3 identity. The native
-        // table uses SHA-256; both identities can be recomputed from these bytes.
-        blobs.insert(blob.bytes.as_ref().to_vec());
-    }
-    purrdf_columnar::project(imported.bundle.dataset.as_ref(), &blobs)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
-/// Native v1 schema and canonical rows, independent of folded GTS term ids.
-#[pyfunction]
-fn gts_columnar_rows_from_bytes<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
-    let projection = py.detach(|| canonical_gts_projection(data))?;
-    columnar_rows_dict(py, &projection)
 }
 
 pub(crate) fn columnar_rows_dict<'py>(
@@ -411,20 +368,6 @@ pub(crate) fn columnar_rows_dict<'py>(
     Ok(out)
 }
 
-/// First-party native v1 Parquet bytes; the host only writes the resulting files.
-#[pyfunction]
-fn gts_columnar_parquet_from_bytes<'py>(
-    py: Python<'py>,
-    data: &[u8],
-) -> PyResult<Bound<'py, PyDict>> {
-    let encoded = py.detach(|| {
-        canonical_gts_projection(data)?
-            .to_parquet(purrdf_columnar::Compression::Uncompressed)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
-    })?;
-    columnar_parquet_dict(py, &encoded.files)
-}
-
 pub(crate) fn columnar_parquet_dict<'py>(
     py: Python<'py>,
     files: &purrdf_columnar::ParquetFiles,
@@ -440,8 +383,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGtsFoldView>()?;
     m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
     m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_columnar_rows_from_bytes, m)?)?;
-    m.add_function(wrap_pyfunction!(gts_columnar_parquet_from_bytes, m)?)?;
+    crate::py_gts_export::register(m)?;
     Ok(())
 }
 

@@ -984,10 +984,10 @@ fn predicate_needs_test(meta: &syn::Meta) -> bool {
             };
             if list.path.is_ident("all") {
                 children.iter().any(predicate_needs_test)
-            } else if list.path.is_ident("any") {
-                !children.is_empty() && children.iter().all(predicate_needs_test)
             } else {
-                false
+                list.path.is_ident("any")
+                    && !children.is_empty()
+                    && children.iter().all(predicate_needs_test)
             }
         }
         syn::Meta::NameValue(_) => false,

@@ -80,7 +80,7 @@ fn fixture() -> Arc<RdfDataset> {
         .expect("writing to a String cannot fail");
     }
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+        .unwrap_or_else(|errors| panic!("fixture data: {errors}"))
 }
 
 /// Each item's term id, in [`STATUSES`] order, found as the one thing its status record
@@ -371,7 +371,7 @@ fn lane_values(dataset: &RdfDataset, query: &str, focus: &TermValue) -> BTreeSet
                 base_iri: None,
                 substitutions: &substitutions,
             },
-            QueryOptions::new().with_prebinding(ShaclPrebinding::Applied),
+            &QueryOptions::new().with_prebinding(ShaclPrebinding::Applied),
         )
         .unwrap_or_else(|error| panic!("{query} with {focus:?}: {}", error.message));
     let SparqlResult::Solutions {

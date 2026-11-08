@@ -412,10 +412,12 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
                     .push_annotation_in_graph(reifier, predicate, object, graph)?;
                 self.stats.annotations += 1;
             }
-            for graph in view.named_graphs() {
-                let graph = self.try_term(graph)?;
-                self.builder.declare_named_graph(graph)?;
-                self.stats.named_graphs += 1;
+            if view.supports_named_graphs() {
+                for graph in view.named_graphs() {
+                    let graph = self.try_term(graph)?;
+                    self.builder.declare_named_graph(graph)?;
+                    self.stats.named_graphs += 1;
+                }
             }
             Ok(())
         })

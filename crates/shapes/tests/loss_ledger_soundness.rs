@@ -95,7 +95,7 @@ fn complete_red_via_result_core_names_the_missing_code() {
     )
     .expect_err("sh:SPARQLTarget was never recorded by this compile");
     assert!(
-        err.contains("sh:SPARQLTarget"),
+        err.to_string().contains("sh:SPARQLTarget"),
         "error must name the missing code: {err}"
     );
 }

@@ -172,6 +172,22 @@ constants = []
 fingerprints = ["body:fe5ba569e977fece"]
 names = []
 
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::acquisition::ParserContext::deref"
+file = "crates/rdf/src/native_codecs/acquisition.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::acquisition::ParserContext"
+reason = "The parser carrier preserves an exclusive mutable loan of the original RunContext for progress and live admission updates. The immutable core carrier borrows an immutable value and cannot represent that contract."
+
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::acquisition::ParserContext::deref_mut"
+file = "crates/rdf/src/native_codecs/acquisition.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::acquisition::ParserContext"
+reason = "Mutable projection must update the original progress carrier and account through its exclusive loan. Immutable OwnedOrBorrowed storage deliberately offers no mutable dereference."
+
 [[job]]
 id = "fixed-key-table-hash"
 summary = "The fixed-key table hasher behind every workspace hash map and set"
@@ -416,6 +432,23 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "zstd-codec"
+summary = "Shared Zstandard frame codec and deterministic FastCOVER dictionary training"
+home = "purrdf_zstd::decoding::FrameDecoder"
+entry_points = ["purrdf_zstd::encoding::compress_slice_to_vec", "purrdf_zstd::dictionary::create_fastcover_dict_from_source"]
+spec = "RFC 8878 frame encoding and decoding; pinned inherited codec with fixed target dispatch, native borrowed refusal inspection and deterministic dictionary finalization"
+vectors = ["crates/columnar/tests/golden_bytes.rs"]
+bench = ["purrdf-columnar:codec"]
+sites = ["zstd.match-length"]
+replaces_external = ["structured-zstd"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "match-length"
 summary = "The first-mismatch index: the length of the common prefix of two byte strings, word-parallel inline for short keys and vector-dispatched for the encoder's candidate windows"
 home = "purrdf_deflate::common_prefix_len"
@@ -431,6 +464,14 @@ enforced = true
 constants = []
 fingerprints = ["rule:xor-first-mismatch"]
 names = ['^(common_prefix_len|match_length_portable)$']
+
+[[job.variant]]
+symbol = "purrdf_zstd::encoding::match_table::helpers::common_prefix_len"
+file = "crates/zstd/src/encoding/match_table/helpers.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_zstd::encoding::match_table::helpers::common_prefix_len"
+reason = "The slice bridge enters the Zstandard codec's CRC/BMI2/NEON kernel family, which its match loops can also select once per block. It retains those explicit ISA entry contracts rather than introducing the DEFLATE backend's independent selector into that family; pointer comparison algorithms remain shared within the family."
 
 [[job]]
 id = "csvw-dialect-csv"
@@ -494,6 +535,7 @@ entry_points = [
     "purrdf_hash::hex::encode_to_slice",
     "purrdf_hash::hex::decode",
     "purrdf_hash::hex::decode_canonical",
+    "purrdf_hash::hex::decode_canonical_to_slice",
     "purrdf_hash::hex::decode_32",
     "purrdf_hash::hex::decode_32_canonical",
     "purrdf_hash::hex::nibble",
@@ -514,6 +556,23 @@ enforced = true
 constants = []
 fingerprints = ["rule:hex-table", "rule:hex-format-loop", "rule:hex-pair-radix"]
 names = ['^(hex_value|hex_val|hex_digit|hex_nibble|lower_hex_value|unhex|encode_hex|decode_hex)$']
+
+[[job]]
+id = "visual-fingerprint"
+summary = "Admitted visual-hashing 1.0.0 emoji, spoken labels and bishop randomart over original bytes, with typed full-digest presentation"
+home = "purrdf_lex::visual_fingerprint::render_bytes"
+entry_points = ["purrdf_lex::visual_fingerprint::present", "purrdf_lex::visual_fingerprint::parse_digest", "purrdf_core::visual_fingerprint", "purrdf_gts::emojihash"]
+spec = "docs/provenance/visual-hashing.md; frozen visual-hashing 1.0.0 source and vectors at 519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776"
+vectors = ["vectors/emojihash/empty.json", "vectors/emojihash/ascii-gts.json", "vectors/emojihash/zeros32.json", "vectors/emojihash/seq32.json", "vectors/randomart/empty.json", "vectors/randomart/ascii-gts.json", "vectors/randomart/zeros32.json", "vectors/randomart/seq32.json", "vectors/randomart/labeled-ed25519.json"]
+bench = []
+sites = []
+replaces_external = ["visual-hashing"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(emojihash|emojihash_labels|emoji_indices|randomart)$']
 
 [[job]]
 id = "json-schema-validation"
@@ -862,12 +921,28 @@ constants = []
 fingerprints = ["rule:align-up-mask"]
 names = []
 
+[[job.variant]]
+symbol = "purrdf_zstd::decoding::simd_copy::copy_avx2"
+file = "crates/zstd/src/decoding/simd_copy.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_zstd::decoding::simd_copy::copy_avx2"
+reason = "The len & !63 mask rounds DOWN to complete 64-byte copy iterations, leaving at most one 32-byte tail. It never aligns an output extent upward; substituting checked_next_multiple_of would overcopy."
+
+[[job.variant]]
+symbol = "purrdf_zstd::huff0::huf_cstream::HufCStream::add_bits"
+file = "crates/zstd/src/huff0/huf_cstream.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_zstd::huff0::huf_cstream::HufCStream::add_bits"
+reason = "The elt & !0xFF mask removes the packed Huffman symbol's low-byte length metadata before inserting its code bits. The value is not an offset or alignment; rounding it upward would corrupt the encoded bitstream."
+
 [[job]]
 id = "div-ceil"
-summary = "Ceiling division without the overflow of the hand-written n + d - 1: std div_ceil on unsigned integers, retrieval's ceil_div on i128"
+summary = "Ceiling division without intermediate overflow: stable unsigned div_ceil, including retrieval's u128 resolution constraints"
 home = "purrdf_retrieval::reciprocal_rank::ceil_div"
 entry_points = []
-spec = "the quotient rounded toward positive infinity for a positive divisor; the unsigned integers' stable div_ceil, and ceil_div where the signed div_ceil is not stable"
+spec = "the unsigned quotient rounded toward positive infinity for a positive divisor; the stable div_ceil primitive"
 vectors = []
 bench = []
 sites = []
@@ -880,10 +955,27 @@ fingerprints = ["rule:div-ceil-by-hand"]
 names = []
 
 [[job]]
+id = "unsigned-word-division"
+summary = "In-place unsigned division of borrowed little-endian words by one nonzero word"
+home = "purrdf_lex::integer_text::div_rem_word"
+entry_points = []
+spec = "Base-2^64 long division with a u128 partial dividend, returning the significant quotient length and remainder without allocation"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(div_rem_word)$']
+
+[[job]]
 id = "wide-arith"
-summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c, and the greatest common divisor"
+summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c with truncated and ceiling rounding, and the greatest common divisor"
 home = "purrdf_xsd::wide::mul_div"
-entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::gcd"]
+entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::mul_div_ceil", "purrdf_xsd::wide::gcd"]
 spec = "schoolbook multiplication over 64-bit halves, restoring binary long division, and Euclid's algorithm, over u128"
 vectors = [
     "crates/xsd/tests/vectors/wide_vectors.txt",
@@ -1121,6 +1213,23 @@ fingerprints = []
 names = ['^(parse_json_value|json_parse_value|parse_json_number|metadata_value_from_json)$']
 
 [[job]]
+id = "toml-document"
+summary = "Reading TOML 1.1 into a flat typed source model and projecting a verified original-byte RDF cover"
+home = "purrdf_toml::analyze"
+entry_points = ["purrdf_toml::Document", "purrdf_toml::project", "purrdf_toml::encode", "purrdf_toml::decode_document"]
+spec = "TOML 1.1.0 and crates/toml/SPEC.md; declaration identity, typed values, scalar/structure cover and exact reparse verification"
+vectors = ["crates/toml/tests/suite/files-toml-1.1.0"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(parse_toml|parse_toml_value|parse_toml_string|parse_toml_number)$']
+
+[[job]]
 id = "yaml-document"
 summary = "Reading and writing a YAML 1.2 document over the JSON data model"
 home = "purrdf_lex::yaml::read"
@@ -1253,6 +1362,14 @@ criterion = "a"
 anchor = "purrdf_shapes::schema_import::ImportContext::import_node_list"
 reason = "It reads a JSON Schema document back: `rdf:first` and `rdf:rest` are the property keys of the list conjunct the schema emitter wrote, matched as JSON, and no RDF collection is walked."
 
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::text_parse::document_graph_in_context"
+file = "crates/rdf/src/native_codecs/text_parse.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_rdf::native_codecs::text_parse::document_graph_in_context"
+reason = "The loop consumes a fixed array of five owned vocabulary IRIs and releases their strings through the original memory account. It follows no RDF edges, discovers no collection cells and applies no malformed-list policy."
+
 [[job]]
 id = "thread-stack"
 summary = "Running a closure on a thread with a stated stack, and refusing a request past the wasm32 shadow-stack floor"
@@ -1335,6 +1452,40 @@ enforced = true
 
 [job.forbidden]
 constants = ["8380417"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "lattice-ntt-and-codec"
+summary = "Shared fixed 256-coefficient field transforms and bit packing for the two native lattice primitives"
+home = "purrdf_gts::lattice::Lattice"
+entry_points = ["purrdf_gts::lattice::pack", "purrdf_gts::lattice::unpack"]
+spec = "FIPS 203 Algorithms 5–6 and 9–10 and FIPS 204 Algorithms 16–19 and 41–42; only the ML-KEM-1024 incomplete quadratic transform and ML-DSA-65 complete transform are instantiated"
+vectors = ["crates/gts/tests/mlkem1024/keyGen.txt", "crates/gts/tests/mlkem1024/encapsulation.txt", "crates/gts/tests/mlkem1024/decapsulation.txt", "crates/gts/tests/mldsa65/keyGen.txt", "crates/gts/tests/mldsa65/sigGen.txt", "crates/gts/tests/mldsa65/sigVer.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "mlkem1024"
+summary = "Native ML-KEM-1024 seed expansion, caller-randomized encapsulation and implicit-rejection decapsulation"
+home = "purrdf_gts::mlkem1024::DecapsulationKey"
+entry_points = ["purrdf_gts::mlkem1024::EncapsulationKey", "purrdf_gts::mlkem1024::Ciphertext", "purrdf_gts::mlkem1024::SharedSecret"]
+spec = "FIPS 203 Algorithms 5–18 and the exact input checks in sections 7.2–7.3, with caller-provided d, z and m and the ML-KEM-1024 parameter set only"
+vectors = ["crates/gts/tests/mlkem1024/keyGen.txt", "crates/gts/tests/mlkem1024/encapsulation.txt", "crates/gts/tests/mlkem1024/decapsulation.txt", "crates/gts/tests/mlkem1024/decapsulationKeyCheck.txt", "crates/gts/tests/mlkem1024/encapsulationKeyCheck.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
 fingerprints = []
 names = []
 
@@ -1658,13 +1809,56 @@ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
 
 [[distinct]]
 members = [
-    "purrdf_gts::model::Graph::reifier",
-    "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
+    "purrdf_geo_kernel::geojson::parse",
+    "purrdf_geo_kernel::wkt::parse",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse"
+reason = "The public GeoJSON and WKT entries select different grammars through their respective parse_in_policy functions. Both select the fixed geometry policy; source admission and completion-error handling already share carrier::parse_in_policy."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::geojson::parse_in_policy",
+    "purrdf_geo_kernel::wkt::parse_in_policy",
 ]
 kind = "body"
-criterion = "layering"
-anchor = "purrdf_rdf::native_codecs::ser_model::SerGraph"
-reason = "The native codec's serialization model may not depend on the GTS crate (tests/gts_codec_hygiene.rs), so it keeps its own first-row reifier lookup over the same row shape as the GTS model's."
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse_in_policy"
+reason = "The explicit-policy entries supply different codec grammars as callbacks to the single carrier::parse_in_policy admission and completion boundary. The forwarding bodies share a shape, but the GeoJSON and WKT parsers accept different languages."
+
+[[distinct]]
+members = [
+    "purrdf_geo_kernel::geojson::parse_unbounded",
+    "purrdf_geo_kernel::wkt::parse_unbounded",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_geo_kernel::geojson::parse_unbounded"
+reason = "The unrestricted entries select their respective GeoJSON and WKT readers without an admission account. They expose distinct grammars and preserve each codec's errors; neither copies parsing or accounting logic."
+
+[[distinct]]
+members = [
+    "purrdf_core::ir::composite::CompositeDatasetView::reserve_owned_workspace",
+    "purrdf_core::ir::mutable::delta_view::DeltaDatasetView::reserve_owned_workspace",
+    "purrdf_core::ir::pack::container::PackView::reserve_owned_workspace",
+    "purrdf_core::ir::paged::PagedDataset::reserve_owned_workspace",
+    "purrdf_core::term_fixture::BudgetedView::reserve_owned_workspace",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_core::dataset_view::NoopReservation::owned"
+reason = "Each resident carrier must explicitly grant retained admission in its own DatasetView implementation; the default missing capability cannot imply unbounded authority. Each delegates to the single zero-sized NoopReservation owner without copying runtime allocation or accounting behavior."
+
+[[distinct]]
+members = [
+    "purrdf_core::fno::construction::Context::new",
+    "purrdf_rdf::native_codecs::acquisition::RunContext::new",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::acquisition::RunContext"
+reason = "Each domain-private context retains the original progress and admission in its own owner and drop layout. These constructors only initialize three fields; admission and control already use OwnedAdmission and with_memory_control, so a shared generic container would add abstraction without centralizing another algorithm."
 
 [[distinct]]
 members = [
@@ -1800,12 +1994,12 @@ reason = "The BLAKE3 GTS reference domain and the SHA-256 blob-store domain are 
 
 [[distinct]]
 members = [
-    "purrdf_core::ir::embedding::wire::SectionDescriptor::new",
-    "purrdf_core::ir::embedding::wire::SectionPayload::new",
+    "purrdf::embedding::wire::SectionDescriptor::new",
+    "purrdf::embedding::wire::SectionPayload::new",
 ]
 kind = "shim"
 criterion = "b"
-anchor = "purrdf_core::ir::embedding::wire::SectionDescriptor"
+anchor = "purrdf::embedding::wire::SectionDescriptor"
 reason = "A payload owns its encoded bytes and a descriptor carries only the length of bytes streamed later; each constructor keys its own record by the shared `SectionKey`."
 
 [[distinct]]
@@ -1853,11 +2047,20 @@ members = [
     "purrdf_json::profile::Vocabulary::standard",
     "purrdf_markdown::profile::Vocabulary::standard",
     "purrdf_mime::profile::Vocabulary::standard",
+    "purrdf_toml::profile::Vocabulary::standard",
+    "purrdf_yaml::profile::Vocabulary::standard",
 ]
 kind = "shim"
 criterion = "b"
 anchor = "purrdf_markdown::profile::Vocabulary::standard"
-reason = "Each codec crate names its own vocabulary under its own designated namespace: three different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+reason = "Each codec crate names its own vocabulary under its own designated namespace: five different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+
+[[distinct]]
+members = ["purrdf_json::project::encode", "purrdf_toml::codec::encode", "purrdf_yaml::project::encode"]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_json::project::encode"
+reason = "The public convenience entry points admit different languages and typed models: RFC 8259 ordered JSON, TOML 1.1 declarations and values, and YAML 1.2.2 source streams. Each composes its own single analysis and projection homes; none duplicates a parser, identity function or byte-cover law."
 
 [[distinct]]
 members = [
@@ -1964,23 +2167,13 @@ reason = "The required PropertyFunction::rows_per_invocation of two different mo
 
 [[distinct]]
 members = [
-    "purrdf_retrieval::test_crate::real_producers::text_config",
+    "purrdf::test_crate::retrieval_real_producers::text_config",
     "purrdf_text::test_crate::determinism::config",
 ]
 kind = "body"
 criterion = "b"
 anchor = "purrdf_text::test_crate::determinism::config"
 reason = "Two crates' fixtures over different predicates (text's NOTE is http://example.org/note, retrieval's is https://example.org/note) that happen to share a constant's name and the TextIndex config spelling; the values differ, so neither can call the other."
-
-[[distinct]]
-members = [
-    "purrdf_shapes::test_crate::product_refusal::certify",
-    "purrdf_validate::product::certify_shapes_product",
-]
-kind = "shim"
-criterion = "layering"
-anchor = "purrdf_validate::product::certify_shapes_product"
-reason = "purrdf-validate depends on purrdf-shapes, so the shapes crate's own product-codec tests cannot reach the host wrapper without a dev-dependency back-edge; both are the one-line forward to ShapesProduct::open(..)?.certify(), and the test exercises the shapes crate's codec, not the host surface."
 
 [[distinct]]
 members = [
@@ -2035,11 +2228,11 @@ reason = "Each is the oracle for a different generated shape (an OPTIONAL spine,
 [[distinct]]
 members = [
     "purrdf_sparql_eval::bench_crate::cost_based_bgp_planner::support::iri",
-    "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri",
+    "purrdf::test_crate::embedding_knn_e2e::fixture::iri",
 ]
 kind = "shim"
 criterion = "b"
-anchor = "purrdf_sparql_eval::test_crate::embedding_knn_e2e::iri"
+anchor = "purrdf::test_crate::embedding_knn_e2e::fixture::iri"
 reason = "Same spelling over different namespaces: the shared support mints under http://example.org/, the k-NN fixture under https://example.org/d/, which its artifact targets and query prefixes are written against."
 
 [[distinct]]
@@ -2184,7 +2377,7 @@ reason = "Each system under test constructs itself from the model state as Syste
 [[distinct]]
 members = [
     "purrdf_alloc_probe::widen_u64",
-    "purrdf_core::bench_crate::purremb::fixture::usize_to_u64",
+    "purrdf::bench_crate::purremb::fixture::usize_to_u64",
 ]
 kind = "shim"
 criterion = "layering"
@@ -2233,7 +2426,7 @@ reason = "The AST snapshot test labels each golden entry by the grammar it was r
 
 [[distinct]]
 members = [
-    "purrdf_retrieval::bench_crate::on_demand_read::Producer::arity",
+    "purrdf::bench_crate::retrieval_on_demand_read::Producer::arity",
     "purrdf_retrieval::test_crate::candidate_union::FaultingProducer::arity",
     "purrdf_retrieval::test_crate::on_demand_receipt::IndexedProducer::arity",
     "purrdf_retrieval::test_crate::seed_whitespace::Silent::arity",
@@ -2264,7 +2457,7 @@ reason = "PropertyFunction::arity is a required method with no default: every re
 
 [[distinct]]
 members = [
-    "purrdf_shapes::shacl_corpora::CorpusRelation::arity",
+    "purrdf_shacl_conformance::CorpusRelation::arity",
     "purrdf_sparql_eval::test_crate::prepared_admission::SubjectBoundRelation::arity",
     "purrdf_sparql_eval::test_crate::query_completion::StoredProducer::arity",
 ]
@@ -3001,6 +3194,16 @@ reason = "Resident conveniences for two separate persisted grammars: statement-l
 
 [[distinct]]
 members = [
+    "purrdf_glob::CompiledGlob::compile",
+    "purrdf_glob::set::CompiledGlobSet::compile",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_glob::set::CompiledGlobSet::compile"
+reason = "The resident entry points construct different typed owners: one pattern versus an ordered set preserving duplicate source occurrences and their indices under one flat admission account. Both reuse the same native parser and matcher; the shared forwarding shape duplicates no compilation or matching algorithm."
+
+[[distinct]]
+members = [
     "purrdf_shapes::query_law::replace",
     "purrdf_shapes::sparql::coordinates::replace",
     "purrdf_shapes::xpath::replace",
@@ -3074,11 +3277,25 @@ anchor = "purrdf_sparql_eval::workspace::array::WorkspaceArray"
 reason = "The immutable and exclusive mutable slice views must have distinct Rust borrow signatures. Both preserve the original caller/native array owner and grant; sharing a mutable accessor with the immutable one would require an invalid exclusive borrow or unsafe aliasing."
 
 [[distinct]]
-members = ["purrdf_retrieval::execute::ExecutionError::source", "purrdf_retrieval::ranked_stream::ProtocolError::source"]
+members = ["purrdf_datalog::store::rows::RowLog::next", "purrdf_datalog::store::terms::TermArena::next"]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_datalog::store::rows::RowLog"
+reason = "The row log reports the next stable row publication coordinate; the lexical arena reports the next term identity. Each reads its own dense length or retained sparse watermark, without minting an ID, reclaiming storage or duplicating an allocation algorithm. Their row/partition and spelling ownership protocols are distinct."
+
+[[distinct]]
+members = ["purrdf_datalog::store::rows::RowLog::default", "purrdf_datalog::store::terms::TermArena::default"]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_datalog::store::rows::RowLog"
+reason = "The two typed arena defaults select their own empty dense representation. Neither allocates, mints an identity or implements a shared storage job; row publication and lexical ownership retain different payload and reclamation contracts."
+
+[[distinct]]
+members = ["purrdf_datalog::seminaive::probe::ProbeError::source", "purrdf_datalog::seminaive::session::SessionError::source"]
 kind = "body"
 criterion = "a"
-anchor = "purrdf_retrieval::execute::ExecutionError"
-reason = "Required std::error::Error adapters expose the original native failure carried by two distinct public error enums. All other variants have no nested source; the forwarding match implements each concrete trait contract without copying the failure or its owner."
+anchor = "purrdf_datalog::seminaive::probe::ProbeError"
+reason = "Required std::error::Error implementations expose each public enum's original EvalError cause. State and coordinate refusals have no nested cause. These typed trait adapters neither copy an error nor implement another evaluator or error-inspection protocol."
 
 [[distinct]]
 members = ["purrdf_core::lookaside::RdfLookasideResource::new", "purrdf_entail::owl_dl::source_terms::SourceTerms::from_prefix"]
@@ -3107,81 +3324,81 @@ names = []
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::lookup_hashed"
-line = 610
+line = 750
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::lookup_owned_blank"
-line = 636
+line = 795
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory"
-line = 868
+line = 1027
 sink = "source:68501dd74980d201"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory"
-line = 868
+line = 1027
 sink = "source:469fd0ba6adc3424"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::append_builder_with_memory"
-line = 2237
+line = 2476
 sink = "source:f9e400eaac2b01f1"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
 
 [[job.capacity_proof]]
@@ -3191,14 +3408,14 @@ line = 261
 sink = "source:cff2cf01734ea1d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/composite.rs=source:2415759d86faba08",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/composite.rs=source:e4e5aa0fe3414212",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
 
 [[job.capacity_proof]]
@@ -3208,106 +3425,112 @@ line = 261
 sink = "source:d14392e033854316"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/composite.rs=source:2415759d86faba08",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/composite.rs=source:e4e5aa0fe3414212",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/dataset.rs"
 symbol = "crates/rdf-core/src/ir/dataset.rs::permutation"
-line = 1310
+line = 1420
 sink = "source:93359fa72451a90c"
 class = "resident-permutation"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/frozen_terms.rs"
 symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
-line = 67
+line = 187
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/frozen_terms.rs"
 symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
-line = 70
+line = 190
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
 
 [[job.capacity_proof]]
-file = "crates/rdf-core/src/ir/embedding/wire.rs"
-symbol = "crates/rdf-core/src/ir/embedding/wire.rs::header"
-line = 321
+file = "crates/purrdf/src/embedding/wire.rs"
+symbol = "crates/purrdf/src/embedding/wire.rs::header"
+line = 260
 sink = "source:9c6128d42cb7a529"
 class = "encoded-shape"
 authorities = [
+    "crates/rdf-core/src/ir/embedding/model.rs=source:8ad973cd3ce67cd4",
+    "crates/rdf-core/src/ir/embedding/wire.rs=source:2298086a166c2fd1",
     "crates/rdf-core/src/ir/embedding/contract.rs=source:1c0dc2b9477aa9b4",
-    "crates/rdf-core/src/ir/embedding/mod.rs=source:97d0de139ab31ff2",
-    "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
+    "crates/rdf-core/src/ir/embedding/mod.rs=source:9b5f6f0268b9dfee",
+    "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
 
 [[job.capacity_proof]]
-file = "crates/rdf-core/src/ir/embedding/writer.rs"
-symbol = "crates/rdf-core/src/ir/embedding/writer.rs::write_matrix"
-line = 641
+file = "crates/purrdf/src/embedding/writer.rs"
+symbol = "crates/purrdf/src/embedding/writer.rs::write_matrix"
+line = 557
 sink = "source:8045eb2f4d5285e2"
 class = "encoded-shape"
 authorities = [
+    "crates/rdf-core/src/ir/embedding/model.rs=source:8ad973cd3ce67cd4",
+    "crates/rdf-core/src/ir/embedding/wire.rs=source:2298086a166c2fd1",
     "crates/rdf-core/src/ir/embedding/contract.rs=source:1c0dc2b9477aa9b4",
-    "crates/rdf-core/src/ir/embedding/mod.rs=source:97d0de139ab31ff2",
-    "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
-    "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+    "crates/rdf-core/src/ir/embedding/mod.rs=source:9b5f6f0268b9dfee",
+    "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
+    "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
 
 [[job.capacity_proof]]
-file = "crates/rdf-core/src/ir/embedding/writer.rs"
-symbol = "crates/rdf-core/src/ir/embedding/writer.rs::prepare_matrix"
-line = 716
+file = "crates/purrdf/src/embedding/writer.rs"
+symbol = "crates/purrdf/src/embedding/writer.rs::prepare_matrix"
+line = 632
 sink = "source:759fa0c7869386ce"
 class = "encoded-shape"
 authorities = [
+    "crates/rdf-core/src/ir/embedding/model.rs=source:8ad973cd3ce67cd4",
+    "crates/rdf-core/src/ir/embedding/wire.rs=source:2298086a166c2fd1",
     "crates/rdf-core/src/ir/embedding/contract.rs=source:1c0dc2b9477aa9b4",
-    "crates/rdf-core/src/ir/embedding/mod.rs=source:97d0de139ab31ff2",
-    "crates/rdf-core/src/ir/embedding/wire.rs=source:c33349e34bf8113d",
-    "crates/rdf-core/src/ir/embedding/writer.rs=source:e7a6e4ab2aa72bfb",
+    "crates/rdf-core/src/ir/embedding/mod.rs=source:9b5f6f0268b9dfee",
+    "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
+    "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
 
 [[job.capacity_proof]]
@@ -3317,14 +3540,14 @@ line = 606
 sink = "source:c4edb708dec6980b"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
 
 [[job.capacity_proof]]
@@ -3334,82 +3557,82 @@ line = 606
 sink = "source:eb9a0b3db238c761"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
 symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::new"
-line = 114
+line = 166
 sink = "source:3d42d43948575620"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:0e61204514c79a7f",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa1859a63d63ceb7",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
 symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::new"
-line = 114
+line = 166
 sink = "source:bfcc85921a648621"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:0e61204514c79a7f",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa1859a63d63ceb7",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
 symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids"
-line = 203
+line = 257
 sink = "source:c4edb708dec6980b"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:0e61204514c79a7f",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa1859a63d63ceb7",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
 symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids"
-line = 203
+line = 257
 sink = "source:eb9a0b3db238c761"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:0e61204514c79a7f",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:fa1859a63d63ceb7",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
 
 [[job.capacity_proof]]
@@ -3419,14 +3642,14 @@ line = 95
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
     "crates/rdf-core/src/ir/event_sink.rs=source:06dde97381917c60",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
 
 [[job.capacity_proof]]
@@ -3436,10 +3659,10 @@ line = 432
 sink = "source:c1a00658c1ffa4e5"
 class = "global-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
 
 [[job.capacity_proof]]
@@ -3449,10 +3672,10 @@ line = 890
 sink = "source:921e8adc54613316"
 class = "resident-global-vec-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
 
 [[job.capacity_proof]]
@@ -3462,14 +3685,14 @@ line = 588
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/ingest.rs=source:b04f0c84dfb362cd",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
 
 [[job.capacity_proof]]
@@ -3479,14 +3702,14 @@ line = 603
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/ingest.rs=source:b04f0c84dfb362cd",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
 
 [[job.capacity_proof]]
@@ -3496,14 +3719,14 @@ line = 458
 sink = "source:20664803727b8ebe"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
 
 [[job.capacity_proof]]
@@ -3513,50 +3736,50 @@ line = 458
 sink = "source:a89aa0bcdd678ca2"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/paged/query.rs"
 symbol = "crates/rdf-core/src/ir/paged/query.rs::validate_materialization"
-line = 677
+line = 752
 sink = "source:77a0de8cadadbe03"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/paged/query.rs=source:10078cea88a41f14",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/paged/query.rs=source:03295004fbd4b94c",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/paged/query.rs"
 symbol = "crates/rdf-core/src/ir/paged/query.rs::validate_materialization"
-line = 677
+line = 752
 sink = "source:2b2967d384636018"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/paged/query.rs=source:10078cea88a41f14",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/paged/query.rs=source:03295004fbd4b94c",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
 
 [[job.capacity_proof]]
@@ -3566,11 +3789,11 @@ line = 467
 sink = "source:e56729be357eb4f1"
 class = "resident-global-vec-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
-    "crates/rdf-core/src/ir/paged/stack.rs=source:06399db5856a0664",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+    "crates/rdf-core/src/ir/paged/stack.rs=source:e2b618a6bf7d0851",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
 
 [[job.capacity_proof]]
@@ -3580,14 +3803,14 @@ line = 113
 sink = "source:082c3ff94178a18d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
 
 [[job.capacity_proof]]
@@ -3597,14 +3820,14 @@ line = 113
 sink = "source:dbc961a86092a7d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
 
 [[job.capacity_proof]]
@@ -3614,14 +3837,14 @@ line = 196
 sink = "source:082c3ff94178a18d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
 
 [[job.capacity_proof]]
@@ -3631,14 +3854,14 @@ line = 196
 sink = "source:dbc961a86092a7d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
 
 [[job.capacity_proof]]
@@ -3648,16 +3871,16 @@ line = 110
 sink = "source:399173dc809511f8"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
-    "crates/rdf-core/src/ir/segmented/build.rs=source:b1e975ae2f69c860",
-    "crates/rdf-core/src/ir/segmented/mod.rs=source:f5ff3f3b995737b5",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+    "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
+    "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
@@ -3667,88 +3890,88 @@ line = 127
 sink = "source:93bf37ec51519cfd"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
-    "crates/rdf-core/src/ir/segmented/build.rs=source:b1e975ae2f69c860",
-    "crates/rdf-core/src/ir/segmented/mod.rs=source:f5ff3f3b995737b5",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+    "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
+    "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/segmented/build.rs"
 symbol = "crates/rdf-core/src/ir/segmented/build.rs::map_id"
-line = 527
+line = 531
 sink = "source:495627ce45322797"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
-    "crates/rdf-core/src/ir/segmented/build.rs=source:b1e975ae2f69c860",
-    "crates/rdf-core/src/ir/segmented/mod.rs=source:f5ff3f3b995737b5",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+    "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
+    "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/segmented/build.rs"
 symbol = "crates/rdf-core/src/ir/segmented/build.rs::encode_dataset"
-line = 552
+line = 556
 sink = "source:93bf37ec51519cfd"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/global.rs=source:bbf736546130634d",
-    "crates/rdf-core/src/ir/segmented/build.rs=source:b1e975ae2f69c860",
-    "crates/rdf-core/src/ir/segmented/mod.rs=source:f5ff3f3b995737b5",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+    "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
+    "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/validate.rs"
 symbol = "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory"
-line = 471
+line = 558
 sink = "source:55afea662f67f62d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
-    "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+    "crates/rdf-core/src/ir/validate.rs=source:0dd30c2432edb6df",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/validate.rs"
 symbol = "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory"
-line = 519
+line = 607
 sink = "source:55afea662f67f62d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
-    "crates/rdf-core/src/ir/validate.rs=source:bb7eaea66da9a620",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+    "crates/rdf-core/src/ir/validate.rs=source:0dd30c2432edb6df",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
 
 [[job.capacity_proof]]
@@ -3758,12 +3981,202 @@ line = 254
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a5c6fa86d3c456c0",
-    "crates/rdf-core/src/ir/builder.rs=source:03ddf41248fe1335",
-    "crates/rdf-core/src/ir/dataset.rs=source:b11d39e455d96daf",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:ada413c8515ff604",
-    "crates/rdf-core/src/ir/term.rs=source:4dbddd0003c8abf3",
+    "crates/lex/src/allocation.rs=source:72565983e6b0aa1f",
+    "crates/rdf-core/src/ir/builder.rs=source:8b7eab00a5e9bd2b",
+    "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
 ]
-constructors = "source:9883f531a1609e46"
+constructors = "source:a5ae4bce5437473e"
 reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+
+[[job]]
+id = "multiset-256"
+summary = "Reversible little-endian 256-bit member sums with exact population, checked atomic combination/subtraction and domain-bound fingerprints"
+home = "purrdf_hash::multiset::Multiset256"
+entry_points = []
+spec = "Sum in Z/(2^256), with an independent checked u128 population; duplicate members contribute repeatedly, and callers independently establish membership before subtraction"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "checked-word-identity"
+summary = "Frozen full and prefix checked word spellings over the original 32-byte digest identity"
+home = "purrdf_hash::word_id::Reference"
+entry_points = ["purrdf_hash::word_id::decode", "purrdf_hash::word_id::decode_full", "purrdf_hash::word_id::encode_batch", "purrdf_hash::word_id::decode_batch"]
+spec = "docs/design/purrdf-word-identities.md: immutable ASCII alphabet, big-endian 12-bit extraction, full zero padding and count-first GF check; lexical selectors carry no scope"
+vectors = ["crates/hash-conformance/tests/vectors/word_id.txt"]
+bench = ["purrdf-hash-conformance:digests"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "checked-word-prefix-plan"
+summary = "Exact uniform and individual checked word prefixes over the original immutable scoped membership"
+home = "purrdf_core::content_prefix::PrefixPlan"
+entry_points = []
+spec = "docs/design/purrdf-word-identities.md: admitted digest sorting and neighbour minimums, bounded unique resolution and exact original Presentation binding"
+vectors = ["crates/rdf-core/tests/content_aliases.rs"]
+bench = ["purrdf-core:ir_layout"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "source-row-identity"
+summary = "One canonical value-based row law for native sealed source metadata and selected text source fingerprints, in graph-aware and graph-free profiles"
+home = "purrdf_core::source::LiteralSourceRow"
+entry_points = []
+spec = "purrdf/source-row/v1 and purrdf/triples/source-row/v1 over core canonical bytes; exact blank scopes, datatype, lexical form, language and direction, independent of dictionary ordinals"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "native-hash-table"
+summary = "Explicit-hash native tables and fixed-key maps with governed group scans and transactional growth"
+home = "purrdf_core::hash::table::HashTable"
+entry_points = ["purrdf_core::hash::table::HashMap", "purrdf_core::hash::reserve_table_with_memory"]
+spec = "one pinned native probe and ownership engine; caller work refusal precedes each governed group and unpublished growth never owns copied original entries"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["hashbrown"]
+enforced = true
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[distinct]]
+kind = "shim"
+members = [
+  "purrdf_core::hash::table::map::HashMap::from",
+  "purrdf_core::hash::table::set::HashSet::from",
+  "purrdf_lex::json::value::Value::array",
+]
+criterion = "a"
+anchor = "purrdf_core::hash::table::HashMap"
+reason = "These typed array adapters select different FromIterator contracts: native maps replace duplicate keys, native sets deduplicate values, and JSON arrays preserve order and duplicates. Their collection semantics are not interchangeable."
+
+[[distinct]]
+kind = "body"
+members = [
+    "purrdf_zstd::encoding::fastpath::avx2_bmi2::count_match_from_indices",
+    "purrdf_zstd::encoding::fastpath::neon::count_match_from_indices",
+    "purrdf_zstd::encoding::fastpath::simd128::count_match_from_indices",
+    "purrdf_zstd::encoding::fastpath::sse42::count_match_from_indices",
+]
+criterion = "b"
+anchor = "purrdf_zstd::encoding::fastpath::scalar::count_match_with"
+reason = "These named ISA entries pass their own target-qualified prefix callback to the single seed/index implementation. Their target_feature boundaries preserve the codec's selected kernel contract; no seed or pointer arithmetic is duplicated."
+
+[[distinct]]
+kind = "body"
+members = [
+    "purrdf_zstd::encoding::fastpath::avx2_bmi2::common_prefix_len_ptr",
+    "purrdf_zstd::encoding::fastpath::neon::common_prefix_len_ptr",
+    "purrdf_zstd::encoding::fastpath::simd128::common_prefix_len_ptr",
+    "purrdf_zstd::encoding::fastpath::sse42::common_prefix_len_ptr",
+]
+criterion = "b"
+anchor = "purrdf_zstd::encoding::fastpath::scalar::common_prefix_len_with"
+reason = "The explicit ISA entries select distinct intrinsic callbacks under their original target_feature attributes and assembly-audited symbols. The word probe and scalar tail are implemented once in common_prefix_len_with; these entries only bind that algorithm to its selected vector kernel."
+
+[[distinct]]
+kind = "body"
+members = [
+    "purrdf_zstd::decoding::scratch::DecoderScratch::split",
+    "purrdf_zstd::decoding::scratch::DirectScratch::split",
+]
+criterion = "b"
+anchor = "purrdf_zstd::decoding::scratch::Workspace"
+reason = "Workspace exposes disjoint field borrows from two ownership shapes: owned decoder fields and reborrowed persistent fields with caller-owned direct output. The adapters shorten different lifetimes; sharing the storage shape would change ownership or restore the avoided drain copy."
+
+[[distinct]]
+kind = "body"
+members = [
+    "purrdf_zstd::encoding::dfast::DfastMatchGenerator::stage_borrowed_block",
+    "purrdf_zstd::encoding::row::RowMatchGenerator::stage_borrowed_block",
+]
+criterion = "b"
+anchor = "purrdf_zstd::encoding::history::stage_borrowed_block"
+reason = "The strategy-specific match generators expose the same staging interface while retaining separate table and history ownership. These field adapters delegate all bounds checking and range publication to the one history::stage_borrowed_block implementation."
+
+[[distinct]]
+kind = "body"
+members = [
+    "purrdf_zstd::encoding::dfast::DfastMatchGenerator::compact_history",
+    "purrdf_zstd::encoding::row::RowMatchGenerator::compact_history",
+]
+criterion = "b"
+anchor = "purrdf_zstd::encoding::history::compact_history"
+reason = "Each match strategy projects its own history fields into the single compaction implementation, keeping that strategy's coordinate floor attached to its owning matcher. The threshold, drain and coordinate update are implemented only by history::compact_history."
+
+[[distinct]]
+kind = "shim"
+members = [
+    "purrdf_zstd::cpu_kernel::NeonKernel::mask_lower_bits",
+    "purrdf_zstd::cpu_kernel::SveKernel::mask_lower_bits",
+]
+criterion = "b"
+anchor = "purrdf_zstd::cpu_kernel::CpuKernel"
+reason = "Separate selected kernel types implement the one CpuKernel interface and delegate masking to ScalarKernel on Arm, which has no BMI2 mask instruction. Neither trait adapter repeats the scalar mask algorithm."
+
+[[distinct]]
+kind = "shim"
+members = [
+    "purrdf_zstd::cpu_kernel::Avx2Kernel::mask_lower_bits",
+    "purrdf_zstd::cpu_kernel::Bmi2Kernel::mask_lower_bits",
+]
+criterion = "b"
+anchor = "purrdf_zstd::cpu_kernel::mask_lower_bits_bmi2_impl"
+reason = "The selected AVX2 and BMI2 kernel types separately satisfy CpuKernel after their respective runtime feature checks. Both call the same BMI2 target-qualified mask body, retaining their selection safety contracts without duplicating the intrinsic implementation."
+
+[[distinct]]
+kind = "shim"
+members = [
+    "purrdf_zstd::encoding::fastpath::avx2_bmi2::hash_mix_u64",
+    "purrdf_zstd::encoding::fastpath::sse42::hash_mix_u64",
+]
+criterion = "b"
+anchor = "purrdf_zstd::encoding::fastpath::sse42::hash_mix_u64"
+reason = "The 32-bit x86 entries retain distinct SSE4.2 and AVX2/BMI2 target-qualified dispatch contracts. Because the 64-bit CRC intrinsic is unavailable there, both delegate to the one scalar mixer; their native x86_64 entries still select the actual CRC paths."
+
+[[distinct]]
+members = [
+    "purrdf_core::ownership::OwnedOrBorrowed::deref",
+    "purrdf_rdf::native_codecs::acquisition::ParserContext::deref",
+    "purrdf_rdf::native_codecs::acquisition::ParserContext::deref_mut",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::acquisition::ParserContext"
+reason = "The core carrier supports immutable borrowing only. The parser carrier must preserve an exclusive mutable RunContext loan so its read and mutable projections reach one original progress carrier and live admission account; the immutable carrier cannot provide that update authority."

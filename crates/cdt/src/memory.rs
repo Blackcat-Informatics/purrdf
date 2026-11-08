@@ -21,6 +21,15 @@ pub enum ReadError {
     Storage(StorageError),
 }
 
+impl purrdf_hash::error::StructuredError for ReadError {
+    purrdf_hash::error_visit! {
+        Lexical(cause) => "cdt-read-lexical" { "cause" => Cause(cause) },
+        Storage(cause) => "cdt-read-storage" { "cause" => Cause(cause) },
+    }
+}
+
+purrdf_lex::error_source!(ReadError { Lexical, Storage });
+
 purrdf_lex::variant_from!(ReadError { Lexical(CdtError) });
 
 purrdf_lex::variant_from!(ReadError { Storage(StorageError) });
@@ -108,6 +117,12 @@ impl<'m, 'a> ChildStorage<'m, 'a> {
     }
 }
 impl Admission for ChildStorage<'_, '_> {
+    fn progress_enabled(&self) -> bool {
+        self.parent.admission().progress_enabled()
+    }
+    fn checkpoint(&mut self, units: u64) -> Result<(), StorageError> {
+        self.parent.admission_mut().checkpoint(units)
+    }
     fn resize(&mut self, next: usize) -> Result<(), StorageError> {
         if next >= self.live {
             self.parent.add_bytes(next - self.live)?;

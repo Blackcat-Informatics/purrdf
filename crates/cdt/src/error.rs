@@ -55,6 +55,8 @@ pub enum CdtError {
         offset: usize,
         /// A short, stable explanation.
         reason: &'static str,
+        /// Original UCHAR decoder refusal, when decoding reached that terminal.
+        cause: Option<purrdf_lex::terminals::UcharError>,
     },
     /// An `IRIREF` is syntactically an IRI reference but is not **absolute** (it has
     /// no scheme), or is not a valid IRI at all. CDT lexical forms carry no base, so
@@ -73,6 +75,8 @@ pub enum CdtError {
         offset: usize,
         /// A short, stable explanation.
         reason: &'static str,
+        /// Original language parser refusal; direction-suffix refusals have none.
+        cause: Option<purrdf_iri::langtag::LanguageTagError>,
     },
     /// A `NumericLiteral` is not a valid `INTEGER`, `DECIMAL` or `DOUBLE`.
     BadNumericLiteral {
@@ -109,6 +113,46 @@ pub enum CdtError {
         /// Byte offset of the first byte of the trailing text.
         offset: usize,
     },
+}
+
+impl purrdf_hash::error::StructuredError for CdtError {
+    purrdf_hash::error_visit! {
+        InputTooLarge { offset, length } => "cdt-input-too-large" {
+            "offset" => ByteCount(*offset as u128), "length" => ByteCount(*length as u128),
+        },
+        TooManyElements { offset, limit } => "cdt-too-many-elements" {
+            "offset" => ByteCount(*offset as u128), "limit" => Unsigned(*limit as u128),
+        },
+        Unexpected { offset, expected } => "cdt-unexpected" {
+            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
+        },
+        UnexpectedEnd { offset, expected } => "cdt-unexpected-end" {
+            "offset" => ByteCount(*offset as u128), "expected" => Text(expected),
+        },
+        BadEscape { offset, reason, cause } => "cdt-bad-escape" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+            "cause" => Value(cause.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
+        },
+        NotAbsoluteIri { offset, iri, reason } => "cdt-not-absolute-iri" {
+            "offset" => ByteCount(*offset as u128), "iri" => Iri(iri), "reason" => Text(reason),
+        },
+        BadLanguageTag { offset, reason, cause } => "cdt-bad-language-tag" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+            "cause" => Value(cause.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
+        },
+        BadNumericLiteral { offset, reason } => "cdt-bad-numeric-literal" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        BadBlankNodeLabel { offset, reason } => "cdt-bad-blank-node-label" {
+            "offset" => ByteCount(*offset as u128), "reason" => Text(reason),
+        },
+        DuplicateMapKey { offset, key } => "cdt-duplicate-map-key" {
+            "offset" => ByteCount(*offset as u128), "key" => Text(key),
+        },
+        TrailingText { offset } => "cdt-trailing-text" {
+            "offset" => ByteCount(*offset as u128),
+        },
+    }
 }
 
 impl CdtError {
@@ -166,7 +210,7 @@ impl fmt::Display for CdtError {
             Self::UnexpectedEnd { offset, expected } => {
                 write!(f, "at byte {offset}: input ended, expected {expected}")
             }
-            Self::BadEscape { offset, reason } => {
+            Self::BadEscape { offset, reason, .. } => {
                 write!(f, "at byte {offset}: bad escape sequence: {reason}")
             }
             Self::NotAbsoluteIri {
@@ -176,7 +220,7 @@ impl fmt::Display for CdtError {
             } => {
                 write!(f, "at byte {offset}: <{iri}> is not usable here: {reason}")
             }
-            Self::BadLanguageTag { offset, reason } => {
+            Self::BadLanguageTag { offset, reason, .. } => {
                 write!(f, "at byte {offset}: bad language tag: {reason}")
             }
             Self::BadNumericLiteral { offset, reason } => {
@@ -195,7 +239,10 @@ impl fmt::Display for CdtError {
     }
 }
 
-impl core::error::Error for CdtError {}
+purrdf_lex::error_source!(CdtError => {
+    Self::BadEscape { cause: Some(cause), .. } => cause,
+    Self::BadLanguageTag { cause: Some(cause), .. } => cause,
+});
 
 /// Why a value-space comparison had no answer.
 ///
@@ -229,6 +276,14 @@ pub enum CdtTypeErrorKind {
     Undefined,
 }
 
+impl purrdf_hash::error::StructuredError for CdtTypeErrorKind {
+    purrdf_hash::error_visit! {
+        IllTyped => "cdt-type-ill-typed" {},
+        Unmodelled => "cdt-type-unmodelled" {},
+        Undefined => "cdt-type-undefined" {},
+    }
+}
+
 /// A SPARQL **type error** raised by a value-space comparison.
 ///
 /// This is the third outcome of [`crate::list_equal`] / [`crate::list_less_than`]
@@ -241,6 +296,14 @@ pub struct CdtTypeError {
     pub kind: CdtTypeErrorKind,
     /// A short, stable explanation of which pair could not be compared and why.
     pub reason: &'static str,
+}
+
+impl purrdf_hash::error::StructuredError for CdtTypeError {
+    purrdf_hash::error_visit! {
+        @record self { kind, reason } => "cdt-type" {
+            "kind" => Record(&self.kind), "reason" => Text(self.reason),
+        }
+    }
 }
 
 impl CdtTypeError {

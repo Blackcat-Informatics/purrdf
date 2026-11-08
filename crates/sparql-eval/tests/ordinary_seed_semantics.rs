@@ -77,7 +77,7 @@ fn ordinary_joins_preserve_expression_scope_and_subquery_modifiers() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 )
                 .expect("ordinary boundary query returns an outcome")
@@ -120,7 +120,7 @@ fn every_seeded_optional_fuel_cut_is_a_subbag_without_fabricated_padding() {
             .query_governed(
                 &dataset,
                 request,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("measure tiny ordinary OPTIONAL");
@@ -139,7 +139,7 @@ fn every_seeded_optional_fuel_cut_is_a_subbag_without_fabricated_padding() {
                 .query_governed(
                     &dataset,
                     request,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED.with_fuel(allowance),
                 )
                 .expect("fuel cut returns an outcome");

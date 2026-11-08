@@ -52,19 +52,19 @@ fn malformed_compiler_rows_are_refused_before_evaluation() {
         let query = ask(pattern);
         assert!(
             engine
-                .prepare_algebra(query.clone(), QueryOptions::EMPTY)
+                .prepare_algebra(query.clone(), &QueryOptions::EMPTY)
                 .is_err()
         );
-        assert!(PreparedQuery::rewritten(query, QueryOptions::EMPTY).is_err());
+        assert!(PreparedQuery::rewritten(query, &QueryOptions::EMPTY).is_err());
     }
     assert_eq!(engine.plan_cache_stats().misses, 0);
     let empty = engine
-        .prepare_algebra(ask(values(vec![], vec![])), QueryOptions::EMPTY)
+        .prepare_algebra(ask(values(vec![], vec![])), &QueryOptions::EMPTY)
         .unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     assert!(matches!(
         engine
-            .query_prepared(&data, &empty, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, &empty, &[], &QueryOptions::EMPTY)
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
@@ -92,7 +92,7 @@ fn term_validation_preserves_rdf_values_and_rejects_invalid_structure() {
             engine
                 .prepare_algebra(
                     ask(values(vec![Variable::new("x")], vec![Some(term)])),
-                    QueryOptions::EMPTY
+                    &QueryOptions::EMPTY
                 )
                 .is_err()
         );
@@ -114,7 +114,7 @@ fn term_validation_preserves_rdf_values_and_rejects_invalid_structure() {
         engine
             .prepare_algebra(
                 ask(values(vec![Variable::new("名")], vec![Some(term)])),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
     }
@@ -147,7 +147,7 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
     for pattern in invalid {
         assert!(
             engine
-                .prepare_algebra(ask(pattern), QueryOptions::EMPTY)
+                .prepare_algebra(ask(pattern), &QueryOptions::EMPTY)
                 .is_err()
         );
     }
@@ -165,7 +165,7 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
                 expr: expression,
                 inner: empty().into(),
             }),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
     })
     .expect("spawn")
@@ -187,7 +187,7 @@ fn rewritten_calls_share_registry_and_arity_admission() {
             object_args,
         }))
     };
-    assert!(PreparedQuery::rewritten(call(vec![], vec![]), QueryOptions::EMPTY).is_err());
+    assert!(PreparedQuery::rewritten(call(vec![], vec![]), &QueryOptions::EMPTY).is_err());
     let mut registry = PropertyFunctionRegistry::new();
     registry.register(
         "http://example.org/relation",
@@ -196,18 +196,18 @@ fn rewritten_calls_share_registry_and_arity_admission() {
     let env =
         ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly");
     let options = QueryOptions::new().with_env(&env);
-    assert!(PreparedQuery::rewritten(call(vec![], vec![]), options).is_err());
+    assert!(PreparedQuery::rewritten(call(vec![], vec![]), &options).is_err());
     let query = call(
         vec![TermPattern::Variable(Variable::new("s"))],
         vec![TermPattern::Variable(Variable::new("o"))],
     );
-    let typed = engine.prepare_algebra(query.clone(), options).unwrap();
-    let rewritten = PreparedQuery::rewritten(query, options).unwrap();
+    let typed = engine.prepare_algebra(query.clone(), &options).unwrap();
+    let rewritten = PreparedQuery::rewritten(query, &options).unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     for prepared in [&*typed, &rewritten] {
         assert!(matches!(
             engine
-                .query_prepared(&data, prepared, &[], options)
+                .query_prepared(&data, prepared, &[], &options)
                 .unwrap(),
             SparqlResult::Boolean(false)
         ));
@@ -283,7 +283,7 @@ fn disabled_and_compiler_plans_are_counted_without_retention() {
     let typed = engine
         .prepare_algebra(
             ask(GraphPattern::Bgp { patterns: vec![] }),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap();
     assert_eq!(
@@ -356,7 +356,9 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
         .unwrap();
     parsed.validate().unwrap();
     let text = engine.prepare_query(&query, None).unwrap();
-    let typed = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
+    let typed = engine
+        .prepare_algebra(parsed, &QueryOptions::EMPTY)
+        .unwrap();
     assert_eq!(text.query(), typed.query());
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     // Preparation accepts the parser's envelope. Execution measures the stack it runs
@@ -369,13 +371,13 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
         let (plain, governed) = purrdf_stack::on_stack_scoped(256 * 1024, || {
             let engine = NativeSparqlEngine::new();
             (
-                engine.query_prepared(&data, prepared, &[], QueryOptions::EMPTY),
+                engine.query_prepared(&data, prepared, &[], &QueryOptions::EMPTY),
                 engine
                     .query_prepared_governed_in_operation(
                         &*data,
                         prepared,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &Arc::new(GovernorState::new(&QueryGovernors::METERED)),
                     )
                     .is_err(),
@@ -395,7 +397,7 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
         assert!(governed);
     }
     let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {
-        NativeSparqlEngine::new().query_prepared(&data, &text, &[], QueryOptions::EMPTY)
+        NativeSparqlEngine::new().query_prepared(&data, &text, &[], &QueryOptions::EMPTY)
     })
     .expect("the large stack runs the evaluation")
     .expect("the spine evaluates where the stack holds it");
@@ -469,7 +471,7 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
         subject_args: vec![TermPattern::Variable(Variable::new("s"))],
         object_args: vec![TermPattern::Variable(Variable::new("o"))],
     });
-    assert!(PreparedQuery::rewritten(ask(call.clone()), options).is_err());
+    assert!(PreparedQuery::rewritten(ask(call.clone()), &options).is_err());
     let raw = ask(GraphPattern::Join {
         left: Child::new(GraphPattern::Lateral {
             left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
@@ -485,14 +487,14 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
             }],
         }),
     });
-    let rewritten = PreparedQuery::rewritten(raw.clone(), options).unwrap();
+    let rewritten = PreparedQuery::rewritten(raw.clone(), &options).unwrap();
     assert_ne!(
         rewritten.query(),
         &raw,
         "admission must put the binding before the call"
     );
     let engine = NativeSparqlEngine::new();
-    let typed = engine.prepare_algebra(raw, options).unwrap();
+    let typed = engine.prepare_algebra(raw, &options).unwrap();
     assert_eq!(typed.query(), rewritten.query());
     let mut builder = RdfDatasetBuilder::new();
     let subject = builder.intern_iri("http://example.org/value").unwrap();
@@ -503,7 +505,7 @@ fn admission_reorders_a_binding_before_a_bound_only_relation() {
     let data = builder.freeze().unwrap();
     assert!(matches!(
         engine
-            .query_prepared(&data, &rewritten, &[], options)
+            .query_prepared(&data, &rewritten, &[], &options)
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
@@ -545,14 +547,14 @@ fn aggregate_sort_keys_reorder_a_binding_before_a_bound_only_relation() {
     let data = builder.freeze().unwrap();
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_query_with_options(query, None, options)
+        .prepare_query_with_options(query, None, &options)
         .unwrap();
     let typed = engine
-        .prepare_algebra(prepared.query().clone(), options)
+        .prepare_algebra(prepared.query().clone(), &options)
         .unwrap();
     for prepared in [&prepared, &typed] {
         let result = engine
-            .query_prepared(&data, prepared, &[], options)
+            .query_prepared(&data, prepared, &[], &options)
             .unwrap();
         let SparqlResult::Solutions {
             variables, rows, ..
@@ -580,13 +582,13 @@ fn parser_and_prepared_execution_agree_near_the_evaluator_depth_boundary() {
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     assert!(matches!(
         engine
-            .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let result = engine
-        .query_prepared_governed_in_operation(&*data, &prepared, &[], QueryOptions::EMPTY, &state)
+        .query_prepared_governed_in_operation(&*data, &prepared, &[], &QueryOptions::EMPTY, &state)
         .unwrap();
     assert!(matches!(
         result,
@@ -613,12 +615,12 @@ fn compiler_aggregate_calls_are_admitted_with_their_registry() {
         variables: vec![],
         aggregates: vec![(Variable::new("result"), aggregate)],
     });
-    let error = PreparedQuery::rewritten(query.clone(), QueryOptions::EMPTY).unwrap_err();
+    let error = PreparedQuery::rewritten(query.clone(), &QueryOptions::EMPTY).unwrap_err();
     assert_eq!(error.code, "native-sparql-aggregate-function");
     let engine = NativeSparqlEngine::new();
     assert_eq!(
         engine
-            .prepare_algebra(query, QueryOptions::EMPTY)
+            .prepare_algebra(query, &QueryOptions::EMPTY)
             .unwrap_err()
             .code,
         error.code
@@ -650,12 +652,14 @@ fn duplicate_projection_and_group_keys_preserve_parsed_and_compiler_results() {
             .unwrap();
         parsed.validate().unwrap();
         let from_text = engine.prepare_query(text, None).unwrap();
-        let from_algebra = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
+        let from_algebra = engine
+            .prepare_algebra(parsed, &QueryOptions::EMPTY)
+            .unwrap();
         for plan in [&from_text, &from_algebra] {
             let SparqlResult::Solutions {
                 variables, rows, ..
             } = engine
-                .query_prepared(&data, plan, &[], QueryOptions::EMPTY)
+                .query_prepared(&data, plan, &[], &QueryOptions::EMPTY)
                 .unwrap()
             else {
                 panic!("expected solutions");
@@ -699,7 +703,7 @@ fn aggregate_output_collisions_are_refused_without_rejecting_redundant_keys() {
             variables,
             aggregates,
         });
-        assert!(PreparedQuery::rewritten(query, QueryOptions::EMPTY).is_err());
+        assert!(PreparedQuery::rewritten(query, &QueryOptions::EMPTY).is_err());
     }
 }
 
@@ -714,11 +718,11 @@ fn deeply_nested_prepared_expressions_execute_without_recursive_admission_visito
         expr: expression,
         inner: Child::new(GraphPattern::Bgp { patterns: vec![] }),
     });
-    let prepared = engine.prepare_algebra(query, QueryOptions::EMPTY).unwrap();
+    let prepared = engine.prepare_algebra(query, &QueryOptions::EMPTY).unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     assert!(matches!(
         engine
-            .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap(),
         SparqlResult::Boolean(true)
     ));
@@ -729,7 +733,7 @@ fn deeply_nested_prepared_expressions_execute_without_recursive_admission_visito
                 &*data,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state
             )
             .unwrap(),
@@ -756,10 +760,10 @@ fn reserved_language_datatype_shapes_are_refused_by_text_and_compiler_admission(
         assert!(engine.prepare_query(&text, None).is_err());
         assert!(
             engine
-                .prepare_algebra(parsed.clone(), QueryOptions::EMPTY)
+                .prepare_algebra(parsed.clone(), &QueryOptions::EMPTY)
                 .is_err()
         );
-        assert!(PreparedQuery::rewritten(parsed, QueryOptions::EMPTY).is_err());
+        assert!(PreparedQuery::rewritten(parsed, &QueryOptions::EMPTY).is_err());
         // This loop used to continue from here: build a trivially-admitted
         // `PreparedQuery`, overwrite its public `query` field by hand with the
         // reserved-datatype `parsed` algebra above (bypassing admission), and
@@ -783,10 +787,12 @@ fn reserved_language_datatype_shapes_are_refused_by_text_and_compiler_admission(
         let parsed = purrdf_sparql_algebra::SparqlParser::new()
             .parse_query(&text)
             .unwrap();
-        let from_algebra = engine.prepare_algebra(parsed, QueryOptions::EMPTY).unwrap();
+        let from_algebra = engine
+            .prepare_algebra(parsed, &QueryOptions::EMPTY)
+            .unwrap();
         for plan in [&from_text, &from_algebra] {
             let SparqlResult::Solutions { rows, .. } = engine
-                .query_prepared(&data, plan, &[], QueryOptions::EMPTY)
+                .query_prepared(&data, plan, &[], &QueryOptions::EMPTY)
                 .unwrap()
             else {
                 panic!("expected solutions");

@@ -1,0 +1,7 @@
+version = 1
+
+[[annotations]]
+path = ["bit_io/**/*", "blocks/**/*", "common/**/*", "cpu_kernel.rs", "cpu_kernel/**/*", "decoding/**/*", "dictionary/**/*", "encoding/**/*", "fse/**/*", "histogram.rs", "histogram/**/*", "huff0/**/*", "io_std.rs", "LICENSES/**/*"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["Moritz Borcherding <moritz.borcherding@web.de>", "Structured World Foundation <foundation@sw.foundation>", "2026 Blackcat Informatics Inc."]
+SPDX-License-Identifier = "Apache-2.0"

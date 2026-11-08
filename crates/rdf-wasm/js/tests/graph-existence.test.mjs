@@ -15,7 +15,7 @@ const modes = [undefined, true, false];
 const parse = (mode) => mode === undefined
   ? Dataset.parse(TRIG, "trig")
   : Dataset.parse(TRIG, "trig", undefined, mode);
-const graphs = (dataset) => JSON.parse(dataset.query("SELECT ?g WHERE { GRAPH ?g {} }"))
+const graphs = (dataset) => JSON.parse(dataset.query("SELECT ?g WHERE { GRAPH ?g {} }").body)
   .results.bindings.map((row) => row.g.value).sort();
 
 for (const mode of modes) {
@@ -41,16 +41,16 @@ for (const mode of modes) {
       }
       const clear = `CLEAR GRAPH <${G}>`;
       if (governed) assert.equal(engine.updateGoverned(dataset, clear, { noCeiling: true }).isApplied, true);
-      else assert.equal(engine.update(dataset, clear), dataset);
+      else assert.equal(engine.update(dataset, clear).dataset, dataset);
       assert.equal(dataset.rememberEmptyGraphs, remember);
       assert.deepEqual(graphs(dataset), remember ? [G] : []);
-      engine.update(dataset, `CREATE GRAPH <${H}>`);
+      engine.update(dataset, `CREATE GRAPH <${H}>`).dataset;
       assert.deepEqual(graphs(dataset), remember ? [G, H] : []);
-      engine.update(dataset, "DROP NAMED");
+      engine.update(dataset, "DROP NAMED").dataset;
       assert.deepEqual(graphs(dataset), []);
-      if (remember) assert.throws(() => engine.update(dataset, `COPY GRAPH <${G}> TO GRAPH <${H}>`));
-      else engine.update(dataset, `COPY GRAPH <${G}> TO GRAPH <${H}>`);
-      engine.update(dataset, `CLEAR SILENT GRAPH <${G}>`);
+      if (remember) assert.throws(() => engine.update(dataset, `COPY GRAPH <${G}> TO GRAPH <${H}>`).dataset);
+      else engine.update(dataset, `COPY GRAPH <${G}> TO GRAPH <${H}>`).dataset;
+      engine.update(dataset, `CLEAR SILENT GRAPH <${G}>`).dataset;
       assert.deepEqual(graphs(dataset), []);
       dataset.free();
     }
@@ -81,7 +81,7 @@ for (const mode of modes) {
         assert.equal(outcome.isApplied, false);
         assert.equal(outcome.tripped.cause, "cancelled");
       } else {
-        await assert.rejects(engine.updateAsync(dataset, request, options), { name: "AbortError" });
+        await assert.rejects(engine.updateAsync(dataset, request, options).then(result => result.dataset), { name: "AbortError" });
       }
       assert.equal(loads, 1, "cancellation arrived in the real asynchronous effect");
       assert.equal(dataset.id, id);
@@ -92,12 +92,12 @@ for (const mode of modes) {
       if (governed) {
         const outcome = await engine.updateGovernedAsync(dataset, clear, { noCeiling: true });
         assert.equal(outcome.isApplied, true);
-      } else assert.equal(await engine.updateAsync(dataset, clear), dataset);
+      } else assert.equal(await engine.updateAsync(dataset, clear).then(result => result.dataset), dataset);
       assert.equal(dataset.id, id);
       assert.equal(dataset.generation, 1n);
       assert.equal(dataset.rememberEmptyGraphs, remember);
       assert.deepEqual(graphs(dataset), remember ? [G] : []);
-      await engine.updateAsync(dataset, `CREATE GRAPH <${H}>`);
+      await engine.updateAsync(dataset, `CREATE GRAPH <${H}>`).then(result => result.dataset);
       assert.deepEqual(graphs(dataset), remember ? [G, H] : []);
       assert.equal(dataset.generation, 2n);
       dataset.free();

@@ -3,6 +3,7 @@
 
 //! Sparse records at the original VM's value-stack positions.
 
+use crate::error::EvaluatorInvariant;
 use purrdf_core::{DatasetView, evidence::EvidenceCombination};
 
 use super::compile::Op;
@@ -80,7 +81,7 @@ impl Records {
             Op::Call { argc, .. } | Op::CallCustom { argc, .. } => argc as usize,
         };
         let start = depth.checked_sub(consumed).ok_or_else(|| {
-            EvalError::internal("VM evidence operands exceed the original value stack")
+            EvalError::Invariant(EvaluatorInvariant::VmEvidenceOperandsOutsideStack)
         })?;
         let law = if matches!(op, Op::Kleene { or: true, .. }) {
             EvidenceCombination::Alternatives
@@ -121,7 +122,7 @@ impl Records {
                 Op::CoalesceNext(_) if after < before => {}
                 _ => {
                     let position = after.checked_sub(1).ok_or_else(|| {
-                        EvalError::internal("VM evidence result has no original value slot")
+                        EvalError::Invariant(EvaluatorInvariant::VmEvidenceResultSlotMissing)
                     })?;
                     self.attach(position, record, workspace)?;
                 }
@@ -133,7 +134,7 @@ impl Records {
     fn settle(&mut self, pc: usize, workspace: &WorkspaceCapability) -> Result<(), EvalError> {
         while self.branches.last().is_some_and(|branch| pc >= branch.0) {
             let (_, position, condition) = self.branches.pop().ok_or_else(|| {
-                EvalError::internal("VM evidence lost its original conditional record")
+                EvalError::Invariant(EvaluatorInvariant::VmConditionalEvidenceMissing)
             })?;
             self.attach(position, condition, workspace)?;
         }

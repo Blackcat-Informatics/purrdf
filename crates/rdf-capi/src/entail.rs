@@ -52,6 +52,12 @@
 //! caller) with `purrdf_buffer_data`. `purrdf_entail_materialize_to_nquads`
 //! hands out **two** independent buffers, so it needs **two** frees; on any error
 //! it writes neither out-param and there is nothing to free.
+//!
+//! Canonicalizing exports additionally require `canonical_search` (`unlimited`
+//! or canonical unsigned decimal), optional `cancellation`, and a distinct
+//! `out_canonicalization_json` buffer slot. Free that evidence buffer separately.
+//! Native refusal leaves result slots untouched and retains finalized evidence
+//! and its original canonical cause in the error handle until that handle is freed.
 
 use std::os::raw::c_char;
 
@@ -72,7 +78,7 @@ use crate::{cstr_array, cstr_to_str};
 
 /// Close `document` (N-Quads, which accepts N-Triples) under the regime spelled
 /// `regime`, returning the canonical N-Quads closure and the rendered reasoning
-/// report as two byte vectors. Native-testable, pointer-free core.
+/// report as two owning buffers. Native-testable, pointer-free core.
 ///
 /// The parse → close → canonicalize → render sequence lives in
 /// [`materialize_to_nquads_string_with`]; this only adds the C-ABI byte framing.
@@ -82,24 +88,20 @@ fn materialize_to_nquads_bytes(
     program: &str,
     imports: &[(&str, &str)],
     premise_iris: &[&str],
-    max_stored_facts: Option<u64>,
-    max_join_steps: Option<u64>,
-) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let limits = MaterializeLimits {
-        max_stored_facts,
-        max_join_steps,
-        host: RegimeHost::CAbi,
-    };
+    limits: &MaterializeLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(PurrdfBuffer, PurrdfBuffer), purrdf_validate::regime::ReasoningError> {
     let (nquads, report) = materialize_to_nquads_string_with(
         regime,
         document,
         program,
         imports,
         premise_iris,
-        &limits,
+        limits,
+        control,
     )?
     .into_parts();
-    Ok((nquads.into_bytes(), report.into_bytes()))
+    Ok((PurrdfBuffer::from(nquads), PurrdfBuffer::from(report)))
 }
 
 /// Materialize an RDF document under a SPARQL entailment regime.
@@ -132,7 +134,8 @@ fn materialize_to_nquads_bytes(
 /// `max_stored_facts` bounds the facts each evaluation store may hold and
 /// `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
 /// `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
-/// 1048576 join steps natively — or point at an exact limit. A run past either fails
+/// 1048576 join steps natively — or point at an exact limit. `max_term_arena_bytes`
+/// bounds retained term surfaces, defaulting to 16777216 bytes. A run past a limit fails
 /// the call naming the limit, the numbers and the parameter that raises it; a run inside
 /// them returns exactly the closure larger limits would, and the report's
 /// `contract-hash` names the calculus under the limits in force.
@@ -153,7 +156,7 @@ fn materialize_to_nquads_bytes(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
 /// null or writable.
 #[unsafe(no_mangle)]
@@ -168,8 +171,12 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_nquads: *mut *mut PurrdfBuffer,
     out_report: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above — `document`/`regime`/`program` are
@@ -178,55 +185,61 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     // fallible step has succeeded, so a failing call leaves both untouched and
     // hands out no buffer the caller would have to free.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || regime.is_null()
-                || program.is_null()
-                || out_nquads.is_null()
-                || out_report.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_nquads, out_report],
+            control,
             {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_entail_materialize_to_nquads",
-                ));
+                if document.is_null()
+                    || regime.is_null()
+                    || program.is_null()
+                    || out_nquads.is_null()
+                    || out_report.is_null()
+                {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "null pointer argument to purrdf_entail_materialize_to_nquads",
+                    ));
+                }
+                let document = cstr_to_str(document)?;
+                let regime = cstr_to_str(regime)?;
+                let program = cstr_to_str(program)?;
+                let imports = import_pairs(
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    "purrdf_entail_materialize_to_nquads",
+                )?;
+                let premise_iris = cstr_array(
+                    premise_iris,
+                    premise_iri_count,
+                    "premise_iris",
+                    "purrdf_entail_materialize_to_nquads",
+                )?;
+                let (nquads, report) = materialize_to_nquads_bytes(
+                    document,
+                    regime,
+                    program,
+                    &imports,
+                    &premise_iris,
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
+                    control,
+                )
+                .map_err(PurrdfError::reasoning)?;
+                *out_nquads = into_handle(nquads);
+                *out_report = into_handle(report);
+                Ok(PurrdfStatus::Ok)
             }
-            let document = cstr_to_str(document)?;
-            let regime = cstr_to_str(regime)?;
-            let program = cstr_to_str(program)?;
-            let imports = import_pairs(
-                import_iris,
-                import_documents,
-                import_count,
-                "purrdf_entail_materialize_to_nquads",
-            )?;
-            let premise_iris = cstr_array(
-                premise_iris,
-                premise_iri_count,
-                "premise_iris",
-                "purrdf_entail_materialize_to_nquads",
-            )?;
-            let (nquads, report) = materialize_to_nquads_bytes(
-                document,
-                regime,
-                program,
-                &imports,
-                &premise_iris,
-                // SAFETY: the caller's contract — null or readable.
-                max_stored_facts.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_join_steps.as_ref().copied(),
-            )
-            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_nquads = into_handle(PurrdfBuffer(nquads));
-            *out_report = into_handle(PurrdfBuffer(report));
-            Ok(PurrdfStatus::Ok)
-        })
+        )
     }
 }
 
 /// The rule table `regime` is *defined by*, one name per line. Native-testable,
 /// pointer-free core.
-fn rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn rules_bytes(regime: &str) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(rules_string(regime)?.into_bytes())
 }
 
@@ -262,9 +275,8 @@ pub unsafe extern "C" fn purrdf_entail_rules(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = rules_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            let bytes = rules_bytes(regime).map_err(PurrdfError::reasoning)?;
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -272,7 +284,9 @@ pub unsafe extern "C" fn purrdf_entail_rules(
 
 /// The subset of the rule table this build fires, one name per line.
 /// Native-testable, pointer-free core.
-fn implemented_rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn implemented_rules_bytes(
+    regime: &str,
+) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(implemented_rules_string(regime)?.into_bytes())
 }
 
@@ -302,9 +316,8 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = implemented_rules_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            let bytes = implemented_rules_bytes(regime).map_err(PurrdfError::reasoning)?;
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -312,7 +325,7 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
 
 /// The rules this build fires beyond the specification table, one name per line.
 /// Native-testable, pointer-free core.
-fn extensions_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn extensions_bytes(regime: &str) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(extension_rules_string(regime)?.into_bytes())
 }
 
@@ -345,9 +358,8 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = extensions_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            let bytes = extensions_bytes(regime).map_err(PurrdfError::reasoning)?;
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -375,19 +387,22 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
 /// # Safety
 /// `out_answer` and `out_certificate` must be non-null, writable pointers. Both
 /// writes happen only after every fallible step has succeeded.
-unsafe fn store_answer(
-    produced: Result<ReasoningAnswer, String>,
+unsafe fn store_answer<
+    A: AsRef<str> + Into<PurrdfBuffer>,
+    E: Into<purrdf_validate::regime::ReasoningError>,
+>(
+    produced: Result<ReasoningAnswer<A>, E>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     let (answer, certificate) = produced
-        .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?
+        .map_err(|error| PurrdfError::reasoning(error.into()))?
         .into_parts();
     // SAFETY: the caller's contract above — both pointers are non-null and
     // writable, and nothing fallible remains between here and the two writes.
     unsafe {
-        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
-        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
+        *out_answer = into_handle(answer.into());
+        *out_certificate = into_handle(PurrdfBuffer::from(certificate.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -451,34 +466,52 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above; the out-params are written only by
     // `store_answer`, after the boundary call has succeeded.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_entail_consistency"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_entail_consistency"));
+                }
+                let document = cstr_to_str(document)?;
+                let imports = import_pairs(
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    "purrdf_entail_consistency",
+                )?;
+                let premise_iris = cstr_array(
+                    premise_iris,
+                    premise_iri_count,
+                    "premise_iris",
+                    "purrdf_entail_consistency",
+                )?;
+                store_answer(
+                    consistency_to_string(
+                        document,
+                        &imports,
+                        &premise_iris,
+                        step_cap,
+                        work_cap,
+                        control,
+                    ),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let imports = import_pairs(
-                import_iris,
-                import_documents,
-                import_count,
-                "purrdf_entail_consistency",
-            )?;
-            let premise_iris = cstr_array(
-                premise_iris,
-                premise_iri_count,
-                "premise_iris",
-                "purrdf_entail_consistency",
-            )?;
-            store_answer(
-                consistency_to_string(document, &imports, &premise_iris, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -489,9 +522,10 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
 /// block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` and `work_cap` behave
 /// exactly as in [`purrdf_entail_consistency`].
 ///
-/// Costs one tableau decision per ORDERED pair of named classes plus the
-/// consistency check, which the certificate's `decisions` line reports so the cost
-/// is a measurement rather than a surprise.
+/// Classification reuses shared saturation; the certificate's `decisions` line
+/// records its actual tableau runs. Incomplete directness returns an error with
+/// `owl-directness-unavailable` and the original full certificate in its message;
+/// neither answer out-parameter is written.
 ///
 /// # Safety
 /// As [`purrdf_entail_consistency`].
@@ -502,21 +536,32 @@ pub unsafe extern "C" fn purrdf_entail_classify(
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: identical contract to `purrdf_entail_consistency`.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_entail_classify"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_entail_classify"));
+                }
+                let document = cstr_to_str(document)?;
+                store_answer(
+                    classify_to_string(document, step_cap, work_cap, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            store_answer(
-                classify_to_string(document, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -528,6 +573,9 @@ pub unsafe extern "C" fn purrdf_entail_classify(
 /// `purrdf_buffer_free`.** `step_cap` and `work_cap` behave exactly as in
 /// [`purrdf_entail_consistency`].
 ///
+/// Incomplete directness returns an error with `owl-directness-unavailable` and
+/// the original full certificate in its message; neither answer out-parameter is written.
+///
 /// # Safety
 /// As [`purrdf_entail_consistency`].
 #[unsafe(no_mangle)]
@@ -537,21 +585,32 @@ pub unsafe extern "C" fn purrdf_entail_realize(
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: identical contract to `purrdf_entail_consistency`.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_entail_realize"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if document.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_entail_realize"));
+                }
+                let document = cstr_to_str(document)?;
+                store_answer(
+                    realize_to_string(document, step_cap, work_cap, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            store_answer(
-                realize_to_string(document, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -577,26 +636,37 @@ pub unsafe extern "C" fn purrdf_entail_instances(
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: as `purrdf_entail_consistency`, with one more borrowed C string.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || class.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_entail_instances"));
+                if document.is_null()
+                    || class.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_instances"));
+                }
+                let document = cstr_to_str(document)?;
+                let class = cstr_to_str(class)?;
+                store_answer(
+                    instances_to_string(document, class, step_cap, work_cap, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let class = cstr_to_str(class)?;
-            store_answer(
-                instances_to_string(document, class, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -626,26 +696,37 @@ pub unsafe extern "C" fn purrdf_entail_entails(
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: as `purrdf_entail_instances`.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || axiom.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_entail_entails"));
+                if document.is_null()
+                    || axiom.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_entails"));
+                }
+                let document = cstr_to_str(document)?;
+                let axiom = cstr_to_str(axiom)?;
+                store_answer(
+                    entails_to_string(document, axiom, step_cap, work_cap, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let axiom = cstr_to_str(axiom)?;
-            store_answer(
-                entails_to_string(document, axiom, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -711,28 +792,39 @@ pub unsafe extern "C" fn purrdf_entail_extract_module(
     method: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: as `purrdf_entail_instances`, with two more borrowed C strings.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || signature.is_null()
-                || method.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_entail_extract_module"));
+                if document.is_null()
+                    || signature.is_null()
+                    || method.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_extract_module"));
+                }
+                let document = cstr_to_str(document)?;
+                let signature = cstr_to_str(signature)?;
+                let method = cstr_to_str(method)?;
+                store_answer(
+                    extract_module_to_string(document, signature, method, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let signature = cstr_to_str(signature)?;
-            let method = cstr_to_str(method)?;
-            store_answer(
-                extract_module_to_string(document, signature, method),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -768,26 +860,37 @@ pub unsafe extern "C" fn purrdf_entail_justify(
     axiom: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: as `purrdf_entail_entails`, with no step cap to read.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || axiom.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_entail_justify"));
+                if document.is_null()
+                    || axiom.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_justify"));
+                }
+                let document = cstr_to_str(document)?;
+                let axiom = cstr_to_str(axiom)?;
+                store_answer(
+                    justify_to_string(document, axiom, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let axiom = cstr_to_str(axiom)?;
-            store_answer(
-                justify_to_string(document, axiom),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -851,17 +954,23 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 // would compile, link and ship — and never appear in the committed header, which is the
 // definition of a dark capability on this host.
 
-/// The two nullable evaluation-limit pointers every entailment entry point takes, as the
+/// The three nullable evaluation-limit pointers every entailment entry point takes, as the
 /// boundary's limits, spelled for this host.
 ///
 /// # Safety
-/// `max_stored_facts` and `max_join_steps` must each be null or readable.
-unsafe fn c_limits(max_stored_facts: *const u64, max_join_steps: *const u64) -> MaterializeLimits {
+/// All three limit pointers must each be null or readable.
+pub(crate) unsafe fn c_limits(
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
+) -> MaterializeLimits {
     MaterializeLimits {
         // SAFETY: the caller's contract — null or readable.
         max_stored_facts: unsafe { max_stored_facts.as_ref() }.copied(),
         // SAFETY: the caller's contract — null or readable.
         max_join_steps: unsafe { max_join_steps.as_ref() }.copied(),
+        // SAFETY: the caller's contract — null or readable.
+        max_term_arena_bytes: unsafe { max_term_arena_bytes.as_ref() }.copied(),
         host: RegimeHost::CAbi,
     }
 }
@@ -994,7 +1103,7 @@ pub(crate) unsafe fn import_pairs<'a>(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1009,6 +1118,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1048,7 +1158,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
                     pattern,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1100,7 +1210,7 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1115,6 +1225,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1152,7 +1263,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
                     conclusion,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1195,7 +1306,7 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
 /// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -1210,6 +1321,7 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
     premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    max_term_arena_bytes: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1247,7 +1359,7 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
                     conclusion,
                     &imports,
                     &premise_iris,
-                    &c_limits(max_stored_facts, max_join_steps),
+                    &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                 ),
                 out_answer,
                 out_certificate,
@@ -1263,21 +1375,21 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
 /// # Safety
 /// `out_answer`, `out_certificate` and `out_proof` must be non-null, writable pointers.
 /// All three writes happen only after every fallible step has succeeded.
-unsafe fn store_proved_answer(
-    produced: Result<ReasoningAnswer, String>,
+unsafe fn store_proved_answer<A: AsRef<str> + Into<PurrdfBuffer>>(
+    produced: Result<ReasoningAnswer<A>, purrdf_validate::regime::ReasoningError>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     let (answer, certificate, proof) = produced
-        .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?
+        .map_err(PurrdfError::reasoning)?
         .into_proved_parts();
     // SAFETY: the caller's contract above — all three pointers are non-null and writable,
     // and nothing fallible remains between here and the three writes.
     unsafe {
-        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
-        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
-        *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
+        *out_answer = into_handle(answer.into());
+        *out_certificate = into_handle(PurrdfBuffer::from(certificate.into_bytes()));
+        *out_proof = into_handle(PurrdfBuffer::from(proof.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -1322,31 +1434,42 @@ pub unsafe extern "C" fn purrdf_entail_prove(
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above; the out-params are written only by
     // `store_proved_answer`, after the boundary call has succeeded.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || service.is_null()
-                || argument.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
-                || out_proof.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate, out_proof],
+            control,
             {
-                return Err(null_argument("purrdf_entail_prove"));
+                if document.is_null()
+                    || service.is_null()
+                    || argument.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                    || out_proof.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_prove"));
+                }
+                let document = cstr_to_str(document)?;
+                let service = cstr_to_str(service)?;
+                let argument = cstr_to_str(argument)?;
+                store_proved_answer(
+                    prove_to_string(document, service, argument, step_cap, work_cap, control),
+                    out_answer,
+                    out_certificate,
+                    out_proof,
+                )
             }
-            let document = cstr_to_str(document)?;
-            let service = cstr_to_str(service)?;
-            let argument = cstr_to_str(argument)?;
-            store_proved_answer(
-                prove_to_string(document, service, argument, step_cap, work_cap),
-                out_answer,
-                out_certificate,
-                out_proof,
-            )
-        })
+        )
     }
 }
 
@@ -1387,34 +1510,46 @@ pub unsafe extern "C" fn purrdf_entail_check_proof(
     certificate: *const c_char,
     proof: *const c_char,
     out_report: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above; `*out_report` is written only after the boundary
     // call has succeeded.
     unsafe {
-        ffi_try!(out_error, {
-            if document.is_null()
-                || service.is_null()
-                || argument.is_null()
-                || answer.is_null()
-                || certificate.is_null()
-                || proof.is_null()
-                || out_report.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_report],
+            control,
             {
-                return Err(null_argument("purrdf_entail_check_proof"));
+                if document.is_null()
+                    || service.is_null()
+                    || argument.is_null()
+                    || answer.is_null()
+                    || certificate.is_null()
+                    || proof.is_null()
+                    || out_report.is_null()
+                {
+                    return Err(null_argument("purrdf_entail_check_proof"));
+                }
+                let report = check_dl_proof(
+                    cstr_to_str(document)?,
+                    cstr_to_str(service)?,
+                    cstr_to_str(argument)?,
+                    cstr_to_str(answer)?,
+                    cstr_to_str(certificate)?,
+                    cstr_to_str(proof)?,
+                    control,
+                )
+                .map_err(PurrdfError::reasoning)?;
+                *out_report = into_handle(PurrdfBuffer::from(report.into_bytes()));
+                Ok(PurrdfStatus::Ok)
             }
-            let report = check_dl_proof(
-                cstr_to_str(document)?,
-                cstr_to_str(service)?,
-                cstr_to_str(argument)?,
-                cstr_to_str(answer)?,
-                cstr_to_str(certificate)?,
-                cstr_to_str(proof)?,
-            )
-            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_report = into_handle(PurrdfBuffer(report.into_bytes()));
-            Ok(PurrdfStatus::Ok)
-        })
+        )
     }
 }
 
@@ -1491,7 +1626,7 @@ pub unsafe extern "C" fn purrdf_reasoner_open(
             }
             let document = cstr_to_str(document)?;
             let session = ReasonerSession::open(document, step_cap, work_cap)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+                .map_err(PurrdfError::reasoning)?;
             *out_reasoner = into_handle(PurrdfReasoner(session));
             Ok(PurrdfStatus::Ok)
         })
@@ -1525,16 +1660,31 @@ pub unsafe extern "C" fn purrdf_reasoner_consistency(
     reasoner: *mut PurrdfReasoner,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_reasoner_consistency"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_reasoner_consistency"));
+                }
+                store_answer(
+                    (*reasoner).0.consistency(control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            store_answer((*reasoner).0.consistency(), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1551,16 +1701,27 @@ pub unsafe extern "C" fn purrdf_reasoner_classify(
     reasoner: *mut PurrdfReasoner,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_reasoner_classify"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_reasoner_classify"));
+                }
+                store_answer((*reasoner).0.classify(control), out_answer, out_certificate)
             }
-            store_answer((*reasoner).0.classify(), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1577,16 +1738,27 @@ pub unsafe extern "C" fn purrdf_reasoner_realize(
     reasoner: *mut PurrdfReasoner,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
-                return Err(null_argument("purrdf_reasoner_realize"));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
+            {
+                if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
+                    return Err(null_argument("purrdf_reasoner_realize"));
+                }
+                store_answer((*reasoner).0.realize(control), out_answer, out_certificate)
             }
-            store_answer((*reasoner).0.realize(), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1605,21 +1777,36 @@ pub unsafe extern "C" fn purrdf_reasoner_instances(
     class: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null()
-                || class.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_reasoner_instances"));
+                if reasoner.is_null()
+                    || class.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_reasoner_instances"));
+                }
+                let class = cstr_to_str(class)?;
+                store_answer(
+                    (*reasoner).0.instances(class, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let class = cstr_to_str(class)?;
-            store_answer((*reasoner).0.instances(class), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1638,21 +1825,36 @@ pub unsafe extern "C" fn purrdf_reasoner_entails(
     axiom: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null()
-                || axiom.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_reasoner_entails"));
+                if reasoner.is_null()
+                    || axiom.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_reasoner_entails"));
+                }
+                let axiom = cstr_to_str(axiom)?;
+                store_answer(
+                    (*reasoner).0.entails(axiom, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let axiom = cstr_to_str(axiom)?;
-            store_answer((*reasoner).0.entails(axiom), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1671,21 +1873,36 @@ pub unsafe extern "C" fn purrdf_reasoner_justify(
     axiom: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null()
-                || axiom.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_reasoner_justify"));
+                if reasoner.is_null()
+                    || axiom.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_reasoner_justify"));
+                }
+                let axiom = cstr_to_str(axiom)?;
+                store_answer(
+                    (*reasoner).0.justify(axiom, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let axiom = cstr_to_str(axiom)?;
-            store_answer((*reasoner).0.justify(axiom), out_answer, out_certificate)
-        })
+        )
     }
 }
 
@@ -1709,7 +1926,11 @@ pub unsafe extern "C" fn purrdf_reasoner_profile(
             if reasoner.is_null() || out_answer.is_null() || out_certificate.is_null() {
                 return Err(null_argument("purrdf_reasoner_profile"));
             }
-            store_answer(Ok((*reasoner).0.profile()), out_answer, out_certificate)
+            store_answer(
+                Ok::<_, purrdf_validate::regime::ReasoningError>((*reasoner).0.profile()),
+                out_answer,
+                out_certificate,
+            )
         })
     }
 }
@@ -1728,27 +1949,38 @@ pub unsafe extern "C" fn purrdf_reasoner_extract_module(
     method: *const c_char,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     // SAFETY: the caller's contract above.
     unsafe {
-        ffi_try!(out_error, {
-            if reasoner.is_null()
-                || signature.is_null()
-                || method.is_null()
-                || out_answer.is_null()
-                || out_certificate.is_null()
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_answer, out_certificate],
+            control,
             {
-                return Err(null_argument("purrdf_reasoner_extract_module"));
+                if reasoner.is_null()
+                    || signature.is_null()
+                    || method.is_null()
+                    || out_answer.is_null()
+                    || out_certificate.is_null()
+                {
+                    return Err(null_argument("purrdf_reasoner_extract_module"));
+                }
+                let signature = cstr_to_str(signature)?;
+                let method = cstr_to_str(method)?;
+                store_answer(
+                    (*reasoner).0.extract_module(signature, method, control),
+                    out_answer,
+                    out_certificate,
+                )
             }
-            let signature = cstr_to_str(signature)?;
-            let method = cstr_to_str(method)?;
-            store_answer(
-                (*reasoner).0.extract_module(signature, method),
-                out_answer,
-                out_certificate,
-            )
-        })
+        )
     }
 }
 
@@ -1820,7 +2052,11 @@ mod tests {
     /// produces different bytes fails here in the same words.
     #[test]
     fn the_golden_vector_matches() {
-        check_regime_golden_vectors().expect("the regime golden vector");
+        check_regime_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .expect("the regime golden vector");
     }
 
     /// The C-ABI host's leg of the OTHER tri-host assertion: an inconsistent input is
@@ -1832,7 +2068,11 @@ mod tests {
     /// only channel the evidence has.
     #[test]
     fn an_inconsistent_input_is_refused_with_its_report() {
-        check_inconsistent_refusal().expect("the inconsistent refusal");
+        check_inconsistent_refusal(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .expect("the inconsistent refusal");
     }
 
     /// The C-ABI host's leg of the CROSS-HOST assertion for the PROOF surface.
@@ -1843,14 +2083,22 @@ mod tests {
     /// producing different bytes has produced a different proof TERM.
     #[test]
     fn the_dl_proof_golden_vector_matches() {
-        check_dl_proof_golden_vectors().expect("the DL proof golden vector");
+        check_dl_proof_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .expect("the DL proof golden vector");
     }
 
     /// The C-ABI host's leg of the availability assertion: an answer nobody asked to record
     /// is never presentable as a verified one.
     #[test]
     fn an_absent_proof_is_never_presented_as_a_verified_one() {
-        check_absent_proof_is_not_verifiable().expect("the absent-proof refusal");
+        check_absent_proof_is_not_verifiable(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .expect("the absent-proof refusal");
     }
 
     /// **THE GOLDEN ARTIFACT, THROUGH THE C SYMBOLS.** Every committed case reproduces
@@ -1906,6 +2154,9 @@ mod tests {
                     &raw mut answer,
                     &raw mut certificate,
                     &raw mut proof,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     std::ptr::null_mut(),
                 )
             };
@@ -1930,6 +2181,9 @@ mod tests {
                     certificate_c.as_ptr(),
                     proof_c.as_ptr(),
                     &raw mut report,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     std::ptr::null_mut(),
                 )
             };
@@ -1970,6 +2224,9 @@ mod tests {
                 &raw mut answer,
                 &raw mut certificate,
                 &raw mut proof,
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut crate::receipt::Output::default().0,
                 std::ptr::null_mut(),
             )
         };
@@ -1997,6 +2254,9 @@ mod tests {
                 certificate_c.as_ptr(),
                 proof_c.as_ptr(),
                 &raw mut report,
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut crate::receipt::Output::default().0,
                 std::ptr::null_mut(),
             )
         };
@@ -2025,6 +2285,9 @@ mod tests {
                 empty.as_ptr(),
                 absent.as_ptr(),
                 &raw mut report,
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut crate::receipt::Output::default().0,
                 &raw mut error,
             )
         };
@@ -2037,11 +2300,24 @@ mod tests {
 
     #[test]
     fn materialize_emits_closure_and_report() {
-        let (nquads, report) =
-            materialize_to_nquads_bytes(SCHEMA, "rdfs", "", &[], &[], None, None)
-                .expect("rdfs closure");
-        let nquads = String::from_utf8(nquads).expect("utf8");
-        let report = String::from_utf8(report).expect("utf8");
+        let (nquads, report) = materialize_to_nquads_bytes(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &MaterializeLimits {
+                host: RegimeHost::CAbi,
+                ..MaterializeLimits::default()
+            },
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("rdfs closure");
+        let nquads = std::str::from_utf8(nquads.as_bytes()).expect("utf8");
+        let report = std::str::from_utf8(report.as_bytes()).expect("utf8");
         assert!(nquads.contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -2060,11 +2336,53 @@ mod tests {
 
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
+        let regime = CString::new("RDFS").expect("no NUL");
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        // SAFETY: the input and writable output slots live throughout this call.
+        let status =
+            unsafe { purrdf_entail_rules(regime.as_ptr(), &raw mut output, &raw mut error) };
+        drop(regime);
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(output.is_null());
+        assert!(!error.is_null());
+        let expected = purrdf_validate::native_error::to_json(
+            &purrdf_validate::regime::parse_regime("RDFS").expect_err("unknown"),
+        )
+        .expect("native fields")
+        .to_string();
+        // SAFETY: the error owns the returned C string until it is freed below.
+        unsafe {
+            let json = crate::error::purrdf_error_native_cause_json(error);
+            assert!(!json.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(json).to_str().expect("UTF-8"),
+                expected
+            );
+            crate::error::purrdf_error_free(error);
+        }
         for error in [
-            materialize_to_nquads_bytes(SCHEMA, "RDFS", "", &[], &[], None, None)
-                .expect_err("case-sensitive"),
-            rules_bytes("rdfs-plus").expect_err("unknown"),
-            implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
+            materialize_to_nquads_bytes(
+                SCHEMA,
+                "RDFS",
+                "",
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                },
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect_err("case-sensitive")
+            .to_string(),
+            rules_bytes("rdfs-plus").expect_err("unknown").to_string(),
+            implemented_rules_bytes("rdfs-plus")
+                .expect_err("unknown")
+                .to_string(),
         ] {
             assert!(error.contains("accepted: simple, rdf, rdfs"), "{error}");
         }
@@ -2085,24 +2403,68 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let (_, report) =
-                materialize_to_nquads_bytes(SCHEMA, regime, program, &[], &[], None, None)
-                    .unwrap_or_else(|error| panic!("{regime}: {error}"));
-            let report = String::from_utf8(report).expect("utf8");
+            let (_, report) = materialize_to_nquads_bytes(
+                SCHEMA,
+                regime,
+                program,
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                },
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap_or_else(|error| panic!("{regime}: {error}"));
+            let report = std::str::from_utf8(report.as_bytes()).expect("utf8");
             assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], None, None)
-            .expect_err("a rule document for a rule-table regime");
-        assert!(error.contains("takes no rule document"), "{error}");
+        let error = materialize_to_nquads_bytes(
+            SCHEMA,
+            "rdfs",
+            RIF_PROGRAM,
+            &[],
+            &[],
+            &MaterializeLimits {
+                host: RegimeHost::CAbi,
+                ..MaterializeLimits::default()
+            },
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a rule document for a rule-table regime");
+        assert!(
+            error.to_string().contains("takes no rule document"),
+            "{error}"
+        );
     }
 
     #[test]
     fn a_malformed_document_is_an_error() {
         assert!(
-            materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "", &[], &[], None, None)
-                .is_err()
+            materialize_to_nquads_bytes(
+                "this is not n-quads\n",
+                "rdfs",
+                "",
+                &[],
+                &[],
+                &MaterializeLimits {
+                    host: RegimeHost::CAbi,
+                    ..MaterializeLimits::default()
+                },
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .is_err()
         );
     }
 
@@ -2172,9 +2534,13 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
-                    &raw mut error,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    &raw mut error
                 ),
                 PurrdfStatus::Ok as i32
             );
@@ -2196,11 +2562,13 @@ mod tests {
         let program = CString::new("").expect("no interior NUL");
         let run = |regime: &str,
                    facts: Option<u64>,
-                   steps: Option<u64>|
+                   steps: Option<u64>,
+                   arena: Option<u64>|
          -> Result<(String, String), String> {
             let regime = CString::new(regime).expect("no interior NUL");
             let facts_ptr = facts.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
             let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let arena_ptr = arena.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
             let mut nquads: *mut PurrdfBuffer = std::ptr::null_mut();
             let mut report: *mut PurrdfBuffer = std::ptr::null_mut();
             let mut error: *mut PurrdfError = std::ptr::null_mut();
@@ -2218,11 +2586,19 @@ mod tests {
                     0,
                     facts_ptr,
                     steps_ptr,
+                    arena_ptr,
                     &raw mut nquads,
                     &raw mut report,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 if status != PurrdfStatus::Ok as i32 {
+                    assert!(
+                        nquads.is_null() && report.is_null(),
+                        "a refused run publishes no output"
+                    );
                     let text = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
                         .to_string_lossy()
                         .into_owned();
@@ -2232,14 +2608,14 @@ mod tests {
                 Ok((take(nquads), take(report)))
             }
         };
-        let (closure, report) = run("rdfs", None, None).expect("the default");
+        let (closure, report) = run("rdfs", None, None, None).expect("the default");
         let stored: u64 = report
             .lines()
             .find_map(|line| line.strip_prefix("budget stored-facts "))
             .expect("a stored-facts line")
             .parse()
             .expect("a count");
-        let refused = run("rdfs", Some(stored - 1), None).expect_err("one fact short");
+        let refused = run("rdfs", Some(stored - 1), None, None).expect_err("one fact short");
         assert!(
             refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
                 && refused.ends_with(
@@ -2247,13 +2623,34 @@ mod tests {
                 ),
             "{refused}"
         );
-        let (exact, _) = run("rdfs", Some(stored), None).expect("exactly the store");
+        let (exact, _) = run("rdfs", Some(stored), None, None).expect("exactly the store");
         assert_eq!(exact, closure);
-        let steps = run("owl-rl", None, Some(1)).expect_err("one join step");
+        let steps = run("owl-rl", None, Some(1), None).expect_err("one join step");
         assert!(
             steps.ends_with("raise it with purrdf_entail_materialize_to_nquads's max_join_steps"),
             "{steps}"
         );
+        let bytes: u64 = report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let refused = run("rdfs", None, None, Some(bytes - 1)).expect_err("one byte short");
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with(
+                "raise it with purrdf_entail_materialize_to_nquads's max_term_arena_bytes"
+            ),
+            "{refused}"
+        );
+        assert_eq!(run("rdfs", None, None, Some(bytes)).unwrap().0, closure);
     }
 
     #[test]
@@ -2309,9 +2706,13 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
-                    &raw mut error,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    &raw mut error
                 ),
                 PurrdfStatus::ParseError as i32
             );
@@ -2344,9 +2745,13 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
-                    std::ptr::null_mut(),
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut()
                 ),
                 PurrdfStatus::NullPointer as i32
             );
@@ -2441,28 +2846,77 @@ mod tests {
                             0,
                             a,
                             c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
                             e,
                         )
                     }),
                 ),
                 (
                     "classify",
-                    pair(|a, c, e| purrdf_entail_classify(document.as_ptr(), 0, 0, a, c, e)),
+                    pair(|a, c, e| {
+                        purrdf_entail_classify(
+                            document.as_ptr(),
+                            0,
+                            0,
+                            a,
+                            c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
+                            e,
+                        )
+                    }),
                 ),
                 (
                     "realize",
-                    pair(|a, c, e| purrdf_entail_realize(document.as_ptr(), 0, 0, a, c, e)),
+                    pair(|a, c, e| {
+                        purrdf_entail_realize(
+                            document.as_ptr(),
+                            0,
+                            0,
+                            a,
+                            c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
+                            e,
+                        )
+                    }),
                 ),
                 (
                     "instances",
                     pair(|a, c, e| {
-                        purrdf_entail_instances(document.as_ptr(), class.as_ptr(), 0, 0, a, c, e)
+                        purrdf_entail_instances(
+                            document.as_ptr(),
+                            class.as_ptr(),
+                            0,
+                            0,
+                            a,
+                            c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
+                            e,
+                        )
                     }),
                 ),
                 (
                     "entails",
                     pair(|a, c, e| {
-                        purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, 0, a, c, e)
+                        purrdf_entail_entails(
+                            document.as_ptr(),
+                            axiom.as_ptr(),
+                            0,
+                            0,
+                            a,
+                            c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
+                            e,
+                        )
                     }),
                 ),
                 (
@@ -2478,6 +2932,9 @@ mod tests {
                             method.as_ptr(),
                             a,
                             c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
                             e,
                         )
                     }),
@@ -2485,7 +2942,16 @@ mod tests {
                 (
                     "justify",
                     pair(|a, c, e| {
-                        purrdf_entail_justify(document.as_ptr(), axiom.as_ptr(), a, c, e)
+                        purrdf_entail_justify(
+                            document.as_ptr(),
+                            axiom.as_ptr(),
+                            a,
+                            c,
+                            c"1000000".as_ptr(),
+                            std::ptr::null(),
+                            &mut crate::receipt::Output::default().0,
+                            e,
+                        )
                     }),
                 ),
                 (
@@ -2586,6 +3052,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2606,6 +3073,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2624,6 +3092,7 @@ mod tests {
                             0,
                             std::ptr::null(),
                             0,
+                            std::ptr::null(),
                             std::ptr::null(),
                             std::ptr::null(),
                             a,
@@ -2692,6 +3161,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2710,6 +3180,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2726,6 +3197,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
                         std::ptr::null(),
                         std::ptr::null(),
                         &raw mut answer,
@@ -2777,6 +3249,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2795,6 +3268,7 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2811,6 +3285,7 @@ mod tests {
                         1,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
                         std::ptr::null(),
                         std::ptr::null(),
                         a,
@@ -2841,6 +3316,7 @@ mod tests {
                 0,
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
                 &raw mut answer,
                 &raw mut certificate,
                 std::ptr::null_mut(),
@@ -2866,6 +3342,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     a,
                     c,
                     e,
@@ -2885,13 +3362,39 @@ mod tests {
         let axiom = CString::new(CHAIN_AXIOM).expect("no interior NUL");
         // SAFETY: both C strings are live for the calls; `pair` owns the pointers.
         let (starved, certificate) = unsafe {
-            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 1, 0, a, c, e))
+            pair(|a, c, e| {
+                purrdf_entail_entails(
+                    document.as_ptr(),
+                    axiom.as_ptr(),
+                    1,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    e,
+                )
+            })
         };
         assert_eq!(starved.lines().next(), Some("entails unknown"));
         assert!(certificate.contains("\ncompleteness budget-exhausted\n"));
         // SAFETY: as above.
         let (decided, certificate) = unsafe {
-            pair(|a, c, e| purrdf_entail_entails(document.as_ptr(), axiom.as_ptr(), 0, 0, a, c, e))
+            pair(|a, c, e| {
+                purrdf_entail_entails(
+                    document.as_ptr(),
+                    axiom.as_ptr(),
+                    0,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    e,
+                )
+            })
         };
         assert!(decided.starts_with("entails true\n"));
         assert!(certificate.contains("\ncompleteness decided\n"));
@@ -2916,7 +3419,10 @@ mod tests {
                     0,
                     &raw mut answer,
                     &raw mut certificate,
-                    &raw mut error,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    &raw mut error
                 ),
                 PurrdfStatus::ParseError as i32
             );
@@ -2950,15 +3456,79 @@ mod tests {
                     0,
                     a,
                     c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     std::ptr::null_mut(),
                 ),
-                purrdf_entail_classify(null, 0, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_realize(null, 0, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_instances(null, null, 0, 0, a, c, std::ptr::null_mut()),
-                purrdf_entail_entails(null, null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_classify(
+                    null,
+                    0,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
+                purrdf_entail_realize(
+                    null,
+                    0,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
+                purrdf_entail_instances(
+                    null,
+                    null,
+                    0,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
+                purrdf_entail_entails(
+                    null,
+                    null,
+                    0,
+                    0,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
                 purrdf_entail_profile(null, a, c, std::ptr::null_mut()),
-                purrdf_entail_extract_module(null, null, null, a, c, std::ptr::null_mut()),
-                purrdf_entail_justify(null, null, a, c, std::ptr::null_mut()),
+                purrdf_entail_extract_module(
+                    null,
+                    null,
+                    null,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
+                purrdf_entail_justify(
+                    null,
+                    null,
+                    a,
+                    c,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
+                    std::ptr::null_mut(),
+                ),
                 purrdf_entail_explain_conclusion(null, null, null, a, c, std::ptr::null_mut()),
             ] {
                 assert_eq!(status, PurrdfStatus::NullPointer as i32);
@@ -3008,6 +3578,8 @@ mod tests {
                     media_type.as_ptr(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    0,
                     &raw mut dataset,
                     &raw mut error,
                 ),
@@ -3083,6 +3655,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     a,
                     c,
                     e,
@@ -3110,6 +3683,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer_ptr,
@@ -3154,6 +3728,7 @@ mod tests {
                     1,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer_ptr,
@@ -3209,6 +3784,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3234,6 +3810,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer,
@@ -3266,6 +3843,7 @@ mod tests {
                         1,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         e,
@@ -3286,6 +3864,7 @@ mod tests {
                     0,
                     std::ptr::null(),
                     1,
+                    std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut answer,
@@ -3324,6 +3903,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3349,6 +3929,7 @@ mod tests {
                             0,
                             premise_iris.as_ptr(),
                             1,
+                            std::ptr::null(),
                             std::ptr::null(),
                             std::ptr::null(),
                             a,
@@ -3436,8 +4017,12 @@ mod tests {
                         0,
                         std::ptr::null(),
                         std::ptr::null(),
+                        std::ptr::null(),
                         n,
                         r,
+                        c"1000000".as_ptr(),
+                        std::ptr::null(),
+                        &mut crate::receipt::Output::default().0,
                         e,
                     )
                 })
@@ -3458,6 +4043,9 @@ mod tests {
                         0,
                         a,
                         c,
+                        c"1000000".as_ptr(),
+                        std::ptr::null(),
+                        &mut crate::receipt::Output::default().0,
                         e,
                     )
                 })
@@ -3527,6 +4115,7 @@ mod tests {
             usize,
             *const u64,
             *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3543,7 +4132,9 @@ mod tests {
             ),
         ];
         for (entry, name) in entries {
-            let run = |steps: &u64| {
+            let run = |steps: Option<u64>, arena: Option<u64>| {
+                let steps_ptr = steps.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+                let arena_ptr = arena.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
                 // SAFETY: every C string and the limit outlive the call; the tables are empty.
                 unsafe {
                     attempt(|a, c, e| {
@@ -3557,7 +4148,8 @@ mod tests {
                             std::ptr::null(),
                             0,
                             std::ptr::null(),
-                            std::ptr::from_ref(steps),
+                            steps_ptr,
+                            arena_ptr,
                             a,
                             c,
                             e,
@@ -3565,17 +4157,36 @@ mod tests {
                     })
                 }
             };
-            let refused = run(&one).expect_err("one join step");
+            let refused = run(Some(one), None).expect_err("one join step");
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {name}'s max_join_steps")),
                 "{name}: {refused}"
             );
-            let (answer, _) = run(&plenty).expect("the default, stated");
+            let (answer, certificate) = run(Some(plenty), None).expect("the default, stated");
             assert!(
                 answer.starts_with("mechanism strict-table\n"),
                 "{name}: {answer}"
             );
+            let bytes: u64 = certificate
+                .lines()
+                .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let refused = run(None, Some(bytes - 1)).expect_err("one byte short");
+            assert!(
+                refused.contains(&format!(
+                    "term arena bytes limit: {bytes} observed, {} permitted",
+                    bytes - 1
+                )),
+                "{name}: {refused}"
+            );
+            assert!(
+                refused.ends_with(&format!("raise it with {name}'s max_term_arena_bytes")),
+                "{name}: {refused}"
+            );
+            assert_eq!(run(None, Some(bytes)).unwrap().0, answer);
         }
     }
 }

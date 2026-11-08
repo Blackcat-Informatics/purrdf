@@ -305,4 +305,4 @@ impl core::fmt::Debug for ShapeRegistry {
     }
 }
 
-pub(crate) use runtime::eval_shape;
+pub(crate) use runtime::{ShapeStart, begin_shape};

@@ -35,10 +35,10 @@ pub(crate) fn parse(name: Option<&str>) -> Result<Option<Profile>, String> {
 /// `options` evaluating `REGEX`/`REPLACE` under `profile` with the production bounds, or
 /// unchanged when no law was selected ([`purrdf_validate::xpath_regex::query_options`]).
 pub(crate) const fn select<'options, 'providers>(
-    options: QueryOptions<'options, 'providers>,
+    options: &QueryOptions<'options, 'providers>,
     profile: Option<Profile>,
 ) -> QueryOptions<'options, 'providers> {
-    purrdf_validate::xpath_regex::query_options(options, profile)
+    purrdf_validate::xpath_regex::query_options(*options, profile)
 }
 
 #[cfg(test)]
@@ -81,9 +81,9 @@ mod tests {
     /// its law and the production bounds.
     #[test]
     fn a_selection_reaches_the_request_options() {
-        assert_eq!(select(QueryOptions::new(), None).xpath_regex(), None);
+        assert_eq!(select(&QueryOptions::new(), None).xpath_regex(), None);
         assert_eq!(
-            select(QueryOptions::new(), Some(Profile::Xpath20)).xpath_regex(),
+            select(&QueryOptions::new(), Some(Profile::Xpath20)).xpath_regex(),
             Some((
                 Profile::Xpath20,
                 purrdf_core::xsd_regex::xpath::Limits::new()

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+[package]
+name = "purrdf-yaml"
+description = "Source-preserving YAML streams and strict RDF byte-cover reconstruction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+documentation = "https://docs.rs/purrdf-yaml"
+
+[lints]
+workspace = true
+
+[dependencies]
+purrdf-core.workspace = true
+purrdf-lex.workspace = true
+purrdf-hash.workspace = true
+
+[dev-dependencies]
+purrdf-rdf.workspace = true
+purrdf-testkit.workspace = true
+
+[[test]]
+name = "roundtrip"
+harness = false

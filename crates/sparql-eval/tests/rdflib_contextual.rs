@@ -68,7 +68,7 @@ fn contextual_graph_selection_deduplicates_statement_roles_without_resurrection(
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     single_graph,
                 )
                 .expect("selected production query");
@@ -231,10 +231,10 @@ fn contextual_query_preserves_caller_division_policy() {
         };
         let options = QueryOptions::EMPTY.with_division(policy);
         let native = engine
-            .query_with_options_view(&*data, request, options)
+            .query_with_options_view(&*data, request, &options)
             .unwrap();
         let contextual = engine
-            .query_rdflib_with_options_view(&*data, request, options, false)
+            .query_rdflib_with_options_view(&*data, request, &options, false)
             .unwrap();
         let SparqlResult::Solutions {
             rows: native_rows, ..
@@ -271,13 +271,13 @@ fn contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs() {
             substitutions: &[],
         };
         let native = engine
-            .query_with_options_view(&*data, request, options)
+            .query_with_options_view(&*data, request, &options)
             .unwrap();
         let plan = engine
-            .prepare_rdflib_query(query, None, &[], options)
+            .prepare_rdflib_query(query, None, &[], &options)
             .unwrap();
         let full = engine
-            .query_rdflib_prepared_governed_view(&*data, &plan, options, &QueryGovernors::METERED)
+            .query_rdflib_prepared_governed_view(&*data, &plan, &options, &QueryGovernors::METERED)
             .unwrap();
         let fuel = full.evidence().consumed.get(ResourceDimension::Fuel);
         let scratch = full
@@ -305,7 +305,7 @@ fn contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs() {
             );
         for governors in ceilings {
             match engine
-                .query_rdflib_prepared_governed_view(&*data, &plan, options, &governors)
+                .query_rdflib_prepared_governed_view(&*data, &plan, &options, &governors)
                 .unwrap()
             {
                 GovernedOutcome::Complete { result: actual, .. } => {
@@ -475,7 +475,7 @@ fn contextual_custom_updates_preserve_order_errors_and_numeric_admission() {
             query
         };
         let plan = engine
-            .prepare_rdflib_query(query, None, &[], options)
+            .prepare_rdflib_query(query, None, &[], &options)
             .unwrap();
         let data = RdfDatasetBuilder::new().freeze().unwrap();
         let governors = if costly || initial {
@@ -486,7 +486,7 @@ fn contextual_custom_updates_preserve_order_errors_and_numeric_admission() {
             QueryGovernors::METERED
         };
         let outcome =
-            engine.query_rdflib_prepared_governed_view(&*data, &plan, options, &governors);
+            engine.query_rdflib_prepared_governed_view(&*data, &plan, &options, &governors);
         if fail {
             assert!(
                 outcome
@@ -530,14 +530,19 @@ fn contextual_nested_numeric_groups_keep_ordered_worker_refusals() {
     let query = format!(
         "SELECT ?outer WHERE {{ VALUES ?outer {{ {drivers} }} FILTER EXISTS {{ SELECT (AVG(?v) AS ?mean) WHERE {{ VALUES ?x {{1 2 3}} BIND(?x / 3 AS ?v) }} }} }}"
     );
-    let options = QueryOptions::EMPTY.with_division("2:half-even".parse().unwrap());
+    // Compare whole receipts at the same coordinates across every worker pool.
+    let now = purrdf_xsd::temporal::parse_datetime("2024-02-29T12:34:56Z").unwrap();
+    let options = QueryOptions::EMPTY
+        .with_division("2:half-even".parse().unwrap())
+        .with_now(&now)
+        .with_entropy_seed(7);
     let run = |governors: &QueryGovernors| {
         let engine = NativeSparqlEngine::new();
         let plan = engine
-            .prepare_rdflib_query(&query, None, &[], options)
+            .prepare_rdflib_query(&query, None, &[], &options)
             .unwrap();
         engine
-            .query_rdflib_prepared_governed_view(&*data, &plan, options, governors)
+            .query_rdflib_prepared_governed_view(&*data, &plan, &options, governors)
             .unwrap()
     };
     let full = run(&QueryGovernors::METERED);
@@ -656,11 +661,11 @@ fn contextual_nested_exists_retains_enclosing_names() {
                  FILTER NOT EXISTS { ?z ex:r ?y } } }",
                 None,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
             .unwrap();
         let (_, rows) = result.solutions().unwrap();
         assert_eq!(rows.len(), 1 + usize::from(matching));
@@ -729,11 +734,11 @@ fn contextual_group_filters_preserve_callback_order_and_errors() {
                 &format!("PREFIX ex:<http://example.org/> {form} WHERE {{ {body} }}"),
                 None,
                 &[],
-                options,
+                &options,
             )
             .unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, options)
+            .query_rdflib_prepared_view(&*data, &plan, &options)
             .unwrap();
         match result {
             SparqlResult::Boolean(answer) => assert!(answer),
@@ -772,10 +777,10 @@ fn contextual_exists_through_local_projection() {
             if negated { "NOT " } else { "" }
         );
         let plan = engine
-            .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+            .prepare_rdflib_query(&text, None, &[], &QueryOptions::EMPTY)
             .unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
             .unwrap();
         let (_, rows) = result.solutions().unwrap();
         assert_eq!(
@@ -797,10 +802,10 @@ fn contextual_exists_through_local_projection() {
             if negated { "NOT " } else { "" }
         );
         let plan = engine
-            .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+            .prepare_rdflib_query(&text, None, &[], &QueryOptions::EMPTY)
             .unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
             .unwrap();
         assert_eq!(result.solutions().unwrap().1.len(), usize::from(!negated));
     }
@@ -819,7 +824,7 @@ fn contextual_filter_group_boundary_and_visited_graph_errors() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             true,
         )
     };
@@ -863,7 +868,8 @@ fn contextual_filter_group_boundary_and_visited_graph_errors() {
                 )
             };
             let text = format!("SELECT ?x WHERE {{ VALUES ?x {{1}} {filters} }}");
-            assert!(query(&text).unwrap_err().to_string().contains("dataset"));
+            let error = query(&text).unwrap_err();
+            assert!(error.to_string().contains("dataset"), "{text}: {error:?}");
         }
     }
     for text in [
@@ -962,8 +968,8 @@ fn contextual_matrix() {
                 .unwrap();
             let options = QueryOptions::EMPTY.with_functions(&functions);
             let actual = engine
-                .prepare_rdflib_query(text, None, &bindings, options)
-                .and_then(|plan| engine.query_rdflib_prepared_view(&*data, &plan, options));
+                .prepare_rdflib_query(text, None, &bindings, &options)
+                .and_then(|plan| engine.query_rdflib_prepared_view(&*data, &plan, &options));
             let oracle = &case["oracle"];
             let actual = match actual {
                 Err(e) => {
@@ -1074,7 +1080,7 @@ fn contextual_application_keeps_one_optional_condition_and_rhs() {
         }
         let query = format!("SELECT ?this WHERE {{ {body} }}");
         let plan = NativeSparqlEngine::new()
-            .prepare_rdflib_query(&query, None, &[], QueryOptions::EMPTY)
+            .prepare_rdflib_query(&query, None, &[], &QueryOptions::EMPTY)
             .unwrap();
         let mut optional = 0;
         let mut exists = 0;
@@ -1139,11 +1145,11 @@ fn successful_optional_rhs_is_invoked_once_per_duplicate_driver() {
     let options = QueryOptions::EMPTY.with_functions(&functions);
     let text = "SELECT ?driver ?value WHERE { VALUES ?driver { 1 1 } OPTIONAL { BIND(<http://example.org/tick>() AS ?value) } }";
     let plan = engine
-        .prepare_rdflib_query(text, None, &[], options)
+        .prepare_rdflib_query(text, None, &[], &options)
         .unwrap();
     let dataset = RdfDatasetBuilder::new().freeze().unwrap();
     let result = engine
-        .query_rdflib_prepared_view(&*dataset, &plan, options)
+        .query_rdflib_prepared_view(&*dataset, &plan, &options)
         .unwrap();
     assert_eq!(
         calls.load(Ordering::Relaxed),
@@ -1179,11 +1185,11 @@ fn contextual_service_uses_serializable_protocol_algebra_and_shared_source() {
     )];
     let query = "SELECT ?this ?value WHERE { BIND(<http://example.org/b> AS ?this) SERVICE <http://example.org/service> { ?this <http://example.org/p> ?value } }";
     let plan = engine
-        .prepare_rdflib_query(query, None, &bindings, options)
+        .prepare_rdflib_query(query, None, &bindings, &options)
         .unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let result = engine
-        .query_rdflib_prepared_view(&*data, &plan, options)
+        .query_rdflib_prepared_view(&*data, &plan, &options)
         .unwrap();
     let (variables, rows) = result.solutions().unwrap();
     assert_eq!(variables, ["this", "value"]);
@@ -1230,11 +1236,11 @@ fn configured_relations_receive_the_context_in_the_existing_call_home() {
     )];
     let text = "SELECT ?this ?value WHERE { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/relation> ?value }";
     let plan = engine
-        .prepare_rdflib_query(text, None, &bindings, options)
+        .prepare_rdflib_query(text, None, &bindings, &options)
         .unwrap();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let result = engine
-        .query_rdflib_prepared_view(&*data, &plan, options)
+        .query_rdflib_prepared_view(&*data, &plan, &options)
         .unwrap();
     assert_eq!(
         result.solutions().unwrap().1,
@@ -1274,11 +1280,11 @@ fn initial_terms_keep_rdf12_identity_and_hygienic_aliases() {
                 text,
                 None,
                 &[(Variable::new("this"), term)],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
             .unwrap();
         let (columns, rows) = result.solutions().unwrap();
         assert_eq!(
@@ -1307,11 +1313,11 @@ fn production_entry_executes_nested_exists_on_an_admitted_stack() {
         let engine = NativeSparqlEngine::new();
         let data = RdfDatasetBuilder::new().freeze().unwrap();
         let plan = engine
-            .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+            .prepare_rdflib_query(&text, None, &[], &QueryOptions::EMPTY)
             .unwrap();
         assert!(matches!(
             engine
-                .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+                .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
                 .unwrap(),
             SparqlResult::Boolean(true)
         ));
@@ -1336,7 +1342,7 @@ fn contextual_representation_scales_with_nodes_and_context_width() {
             }
             let text = format!("SELECT * WHERE {{ {body} }}");
             let plan = NativeSparqlEngine::new()
-                .prepare_rdflib_query(&text, None, &[], QueryOptions::EMPTY)
+                .prepare_rdflib_query(&text, None, &[], &QueryOptions::EMPTY)
                 .unwrap();
             let mut nodes = 0;
             walk_pre_post(NodeRef::Pattern(plan.query().pattern()), |visit, _| {
@@ -1366,13 +1372,13 @@ fn governed_publication_preserves_duplicate_columns_and_certified_rows() {
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let text = "SELECT (?x AS ?x) (?x AS ?x) WHERE { VALUES ?x { 1 2 } OPTIONAL { BIND(1/?x AS ?right) FILTER EXISTS { BIND(1 AS ?probe) } } }";
     let plan = engine
-        .prepare_rdflib_query(text, None, &[], QueryOptions::EMPTY)
+        .prepare_rdflib_query(text, None, &[], &QueryOptions::EMPTY)
         .unwrap();
     let full = engine
         .query_rdflib_prepared_governed_view(
             &*data,
             &plan,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -1389,7 +1395,7 @@ fn governed_publication_preserves_duplicate_columns_and_certified_rows() {
             .query_rdflib_prepared_governed_view(
                 &*data,
                 &plan,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_fuel(fuel),
             )
             .unwrap();
@@ -1451,17 +1457,17 @@ fn ordinary_transformation_admission_rejects_contextual_applications() {
         query.validate().unwrap();
         for error in [
             engine
-                .prepare_algebra(query.clone(), QueryOptions::EMPTY)
+                .prepare_algebra(query.clone(), &QueryOptions::EMPTY)
                 .unwrap_err(),
-            PreparedQuery::rewritten(query, QueryOptions::EMPTY).unwrap_err(),
+            PreparedQuery::rewritten(query, &QueryOptions::EMPTY).unwrap_err(),
         ] {
             assert!(error.to_string().contains("typed contextual preparation"));
         }
     }
     engine
-        .prepare_algebra(ask(GraphPattern::empty_bgp()), QueryOptions::EMPTY)
+        .prepare_algebra(ask(GraphPattern::empty_bgp()), &QueryOptions::EMPTY)
         .unwrap();
-    PreparedQuery::rewritten(ask(GraphPattern::empty_bgp()), QueryOptions::EMPTY).unwrap();
+    PreparedQuery::rewritten(ask(GraphPattern::empty_bgp()), &QueryOptions::EMPTY).unwrap();
     let GraphPattern::Apply { policy, .. } = &application else {
         unreachable!()
     };
@@ -1498,12 +1504,12 @@ fn ordinary_transformation_admission_rejects_contextual_applications() {
             "SELECT ?x WHERE { VALUES ?x { 1 2 } BIND(0 AS ?x) }",
             None,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap();
     assert_eq!(
         engine
-            .query_rdflib_prepared_view(&*data, &typed, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &typed, &QueryOptions::EMPTY)
             .unwrap()
             .solutions()
             .unwrap()
@@ -1552,10 +1558,10 @@ fn grouped_continuation_withholds_incomplete_accumulators_at_every_fuel_cutoff()
             .unwrap();
         let options = QueryOptions::EMPTY.with_functions(&functions);
         let plan = engine
-            .prepare_rdflib_query(text, None, &[], options)
+            .prepare_rdflib_query(text, None, &[], &options)
             .unwrap();
         let full = engine
-            .query_rdflib_prepared_governed_view(&*data, &plan, options, &QueryGovernors::METERED)
+            .query_rdflib_prepared_governed_view(&*data, &plan, &options, &QueryGovernors::METERED)
             .unwrap();
         let cost = full.evidence().consumed.get(ResourceDimension::Fuel);
         let GovernedOutcome::Complete { result, .. } = full else {
@@ -1571,7 +1577,7 @@ fn grouped_continuation_withholds_incomplete_accumulators_at_every_fuel_cutoff()
                 .query_rdflib_prepared_governed_view(
                     &*data,
                     &plan,
-                    options,
+                    &options,
                     &QueryGovernors::METERED.with_fuel(fuel),
                 )
                 .unwrap();
@@ -1631,10 +1637,10 @@ fn contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label() {
                 "SELECT ?x ?a ?b WHERE {{ VALUES ?x {{1 2 3}} BIND(BNODE({argument}) AS ?a) BIND(BNODE({argument}) AS ?b) }}"
             );
             let plan = engine
-                .prepare_rdflib_query(&text, None, &initial, QueryOptions::EMPTY)
+                .prepare_rdflib_query(&text, None, &initial, &QueryOptions::EMPTY)
                 .unwrap();
             let result = engine
-                .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+                .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
                 .unwrap();
             let (columns, rows) = result.solutions().unwrap();
             assert_eq!(columns, &["x", "a", "b"]);
@@ -1654,9 +1660,9 @@ fn contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label() {
             }
             assert_eq!(identities.len(), identity_count);
         }
-        let plan = engine.prepare_rdflib_query("SELECT (COUNT(DISTINCT ?a) AS ?n) WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) }", None, &initial, QueryOptions::EMPTY).unwrap();
+        let plan = engine.prepare_rdflib_query("SELECT (COUNT(DISTINCT ?a) AS ?n) WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) }", None, &initial, &QueryOptions::EMPTY).unwrap();
         let result = engine
-            .query_rdflib_prepared_view(&*data, &plan, QueryOptions::EMPTY)
+            .query_rdflib_prepared_view(&*data, &plan, &QueryOptions::EMPTY)
             .unwrap();
         assert_eq!(
             result.solutions().unwrap().1,
@@ -1671,7 +1677,7 @@ fn contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label() {
         )
         .unwrap();
     let result = engine
-        .query_prepared_view(&*data, &plan, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&*data, &plan, &[], &QueryOptions::EMPTY)
         .unwrap();
     let (_, rows) = result.solutions().unwrap();
     let identities: std::collections::BTreeSet<_> = rows.iter().map(|row| row[0].clone()).collect();
@@ -1731,7 +1737,7 @@ fn governed_ask_settles_only_a_witness_and_stops_after_accepted_filters() {
                 })
                 .collect();
             let plan = engine
-                .prepare_rdflib_query(case["query"].as_str().unwrap(), None, &initial, options)
+                .prepare_rdflib_query(case["query"].as_str().unwrap(), None, &initial, &options)
                 .unwrap();
             let ((Some(expected), None) | (None, Some(expected))) = (
                 case["oracle"]["answer"].as_bool(),
@@ -1747,7 +1753,7 @@ fn governed_ask_settles_only_a_witness_and_stops_after_accepted_filters() {
                 .query_rdflib_prepared_governed_view(
                     &*data,
                     &plan,
-                    options,
+                    &options,
                     &QueryGovernors::METERED,
                 )
                 .unwrap();
@@ -1764,7 +1770,7 @@ fn governed_ask_settles_only_a_witness_and_stops_after_accepted_filters() {
                     .query_rdflib_prepared_governed_view(
                         &*data,
                         &plan,
-                        options,
+                        &options,
                         &QueryGovernors::METERED.with_fuel(fuel),
                     )
                     .unwrap();

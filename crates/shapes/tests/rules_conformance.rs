@@ -57,9 +57,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use purrdf_rdf::{RdfDataset, canonicalize};
+use purrdf_rdf::{RdfDataset, try_canonicalize};
+use purrdf_shacl_conformance::file_iri;
 use purrdf_shapes::data::ShaclData;
-use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};
 
@@ -154,8 +154,19 @@ fn run_case(case: &Case) -> Result<(), String> {
     .map_err(|e| format!("cannot parse expected graph: {e}"))?;
     let expected_full = merge(projected.as_ref(), derived_ds.as_ref())?;
 
-    let produced_canon = canonicalize(produced.as_ref()).nquads;
-    let expected_canon = canonicalize(expected_full.as_ref()).nquads;
+    let produced_canon_owner = try_canonicalize(
+        produced.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+
+    let produced_canon = produced_canon_owner.nquads();
+    let expected_canon_owner = try_canonicalize(
+        expected_full.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let expected_canon = expected_canon_owner.nquads();
     if produced_canon != expected_canon {
         return Err(format!(
             "inferred-graph mismatch (RDFC-1.0):\n  --- PRODUCED (base ⊎ derived) ---\n{produced_canon}\n  --- EXPECTED (base ⊎ expected-derived) ---\n{expected_canon}"
@@ -293,8 +304,24 @@ fn entail_dataset_composes_project_then_apply_rules() {
     let via_apply = apply_rules(&data, &shapes).expect("apply_rules");
 
     assert_eq!(
-        canonicalize(via_entail.as_ref()).nquads,
-        canonicalize(via_apply.as_ref()).nquads,
+        try_canonicalize(
+            via_entail.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        try_canonicalize(
+            via_apply.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
         "entail_dataset must equal apply_rules over the projected dataset"
     );
 }
@@ -326,12 +353,16 @@ fn sh_order_is_order_independent_over_the_closure() {
                 .prefixes,
         )
         .expect("shapes");
-        canonicalize(
+        try_canonicalize(
             purrdf_shapes::entail_dataset(data.as_ref(), &shapes)
                 .expect("entail")
                 .as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
-        .nquads
+        .unwrap()
     };
 
     let forward = entail(
@@ -345,7 +376,8 @@ fn sh_order_is_order_independent_over_the_closure() {
            sh:rule [ a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .",
     );
     assert_eq!(
-        forward, swapped,
+        forward.nquads(),
+        swapped.nquads(),
         "swapping sh:order must not change the fixpoint closure"
     );
 }

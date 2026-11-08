@@ -28,7 +28,10 @@ const KEYWORDS: &[&str] = &[
     "@base",
     "@container",
     "@context",
+    "@default",
     "@direction",
+    "@embed",
+    "@explicit",
     "@graph",
     "@id",
     "@import",
@@ -39,10 +42,12 @@ const KEYWORDS: &[&str] = &[
     "@list",
     "@nest",
     "@none",
+    "@omitDefault",
     "@prefix",
     "@propagate",
     "@protected",
     "@reverse",
+    "@requireAll",
     "@set",
     "@type",
     "@value",
@@ -106,6 +111,7 @@ struct Compiler<'a> {
     remote_stack: Vec<String>,
     remote_cache: BTreeMap<String, Arc<Value>>,
     override_protected: bool,
+    default_propagate: bool,
 }
 
 pub(super) fn compile(
@@ -114,19 +120,33 @@ pub(super) fn compile(
     registry: &JsonLdContextRegistry,
     limits: JsonLdContextLimits,
 ) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+    compile_with_bases(supplied, document_iri, document_iri, registry, limits)
+}
+
+pub(super) fn compile_with_bases(
+    supplied: &Value,
+    document_iri: Option<&str>,
+    initial_base: Option<&str>,
+    registry: &JsonLdContextRegistry,
+    limits: JsonLdContextLimits,
+) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
     let document_iri = document_iri.map(str::to_owned);
     if let Some(iri) = &document_iri {
         validate_absolute_iri(iri, "JSON-LD document IRI")?;
+    }
+    if let Some(iri) = initial_base {
+        validate_absolute_iri(iri, "JSON-LD initial base IRI")?;
     }
     let context = extract_context(supplied)?;
     let mut compiler = Compiler {
         registry,
         limits,
-        initial_base: document_iri.clone(),
+        initial_base: initial_base.map(str::to_owned),
         budget: Budget::default(),
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
         override_protected: false,
+        default_propagate: true,
     };
     compiler.charge_value(context, 0)?;
     let canonical_context = canonicalize(context)?;
@@ -138,7 +158,7 @@ pub(super) fn compile(
             limits.max_context_bytes()
         )));
     }
-    let mut active = ActiveContext::new(document_iri.clone());
+    let mut active = ActiveContext::new(initial_base.map(str::to_owned));
     compiler.process_context(
         &mut active,
         &canonical_context,
@@ -167,6 +187,7 @@ pub(super) fn compile_scoped(
         context,
         definition.scoped_context_base.as_deref(),
         true,
+        true,
     )
     .map(Some)
 }
@@ -176,6 +197,7 @@ pub(super) fn apply_context(
     context: &Value,
     base_url: Option<&str>,
     override_protected: bool,
+    propagate: bool,
 ) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
     let limits = JsonLdContextLimits::default();
     let mut compiler = Compiler {
@@ -186,17 +208,12 @@ pub(super) fn apply_context(
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
         override_protected,
+        default_propagate: propagate,
     };
     compiler.charge_value(context, 0)?;
     let canonical_context = canonicalize(context)?;
     let mut active = parent.active.clone();
-    compiler.process_context(
-        &mut active,
-        &canonical_context,
-        base_url.or(parent.active.base_iri.as_deref()),
-        false,
-        0,
-    )?;
+    compiler.process_context(&mut active, &canonical_context, base_url, false, 0)?;
     let inverse = build_inverse_context(&active);
     Ok(CompiledJsonLdContext {
         canonical_context,
@@ -223,6 +240,16 @@ pub(super) fn child_context(parent: &CompiledJsonLdContext) -> CompiledJsonLdCon
         active,
         registry: parent.registry.clone(),
     }
+}
+
+pub(super) fn previous_context(parent: &CompiledJsonLdContext) -> Option<CompiledJsonLdContext> {
+    let active = parent.active.previous_context.as_deref()?.clone();
+    Some(CompiledJsonLdContext {
+        canonical_context: parent.canonical_context.clone(),
+        inverse: build_inverse_context(&active),
+        active,
+        registry: parent.registry.clone(),
+    })
 }
 
 fn extract_context(value: &Value) -> Result<&Value, RdfDiagnostic> {
@@ -324,13 +351,13 @@ impl Compiler<'_> {
         if select_propagation {
             let propagate = match local {
                 Value::Object(object) => match object.get("@propagate") {
-                    None => true,
+                    None => self.default_propagate,
                     Some(Value::Bool(value)) => *value,
                     Some(_) => {
                         return Err(context_error("JSON-LD @propagate must be boolean"));
                     }
                 },
-                _ => true,
+                _ => self.default_propagate,
             };
             if !propagate && active.previous_context.is_none() {
                 active.previous_context = Some(Arc::new(active.clone()));
@@ -478,11 +505,12 @@ impl Compiler<'_> {
         if let Some(document) = self.remote_cache.get(iri) {
             return Ok(Arc::clone(document));
         }
-        let bytes = self.registry.get(iri).ok_or_else(|| {
+        let registered = self.registry.get(iri).ok_or_else(|| {
             context_error(format!(
                 "offline context registry has no document for `{iri}` ({purpose})"
             ))
         })?;
+        let bytes = registered.bytes.as_ref();
         self.budget.loaded_bytes = self
             .budget
             .loaded_bytes
@@ -494,11 +522,16 @@ impl Compiler<'_> {
                 self.limits.max_registry_bytes()
             )));
         }
-        let document = super::parse_strict_json(
-            bytes,
-            self.limits.strict_json(),
-            &format!("offline {purpose} document `{iri}`"),
-        )?;
+        let document = match registered.format {
+            super::JsonLdContextFormat::Json => super::parse_strict_json(
+                bytes,
+                self.limits.strict_json(),
+                &format!("offline {purpose} document `{iri}`"),
+            )?,
+            super::JsonLdContextFormat::Yaml(options) => {
+                super::super::yaml::basic_value(bytes, &options)?
+            }
+        };
         self.charge_value(&document, depth)?;
         let document = Arc::new(document);
         self.remote_cache
@@ -529,6 +562,7 @@ impl Compiler<'_> {
                 .ok_or_else(|| context_error("JSON-LD @propagate must be boolean"))?;
         }
         if !remote && let Some(value) = object.get("@base") {
+            active.base_defined = true;
             active.base_iri = match value {
                 Value::Null => None,
                 Value::String(reference) => Some(resolve_reference(
@@ -850,6 +884,7 @@ impl Compiler<'_> {
                 direction_mapping: None,
                 containers,
                 index_mapping: None,
+                index_term: None,
                 nest: None,
                 scoped_context: None,
                 scoped_context_base: None,
@@ -1038,6 +1073,10 @@ impl Compiler<'_> {
             direction_mapping,
             containers,
             index_mapping,
+            index_term: object
+                .get("@index")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             nest,
             scoped_context,
             scoped_context_base,
@@ -1270,6 +1309,7 @@ fn empty_definition(protected: bool) -> JsonLdTermDefinition {
         direction_mapping: None,
         containers: BTreeSet::new(),
         index_mapping: None,
+        index_term: None,
         nest: None,
         scoped_context: None,
         scoped_context_base: None,
@@ -1533,6 +1573,10 @@ fn validate_container_combination(
     Ok(())
 }
 
+pub(in crate::native_codecs::jsonld) fn is_control(value: &str) -> bool {
+    is_keyword(value) || is_extension_control(value)
+}
+
 fn is_keyword(value: &str) -> bool {
     KEYWORDS.contains(&value)
 }
@@ -1632,34 +1676,19 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
             .or_default()
             .entry(container)
             .or_default();
-        selection
-            .fallback
-            .entry("@none".to_owned())
-            .or_insert_with(|| term.clone());
+        append_inverse_term(&mut selection.fallback, "@none".to_owned(), term);
 
         if definition.reverse_property {
-            selection
-                .types
-                .entry("@reverse".to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.types, "@reverse".to_owned(), term);
             continue;
         }
         if definition.type_mapping == Some(JsonLdTypeMapping::None) {
-            selection
-                .languages
-                .entry("@any".to_owned())
-                .or_insert_with(|| term.clone());
-            selection
-                .types
-                .entry("@any".to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.languages, "@any".to_owned(), term);
+            append_inverse_term(&mut selection.types, "@any".to_owned(), term);
             continue;
         }
         if let Some(mapping) = &definition.type_mapping {
-            selection
-                .types
-                .entry(mapping.inverse_key().to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.types, mapping.inverse_key().to_owned(), term);
             continue;
         }
 
@@ -1669,56 +1698,50 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
         ) {
             (Some(language), Some(direction)) => {
                 let key = explicit_language_direction_key(language, direction);
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (Some(language), None) => {
                 let key = match language {
                     JsonLdNullable::Null => "@null".to_owned(),
                     JsonLdNullable::Value(language) => identity_fold(language),
                 };
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (None, Some(direction)) => {
                 let key = match direction {
                     JsonLdNullable::Null => "@none".to_owned(),
                     JsonLdNullable::Value(direction) => format!("_{}", direction.as_str()),
                 };
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (None, None) => {
                 let default_language = active.default_language.as_deref().unwrap_or("@none");
                 if let Some(direction) = active.default_direction {
-                    selection
-                        .languages
-                        .entry(format!("{default_language}_{}", direction.as_str()))
-                        .or_insert_with(|| term.clone());
+                    append_inverse_term(
+                        &mut selection.languages,
+                        format!("{default_language}_{}", direction.as_str()),
+                        term,
+                    );
                 } else {
-                    selection
-                        .languages
-                        .entry(identity_fold(default_language))
-                        .or_insert_with(|| term.clone());
+                    append_inverse_term(
+                        &mut selection.languages,
+                        identity_fold(default_language),
+                        term,
+                    );
                 }
-                selection
-                    .languages
-                    .entry("@none".to_owned())
-                    .or_insert_with(|| term.clone());
-                selection
-                    .types
-                    .entry("@none".to_owned())
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, "@none".to_owned(), term);
+                append_inverse_term(&mut selection.types, "@none".to_owned(), term);
             }
         }
     }
     inverse
+}
+
+fn append_inverse_term(table: &mut BTreeMap<String, Vec<String>>, key: String, term: &str) {
+    let candidates = table.entry(key).or_default();
+    if candidates.last().is_none_or(|candidate| candidate != term) {
+        candidates.push(term.to_owned());
+    }
 }
 
 fn container_key(containers: &BTreeSet<JsonLdContainer>) -> String {
@@ -1752,7 +1775,7 @@ pub(super) fn expand_iri(
     vocab: bool,
     document_relative: bool,
 ) -> Result<Option<String>, RdfDiagnostic> {
-    if is_keyword(value) || is_extension_control(value) {
+    if is_control(value) {
         return Ok(Some(value.to_owned()));
     }
     if is_keyword_form(value) {
@@ -1779,25 +1802,17 @@ pub(super) fn expand_iri(
             .and_then(|definition| definition.iri_mapping.as_deref())
         {
             let expanded = format!("{mapping}{suffix}");
-            validate_iri_or_blank_node(&expanded, "expanded compact IRI")?;
             return Ok(Some(expanded));
         }
-        if let Ok(parsed) = purrdf_iri::parse(value)
-            && parsed.has_scheme()
-        {
-            return Ok(Some(value.to_owned()));
-        }
-        return Err(context_error(format!(
-            "compact IRI `{value}` uses an undefined prefix `{prefix}`"
-        )));
+        return Ok(Some(value.to_owned()));
     }
     if vocab && let Some(mapping) = &active.vocab_mapping {
         return Ok(Some(format!("{mapping}{value}")));
     }
-    if document_relative {
+    if document_relative && active.base_iri.is_some() {
         return resolve_reference(value, active.base_iri.as_deref(), "IRI").map(Some);
     }
-    Err(no_vocab_expansion(value))
+    Ok(Some(value.to_owned()))
 }
 
 pub(super) fn compact_iri(
@@ -1806,6 +1821,27 @@ pub(super) fn compact_iri(
     iri: &str,
     vocab: bool,
     selection: Option<&JsonLdTermSelection>,
+    compact_to_relative: bool,
+) -> Result<String, RdfDiagnostic> {
+    compact_iri_accepting(
+        active,
+        inverse,
+        iri,
+        vocab,
+        selection,
+        compact_to_relative,
+        |_| true,
+    )
+}
+
+pub(super) fn compact_iri_accepting(
+    active: &ActiveContext,
+    inverse: &InverseContext,
+    iri: &str,
+    vocab: bool,
+    selection: Option<&JsonLdTermSelection>,
+    compact_to_relative: bool,
+    accept: impl Fn(&str) -> bool,
 ) -> Result<String, RdfDiagnostic> {
     if is_extension_control(iri) {
         return Ok(iri.to_owned());
@@ -1817,7 +1853,7 @@ pub(super) fn compact_iri(
         validate_absolute_iri(iri, "IRI to compact")?;
     }
     if vocab {
-        if let Some(term) = select_inverse_term(inverse, iri, selection) {
+        if let Some(term) = select_inverse_term(inverse, iri, selection, &accept) {
             return Ok(term.to_owned());
         }
         if let Some(vocab_mapping) = &active.vocab_mapping
@@ -1833,7 +1869,7 @@ pub(super) fn compact_iri(
         return Ok(candidate);
     }
     reject_iri_confused_with_prefix(active, iri)?;
-    if vocab {
+    if vocab || !compact_to_relative {
         return Ok(iri.to_owned());
     }
     Ok(active
@@ -1847,6 +1883,7 @@ fn select_inverse_term<'a>(
     inverse: &'a InverseContext,
     iri: &str,
     selection: Option<&JsonLdTermSelection>,
+    accept: &impl Fn(&str) -> bool,
 ) -> Option<&'a str> {
     let containers = selection.map_or_else(
         || vec!["@none".to_owned()],
@@ -1863,7 +1900,9 @@ fn select_inverse_term<'a>(
             continue;
         };
         if kind == JsonLdTermSelectionKind::Any {
-            if let Some(term) = candidate.fallback.get("@none") {
+            if let Some(terms) = candidate.fallback.get("@none")
+                && let Some(term) = terms.iter().find(|term| accept(term))
+            {
                 return Some(term);
             }
             continue;
@@ -1874,7 +1913,9 @@ fn select_inverse_term<'a>(
             JsonLdTermSelectionKind::Any => unreachable!("handled above"),
         };
         for value in &preferred {
-            if let Some(term) = table.get(value) {
+            if let Some(terms) = table.get(value)
+                && let Some(term) = terms.iter().find(|term| accept(term))
+            {
                 return Some(term);
             }
         }

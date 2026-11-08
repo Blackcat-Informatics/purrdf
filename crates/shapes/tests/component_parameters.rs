@@ -3,6 +3,9 @@
 
 //! Constraint instantiation, vocabulary coexistence, and parameter integrity.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -48,7 +51,8 @@ fn vocabulary_declarations_preserve_all_fifteen_property_constraints() {
         .iter()
         .find(|s| s.id.to_string() == "<http://example.org/Shape>")
         .unwrap();
-    assert_eq!(shape.property_shapes.len(), 15);
+    let shape = imported.owner.definition(&shape.id).unwrap();
+    assert_eq!(turtle::properties(&imported, shape).count(), 15);
     let empty = dataset("");
     let report = validate_dataset(&empty, &imported).unwrap();
     assert!(!report.conforms);
@@ -146,7 +150,15 @@ fn repeated_single_parameter_validators_apply_conjunctively_in_every_scope() {
             ex:Shape a sh:NodeShape ; sh:targetNode ex:a, ex:b, ex:c ; ex:forbidden ex:a, ex:b ."
         );
         let parsed = shapes(&body).unwrap();
-        assert_eq!(parsed.node_shapes[0].constraints.len(), 2);
+        assert_eq!(
+            parsed
+                .owner
+                .definition(&parsed.node_shapes[0].id)
+                .unwrap()
+                .constraints
+                .len(),
+            2
+        );
         assert_eq!(
             validate_dataset(&dataset(""), &parsed)
                 .unwrap()
@@ -228,7 +240,11 @@ fn repeated_parameter_values_preserve_rdf12_term_identity() {
             ex:arg "text"@en, "text"@en--ltr, "text"@en--rtl, <<( ex:s ex:p ex:o )>> ."#,
     )
     .unwrap();
-    let constraints = &parsed.node_shapes[0].constraints;
+    let constraints = &parsed
+        .owner
+        .definition(&parsed.node_shapes[0].id)
+        .unwrap()
+        .constraints;
     assert_eq!(constraints.len(), 4);
     let mut bindings = constraints
         .iter()
@@ -264,7 +280,15 @@ fn imported_native_validator_binds_as_a_superseded_alternative() {
         sh:validator [ a sh:SPARQLAskValidator ; sh:ask "ASK { FILTER (false) }" ] .
         ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class ."#;
     let parsed = shapes(body).expect("the declared validator is an alternative");
-    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    assert_eq!(
+        parsed
+            .owner
+            .definition(&parsed.node_shapes[0].id)
+            .unwrap()
+            .constraints
+            .len(),
+        1
+    );
     let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
     assert_eq!(report.results.len(), 1);
     assert_eq!(
@@ -286,7 +310,15 @@ fn imported_bare_native_declaration_binds_to_native_execution() {
         sh:parameter [ sh:path sh:class ] .
         ex:Shape a sh:NodeShape ; sh:targetNode ex:focus, ex:other ; sh:class ex:Class .";
     let parsed = shapes(body).unwrap();
-    assert_eq!(parsed.node_shapes[0].constraints.len(), 1);
+    assert_eq!(
+        parsed
+            .owner
+            .definition(&parsed.node_shapes[0].id)
+            .unwrap()
+            .constraints
+            .len(),
+        1
+    );
     let report = validate_dataset(&dataset("ex:focus a ex:Class ."), &parsed).unwrap();
     assert_eq!(report.results.len(), 1);
     assert_eq!(
@@ -306,7 +338,15 @@ fn repeated_statements_across_graphs_do_not_duplicate_parameters_or_constraints(
     let trig = format!("{PREFIXES} ex:g1 {{ {graph} }} ex:g2 {{ {graph} }}");
     let ds = purrdf_rdf::parse_dataset(trig.as_bytes(), "application/trig", None).unwrap();
     let parsed = from_dataset(&ds).expect("named graphs contribute distinct object values");
-    assert_eq!(parsed.node_shapes[0].constraints.len(), 2);
+    assert_eq!(
+        parsed
+            .owner
+            .definition(&parsed.node_shapes[0].id)
+            .unwrap()
+            .constraints
+            .len(),
+        2
+    );
     assert_eq!(
         validate_dataset(&dataset(""), &parsed)
             .unwrap()
@@ -380,12 +420,15 @@ fn native_component_declarations_preserve_every_repeatable_constraint_family() {
         // of the graph too, and top-level (an explicit shape target can name them),
         // so the shape under test is found by its node rather than by position.
         let shape = |shapes: &Shapes| {
-            shapes
+            let root = shapes
                 .node_shapes
                 .iter()
                 .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
-                .expect("ex:Shape is top-level")
-                .property_shapes[0]
+                .map(|shape| shapes.owner.definition(&shape.id).unwrap())
+                .expect("ex:Shape is top-level");
+            turtle::properties(shapes, root)
+                .next()
+                .unwrap()
                 .constraints
                 .clone()
         };

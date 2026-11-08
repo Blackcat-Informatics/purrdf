@@ -59,7 +59,7 @@ use core::fmt;
 
 use purrdf_core::{DatasetView, TermRef, TermValue};
 use purrdf_datalog::cache::ContractHash;
-use purrdf_datalog::chase::ChaseTermination;
+use purrdf_datalog::chase::{ChaseTermination, TerminationCriterion};
 use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
 
 use crate::Regime;
@@ -77,16 +77,10 @@ use crate::rules::{RuleId, extensions, implemented, rules};
 /// existential edge lies in a cycle. This is the certificate that admitted the program
 /// PurRDF actually ran, carried out to the caller instead of discarded.
 ///
-/// # It is a NEWTYPE, not `ChaseTermination` re-exported
-///
-/// `purrdf_datalog::chase::ChaseTermination` has two variants and only one of them can
-/// reach a report: an uncertified program is
-/// `ChaseError::NonTerminating` and produces no run at all. Storing that enum here would
-/// put a variant in a report that no run can carry — the same unrepresentable-state
-/// question [`Completeness`] answers by deriving rather than storing — so the report
-/// carries the certified case's two numbers and there is no `Unbounded` value to read. Its
-/// fields are private and its one (crate-internal) constructor refuses the other variant,
-/// so an uncertified verdict has no way in even from inside this crate.
+/// Its private state retains the original native summary and its criterion.
+/// The constructor accepts only a summary the native classification certifies;
+/// an uncertified program produces no completed run or report. WA-specific
+/// counts are optional so another criterion need not claim it proved WA.
 ///
 /// The sentence is still `purrdf-datalog`'s: [`fmt::Display`] delegates to
 /// `ChaseTermination`'s, so the prose has one author and cannot drift.
@@ -99,61 +93,85 @@ use crate::rules::{RuleId, extensions, implemented, rules};
 /// // A chased lane carries its certificate.
 /// let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("closed");
 /// let certificate = rdfs.termination().expect("the RDFS lane is chased");
-/// assert!(certificate.existential_edges() > 0);
+/// assert!(certificate.existential_edges().expect("WA statistics") > 0);
 /// assert!(certificate.to_string().starts_with("weakly acyclic: "));
 /// // A lane that invents no term has no obligation to prove, and says so.
 /// let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("closed");
 /// assert!(owl.termination().is_none());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminationCertificate {
-    /// Distinct refined positions in the position dependency graph — the proof's size.
-    positions: usize,
-    /// Distinct existential edges checked, none of which lies in a cycle.
-    existential_edges: usize,
+    summary: ChaseTermination,
+    criterion: TerminationCriterion,
+}
+
+impl purrdf_hash::error::StructuredError for TerminationCertificate {
+    purrdf_hash::error_visit! {
+        @record self { summary, criterion } => "entailment-termination" {
+            "summary" => Record(&self.summary),
+            "criterion" => Record(&self.criterion),
+            "law_version" => Unsigned(u128::from(self.law_version())),
+        }
+    }
 }
 
 impl TerminationCertificate {
     /// The certificate `termination` states, or `None` if it certified nothing.
     ///
     /// The refusal case is unreachable from a completed run — `chase` returns
-    /// `ChaseError::NonTerminating` for it rather than an outcome — so this returning
-    /// `None` for `Unbounded` is what makes the type's invariant hold by construction
+    /// `ChaseError::Termination` for it rather than an outcome — so this returning
+    /// `None` for `Uncertified` is what makes the type's invariant hold by construction
     /// rather than by convention.
-    pub(crate) const fn of_chase(termination: &ChaseTermination) -> Option<Self> {
-        match termination {
-            ChaseTermination::WeaklyAcyclic {
-                positions,
-                existential_edges,
-            } => Some(Self {
-                positions: *positions,
-                existential_edges: *existential_edges,
-            }),
-            ChaseTermination::Unbounded { .. } => None,
+    pub(crate) fn of_chase(termination: &ChaseTermination) -> Option<Self> {
+        termination.criterion().map(|criterion| Self {
+            summary: termination.clone(),
+            criterion,
+        })
+    }
+
+    /// The native summary that admitted the completed run.
+    #[must_use]
+    pub const fn summary(&self) -> &ChaseTermination {
+        &self.summary
+    }
+
+    /// The sufficient criterion proved by the native admission.
+    #[must_use]
+    pub const fn criterion(&self) -> TerminationCriterion {
+        self.criterion
+    }
+
+    /// Version of the evidence law the native criterion proves.
+    #[must_use]
+    pub const fn law_version(&self) -> u32 {
+        self.criterion.law_version()
+    }
+
+    /// Distinct refined positions, when this summary proves weak acyclicity.
+    #[must_use]
+    pub const fn positions(&self) -> Option<usize> {
+        match &self.summary {
+            ChaseTermination::WeaklyAcyclic { positions, .. } => Some(*positions),
+            _ => None,
         }
     }
 
-    /// How many distinct refined positions the dependency graph holds — the proof's size.
+    /// Checked existential edges, when this summary proves weak acyclicity.
     #[must_use]
-    pub const fn positions(&self) -> usize {
-        self.positions
-    }
-
-    /// How many distinct existential edges were checked, none of them in a cycle.
-    #[must_use]
-    pub const fn existential_edges(&self) -> usize {
-        self.existential_edges
+    pub const fn existential_edges(&self) -> Option<usize> {
+        match &self.summary {
+            ChaseTermination::WeaklyAcyclic {
+                existential_edges, ..
+            } => Some(*existential_edges),
+            _ => None,
+        }
     }
 }
 
 impl fmt::Display for TerminationCertificate {
     /// `purrdf-datalog`'s own sentence, delegated rather than restated.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        ChaseTermination::WeaklyAcyclic {
-            positions: self.positions,
-            existential_edges: self.existential_edges,
-        }
-        .fmt(f)
+        self.summary.fmt(f)
     }
 }
 
@@ -745,6 +763,14 @@ pub struct Boundary {
     construct: Construct,
 }
 
+impl purrdf_hash::error::StructuredError for Boundary {
+    purrdf_hash::error_visit! {
+        @record self { construct } => "entailment-boundary" {
+            "construct" => Code(self.construct.as_str()),
+        }
+    }
+}
+
 impl Boundary {
     /// The boundary for `construct`.
     #[must_use]
@@ -783,6 +809,15 @@ pub struct WitnessTriple {
     predicate: TermValue,
     /// The object term.
     object: TermValue,
+}
+
+impl purrdf_hash::error::StructuredError for WitnessTriple {
+    purrdf_hash::error_visit! {
+        @record self { subject, predicate, object } => "entailment-witness-triple" {
+            "subject" => Term(&self.subject), "predicate" => Term(&self.predicate),
+            "object" => Term(&self.object),
+        }
+    }
 }
 
 impl WitnessTriple {
@@ -858,6 +893,16 @@ pub struct InconsistencyWitness {
     graph: Option<TermValue>,
 }
 
+impl purrdf_hash::error::StructuredError for InconsistencyWitness {
+    purrdf_hash::error_visit! {
+        @record self { rule, premises, graph } => "entailment-inconsistency-witness" {
+            "rule" => Code(self.rule.as_str()),
+            "premises" => List(self.premises.iter().map(|premise| purrdf_hash::error::ErrorValue::Record(premise))),
+            "graph" => Value(self.graph.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |graph| purrdf_hash::error::ErrorValue::Term(graph))),
+        }
+    }
+}
+
 impl InconsistencyWitness {
     /// A witness that `rule` fired on `premises` while closing `graph`.
     ///
@@ -922,6 +967,14 @@ pub struct InconsistentRun {
     report: ReasoningReport,
 }
 
+impl purrdf_hash::error::StructuredError for InconsistentRun {
+    purrdf_hash::error_visit! {
+        @record self { witness, report } => "entailment-inconsistent-run" {
+            "witness" => Record(&self.witness), "report" => Record(&self.report),
+        }
+    }
+}
+
 impl InconsistentRun {
     /// The run `witness` refused, described by `report`.
     ///
@@ -962,7 +1015,7 @@ impl InconsistentRun {
 /// it by accident. What this crate adds is the two measurements the evaluator has no way
 /// to make — which rule a committed derivation is attributed to under the active regime's
 /// specification names, and how many conclusions the RDF 1.2 IR could not hold.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct RunStats {
     /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
     /// [`ChaseRule::index`].
@@ -1053,7 +1106,7 @@ impl RunStats {
     /// Assigned rather than folded: `certify` is a pure function of the clause set, so the
     /// `1 + n` graph evaluations of one `materialize` call all compute the same
     /// certificate, and combining `n` copies of one value would suggest they could differ.
-    pub(crate) const fn certify(&mut self, certificate: Option<TerminationCertificate>) {
+    pub(crate) fn certify(&mut self, certificate: Option<TerminationCertificate>) {
         if let Some(certificate) = certificate {
             self.termination = Some(certificate);
         }
@@ -1161,6 +1214,66 @@ pub struct ReasoningReport {
     /// than the one that answered is a value nothing can build, exactly as
     /// [`Self::contract_hash`] cannot name a calculus other than its regime's.
     mechanism: Option<EntailmentMechanism>,
+}
+
+impl purrdf_hash::error::StructuredError for ReasoningReport {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            regime,
+            rules_fired,
+            boundaries,
+            budget,
+            contract_hash,
+            inconsistency,
+            withheld_surrogates,
+            termination,
+            mechanism,
+        } = self;
+        visitor.variant("entailment-report");
+        visitor.value(Some("regime"), ErrorValue::Code(regime.name()));
+        visitor.begin_list(Some("rules_fired"), rules_fired.len());
+        for (rule, count) in rules_fired {
+            visitor.begin_record(None, "entailment-rule-count");
+            visitor.value(Some("rule"), ErrorValue::Code(rule.as_str()));
+            visitor.value(Some("count"), ErrorValue::Unsigned(u128::from(*count)));
+            visitor.end_record();
+        }
+        visitor.end_list();
+        visit_list(
+            visitor,
+            Some("boundaries"),
+            boundaries
+                .iter()
+                .map(|boundary| ErrorValue::Record(boundary)),
+        );
+        visitor.value(Some("budget"), ErrorValue::Record(budget));
+        visitor.value(Some("contract_hash"), ErrorValue::Record(contract_hash));
+        visitor.value(
+            Some("inconsistency"),
+            inconsistency
+                .as_ref()
+                .map_or(ErrorValue::Absent, |witness| ErrorValue::Record(witness)),
+        );
+        visitor.value(
+            Some("withheld_surrogates"),
+            ErrorValue::Unsigned(u128::from(*withheld_surrogates)),
+        );
+        visitor.value(
+            Some("termination"),
+            termination
+                .as_ref()
+                .map_or(ErrorValue::Absent, |certificate| {
+                    ErrorValue::Record(certificate)
+                }),
+        );
+        visitor.value(
+            Some("mechanism"),
+            mechanism.map_or(ErrorValue::Absent, |mechanism| {
+                ErrorValue::Code(mechanism.as_str())
+            }),
+        );
+    }
 }
 
 impl ReasoningReport {
@@ -1300,7 +1413,7 @@ impl ReasoningReport {
                 stats.budget,
                 inconsistency,
                 stats.surrogate_drops,
-                stats.termination,
+                stats.termination.clone(),
             )
         })
     }
@@ -1620,14 +1733,14 @@ impl ReasoningReport {
     /// # It can only ever be a certificate, and it is not always the same one
     ///
     /// The uncertified verdict never reaches here — an existential edge in a cycle is
-    /// `ChaseError::NonTerminating`, so the run produces no report to carry it — which is
-    /// why [`TerminationCertificate`] holds the certified case's numbers and no variant
-    /// for the other. What the numbers say still varies: the certificate is a function of
+    /// `ChaseError::Termination`, so the run produces no report to carry it — which is
+    /// why [`TerminationCertificate`] retains only a certified native summary.
+    /// What the evidence says still varies: the certificate is a function of
     /// the CLAUSE SET, so the `RDF` lane's differs from the `RDFS` lane's, and a rule
     /// added to either moves that lane's. It does not vary with the data.
     #[must_use]
-    pub const fn termination(&self) -> Option<TerminationCertificate> {
-        self.termination
+    pub const fn termination(&self) -> Option<&TerminationCertificate> {
+        self.termination.as_ref()
     }
 
     /// WHICH of the seven conclusion-directed mechanisms read an answer off this run.

@@ -39,7 +39,7 @@ fn evaluate(dataset: &RdfDataset, query: &str, mode: QueryEntailment<'_>) -> Spa
         dataset,
         request(query),
         mode,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ClosureRelations::NONE,
     )
     .expect("entailed query")
@@ -55,7 +55,7 @@ fn governed(dataset: &RdfDataset, query: &str) -> SparqlResult {
         dataset,
         request(query),
         QueryEntailment::OwlDirect,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ClosureRelations::NONE,
         &QueryGovernors::UNBOUNDED,
     )

@@ -267,7 +267,7 @@ fn index_queries_and_substring_evidence_share_corrected_cleanup() {
     .unwrap();
     let matches = surface.substring_exhaustive("👩").unwrap();
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].term.documents(), [0, 1]);
+    assert_eq!(matches[0].term.documents().collect::<Vec<_>>(), [0, 1]);
     assert_eq!(matches[0].evidence.len(), 2);
     for evidence in &matches[0].evidence {
         assert_eq!(evidence.sources, std::slice::from_ref(&(0..4)));

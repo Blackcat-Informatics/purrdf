@@ -1,0 +1,6 @@
+- "@id": http://example.org/test#example
+  http://example.com/values:
+  - "@value": Plain String
+  - "@value": String in US English
+  - "@value": String in US English and Left to Right
+  - "@value": Plain String Right to Left

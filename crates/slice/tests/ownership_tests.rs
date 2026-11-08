@@ -12,7 +12,7 @@ use purrdf_testkit::temp_dir;
 
 use purrdf_slice::{
     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
-    ReconciliationStatus, SliceCatalog, SliceVocab,
+    QueryArtifactError, ReconciliationStatus, SliceCatalog, SliceVocab,
 };
 
 /// Pure fixtures use a caller-supplied example.org vocabulary (the slice
@@ -104,7 +104,12 @@ fn single_validated_owner() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // Exactly ONE validated owner for T.
@@ -175,7 +180,12 @@ fn ownership_conflict() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     let t = &report.ownership[&nn("termT")];
@@ -219,7 +229,12 @@ fn ownership_mismatch() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     let t = &report.ownership[&nn("termT")];
@@ -244,6 +259,9 @@ fn ownership_mismatch() {
 
 #[test]
 fn parsed_not_textual_edges() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
     let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
@@ -285,8 +303,93 @@ fn parsed_not_textual_edges() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let invalid_utf8 = vec![b'#', b' ', 255];
+    let expected_utf8 = std::str::from_utf8(&invalid_utf8).unwrap_err();
+    std::fs::write(
+        root.join("slices/grpB/sliceB/queries/competency/a-invalid-utf8.rq"),
+        &invalid_utf8,
+    )
+    .unwrap();
+    let invalid_sparql = "SELECT WHERE {".to_owned();
+    let expected_sparql = purrdf_sparql_algebra::SparqlParser::new()
+        .parse_query_with(&invalid_sparql, &ParserOptions::default())
+        .unwrap_err();
+    write(
+        root,
+        "slices/grpB/sliceB/queries/competency/b-invalid-sparql.rq",
+        &invalid_sparql,
+    );
+
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+
+    drop(catalog);
+    drop(tmp);
+    drop(invalid_utf8);
+    drop(invalid_sparql);
+    assert!(!report.has_ownership_defect());
+    assert_eq!(report.clone().diagnostics, report.diagnostics);
+    let skipped: Vec<_> = report.diagnostics.iter().filter_map(|diagnostic| {
+        if let OwnershipDiagnostic::UnparseableQuery { slice, logical_path, cause } = diagnostic {
+            let captured = Capture::read(diagnostic);
+            assert_eq!(captured.code, "slice-ownership-unparseable-query");
+            assert!(matches!(captured.field("slice"), ErrorValue::Iri(value) if value == iri("sliceB")));
+            assert!(matches!(captured.field("logical_path"), ErrorValue::Text(value) if value == logical_path));
+            Some((slice, logical_path, cause, captured.child("cause")))
+        } else {
+            None
+        }
+    }).collect();
+    let [
+        (slice, path, utf8, captured_utf8),
+        (_, sparql_path, sparql, captured_sparql),
+    ] = skipped.as_slice()
+    else {
+        panic!("both malformed queries must remain nonfatal diagnostics");
+    };
+    assert_eq!(*slice, &iri("sliceB"));
+    assert_eq!(path.as_str(), "queries/competency/a-invalid-utf8.rq");
+    assert_eq!(
+        sparql_path.as_str(),
+        "queries/competency/b-invalid-sparql.rq"
+    );
+    assert_eq!(utf8, &&QueryArtifactError::Utf8(expected_utf8));
+    assert_eq!(
+        sparql,
+        &&QueryArtifactError::Sparql(expected_sparql.clone())
+    );
+    assert_eq!(
+        utf8.to_string(),
+        format!("query is not valid UTF-8: {expected_utf8}")
+    );
+    assert_eq!(sparql.to_string(), expected_sparql.to_string());
+    assert_eq!(captured_utf8.code, "slice-query-utf8");
+    assert!(matches!(
+        captured_utf8.child("cause").field("valid_up_to"),
+        ErrorValue::ByteCount(2)
+    ));
+    assert_eq!(captured_sparql.code, "slice-query-sparql");
+    assert_eq!(
+        captured_sparql.child("cause").code,
+        Capture::read(&expected_sparql).code
+    );
+    assert_eq!(
+        std::error::Error::source(*utf8)
+            .unwrap()
+            .downcast_ref::<std::str::Utf8Error>(),
+        Some(&expected_utf8)
+    );
+    assert_eq!(
+        std::error::Error::source(*sparql)
+            .unwrap()
+            .downcast_ref::<purrdf_sparql_algebra::ParseError>(),
+        Some(&expected_sparql)
+    );
 
     // Exactly one B → A query edge, with termT as evidence.
     let edge = report
@@ -338,12 +441,32 @@ fn path_independence() {
     build(tmp1.path(), "core");
     build(tmp2.path(), "extensions/deeply/nested");
 
-    let r1 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp1.path(), test_vocab()).unwrap())
-        .analyze()
-        .unwrap();
-    let r2 = OwnershipAnalyzer::new(&SliceCatalog::discover(tmp2.path(), test_vocab()).unwrap())
-        .analyze()
-        .unwrap();
+    let r1 = OwnershipAnalyzer::new(
+        &SliceCatalog::discover(
+            tmp1.path(),
+            test_vocab(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap(),
+    )
+    .analyze()
+    .unwrap();
+    let r2 = OwnershipAnalyzer::new(
+        &SliceCatalog::discover(
+            tmp2.path(),
+            test_vocab(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap(),
+    )
+    .analyze()
+    .unwrap();
 
     // Ownership tables are identical (term IRIs, owners, status — all
     // path-independent). physical_origin.logical_path is slice-relative, so it
@@ -413,7 +536,12 @@ fn semantic_vs_nonsemantic() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // The documentation edge B → A (if recorded at all) is NON-semantic and
@@ -496,7 +624,12 @@ fn declared_but_unowned_term() {
     );
     write(root, "slices/grpA/sliceA/module.ttl", &module_ttl);
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // termWithOwner must be Validated.
@@ -595,7 +728,12 @@ fn group_aggregate_iri_reaches_dependency_walk() {
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
 
     // A Query edge from B to A must exist.
@@ -658,7 +796,12 @@ fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
         query_body,
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
     let edge = report
         .edges
@@ -805,7 +948,12 @@ fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configur
         ),
     );
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
     let find_query_edge = |report: &purrdf_slice::OwnershipReport| {
         report
@@ -901,8 +1049,12 @@ fn malformed_artifact_hard_fails_analysis() {
          vocab:Broken a vocab:Class  <<< not turtle at all ;;;\n",
     );
 
-    let error = SliceCatalog::discover(root, test_vocab())
-        .expect_err("a malformed ownership artifact must hard-fail discovery");
+    let error = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("a malformed ownership artifact must hard-fail discovery");
     let message = error.to_string();
     assert!(
         message.contains("module.ttl"),
@@ -935,7 +1087,12 @@ fn every_rdf_artifact_carries_a_semantic_digest_and_no_other_kind_does() {
     );
     write(root, "slices/grpA/sliceA/docs.md", "# not rdf\n");
 
-    let catalog = SliceCatalog::discover(root, test_vocab()).expect("a clean slice discovers");
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a clean slice discovers");
     let record = catalog.records().first().expect("one slice");
     assert_ne!(record.artifacts, [] as [_; 0]);
     for artifact in &record.artifacts {

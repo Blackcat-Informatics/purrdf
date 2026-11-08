@@ -31,6 +31,8 @@ pub struct UnionCandidate {
 /// One producer's original work bound, observed read and evidence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnionProducer {
+    /// Last valid producer rank observed; zero only before the first valid row.
+    pub last_rank: u64,
     /// The caller's independent work depth, excluding the probe.
     pub requested_depth: u32,
     /// The actual terminal status, absent when an interrupted read has no receipt.
@@ -68,6 +70,7 @@ impl UnionProducer {
             announced: None,
             settled: None,
             rows_pulled: 0,
+            last_rank: 0,
             rows_materialised: None,
             rows_emitted: None,
             receipt_verified: false,
@@ -120,7 +123,7 @@ impl purrdf_hash::error::StructuredError for UnionCandidate {
 
 impl purrdf_hash::error::StructuredError for UnionProducer {
     purrdf_hash::error_visit! {
-        @record self { requested_depth, status, contract, announced, settled, rows_pulled,
+        @record self { requested_depth, status, contract, announced, settled, rows_pulled, last_rank,
             rows_materialised, rows_emitted, receipt_verified, completed_prefix, read_error,
             settlement_error } => "retrieval-union-producer" {
             "requested_depth" => Unsigned(u128::from(self.requested_depth)),
@@ -129,6 +132,7 @@ impl purrdf_hash::error::StructuredError for UnionProducer {
             "announced" => Value(self.announced.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
             "settled" => Value(self.settled.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))),
             "rows_pulled" => Unsigned(u128::from(self.rows_pulled)),
+            "last_rank" => Unsigned(u128::from(self.last_rank)),
             "rows_materialised" => Value(self.rows_materialised.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
             "rows_emitted" => Value(self.rows_emitted.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
             "receipt_verified" => Boolean(self.receipt_verified),
@@ -240,6 +244,8 @@ pub enum UnionError {
         stratum: Iri,
         /// The actual row's rank.
         rank: u64,
+        /// Physical rows pulled, which is what exceeds the requested row depth.
+        rows: u64,
         /// The compiled caller depth.
         depth: u32,
     },
@@ -255,8 +261,8 @@ impl purrdf_hash::error::StructuredError for UnionError {
             "requested" => Value(requested.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
         },
         InconsistentExecution { reason } => "retrieval-union-inconsistent-execution" { "reason" => Text(reason) },
-        RowsPastDepth { stratum, rank, depth } => "retrieval-union-rows-past-depth" {
-            "stratum" => Iri(stratum.as_str()), "rank" => Unsigned(u128::from(*rank)), "depth" => Unsigned(u128::from(*depth)),
+        RowsPastDepth { stratum, rank, rows, depth } => "retrieval-union-rows-past-depth" {
+            "stratum" => Iri(stratum.as_str()), "rank" => Unsigned(u128::from(*rank)), "rows" => Unsigned(u128::from(*rows)), "depth" => Unsigned(u128::from(*depth)),
         },
         Protocol(cause) => "retrieval-union-protocol" { "cause" => Cause(cause) },
     }
@@ -277,10 +283,11 @@ impl fmt::Display for UnionError {
             Self::RowsPastDepth {
                 stratum,
                 rank,
+                rows,
                 depth,
             } => write!(
                 f,
-                "candidate stratum {stratum} emitted rank {rank} past requested depth {depth}"
+                "candidate stratum {stratum} emitted row {rows} at rank {rank} past requested row depth {depth}"
             ),
             Self::Protocol(error) => error.fmt(f),
         }
@@ -427,9 +434,9 @@ pub async fn union<'d>(
                             .expect("unpublished producer arena is unique")
                             .get_mut(&read.stratum)
                             .expect("the actual stream's producer was recorded");
-                        let expected = producer.rows_pulled + 1;
+                        let previous_rank = producer.last_rank;
                         producer.rows_pulled += 1;
-                        let checked = validate_rank(expected, rank)
+                        let checked = validate_rank(read.contract.rank_law, previous_rank, rank)
                             .and_then(|()| {
                                 validate_declared_block(
                                     &read.stratum,
@@ -456,10 +463,12 @@ pub async fn union<'d>(
                             primary = Some(error.into());
                             break 'reads;
                         }
-                        if rank > u64::from(producer.requested_depth) {
+                        producer.last_rank = rank;
+                        if producer.rows_pulled > u64::from(producer.requested_depth) {
                             primary = Some(UnionError::RowsPastDepth {
                                 stratum: read.stratum.clone(),
                                 rank,
+                                rows: producer.rows_pulled,
                                 depth: producer.requested_depth,
                             });
                             break 'reads;
@@ -534,7 +543,7 @@ pub async fn union<'d>(
                             .get_mut(&read.stratum)
                             .expect("the actual stream's producer was recorded");
                         match read.stream.receipt().await.and_then(|receipt| {
-                            validate_receipt(&receipt, producer.rows_pulled)?;
+                            validate_receipt(&receipt, producer.rows_pulled, producer.last_rank)?;
                             Ok(ProducerStatus::from(receipt))
                         }) {
                             Ok(status) => {
@@ -766,7 +775,8 @@ impl CandidateUnion {
     ) -> Result<SharedWorkspace<AdmittedVec<u8>>, purrdf_sparql_eval::EvalError> {
         let workspace = self.candidates.workspace();
         let mut writer = Writer::admitted(workspace);
-        writer.u16(1);
+        // Version 3 retains separate row/rank progress and carries ceiling precision.
+        writer.u16(3);
         writer.string("candidate-union");
         writer.bytes(self.plan_id.as_bytes());
         writer.u8(u8::from(self.completed_prefix));
@@ -795,6 +805,7 @@ impl CandidateUnion {
             writer.string(stratum.as_str());
             writer.u32(producer.requested_depth);
             writer.u64(producer.rows_pulled);
+            writer.u64(producer.last_rank);
             writer.option_u64(producer.rows_materialised);
             writer.option_u64(producer.rows_emitted);
             writer.u8(u8::from(producer.receipt_verified));
@@ -849,7 +860,8 @@ fn write_status(
         }
         Some(ProducerStatus::CeilingReached { bound }) => {
             writer.u8(5);
-            writer.i128(bound.into_raw());
+            writer.u128(bound.into_raw());
+            writer.u32(bound.precision().digits());
         }
         Some(ProducerStatus::ExecutionFailed { reason }) => {
             writer.u8(6);
@@ -868,6 +880,7 @@ fn write_contract(
         return;
     };
     writer.u8(1);
+    writer.string(contract.rank_law.as_str());
     writer.u8(u8::from(contract.duplicates == DuplicatePolicy::Unique));
     match &contract.fidelity.completeness {
         Completeness::Complete => writer.u8(0),
@@ -929,6 +942,7 @@ mod admission_failure_tests {
         let stratum = Iri::parse("http://example.org/producer").unwrap();
         let plan_id = PlanId::from_canonical(b"settlement-before-result-admission");
         let contract = StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             crate::RankFidelity::EXACT,
             crate::CandidateDomains::Unrestricted,

@@ -8,7 +8,7 @@ use purrdf_core::purremb_fixture::{
 };
 use purrdf_core::{
     EmbeddingError, EmbeddingView, PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_HEADER_LENGTH,
-    SECTION_CONTRACTS, SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS,
+    SECTION_CONTRACTS, SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE,
     SECTION_TARGET_SETS, SECTION_TARGETS, SECTION_TOKEN_SPANS, verify_embedding,
 };
 
@@ -44,6 +44,13 @@ fn framing_corruptions_fail_closed() {
     let mut unsupported_version = original.clone();
     put_u32(&mut unsupported_version, 8, 2);
     cases.push(unsupported_version);
+
+    for code in [0, 3, u32::MAX] {
+        let mut unsupported_source = original.clone();
+        let (offset, _) = section_span(&unsupported_source, SECTION_SOURCE, 0);
+        put_u32(&mut unsupported_source, offset + 16, code);
+        cases.push(unsupported_source);
+    }
 
     let mut reserved_header = original.clone();
     put_u32(&mut reserved_header, 16, 1);

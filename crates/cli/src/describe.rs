@@ -113,6 +113,8 @@ use crate::{format, ledger, sink, source};
 
 /// The resolved `describe` flags.
 pub(crate) struct DescribeOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--iri`, in the order the operator wrote them; at least one (clap enforces it).
     pub(crate) iris: &'a [String],
     /// `--from`: the input-format override.
@@ -148,6 +150,7 @@ impl ViewOp for DescribeOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
         let describer = Describer::try_new(view)
             .map_err(|error| CliError::Runtime(format!("dataset source read failed: {error}")))?;
@@ -188,8 +191,12 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
     description: &D,
     target: SourceFormat,
 ) -> Result<(), CliError> {
-    let SourceFormat::Native(format) = target else {
-        return Ok(());
+    let format = match target {
+        SourceFormat::Native(format) => format,
+        SourceFormat::Pack | SourceFormat::Gts => return Ok(()),
+        _ => {
+            return Err(format::unsupported_format(target, "the output target"));
+        }
     };
     if format.supports_datasets() {
         return Ok(());
@@ -209,11 +216,16 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
 pub(crate) fn run(
     options: &DescribeOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Resolve BOTH formats before touching the source (mirroring `convert`/`reason`), so an
     // unresolvable OUT fails fast rather than after the description has been extracted.
     let source_format = format::resolve(options.from, options.input)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
     // No `--base` refusal here, unlike `convert`/`reason`. This command has a leg no format
     // row can describe: `--iri` is command-line text and resolves against the base, exactly
     // as a ShEx shape map does. So a base handed to `describe` always has a live consumer —
@@ -232,7 +244,9 @@ pub(crate) fn run(
         options.input,
         source_format,
         options.base,
+        input_options.as_deref(),
         DescribeOp { iris: &iris },
+        canonical,
     )?;
     refuse_uncarriable_named_graphs(&*description, target_format)?;
 
@@ -243,6 +257,7 @@ pub(crate) fn run(
         options.base,
         source_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }
@@ -311,5 +326,6 @@ fn subject_base(
     match source_format {
         SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
         SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
+        _ => Err(format::unsupported_format(source_format, "the data input")),
     }
 }

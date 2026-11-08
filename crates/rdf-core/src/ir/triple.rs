@@ -285,6 +285,7 @@ impl Iterator for TripleRows<'_> {
 pub struct TripleDataset {
     pub(super) dictionary: FrozenTerms,
     pub(super) statistics: super::statistics::LocalStatistics,
+    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
     pub(super) triples: TripleTable,
     pub(super) reifiers: Box<[TripleReifierRow]>,
     pub(super) reifier_targets: OnceLock<Box<[u32]>>,

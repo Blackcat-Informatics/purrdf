@@ -54,7 +54,11 @@ pub(crate) fn large_pack() -> (NamedTempFile, Vec<u8>) {
     }
 
     let dataset = builder.freeze().expect("freeze bench dataset");
-    let bytes = PackBuilder::build_bytes(&dataset).expect("build pack bytes");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("build pack bytes");
 
     let mut file = temp_file!().expect("temp file");
     file.write_all(&bytes).expect("write pack bytes");

@@ -3,6 +3,9 @@
 
 //! Cardinality follows the native SHACL construct, without vocabulary imports.
 
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 use purrdf_shapes::shapes::from_dataset;
 
@@ -236,7 +239,11 @@ fn repeatable_core_parameters_keep_each_constraint() {
             .find(|shape| shape.id.to_string() == "<http://example.org/Shape>")
             .unwrap_or_else(|| panic!("sh:{parameter}: ex:Shape is top-level"));
         assert_eq!(
-            shape.property_shapes[0].constraints.len(),
+            turtle::properties(&shapes, shape)
+                .next()
+                .unwrap()
+                .constraints
+                .len(),
             2,
             "both sh:{parameter} values must contribute constraints"
         );
@@ -277,7 +284,11 @@ fn named_graph_repetitions_count_distinct_rdf_objects() {
     let shapes = from_dataset(&dataset).expect("repeated statements are not extra values");
     assert_eq!(shapes.node_shapes.len(), 1);
     assert_eq!(
-        shapes.node_shapes[0].property_shapes[0].constraints.len(),
+        turtle::properties(&shapes, &shapes.node_shapes[0])
+            .next()
+            .unwrap()
+            .constraints
+            .len(),
         3
     );
 }

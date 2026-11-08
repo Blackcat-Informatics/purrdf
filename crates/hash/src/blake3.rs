@@ -450,6 +450,47 @@ pub struct Streaming<const BUFFER: usize> {
     depth: usize,
     length: u64,
 }
+/// Refusal to absorb a complete input or to admit its next bounded extent.
+#[derive(Debug)]
+pub enum UpdateError<E> {
+    /// The whole input would exceed BLAKE3's maximum message length.
+    LengthOverflow {
+        /// Previously accepted message bytes.
+        before: u64,
+        /// Bytes requested by this update.
+        added: usize,
+    },
+    /// Original progress callback refusal, retained without conversion.
+    Progress(E),
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for UpdateError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LengthOverflow { before, added } => {
+                write!(f, "BLAKE3 input length overflow: {before} + {added} bytes")
+            }
+            Self::Progress(error) => error.fmt(f),
+        }
+    }
+}
+impl<E: core::error::Error + 'static> core::error::Error for UpdateError<E> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::LengthOverflow { .. } => None,
+            Self::Progress(error) => Some(error),
+        }
+    }
+}
+impl<E: crate::error::StructuredError> crate::error::StructuredError for UpdateError<E> {
+    crate::error_visit! {
+        LengthOverflow { before, added } => "blake3-length-overflow" {
+            "before" => Unsigned(u128::from(*before)), "added" => Unsigned(*added as u128)
+        },
+        Progress(cause) => "blake3-progress" { "cause" => Cause(cause) },
+    }
+}
+
 impl<const BUFFER: usize> Streaming<BUFFER> {
     /// An empty message.
     #[must_use]
@@ -564,6 +605,68 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
         self.filled = data.len();
         self
     }
+    /// Absorb bytes through bounded calls to the original streaming kernel.
+    ///
+    /// The callback admits each extent of at most the stream's buffer size in
+    /// bytes before it is absorbed. Each extent also performs at most 54 tree
+    /// reductions. Only accepted extents change the stream. Callers requiring
+    /// an all-or-nothing record must discard the stream after a refusal.
+    ///
+    /// # Errors
+    /// Rejects whole-input length overflow before any callback or mutation;
+    /// otherwise returns the original callback refusal at the first stopped
+    /// extent. No later extent is visited.
+    ///
+    /// ```
+    /// use purrdf_hash::blake3::{RecordHasher, UpdateError};
+    /// let mut stream = RecordHasher::new();
+    /// stream.try_update(b"record", |_| Ok::<_, ()>(())).unwrap();
+    /// assert_eq!(stream.finalize(), purrdf_hash::blake3::hash(b"record"));
+    /// let stopped = stream.try_update(b"tail", |_| Err("stopped"));
+    /// assert!(matches!(stopped, Err(UpdateError::Progress("stopped"))));
+    /// ```
+    pub fn try_update<E>(
+        &mut self,
+        data: &[u8],
+        mut checkpoint: impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<&mut Self, UpdateError<E>> {
+        if u64::try_from(data.len())
+            .ok()
+            .and_then(|added| self.length.checked_add(added))
+            .is_none()
+        {
+            return Err(UpdateError::LengthOverflow {
+                before: self.length,
+                added: data.len(),
+            });
+        }
+        for extent in data.chunks(BUFFER) {
+            checkpoint(extent.len() as u64).map_err(UpdateError::Progress)?;
+            self.update(extent);
+        }
+        Ok(self)
+    }
+
+    /// Admit bounded final-buffer compression and at most 54 tree reductions.
+    /// The original finalizer does not mutate this stream.
+    ///
+    /// # Errors
+    /// Returns the original callback refusal before producing a digest.
+    ///
+    /// ```
+    /// let stream = purrdf_hash::blake3::RecordHasher::new();
+    /// assert_eq!(stream.try_finalize(|_| Ok::<_, ()>(())).unwrap(), stream.finalize());
+    /// ```
+    pub fn try_finalize<E>(
+        &self,
+        mut checkpoint: impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<Hash, E> {
+        // Charge buffered bytes plus a fixed compression unit for each retained
+        // tree level and the root, including the empty-message compression.
+        checkpoint(self.filled as u64 + (self.depth as u64 + 1) * 64)?;
+        Ok(self.finalize())
+    }
+
     /// Start a new message, reusing the buffer and tree storage.
     /// Previously written bytes are inaccessible to the new message; this
     /// method is not a secure erasure operation.
@@ -1158,6 +1261,60 @@ mod tests {
         assert_eq!(&stream.buffer[..6], b"prefix");
         assert_eq!(stream.length, u64::MAX);
         assert_eq!(stream.write(&[]).expect("empty update fits"), 0);
+        let mut called = false;
+        let error = stream.try_update(b"overflow", |_| {
+            called = true;
+            Ok::<_, ()>(())
+        });
+        assert!(matches!(
+            error,
+            Err(UpdateError::LengthOverflow {
+                before: u64::MAX,
+                added: 8
+            })
+        ));
+        assert!(!called);
+        assert_eq!(stream.length, u64::MAX);
+        assert_eq!(stream.filled, 6);
+
+        // A stopped extent preserves only its accepted prefix and its original
+        // opaque cause. Finalization refusal leaves that prefix unchanged.
+        struct Cause(Box<usize>);
+        let bytes = vec![0x5a; 3 * CHUNK + 1];
+        let mut record = RecordHasher::new();
+        let mut extents = 0;
+        let cause = Box::new(17);
+        let original = core::ptr::from_ref(cause.as_ref());
+        let mut cause = Some(Cause(cause));
+        let stopped = record.try_update(&bytes, |units| {
+            assert!(units <= CHUNK as u64);
+            extents += 1;
+            if extents == 3 {
+                Err(cause.take().unwrap())
+            } else {
+                Ok(())
+            }
+        });
+        match stopped {
+            Err(UpdateError::Progress(cause)) => {
+                assert_eq!(core::ptr::from_ref(cause.0.as_ref()), original);
+            }
+            _ => panic!("original progress cause"),
+        }
+        assert_eq!(extents, 3);
+        assert_eq!(record.length, (2 * CHUNK) as u64);
+        let expected = hash(&bytes[..2 * CHUNK]);
+        assert_eq!(record.finalize(), expected);
+        let mut polls = 0;
+        assert!(matches!(
+            record.try_finalize(|_| {
+                polls += 1;
+                Err(17)
+            }),
+            Err(17)
+        ));
+        assert_eq!(polls, 1);
+        assert_eq!(record.finalize(), expected);
     }
 
     #[test]

@@ -62,6 +62,10 @@ use crate::term::{NamedNode, Term, Triple};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SrlError {
+    /// Original violated condition of a directly evaluated IR rule.
+    RuleWellFormedness(super::ir::WellFormednessError),
+    /// Original rule failure and its actual execution coordinates.
+    Execution(Box<crate::rules::RuleExecutionError>),
     /// Original failure of the graph-free input operation.
     TripleSource(purrdf_core::TripleReadError),
     /// Data materialization or a shapes operation refused evaluation.
@@ -96,8 +100,8 @@ pub enum SrlError {
     WellFormedness {
         /// The rule, as [`SrlRule::describe`] names it.
         rule: String,
-        /// The violated condition.
-        message: String,
+        /// The original violated condition and variable operands.
+        cause: super::ir::WellFormednessError,
     },
     /// The rule set violates the stratification condition (§4.4.1): "there is no
     /// recursive dependency involving a closed dependency in the dependency graph".
@@ -113,7 +117,12 @@ pub enum SrlError {
     /// term-generating round limit, the generated-term budget, the stored-fact limit or
     /// the join-step limit. Names the limit, the numbers, the knob that raises it and, for
     /// the two term limits, the rules that inferred a new term in the last round.
-    LimitExceeded(crate::rules::RuleLimitExceeded),
+    LimitExceeded(Box<crate::rules::RuleLimitExceeded>),
+    /// Caller cancellation refused a complete inference result.
+    Stopped {
+        /// Original native stopped error, including consumed resources.
+        cause: Box<EvalError>,
+    },
     /// Evaluation failed: a guard error, the fixed term-arena ceiling passed, or an
     /// inferred triple that is not an RDF triple.
     Evaluation {
@@ -122,9 +131,58 @@ pub enum SrlError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for SrlError {
+    purrdf_hash::error_visit! {
+        RuleWellFormedness(cause) => "srl-rule-well-formedness" { "cause" => Cause(cause) },
+        Execution(cause) => "srl-execution" { "cause" => Cause(cause.as_ref()) },
+        TripleSource(cause) => "srl-triple-source" { "cause" => Cause(cause) },
+        Shapes(cause) => "srl-shapes" { "cause" => Cause(cause) },
+        Syntax { document, line, column, message } => "srl-syntax" {
+            "document" => Value(document.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "line" => Unsigned(u128::from(*line)), "column" => Unsigned(u128::from(*column)),
+            "message" => Message(message),
+        },
+        Import { iri, message } => "srl-import" { "iri" => Iri(iri), "message" => Message(message) },
+        UnreachedImports { iris } => "srl-unreached-imports" {
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+        },
+        WellFormedness { rule, cause } => "srl-well-formedness" {
+            "rule" => Text(rule), "cause" => Cause(cause),
+        },
+        Stratification { rule, depends_on, cycle } => "srl-stratification" {
+            "rule" => Text(rule), "depends_on" => Text(depends_on),
+            "cycle" => List(cycle.iter().map(|rule| purrdf_hash::error::ErrorValue::Text(rule))),
+        },
+        LimitExceeded(cause) => "srl-limit-exceeded" { "cause" => Cause(cause.as_ref()) },
+        Stopped { cause } => "srl-stopped" { "cause" => Cause(cause.as_ref()) },
+        Evaluation { message } => "srl-evaluation" { "message" => Message(message) },
+    }
+}
+
 impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuleWellFormedness(cause) => {
+                write!(f, "SPARQL 1.2 RL evaluation failed: {cause}")
+            }
+            Self::Execution(error) => {
+                let mut cause = error.cause.as_ref();
+                while let crate::rules::RulesError::Execution(nested) = cause {
+                    cause = nested.cause.as_ref();
+                }
+                match cause {
+                    crate::rules::RulesError::LimitExceeded(limit) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
+                    }
+                    crate::rules::RulesError::WellFormedness(cause) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {cause}")
+                    }
+                    crate::rules::RulesError::Failed(message) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {message}")
+                    }
+                    cause => cause.fmt(f),
+                }
+            }
             Self::Shapes(error) => error.fmt(f),
             Self::TripleSource(error) => error.fmt(f),
             Self::Syntax {
@@ -156,8 +214,8 @@ impl fmt::Display for SrlError {
                 if iris.len() == 1 { "set" } else { "sets" },
                 if iris.len() == 1 { "it" } else { "them" },
             ),
-            Self::WellFormedness { rule, message } => {
-                write!(f, "SPARQL 1.2 RL {rule} is not well formed: {message}")
+            Self::WellFormedness { rule, cause } => {
+                write!(f, "SPARQL 1.2 RL {rule} is not well formed: {cause}")
             }
             Self::Stratification {
                 rule,
@@ -174,6 +232,7 @@ impl fmt::Display for SrlError {
             Self::LimitExceeded(limit) => {
                 write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
             }
+            Self::Stopped { cause } => cause.fmt(f),
             Self::Evaluation { message } => write!(f, "SPARQL 1.2 RL evaluation failed: {message}"),
         }
     }
@@ -182,9 +241,13 @@ impl fmt::Display for SrlError {
 impl std::error::Error for SrlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Execution(error) => Some(error.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::TripleSource(error) => Some(error),
-            Self::LimitExceeded(error) => Some(error),
+            Self::WellFormedness { cause, .. } => Some(cause),
+            Self::RuleWellFormedness(cause) => Some(cause),
+            Self::LimitExceeded(error) => Some(error.as_ref()),
+            Self::Stopped { cause } => Some(cause.as_ref()),
             _ => None,
         }
     }
@@ -526,6 +589,12 @@ impl Default for InferOptions {
     }
 }
 
+purrdf_lex::constructors! {
+    impl InferOptions {
+        pub(crate) fn from_rules(rules: RuleOptions) -> Self { .. };
+    }
+}
+
 impl InferOptions {
     /// Select the exact evaluation time for every query in this inference.
     #[must_use]
@@ -607,15 +676,34 @@ pub fn infer(
     base: &RdfDataset,
     options: &InferOptions,
 ) -> Result<Inference, SrlError> {
+    infer_until(document, base, options, None)
+}
+
+/// Infer with a borrowed cooperative stop signal, outside the program identity.
+///
+/// Document, source and admission errors retain their precedence. A stopped run
+/// returns its native cause and usage, never a partially inferred graph.
+///
+/// # Errors
+///
+/// The errors of [`infer`], plus [`SrlError::Stopped`].
+pub fn infer_until(
+    document: &RuleSetDocument,
+    base: &RdfDataset,
+    options: &InferOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<Inference, SrlError> {
     document.check_well_formed()?;
     document.stratify()?;
     let projected = crate::engine::project_dataset(base).map_err(SrlError::Shapes)?;
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
-    eval::evaluate(
+    eval::evaluate_with(
         &document.rule_set(),
         &data,
         &Shapes::default(),
         &options.rules,
+        eval::Reexecution::Incremental,
+        stop,
     )
     .map_err(|error| document.evaluation_error(error))
 }
@@ -635,11 +723,25 @@ pub fn infer_triples(
     base: &purrdf_core::TripleRead<'_>,
     options: &InferOptions,
 ) -> Result<Inference<purrdf_core::TripleDataset>, SrlError> {
+    infer_triples_until(document, base, options, None)
+}
+
+/// Graph-free inference with the same cooperative stop and usage contract.
+///
+/// # Errors
+///
+/// Original input failures and the errors of [`infer_until`].
+pub fn infer_triples_until(
+    document: &RuleSetDocument,
+    base: &purrdf_core::TripleRead<'_>,
+    options: &InferOptions,
+    stop: Option<&dyn purrdf_core::StopSignal>,
+) -> Result<Inference<purrdf_core::TripleDataset>, SrlError> {
     use purrdf_core::DatasetView as _;
     base.checked_read(|base| {
         document.check_well_formed()?;
         document.stratify()?;
-        eval::evaluate_triples(&document.rule_set(), base, &options.rules)
+        eval::evaluate_triples(&document.rule_set(), base, &options.rules, stop)
             .map_err(|error| document.evaluation_error(error))
     })
     .map_err(SrlError::TripleSource)?
@@ -649,12 +751,20 @@ impl RuleSetDocument {
     /// Preserve the one public rule-error mapping for both physical carriers.
     fn evaluation_error(&self, error: crate::rules::RulesError) -> SrlError {
         match error {
+            crate::rules::RulesError::Execution(mut error) => {
+                if let crate::rules::RulesError::LimitExceeded(limit) = error.cause.as_mut() {
+                    limit.rename(|index| self.rules.get(index).map(SrlRule::describe));
+                }
+                SrlError::Execution(error)
+            }
             crate::rules::RulesError::Shapes(error) => SrlError::Shapes(error),
             crate::rules::RulesError::LimitExceeded(mut limit) => {
                 limit.rename(|index| self.rules.get(index).map(SrlRule::describe));
                 SrlError::LimitExceeded(limit)
             }
             crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+            crate::rules::RulesError::WellFormedness(cause) => SrlError::RuleWellFormedness(cause),
+            crate::rules::RulesError::Stopped { cause } => SrlError::Stopped { cause },
         }
     }
 
@@ -715,9 +825,9 @@ impl RuleSetDocument {
         for rule in &self.rules {
             rule.rule
                 .check_well_formed()
-                .map_err(|message| SrlError::WellFormedness {
+                .map_err(|cause| SrlError::WellFormedness {
                     rule: rule.describe(),
-                    message,
+                    cause,
                 })?;
         }
         Ok(())
@@ -994,4 +1104,25 @@ fn parse_document(
         versions: parsed.versions,
         location: base.map(ToOwned::to_owned),
     })
+}
+
+impl SrlError {
+    /// Whether an original rule refusal is semantic or operational.
+    #[must_use]
+    pub const fn failure_class(&self) -> crate::error::FailureClass {
+        match self {
+            Self::Execution(error) => error.failure_class(),
+            Self::Shapes(error) => error.failure_class(),
+            Self::TripleSource(_) | Self::LimitExceeded(_) | Self::Stopped { .. } => {
+                crate::error::FailureClass::Processor
+            }
+            Self::Syntax { .. }
+            | Self::Import { .. }
+            | Self::UnreachedImports { .. }
+            | Self::WellFormedness { .. }
+            | Self::RuleWellFormedness(_)
+            | Self::Stratification { .. }
+            | Self::Evaluation { .. } => crate::error::FailureClass::Evaluation,
+        }
+    }
 }

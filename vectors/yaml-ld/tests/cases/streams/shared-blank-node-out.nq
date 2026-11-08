@@ -1,0 +1,2 @@
+_:shared <https://example.org/first> "first" .
+_:shared <https://example.org/second> "second" .

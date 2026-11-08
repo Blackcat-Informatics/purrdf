@@ -1,0 +1,21 @@
+PurRDF recipient notices
+========================
+
+Copyright 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+First-party code: MIT OR Apache-2.0 OR MulanPSL-2.0 (choose any one option).
+The three complete first-party license texts accompany this notice.
+Third-party and derived material retains its own terms, in addition to
+the chosen first-party license. Documentation with CC-BY-4.0 headers
+retains that grant. No trademark rights are granted.
+
+This inventory preserves notices for the source material and resolved
+build inputs described below. Platform alternatives and build inputs
+need not occur in every compiled binary. Test data is source-only.
+
+structured-zstd-native: Apache-2.0
+Scope: modified inherited Zstandard codec and dictionary trainer; original Apache grant retained, fixed product and local modifications documented in the accompanying notice
+Source: https://crates.io/crates/structured-zstd/0.0.49
+Evidence: crates/zstd/PROVENANCE.md
+Evidence: crates/zstd/UPSTREAM-SHA256.json
+Notice: third-party/structured-zstd-native/0-LICENSE
+Notice: third-party/structured-zstd-native/1-NOTICE

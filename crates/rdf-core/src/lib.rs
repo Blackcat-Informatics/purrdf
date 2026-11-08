@@ -61,8 +61,11 @@ pub mod bytes;
 // the malformed-list taxonomy and standard-`rdf:` const set backing the
 // `DatasetView` walker methods.
 pub mod collections;
+pub mod content_alias;
 pub mod content_id;
+pub mod content_prefix;
 pub mod content_store;
+pub use purrdf_lex::visual_fingerprint;
 // The cover law: verbatim byte spans back into the document they cover,
 // byte for byte -- the decode half of every ordered codec (the Markdown
 // slicer first among them), kept in the kernel so two formats cannot
@@ -77,6 +80,7 @@ pub mod describe;
 pub mod diagnostic;
 pub mod evidence;
 pub mod query_scope;
+pub mod source;
 pub mod statistics;
 // The binary64 distance arithmetics every ranked-retrieval surface computes with: the
 // sealed `Arithmetic` contract, the fixed-lane `Exact` law, the target-dependent
@@ -156,6 +160,9 @@ pub mod turtle_render;
 // not `purrdf-core` internals.
 pub mod xsd_regex;
 
+mod annotation_range;
+pub use annotation_range::{AnnotationRangeWorkspace, AnnotationValueBound, AnnotationValueRange};
+
 pub use backend::{
     DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,
     SerializeGraph, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
@@ -169,7 +176,7 @@ pub use collections::{
     SoleObject, build_rdf_list, convertible_list_cells, walk_rdf_list,
 };
 pub use content_id::{Blake3ContentId, ContentIdScheme};
-pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
+pub use content_store::{Bytes, ContentDigest, ContentHasher, ContentStore, ContentStoreError};
 pub use dataset_view::{
     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
     GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,
@@ -182,8 +189,10 @@ pub use diagnostic::{
     RdfDiagnostic, RdfLocation, RdfSeverity,
 };
 pub use fno::{
-    FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
-    to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
+    FnBlank, FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping,
+    FnoAdmissionError, FnoAdmissionReason, FnoCatalog, FnoCatalogInput, FnoConstructionFailure,
+    FnoConstructorRefusal, FnoFieldKind, FnoReadError, FnoReadFailure, FnoReadSourceError,
+    FnoRejectedCatalog, FnoStructureKind, to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
     EvidenceLease, ExpressionErrorEvidence, GovernorEvidence, ResourceDimension, ResourceVector,
@@ -220,23 +229,26 @@ pub use ir::{
     PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot,
     PagedStackSnapshotError, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
     QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, QueryIndexAllocationError,
-    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfEnvelope, RecordKind, RecordValues, ReservedVocabulary, SkolemError, StackPageOrigin,
-    StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead, TripleReadError,
-    TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout,
+    RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, RdfcActiveGroup, RdfcActivePath, RdfcCandidateProgress, RdfcGroupLabels,
+    RdfcGroupObservation, RdfcGroupObservations, RdfcGroupStats, RdfcRefusalObservation,
+    RdfcRootProgress, RdfcSearchContext, RecordKind, RecordValues, ReservedVocabulary, SkolemError,
+    StackPageOrigin, StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef,
+    TermValue, TermVisit, TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead,
+    TripleReadError, TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout,
     ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_paged_seal,
-    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
-    canonicalize_view, canonicalize_with, check_admissible, check_admissible_flat_view,
-    check_admissible_view, dataset_diff, datasets_isomorphic, deskolemize, fold_term,
-    graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_view_with_stop, try_canonicalize_with,
-    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+    canonical_relabel, canonical_relabel_with_mapping, check_admissible,
+    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
+    deskolemize, fold_term, skolemize, try_blank_count_view, try_canonical_blake3_view,
+    try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
-    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    PackView, VerifiedPack, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    verify_pack_bytes,
 };
 pub use lookaside::{
     RdfBlobOrigin, RdfBlobRecord, RdfLookaside, RdfLookasideKind, RdfLookasideResource,
@@ -244,17 +256,18 @@ pub use lookaside::{
     RdfSuppressionRecord,
 };
 pub use loss::{
-    LossEntry, LossLedger, PROJECTION_CODECS, RESEARCH_OBJECT_CODECS, SCHEMA_IMPORT_CODECS,
-    assert_ledger_complete, assert_ledger_sound, check_ledger_complete, check_ledger_sound,
-    gts_to_rdf_loss_ledger, loss_matrix_json, lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger,
-    pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json, rdf_to_csvw_terms_loss_ledger,
-    rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger,
-    rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger,
-    registered_pairs, research_object_to_rdf_loss_ledger, schema_to_shacl_loss_ledger,
+    LossCompletenessError, LossEntry, LossLedger, LossSoundnessError, PROJECTION_CODECS,
+    RESEARCH_OBJECT_CODECS, SCHEMA_IMPORT_CODECS, assert_ledger_complete, assert_ledger_sound,
+    check_ledger_complete, check_ledger_sound, gts_to_rdf_loss_ledger, loss_matrix_json,
+    lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,
+    rdf_gts_loss_matrix_json, rdf_to_csvw_terms_loss_ledger, rdf_to_gts_loss_ledger,
+    rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger,
+    rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger, registered_pairs,
+    research_object_to_rdf_loss_ledger, schema_to_shacl_loss_ledger,
 };
 pub use model::{
-    RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,
-    RdfTriple,
+    LiteralComponentError, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind,
+    RdfTextDirection, RdfTriple,
 };
 pub use named_graph::{NAMED_GRAPH_SAMPLE_LIMIT, distinct_graph_names, named_graph_refusal};
 pub use provenance::{
@@ -298,7 +311,7 @@ pub use purrdf_iri::vocab;
 /// keeps it one law rather than one per producer — `parse_iri` is
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
-pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
+pub use purrdf_iri::{BaseIri, Iri, IriError, IriReadError, parse as parse_iri};
 /// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
 /// as [`vocab`].
 pub use purrdf_xsd::datatype;
@@ -347,7 +360,8 @@ pub mod prelude {
 pub use ir::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, OwnerKey,
     OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
-    ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
+    ScopeBinding, UnionDatasetView, UnionError, UnionSource, UnionTermGuard, UnionTermId,
+    ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };
 
 #[doc(hidden)]
@@ -356,3 +370,8 @@ pub mod purremb_fixture;
 pub mod term_fixture;
 #[doc(hidden)]
 pub mod view_fixture;
+
+pub use ir::canon::{
+    CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+};

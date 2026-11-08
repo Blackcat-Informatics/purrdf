@@ -41,6 +41,84 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
 assert_eq!(nq.as_slice(), b"<https://example.org/cat> <https://example.org/says> \"meow\" .\n");
 ```
 
+## Exact YAML source reconstruction
+
+Semantic YAML-LD translation is described in [JSON-LD contexts and
+compaction](jsonld.md#yaml-ld-semantic-translation). To retain authored bytes,
+use the separate `purrdf::yaml` source carrier. It accepts the native acyclic
+YAML 1.2.2 subset as UTF-8 and retains document boundaries, occurrences, byte
+spans, trivia, comments, quoting, anchors and alias references. Its lexical model can retain complex or repeated
+mapping keys even where YAML-LD Basic semantic processing restricts keys. Source
+analysis does not execute tags, merge keys or JSON-LD expansion.
+
+The umbrella facade's source-cover workflow is:
+
+```rust
+use purrdf::yaml::{Profile, SourceDocument, analyze, decode_stream, project};
+
+let profile = Profile::standard()?;
+let source = SourceDocument {
+    id: "https://example.org/source.yaml",
+    bytes: b"---\nkey: 'value'\n",
+};
+let document = analyze(source, &profile)?;
+let graph = project(&document, &profile)?;
+assert_eq!(decode_stream(&graph, document.id(), &profile)?.as_bytes(), source.bytes);
+# Ok::<(), purrdf::yaml::YamlError>(())
+```
+
+`Profile::standard()` explicitly opts into the shipped vocabulary and bounds;
+analysis never chooses that policy implicitly. CLI callers supply a versioned
+source profile. For example, save this as `source-profile.json`:
+
+```json
+{
+  "version": 1,
+  "name": "authored-yaml",
+  "profile_version": 1,
+  "vocabulary": "https://example.org/yaml-source#",
+  "bounds": {
+    "syntax": { "max_input_bytes": 16777216 }
+  }
+}
+```
+
+The schema `version` is 1; `profile_version` is a nonzero caller version. The
+vocabulary is an explicit absolute namespace ending in `/` or `#`. Optional
+bounds constrain syntax, cover partition, projection and reconstruction phases;
+omitted fields keep their native standard ceilings. These are independent phase
+accounts, not a combined memory ceiling. See the [native source-carrier
+contract](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/yaml/README.md)
+for their scope. This profile describes lexical cover, independently of
+[YAML-LD semantic input controls](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/YAML_INPUT_OPTIONS.md).
+
+Export the metadata and its computed root to distinct named files, then pass
+that root and the same profile back for reconstruction:
+
+```sh
+purrdf yaml-source export --source-iri https://example.org/authored.yaml \
+  --profile source-profile.json --root-output source-root.txt \
+  authored.yaml source-cover.nq
+read -r source_root < source-root.txt
+purrdf yaml-source reconstruct --root "$source_root" \
+  --profile source-profile.json --max-rdf-bytes 67108864 \
+  source-cover.nq restored.yaml
+```
+
+`--max-rdf-bytes` bounds raw RDF acquisition, separately from parser and native
+decode storage. The exported root binds the source IRI, profile identity
+(including its bounds) and SHA-256 digest of the original source bytes. Equal
+bytes under a different source IRI or profile need not have the same root. Presentation changes can
+change source identity while leaving the represented RDF dataset unchanged.
+
+Reconstruction verifies the complete byte cover and digests, reparses the
+reconstructed stream, recomputes its identity and compares the complete selected
+RDF reprojection before returning bytes. Missing, conflicting, forged or extra
+selected metadata is refused. These checks apply to the selected root and its
+metadata; independent carriers can coexist in a dataset. The cover metadata is
+the source-preservation product; an ordinary semantic RDF conversion does not
+recreate it.
+
 ## Open Knowledge Format bundles
 
 The native OKF codec maps caller-profiled RDF 1.2 datasets to agent-facing
@@ -59,9 +137,9 @@ pinpointed explicitly when writing.
 
 ## Byte determinism
 
-Every serializer is **byte-deterministic**: the same dataset always produces
-the same bytes, on every platform and in every language binding. This is a
-hard workspace invariant, not a best effort — no iteration-order, time, or RNG
+Every serializer is **byte-deterministic**: a fixed dataset, format, context,
+base and options produce the same bytes on every platform and in every language
+binding. This is a hard workspace invariant, not a best effort — no iteration-order, time, or RNG
 dependence is allowed in any output path (hashers are the fixed-key `FixedHasher`
 for exactly this reason), and golden-file tests pin the emitted bytes.
 
@@ -95,7 +173,8 @@ boundary ([Result Formats](../sparql/results.md)) and the RDF↔GTS boundary.
 Alongside the text codecs above, `purrdf-core` ships a **binary** codec for a
 different job: a read-only, query-the-compressed-form encoding of a whole
 dataset for large-scale reference bundles, not an interchange format with a
-media type. `PackBuilder::build_bytes(&dataset)` writes a self-contained,
+media type. `PackBuilder::build_bytes(&dataset, &mut control)` uses the caller's
+explicit canonical search policy and records its receipts. It writes a self-contained,
 byte-deterministic pack — a value dictionary, graph-partitioned succinct
 bitmap-triples, and RDF 1.2 side-tables (reifier bindings, statement
 annotations) — into one `Vec<u8>`. `PackView::from_bytes(&[u8])` opens it
@@ -117,12 +196,15 @@ for the full contract.
 
 ## Deterministic embedding companions
 
-`.purremb` is the mmap-native companion for embedding projections over one
-exact `.purrpck`. It does not modify the pack or RDF canonical identity. Its
-sorted section directory binds finite dense `f32` or `f64` matrices to the
-source pack's exact SHA-256, an independently verified RDFC digest, complete
+`.purremb` is a companion for embedding projections over one exact `.purrpck`
+or a Columnar schema version 1 dataset. Pack attachments bind the pack's exact
+SHA-256; Columnar attachments bind the canonical manifest of all five actual
+files. Neither changes the source or its RDF canonical identity. The sorted
+section directory binds finite dense `f32` or `f64` matrices to this exact
+source identity, an independently verified RDFC digest, complete
 model and processing contracts, stable target sets, and per-section plus
-whole-artifact integrity evidence. `EmbeddingBuilder` accepts unordered rows;
+whole-artifact integrity evidence. The `purrdf::embedding` facade owns source
+certification and construction. `EmbeddingBuilder` accepts unordered rows;
 `EmbeddingStreamWriter` accepts canonical rows with bounded matrix working memory;
 both produce the same canonical bytes.
 
@@ -132,7 +214,7 @@ records retain content digests, logical identities, byte and Unicode-scalar
 coordinates, chunking contracts, and family-scoped token spans. RDF data uses
 one RDF 1.2 model for datasets, default and named graphs, statements, reifier
 bindings, annotations, directional literals, blank nodes, and recursive triple
-terms. Source-local pack ordinals are verified lookup hints, never identity.
+terms. Source-local ordinals are verified lookup hints, never identity.
 
 Matryoshka families store only their widest dense matrix. Each declared leading
 prefix is a distinct `VectorSpaceId` and `ProjectionId`, so a coarse prefix
@@ -142,8 +224,11 @@ demand. Approximate indexes remain opaque, rebuildable derived artifacts bound
 to one exact prefix projection. They never replace the authoritative matrix.
 
 Construction follows one evidence path. First obtain a
-`CertifiedPurrpckSource` by building or independently verifying the exact source
-pack; arbitrary digest claims cannot construct this type. For a corpus, derive
+`CertifiedEmbeddingSource` by building or independently verifying an exact source
+pack, or by strictly reading all five actual Columnar files through
+`EmbeddingSource::Columnar`. The Columnar attachment binds the canonical
+exact-file manifest and independently certifies the reconstructed RDF dataset;
+arbitrary digest claims cannot construct this type. For a corpus, derive
 `CorpusTarget`, `DocumentTarget::from_content`, and
 `TextChunkTarget::from_document` records, add the required hierarchy relations,
 and add a `TokenSpan` for every document or chunk placed in a family matrix. For
@@ -160,17 +245,18 @@ Matryoshka contract lists its allowed leading dimensions, while its
 inputs.
 
 Large collections shard at artifact boundaries: each `.purremb` names its own
-exact source pack and local target set, while equal family contracts retain the
+exact source attachment and local target set, while equal family contracts retain the
 same `FamilyId` and `VectorSpaceId`. Corpus manifests and
 `ExternalBinding::from_bytes` bind external text or other exact artifacts;
-`ExternalBinding::from_purrpck` adds independently certified RDF evidence.
+`bind_external_pack` adds independently certified RDF evidence through the
+facade. `ExternalBinding::from_verified_pack` accepts the native opaque pack proof.
 Bindings carry caller-supplied roles and media types. PurRDF does not invent a
 policy or ontology vocabulary for them.
 
 `EmbeddingView::from_bytes` borrows any stable byte slice, whether heap-owned,
 memory-mapped by the caller, or WebAssembly linear memory. Structural opening,
-full artifact verification, exact source verification, and certified source
-verification are explicit states of evidence rather than access gates. Callers
+full artifact verification, and full source attachment verification produce
+explicit evidence rather than access gates. Callers
 that mmap files must keep the backing bytes immutable while a view or resident
 verification certificate exists.
 

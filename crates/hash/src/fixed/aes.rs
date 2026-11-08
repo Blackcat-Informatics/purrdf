@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! AES table hashing on builds targeting x86-64 or little-endian AArch64 AES.
+//! AES table hashing on builds targeting x86-64 or little-endian 64-bit Arm AES.
 //!
 //! An integer enters a 128-bit accumulator through one AES round; finalization
 //! takes two more rounds before truncating to 64 bits. Short byte strings pack
@@ -58,10 +58,14 @@ fn quad(bytes: &[u8], at: usize) -> [Block; 4] {
 // Keep the long-slice body out of the short string Hash implementation.
 // Inlining it makes the standard library string wrapper exceed its inline budget.
 #[inline(never)]
-pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
+pub(crate) fn try_compress_long<E>(
+    bytes: &[u8],
+    progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+) -> Result<(u64, u64), E> {
     let len = bytes.len();
     debug_assert!(len > 16);
     if len <= 32 {
+        progress(32)?;
         // The common IRI case needs only the first and last 16 bytes. Two
         // rounds per lane diffuse every input byte before the lanes meet;
         // the caller's folded multiply mixes the two output words again.
@@ -75,11 +79,12 @@ pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
             .xor(block(bytes, len - 16))
             .round(Block::from_words(AES_LANE_KEY[1].0, AES_LANE_KEY[1].1))
             .round(Block::from_words(AES_FINAL_KEY[1].0, AES_FINAL_KEY[1].1));
-        return first.xor(last).words();
+        return Ok(first.xor(last).words());
     }
     let keys = AES_LANE_KEY.map(|(low, high)| Block::from_words(low, high));
     let mut lanes = AES_LANE_INIT.map(|(low, high)| Block::from_words(low, high));
     if len <= 64 {
+        progress(64)?;
         step(
             &mut lanes,
             &keys,
@@ -93,14 +98,16 @@ pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
     } else {
         let steps = (len - 1) / 64;
         for index in 0..steps {
+            progress(64)?;
             step(&mut lanes, &keys, quad(bytes, 64 * index));
         }
+        progress(64)?;
         step(&mut lanes, &keys, quad(bytes, len - 64));
     }
     let finals = AES_FINAL_KEY.map(|(low, high)| Block::from_words(low, high));
     let [w0, w1, w2, w3] = [0, 1, 2, 3].map(|lane| lanes[lane].round(finals[lane]));
     let [m0, m1] = AES_MERGE_KEY.map(|(low, high)| Block::from_words(low, high));
-    w0.xor(w1).round(m0).xor(w2.xor(w3).round(m1)).words()
+    Ok(w0.xor(w1).round(m0).xor(w2.xor(w3).round(m1)).words())
 }
 
 /// Full-width AES state, truncated only after two final diffusion rounds.
@@ -142,7 +149,19 @@ impl Engine {
     #[allow(clippy::inline_always)] // Preserve register state across the public Hasher wrapper.
     #[inline(always)]
     pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        super::infallible(self.try_bytes(bytes, &mut super::no_progress));
+    }
+
+    #[allow(clippy::inline_always)] // Same native byte body for resident and fallible wrappers.
+    #[inline(always)]
+    pub(crate) fn try_bytes<E>(
+        &mut self,
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<(), E> {
+        progress(0)?;
         if (17..=32).contains(&bytes.len()) {
+            progress(32)?;
             self.state = self
                 .state
                 .xor(Block::from_words(
@@ -153,15 +172,17 @@ impl Engine {
                 .round(Block::from_words(AES_LANE_KEY[0].0, AES_LANE_KEY[0].1))
                 .xor(block(bytes, bytes.len() - 16))
                 .round(Block::from_words(AES_LANE_KEY[1].0, AES_LANE_KEY[1].1));
-            return;
+            return Ok(());
         }
         let (low, high) = if bytes.len() <= 16 {
+            progress(bytes.len() as u64)?;
             super::portable::pack_short(bytes)
         } else {
-            compress_long(bytes)
+            try_compress_long(bytes, progress)?
         };
         let domain = (bytes.len() as u64).wrapping_mul(super::keys::LEN_M);
         self.absorb_integer(low ^ domain, high);
+        Ok(())
     }
 
     #[inline]
@@ -177,17 +198,22 @@ impl Engine {
     }
 
     #[inline]
-    pub(crate) fn terminal(tag: u8, bytes: &[u8]) -> u64 {
+    pub(crate) fn try_terminal<E>(
+        tag: u8,
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<u64, E> {
         if (17..=32).contains(&bytes.len()) {
+            progress(0)?;
             let mut hasher = Self::new();
             hasher.state = hasher.state.xor(Block::from_words(
                 u64::from(tag).wrapping_mul(super::keys::K_A),
                 0,
             ));
-            hasher.bytes(bytes);
-            hasher.finish()
+            hasher.try_bytes(bytes, progress)?;
+            Ok(hasher.finish())
         } else {
-            super::Engine::<super::Aes>::terminal(tag, bytes)
+            super::Engine::<super::Aes>::try_terminal(tag, bytes, progress)
         }
     }
 }

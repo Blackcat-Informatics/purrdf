@@ -138,7 +138,7 @@ fn duplicate_nullable_and_absent_drivers_keep_their_exact_join_bags() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED.with_max_intermediate_cells(128),
                 )
                 .expect("native bag outcome");
@@ -210,7 +210,7 @@ fn computed_existing_missing_and_quoted_slots_use_dataset_identity_before_scanni
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED.with_max_intermediate_cells(128),
             )
             .expect("term identity outcome");
@@ -347,7 +347,7 @@ fn retained_optional_preparation_preserves_masks_and_every_governor_cut() {
                 .query_governed(
                     &dataset,
                     request,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 )
                 .expect("measure retained OPTIONAL");
@@ -378,7 +378,7 @@ fn retained_optional_preparation_preserves_masks_and_every_governor_cut() {
                 );
             for governors in allowances {
                 let outcome = engine
-                    .query_governed(&dataset, request, QueryOptions::EMPTY, &governors)
+                    .query_governed(&dataset, request, &QueryOptions::EMPTY, &governors)
                     .expect("each cut returns a typed outcome");
                 let actual = if let Some(exhausted) = outcome.exhausted() {
                     let PartialAnswers::Certain(partial) = &exhausted.partial else {

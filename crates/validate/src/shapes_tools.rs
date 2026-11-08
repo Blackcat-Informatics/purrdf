@@ -46,19 +46,20 @@
 //! over [`purrdf_shapes::RuleOptions::with_max_stored_facts`] and
 //! [`purrdf_shapes::RuleOptions::with_max_join_steps`]: the facts the evaluation store may
 //! hold — the data graph, a rule set's data and every inferred triple — and the candidate
-//! solutions the rule bodies may enumerate. `None` keeps the target's default — 4,194,304
-//! facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`. A run
-//! past either fails naming the limit, the numbers and the knob that raises it.
+//! solutions the rule bodies may enumerate. `None` imposes no logical capacity
+//! ceiling on any target. Caller-selected finite limits refuse with exact
+//! observations and the calling host's control names.
 
 use purrdf_shapes::free_expression::{self, FreeExpression};
 use purrdf_shapes::lint::{self, LintReport};
 use purrdf_shapes::srl;
 use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_document};
 use purrdf_shapes::{LimitKnobs, ShapesError, ShapesImports, engine};
-use purrdf_shapes::{RuleSource, run_rules};
+use purrdf_shapes::{RuleOptions, RuleSource, run_rules_with_options};
 
 use crate::ShapesImportList;
 use crate::expr_selector::ExprSelector;
+use crate::query::CoordinateInputs;
 use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 
 /// One rules run across the host boundary: the data graph and exactly ONE rule source —
@@ -98,10 +99,10 @@ pub struct RulesRequest<'a> {
     /// The generated-term budget, or `None` for the engine default. See the
     /// [module docs](self).
     pub max_generated_terms: Option<u64>,
-    /// The stored-fact limit, or `None` for the target's default. See the
+    /// The stored-fact limit, or `None` for no logical ceiling. See the
     /// [module docs](self).
     pub max_stored_facts: Option<u64>,
-    /// The join-step limit, or `None` for the target's default. See the
+    /// The join-step limit, or `None` for no logical ceiling. See the
     /// [module docs](self).
     pub max_join_steps: Option<u64>,
     /// The host calling, whose names for the limits' knobs a refusal gives.
@@ -185,6 +186,8 @@ pub use purrdf_shapes::RuleLimits;
 /// What a rules run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulesOutcome {
+    /// Original supplied rule coordinates and the executed query coordinate record.
+    pub coordinates: purrdf_shapes::RuleCoordinates,
     /// The inference graph — the inferred triples only, never the base graph — as
     /// N-Triples 1.2 in canonical order
     /// ([`Inference::inferred_ntriples`](purrdf_shapes::srl::Inference::inferred_ntriples)).
@@ -219,7 +222,7 @@ pub struct RulesOutcome {
 /// passed; a SPARQL 1.2 RL `IMPORTS` the import table does not supply, or a table
 /// entry its import closure never names.
 pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcome, ShapesError> {
-    apply_rules_with(request, run_rules)
+    apply_rules_with(request, CoordinateInputs::default(), run_rules_with_options)
 }
 
 /// [`apply_rules_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
@@ -238,22 +241,33 @@ pub fn apply_rules_to_ntriples_with_xpath_regex(
     request: &RulesRequest<'_>,
     xpath_regex: Option<Profile>,
 ) -> Result<RulesOutcome, XPathValidationError> {
-    let Some(profile) = xpath_regex else {
-        return Ok(apply_rules_to_ntriples(request)?);
-    };
-    apply_rules_with(request, |source, data, limits, knobs| {
-        purrdf_shapes::xpath::run_rules(source, data, limits, knobs, profile, Limits::new())
+    apply_rules_to_ntriples_with_coordinates(request, xpath_regex, CoordinateInputs::default())
+}
+
+/// Execute with owned exact coordinates and an optional dated XPath law.
+/// Request limits and the calling host's knob names remain authoritative.
+///
+/// # Errors
+/// The same parse, import, execution and pattern refusals as
+/// [`apply_rules_to_ntriples_with_xpath_regex`].
+pub fn apply_rules_to_ntriples_with_coordinates(
+    request: &RulesRequest<'_>,
+    xpath_regex: Option<Profile>,
+    coordinates: CoordinateInputs,
+) -> Result<RulesOutcome, XPathValidationError> {
+    apply_rules_with(request, coordinates, |source, data, options| {
+        run_configured_rules(source, data, options, xpath_regex)
     })
 }
 
 /// The one rules body under either law: `run` is the rules dispatch it runs.
 fn apply_rules_with<E: From<ShapesError>>(
     request: &RulesRequest<'_>,
+    coordinates: CoordinateInputs,
     run: impl FnOnce(
         RuleSource<'_>,
         &purrdf_core::RdfDataset,
-        &RuleLimits,
-        LimitKnobs,
+        &RuleOptions,
     ) -> Result<srl::Inference, E>,
 ) -> Result<RulesOutcome, E> {
     let (data, rules) = rule_inputs(request)?;
@@ -263,22 +277,42 @@ fn apply_rules_with<E: From<ShapesError>>(
         max_stored_facts: request.max_stored_facts,
         max_join_steps: request.max_join_steps,
     };
-    let knobs = request.host.limit_knobs();
+    let options = coordinates.into_rule_options(&limits, request.host.limit_knobs());
     let (inference, diagnostics) = match &rules {
         RuleInput::Shapes(shapes) => (
-            run(RuleSource::Shapes(shapes), data.as_ref(), &limits, knobs)?,
+            run(RuleSource::Shapes(shapes), data.as_ref(), &options)?,
             shapes.mandatory_diagnostics().to_vec(),
         ),
         RuleInput::Srl(document) => (
-            run(RuleSource::Srl(document), data.as_ref(), &limits, knobs)?,
+            run(RuleSource::Srl(document), data.as_ref(), &options)?,
             Vec::new(),
         ),
     };
     Ok(RulesOutcome {
+        coordinates: inference.coordinates().clone(),
         inferred_ntriples: inference.inferred_ntriples(),
         proof: request.explain.then(|| inference.proof_text()),
         diagnostics,
     })
+}
+
+/// The configured rule dispatch shared by entailment and inference boundaries.
+pub(crate) fn run_configured_rules(
+    source: RuleSource<'_>,
+    data: &purrdf_core::RdfDataset,
+    options: &RuleOptions,
+    xpath_regex: Option<Profile>,
+) -> Result<srl::Inference, XPathValidationError> {
+    match xpath_regex {
+        Some(profile) => purrdf_shapes::xpath::run_rules_with_options(
+            source,
+            data,
+            options,
+            profile,
+            Limits::new(),
+        ),
+        None => Ok(run_rules_with_options(source, data, options)?),
+    }
 }
 
 /// The one rule source a [`RulesRequest`] names, parsed and checked.
@@ -292,7 +326,7 @@ enum RuleInput {
 fn rule_inputs(
     request: &RulesRequest<'_>,
 ) -> Result<(std::sync::Arc<purrdf_core::RdfDataset>, RuleInput), ShapesError> {
-    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(ShapesError::Text)?;
     let rules = match (request.shapes_ttl, request.srl) {
         (Some(shapes_ttl), None) => RuleInput::Shapes(Box::new(engine::parse_shapes_with_graph(
             shapes_ttl,
@@ -488,20 +522,26 @@ impl NodeExprInputs {
     fn parse(request: &NodeExprRequest<'_>) -> Result<Self, ShapesError> {
         let imports = ShapesImports::from_turtle(request.imports)?;
         let document = parse_turtle_document(request.shapes_ttl, request.shapes_base)
-            .map_err(|errors| errors.join("\n"))?;
+            .map_err(ShapesError::Text)?;
         let imports = read_under(imports, request.shapes_base, document.base.as_deref());
-        let data =
-            parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+        let data = parse_ntriples_to_dataset(request.data_nt).map_err(ShapesError::Text)?;
         let selector = request.expr.parse()?;
-        let focus =
-            free_expression::parse_term(request.focus).map_err(|e| format!("focus: {e}"))?;
+        let focus = free_expression::parse_term(request.focus).map_err(|cause| {
+            crate::ExprSelectorError::Term {
+                role: "focus".to_owned(),
+                cause,
+            }
+        })?;
         let scope = request
             .scope
             .iter()
             .map(|(name, term)| {
                 free_expression::parse_term(term)
                     .map(|term| ((*name).to_owned(), term))
-                    .map_err(|e| format!("scope {name}: {e}"))
+                    .map_err(|cause| crate::ExprSelectorError::Term {
+                        role: format!("scope {name}"),
+                        cause,
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let selected = selector.select(
@@ -520,17 +560,7 @@ impl NodeExprInputs {
     }
 }
 
-/// Split one `NAME=TERM` scope binding at its first `=` — the spelling the CLI's
-/// `--scope` and the WASM and C-ABI scope arrays share.
-///
-/// # Errors
-///
-/// A binding with no `=`.
-pub fn parse_scope_binding(binding: &str) -> Result<(&str, &str), String> {
-    binding
-        .split_once('=')
-        .ok_or_else(|| format!("scope binding `{binding}` is not NAME=TERM: it has no `=`"))
-}
+pub use purrdf_shapes::scope_binding::{ScopeBindingError, parse_scope_binding};
 
 /// Certify a Turtle shapes graph — its whole `owl:imports` closure, resolved against
 /// `imports`: the loader's verdict, its `shacl-shacl.ttl` results and its function-call
@@ -569,8 +599,7 @@ pub fn lint_shapes_ttl_with_shapes_graph(
         .map(|raw| engine::resolve_shapes_graph_iri(raw, shapes_base))
         .transpose()?;
     let table = ShapesImports::from_turtle(imports)?;
-    let document =
-        parse_turtle_document(shapes_ttl, shapes_base).map_err(|errors| errors.join("\n"))?;
+    let document = parse_turtle_document(shapes_ttl, shapes_base).map_err(ShapesError::Text)?;
     let table = read_under(table, shapes_base, document.base.as_deref());
     lint::lint(
         &document.dataset,

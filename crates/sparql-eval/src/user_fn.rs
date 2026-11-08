@@ -53,6 +53,7 @@
 //! given `Ok(None)` produces.
 
 use purrdf_hash::Domain;
+use sha2::Digest as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -61,10 +62,10 @@ use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 use crate::DetHashMap;
 use crate::error::EvalError;
 use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
-use crate::eval::{
-    EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
-};
-use crate::registry_id::{RegistryId, append_framed_part};
+#[cfg(test)]
+use crate::eval::evaluate_query_evaluated;
+use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, materialize_solutions};
+use crate::registry_id::{RegistryId, digest_framed_part as append_framed_part};
 use crate::witness::RelationWitness;
 use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
@@ -415,7 +416,7 @@ impl UserFunctionAdmission for DeferredFunctionAdmission {
 ///
 /// Unlike a [`UserFunction`]'s SPARQL body, this takes **no [`EvalCtx`]** â it
 /// therefore cannot re-enter the evaluator, so there is no recursion/re-entrancy
-/// boundary to bound (the SPARQL-bodied path's `MAX_UDF_DEPTH` guard does not
+/// boundary to bound (the SPARQL-bodied path's logical depth policy does not
 /// apply here). When a function is declared non-[`Volatile`](Volatility::Volatile)
 /// it **must** be deterministic within a query: the fork-join parallel-evaluation
 /// gate relies on that declaration alone to decide whether the call may run across
@@ -583,14 +584,15 @@ enum NativeBody {
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
 /// the calling query is running over, and the current user-function call depth.
 ///
-/// This is the whole of the difference between [`ExprFnBody`] and [`NativeFnBody`].
+/// [`ExprFnBody`] receives the query context its dataset-aware computation needs.
 /// A native closure sees only values and therefore cannot read a graph or re-enter
 /// an evaluator; an expression-bodied one is defined by a SHACL node expression,
 /// whose evaluation is a function OF a graph (`evalExpr(expr, focusGraph, focusNode,
-/// scope)`), so the graph has to travel with the call.
-#[derive(Debug)]
+/// scope)`), so the graph has to travel with the call. A bound registry may also
+/// supply shared application request state through [`Self::invocation_context`].
 #[non_exhaustive]
 pub struct ExprFnCall<'a> {
+    invocation_context: Option<&'a (dyn core::any::Any + Send + Sync)>,
     /// Where a body that re-enters the evaluator deposits what the relations it
     /// invoked attested — see [`ExprFnCall::record_relations`].
     ///
@@ -628,6 +630,18 @@ pub struct ExprFnCall<'a> {
     pub depth: u32,
 }
 
+purrdf_hash::debug_non_exhaustive!(ExprFnCall<'_> { iri, args, focus_graph, depth });
+
+impl ExprFnCall<'_> {
+    /// Borrow the caller's application context, when its bound registry supplied
+    /// one of this type. Standalone queries supply no application context.
+    #[must_use]
+    pub fn invocation_context<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.invocation_context
+            .and_then(<dyn core::any::Any + Send + Sync>::downcast_ref)
+    }
+}
+
 /// A dataset-aware (expression-bodied) user function body: a closure over the
 /// evaluated argument values AND the calling query's focus graph (see
 /// [`ExprFnCall`]).
@@ -640,7 +654,7 @@ pub struct ExprFnCall<'a> {
 /// exits â never a value it did not compute.
 ///
 /// The two body types differ ONLY in what they are handed ([`ExprFnCall`] adds the
-/// focus graph and the call depth; [`NativeFnBody`] sees values alone and carries a
+/// focus graph, call depth and application invocation context; [`NativeFnBody`] sees values alone and carries a
 /// [`Volatility`] the fork-join gate reads). Their failure channels are identical, so
 /// neither is the "lossy" one and a host cannot pick the wrong seam and quietly lose
 /// per-solution error semantics.
@@ -799,11 +813,6 @@ impl Arity {
     /// diagnostic words would collide) â this encoding exists so that can never
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
-    pub(crate) fn stable_encoding(self) -> String {
-        self.stable_display().to_string()
-    }
-
-    /// The stable identity encoding, borrowing no allocated rendering.
     pub(crate) fn stable_display(self) -> impl core::fmt::Display {
         struct Encoding(Arity);
         impl core::fmt::Display for Encoding {
@@ -821,7 +830,7 @@ impl Arity {
 
 impl core::fmt::Display for Arity {
     /// Human-facing wording only â NOT part of any stable fingerprint or cache-key
-    /// encoding. See `Arity::stable_encoding`, which
+    /// encoding. See `Arity::stable_display`, which
     /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
     /// IS load-bearing; this impl is free to change wording at any time.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -979,6 +988,11 @@ impl core::fmt::Debug for UserFunctionRegistry {
 }
 
 impl UserFunctionRegistry {
+    /// Whether executable bodies include opaque host closures.
+    pub(crate) fn has_opaque_bodies(&self) -> bool {
+        !self.native.is_empty() || !self.exprs.is_empty()
+    }
+
     /// The canonical empty registry â the non-optional "no scalar functions
     /// registered" value every registry-carrying seam
     /// ([`crate::engine::QueryOptions::functions`],
@@ -1288,7 +1302,13 @@ impl UserFunctionRegistry {
 /// Only the SPARQL-bodied table is bound. Native and expression-bodied functions
 /// are Rust closures with no SPARQL body and nothing to parse, so they pass through
 /// untouched â they are reachable through this type exactly as before.
+#[derive(Clone)]
 pub struct BoundFunctionRegistry {
+    data: Option<Arc<BoundFunctionData>>,
+    invocation_context: Option<InvocationContext>,
+}
+
+struct BoundFunctionData {
     /// The declarations: parameters, arity, return constraints, body text, and the
     /// native and expression tables verbatim.
     inner: UserFunctionRegistry,
@@ -1299,19 +1319,37 @@ pub struct BoundFunctionRegistry {
     env: RegistryId,
 }
 
+#[derive(Clone)]
+enum InvocationContext {
+    Strong(Arc<dyn core::any::Any + Send + Sync>),
+    Weak(std::sync::Weak<dyn core::any::Any + Send + Sync>),
+}
+
+impl InvocationContext {
+    fn retain(&self) -> Result<Arc<dyn core::any::Any + Send + Sync>, EvalError> {
+        match self {
+            Self::Strong(context) => Ok(Arc::clone(context)),
+            Self::Weak(context) => context.upgrade().ok_or_else(|| {
+                EvalError::function("the expression function invocation context was released")
+            }),
+        }
+    }
+}
+
 impl core::fmt::Debug for BoundFunctionRegistry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // The prepared bodies are listed by IRI (sorted, for deterministic output)
         // rather than by algebra: a `PreparedQuery` renders to pages of pattern tree
         // that tell a reader nothing about which functions are bound, which is the
         // question this impl exists to answer.
-        let mut bound: Vec<&str> = self.bodies.keys().map(String::as_str).collect();
+        let mut bound: Vec<&str> = self.data().bodies.keys().map(String::as_str).collect();
         bound.sort_unstable();
         f.debug_struct("BoundFunctionRegistry")
-            .field("declarations", &self.inner)
+            .field("declarations", &self.data().inner)
             .field("bound_bodies", &bound)
-            .field("env", &self.env)
-            .finish()
+            .field("env", &self.data().env)
+            .field("invocation_context", &self.invocation_context.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1326,10 +1364,18 @@ impl BoundFunctionRegistry {
     /// universally compatible, because a registry with no bodies cannot have bound
     /// any of them to the wrong environment.
     pub const EMPTY: Self = Self {
-        inner: UserFunctionRegistry::EMPTY,
-        bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
-        env: RegistryId::EMPTY,
+        invocation_context: None,
+        data: None,
     };
+
+    fn data(&self) -> &BoundFunctionData {
+        static EMPTY: BoundFunctionData = BoundFunctionData {
+            inner: UserFunctionRegistry::EMPTY,
+            bodies: DetHashMap::with_hasher(crate::DetHasher::new()),
+            env: RegistryId::EMPTY,
+        };
+        self.data.as_deref().unwrap_or(&EMPTY)
+    }
 
     /// Assemble a bound registry from declarations and their prepared bodies â the
     /// tail of [`crate::engine::NativeSparqlEngine::bind_functions`], which is the
@@ -1339,7 +1385,44 @@ impl BoundFunctionRegistry {
         bodies: DetHashMap<String, Arc<crate::engine::PreparedQuery>>,
         env: RegistryId,
     ) -> Self {
-        Self { inner, bodies, env }
+        if inner.is_empty() && bodies.is_empty() {
+            return Self::EMPTY;
+        }
+        Self {
+            data: Some(Arc::new(BoundFunctionData { inner, bodies, env })),
+            invocation_context: None,
+        }
+    }
+
+    /// Build shared state for expression-function invocations in this request.
+    /// The builder receives a registry for nested queries sharing these exact
+    /// declarations and prepared bodies, with a weak link to the new context.
+    /// Retaining that registry in the context therefore creates no ownership cycle.
+    /// Cloning or moving the returned registry retains the complete request.
+    /// Context is read at invocation time; each query still supplies its focus graph.
+    #[must_use]
+    pub fn with_invocation_context<T: core::any::Any + Send + Sync>(
+        mut self,
+        build: impl FnOnce(Self) -> T,
+    ) -> Self {
+        let context = Arc::new_cyclic(|context: &std::sync::Weak<T>| {
+            let mut nested = self.clone();
+            nested.invocation_context = Some(InvocationContext::Weak(context.clone()));
+            build(nested)
+        });
+        self.invocation_context = Some(InvocationContext::Strong(context));
+        self
+    }
+
+    /// Borrow the application context owned by this registry. Nested registries
+    /// borrow their context weakly and expose it only during an invocation;
+    /// they cannot be reused as independent request owners through this method.
+    #[must_use]
+    pub fn owned_invocation_context<T: core::any::Any + Send + Sync>(&self) -> Option<&T> {
+        match &self.invocation_context {
+            Some(InvocationContext::Strong(context)) => context.downcast_ref(),
+            Some(InvocationContext::Weak(_)) | None => None,
+        }
     }
 
     /// Resolve a call-position IRI to its declaration and its bound body.
@@ -1352,47 +1435,47 @@ impl BoundFunctionRegistry {
         &self,
         iri: &str,
     ) -> Option<(&UserFunction, &Arc<crate::engine::PreparedQuery>)> {
-        let func = self.inner.resolve(iri)?;
-        let body = self.bodies.get(iri)?;
+        let func = self.data().inner.resolve(iri)?;
+        let body = self.data().bodies.get(iri)?;
         Some((func, body))
     }
 
     /// Resolve a call-position IRI to its declared native function, if any.
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
-        self.inner.resolve_native(iri)
+        self.data().inner.resolve_native(iri)
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
     /// (expression-bodied) function, if any.
     #[must_use]
     pub fn resolve_expr(&self, iri: &str) -> Option<&ExprFunction> {
-        self.inner.resolve_expr(iri)
+        self.data().inner.resolve_expr(iri)
     }
 
     /// Whether a registered expression-bodied function requires an owned focus graph.
     #[must_use]
     pub fn requires_focus_graph(&self) -> bool {
-        self.inner.requires_focus_graph()
+        self.data().inner.requires_focus_graph()
     }
 
     /// Whether the registry holds no functions of any kind.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.data().inner.is_empty()
     }
 
     /// The number of declared functions across all three kinds.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.data().inner.len()
     }
 
     /// The declarations this was bound from, for a caller that needs the
     /// unbound view (a content fingerprint, a product writer).
     #[must_use]
     pub fn declarations(&self) -> &UserFunctionRegistry {
-        &self.inner
+        &self.data().inner
     }
 
     /// The identity of the environment every body here was bound against.
@@ -1401,7 +1484,7 @@ impl BoundFunctionRegistry {
     /// [`Self::EMPTY`].
     #[must_use]
     pub fn env_id(&self) -> RegistryId {
-        self.env
+        self.data().env
     }
 
     /// Bind `registry` against the canonical empty environment, through the
@@ -1431,7 +1514,7 @@ impl BoundFunctionRegistry {
     /// distinction [`RegistryId`] exists to draw.
     #[must_use]
     pub fn admits(&self, env: &crate::extension_env::ExtensionEnv<'_>) -> bool {
-        self.bodies.is_empty() || self.env == env.id()
+        self.data().bodies.is_empty() || self.data().env == env.id()
     }
 }
 
@@ -1547,7 +1630,7 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-re
 /// form available for algebra is the serializer's rendering, and making that
 /// load-bearing would turn a cosmetic wording change in an unrelated module into a
 /// silent invalidation of every persisted artifact (the trap
-/// `Arity::stable_encoding` exists to avoid for `Display`). That objection was
+/// `Arity::stable_display` exists to avoid for `Display`). That objection was
 /// sound, and it is answered rather than overruled: [`UserFunction::body`] is now
 /// the declaration's own SPARQL **text**, which no serializer can reword.
 ///
@@ -1572,21 +1655,34 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-re
 ///
 /// # Errors
 ///
-/// Returns [`Result`] for uniformity with the two sibling `content_fingerprint`
-/// functions, whose `describe()` calls can fail when a host's declaration methods
-/// panic. This registry reads plain struct fields and has no such failure mode, so
-/// the `Err` arm is unreachable today; the shape is kept so a caller folding all
-/// three digests writes one error path rather than three.
+/// Returns the original storage refusal if ordering the borrowed declarations or
+/// rendering an arity cannot be admitted. Declaration bytes stream into SHA-256.
 pub fn content_fingerprint(
     functions: &UserFunctionRegistry,
     part: FnPopulation,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
+    let capability = WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(
+        functions,
+        part,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+}
+
+/// Compute the same declaration identity through the original request account.
+pub(crate) fn content_fingerprint_with_memory(
+    functions: &UserFunctionRegistry,
+    part: FnPopulation,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut bytes = sha2::Sha256::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
     append_framed_part(&mut bytes, "population", part.label().as_bytes());
     match part {
         FnPopulation::Declared => {
-            for (iri, func) in iri_sorted(&functions.fns) {
+            for &(iri, func) in &iri_sorted(&functions.fns, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"sparql-bodied");
                 append_framed_part(
@@ -1614,22 +1710,39 @@ pub fn content_fingerprint(
                 append_framed_part(&mut bytes, "body", func.body.as_bytes());
                 append_constraint(&mut bytes, "return", &func.return_constraint);
             }
-            for (iri, func) in iri_sorted(&functions.exprs) {
+            for &(iri, func) in &iri_sorted(&functions.exprs, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"expression-bodied");
-                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+                append_arity(&mut bytes, func.arity, memory)?;
             }
         }
         FnPopulation::Injected => {
-            for (iri, func) in iri_sorted(&functions.native) {
+            for &(iri, func) in &iri_sorted(&functions.native, &capability)? {
                 append_framed_part(&mut bytes, "iri", iri.as_bytes());
                 append_framed_part(&mut bytes, "kind", b"native");
-                append_framed_part(&mut bytes, "arity", func.arity.stable_encoding().as_bytes());
+                append_arity(&mut bytes, func.arity, memory)?;
                 append_framed_part(&mut bytes, "volatility", func.volatility.label().as_bytes());
             }
         }
     }
-    Ok(ContentDigest::of(&bytes))
+    Ok(ContentDigest::from_raw(bytes.finalize().into()))
+}
+
+fn append_arity(
+    out: &mut sha2::Sha256,
+    arity: Arity,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    let result = (|| {
+        let text = memory.format(&arity.stable_display())?;
+        append_framed_part(out, "arity", text.as_bytes());
+        memory.release_string(text)
+    })();
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "function fingerprint arity")
+    })
 }
 
 /// One registry map's entries in IRI order â the fingerprint reads this rather than
@@ -1637,10 +1750,14 @@ pub fn content_fingerprint(
 /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)
 /// does, so the digest is a function of the registry's contents and not of the order
 /// a host happened to register them in.
-fn iri_sorted<V>(map: &DetHashMap<String, V>) -> Vec<(&str, &V)> {
-    let mut out: Vec<(&str, &V)> = map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+fn iri_sorted<'a, V>(
+    map: &'a DetHashMap<String, V>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<(&'a str, &'a V)>, EvalError> {
+    let mut out =
+        AdmittedVec::from_iter_admitted(map.iter().map(|(k, v)| (k.as_str(), v)), workspace)?;
     out.sort_unstable_by(|left, right| left.0.cmp(right.0));
-    out
+    Ok(out)
 }
 
 /// Fold a parameter's or return value's [`TypeConstraint`] in under `role`.
@@ -1649,7 +1766,7 @@ fn iri_sorted<V>(map: &DetHashMap<String, V>) -> Vec<(&str, &V)> {
 /// sites cannot produce overlapping label spellings, and every field is emitted
 /// unconditionally (absent ones as a zero presence byte) so an absent constraint and
 /// a present-but-empty one stay distinguishable.
-fn append_constraint(out: &mut Vec<u8>, role: &str, constraint: &TypeConstraint) {
+fn append_constraint(out: &mut sha2::Sha256, role: &str, constraint: &TypeConstraint) {
     append_framed_part(out, "constraint-role", role.as_bytes());
     append_optional_part(
         out,
@@ -1666,7 +1783,7 @@ fn append_constraint(out: &mut Vec<u8>, role: &str, constraint: &TypeConstraint)
 /// Append an optional field: always a one-byte presence flag under `label`, then the
 /// value under the same label when present. Emitting the flag unconditionally is what
 /// keeps the framing injective across a field that may or may not be there.
-fn append_optional_part(out: &mut Vec<u8>, label: &str, value: Option<&[u8]>) {
+fn append_optional_part(out: &mut sha2::Sha256, label: &str, value: Option<&[u8]>) {
     append_framed_part(out, label, &[u8::from(value.is_some())]);
     if let Some(value) = value {
         append_framed_part(out, label, value);
@@ -1731,27 +1848,56 @@ fn matches_node_kind(value: &TermValue, nk: NodeKind) -> bool {
 /// governed execution, fuel and depth exhaustion are recorded on the
 /// expression truncation channel and return `Ok(None)` here so they cannot masquerade as a
 /// function failure.
-pub(crate) fn eval_user_function<D: DatasetView + Sync>(
-    func: &UserFunction,
+pub(crate) fn eval_user_function<'d, D: DatasetView + Sync>(
+    func: &'d UserFunction,
     body: &crate::engine::PreparedQuery,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &mut EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'d, D>,
 ) -> Result<Option<TermValue>, EvalError> {
     eval_user_function_evidence(func, body, iri, args, ctx, &mut None)
 }
 
 /// Return a body's original evidence beside its value from the same execution.
 /// The caller owns the suspension slot; no context-global last-result is used.
-pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
-    func: &UserFunction,
+pub(crate) fn eval_user_function_evidence<'d, D: DatasetView + Sync>(
+    func: &'d UserFunction,
     body: &crate::engine::PreparedQuery,
     iri: &str,
     args: &[Option<TermValue>],
-    ctx: &mut EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'d, D>,
     evidence: &mut Option<crate::evidence_exec::RowEvidence>,
 ) -> Result<Option<TermValue>, EvalError> {
     *evidence = None;
+    let Some(invocation) = prepare_user_function(func, body, iri, args, ctx)? else {
+        return Ok(None);
+    };
+    let (value, record) = crate::eval::evaluate_user_invocation(invocation, iri, ctx)?;
+    *evidence = record;
+    Ok(value)
+}
+
+/// The immutable substituted body owns the original native AST grants.
+pub(crate) struct InvocationQuery {
+    pub(crate) query: purrdf_sparql_algebra::Query,
+    _frame: crate::workspace::LexicalFrame,
+}
+
+/// One actual invocation, ready to move into the query driver's admitted stack.
+pub(crate) struct UserInvocation<'f, 'd, D: DatasetView + Sync> {
+    pub(crate) child: EvalCtx<'d, D>,
+    pub(crate) query: crate::workspace::NativeSharedWorkspace<InvocationQuery>,
+    func: &'f UserFunction,
+}
+
+/// Validate, charge and admit one invocation before any body instruction runs.
+pub(crate) fn prepare_user_function<'f, 'd, D: DatasetView + Sync>(
+    func: &'f UserFunction,
+    body: &crate::engine::PreparedQuery,
+    iri: &str,
+    args: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'d, D>,
+) -> Result<Option<UserInvocation<'f, 'd, D>>, EvalError> {
     if args.len() < func.required || args.len() > func.params.len() {
         return Err(EvalError::function(format!(
             "SHACL-AF function <{iri}> expects {}..={} argument(s), got {}",
@@ -1765,17 +1911,22 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
     // A mandatory parameter with an unbound (`None`) argument yields no result node
     // (SHACL-AF Â§5.2/Â§9.5): the function is not evaluated at all. An unbound OPTIONAL
     // argument simply leaves that parameter variable unbound (pre-binding semantics).
-    let mut substitutions: Vec<(String, TermValue)> = Vec::with_capacity(args.len());
     for (idx, (arg, param)) in args.iter().zip(&func.params).enumerate() {
         match arg {
             Some(value) => {
                 param
                     .constraint
                     .check(iri, &format!("parameter ?{}", param.var), value)?;
-                substitutions.push((param.var.clone(), value.clone()));
             }
             None if idx < func.required => return Ok(None),
             None => {}
+        }
+    }
+
+    let mut substitutions = AdmittedVec::with_capacity(args.len(), &ctx.growth)?;
+    for (arg, param) in args.iter().zip(&func.params) {
+        if let Some(value) = arg {
+            substitutions.push((param.var.as_str(), value))?;
         }
     }
 
@@ -1828,13 +1979,47 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
     crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
         crate::eval::query_pattern(body.query()),
     ));
-    let copied = body.query().clone();
-    let substituted = crate::substitute::apply_shacl_prebinding(
-        copied,
-        crate::substitute::Prebindings::Owned(&substitutions),
-    )
-    .map_err(|d| EvalError::function(d.to_string()))?;
-    let outcome = match evaluate_query_evaluated(&substituted, &mut child)? {
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let query = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        let copied = body
+            .query()
+            .clone_with_memory(&mut memory)
+            .map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "function body AST")
+            })?;
+        crate::substitute::apply_shacl_prebinding_with_memory(
+            copied,
+            crate::substitute::Prebindings::Referenced(&substitutions),
+            &mut memory,
+        )
+        .map_err(crate::substitute::GroundFailure::into_eval_error)?
+    };
+    let query = crate::workspace::NativeSharedWorkspace::new_admitted(
+        InvocationQuery {
+            query,
+            _frame: frame,
+        },
+        &ctx.growth,
+    )?;
+    Ok(Some(UserInvocation { child, query, func }))
+}
+
+/// Complete the same invocation once, preserving its original state and evidence.
+pub(crate) fn finish_user_function<D: DatasetView + Sync>(
+    invocation: UserInvocation<'_, '_, D>,
+    evaluated: EvaluatedOutcome<D::Id>,
+    iri: &str,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(Option<TermValue>, Option<crate::evidence_exec::RowEvidence>), EvalError> {
+    let UserInvocation {
+        mut child,
+        query: _query,
+        func,
+    } = invocation;
+    let outcome = match evaluated {
         EvaluatedOutcome::Complete(outcome) => outcome,
         EvaluatedOutcome::Truncated { certificate, .. } => {
             // A function call is an expression position, so a truncated body makes the
@@ -1851,10 +2036,9 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
             // minted identity state does: a relation the body invoked really did serve
             // this query, and the caller's receipt is the only place that fact can land.
             ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
-            return Ok(None);
+            return Ok((None, None));
         }
     };
-
     let body_evidence = function_body_evidence(&outcome, &child)?;
 
     let result: Option<TermValue> = match (func.kind, outcome) {
@@ -1917,8 +2101,7 @@ pub(crate) fn eval_user_function_evidence<D: DatasetView + Sync>(
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
     // runtime datatype constraint would spuriously reject IRI/blank-node returns,
     // so it is retained on `UserFunction` for callers but NOT enforced here.
-    *evidence = body_evidence;
-    Ok(result)
+    Ok((result, body_evidence))
 }
 
 /// Execute a resolved native (host-Rust closure) function call: arity-check the
@@ -2064,13 +2247,11 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
 ///   would make a function that could not be evaluated indistinguishable from one
 ///   that evaluated to nothing â a silent wrong answer.
 /// * **Re-entrancy.** A node-expression body can call back into query evaluation,
-///   which can call this function again. The chain is bounded by the SAME
-///   [`MAX_UDF_DEPTH`](crate::eval::MAX_UDF_DEPTH) ceiling the SPARQL-bodied path
-///   uses, and the depth is handed to the callee so a callee that leaves and re-enters
+///   which can call this function again. The same caller-selected logical depth
+///   policy applies, and the depth is handed to the callee so a callee that leaves and re-enters
 ///   the evaluator ([`QueryOptions::call_depth`](crate::QueryOptions::call_depth))
-///   keeps counting rather than restarting at zero. Unbounded native recursion in Rust
-///   ABORTS the process, which no caller can catch, so this bound is the difference
-///   between an error and a crash.
+///   keeps counting rather than restarting at zero. The physical stack check at
+///   this host callback remains active even when the logical ceiling is removed.
 ///
 /// # Errors
 ///
@@ -2106,24 +2287,24 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
             &workspace,
         ));
     };
-    let depth = ctx.udf_depth.saturating_add(1);
-    if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(NativeDiagnostic::error(
-            NativeDiagnosticKind::FunctionOperational,
-            format_args!(
-                "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
-                crate::eval::MAX_UDF_DEPTH
-            ),
-            &workspace,
-        ));
-    }
+    let Some(depth) = ctx.next_udf_depth()? else {
+        return Ok(None);
+    };
     if workspace.is_bounded() && matches!(func.body, ExprBody::Resident(_)) {
         return Err(EvalError::WorkspaceUnpriced(
             "expression function allocation contract",
         ));
     }
+    crate::stack::check("expression-bodied user function callback")?;
     let relations = core::cell::RefCell::new(RelationWitness::default());
+    let invocation_context = ctx
+        .user_functions
+        .invocation_context
+        .as_ref()
+        .map(InvocationContext::retain)
+        .transpose()?;
     let call = ExprFnCall {
+        invocation_context: invocation_context.as_deref(),
         relations: &relations,
         iri,
         args,
@@ -2404,7 +2585,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -2586,7 +2767,7 @@ mod tests {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY
+                        &QueryOptions::EMPTY
                             .with_functions(&bound)
                             .with_user_function_admission(&law),
                     )
@@ -2604,7 +2785,7 @@ mod tests {
                 .query_with_options_view(
                     &dataset,
                     request,
-                    QueryOptions::EMPTY.with_functions(&bound),
+                    &QueryOptions::EMPTY.with_functions(&bound),
                 )
                 .expect("ordinary execution has no admission callback");
             assert!(exact.calls.lock().expect("calls").is_empty());
@@ -2612,7 +2793,7 @@ mod tests {
                 .query_with_options_view(
                     &dataset,
                     request,
-                    QueryOptions::EMPTY
+                    &QueryOptions::EMPTY
                         .with_functions(&bound)
                         .with_user_function_admission(&law),
                 )
@@ -2714,16 +2895,16 @@ mod tests {
                     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
                     let error = match entry {
                         "query" => engine
-                            .query_fallible_view(&view, request, options)
+                            .query_fallible_view(&view, request, &options)
                             .map(|_| ()),
                         "prepared" => engine
-                            .query_prepared_fallible_view(&view, &prepared, &[], options)
+                            .query_prepared_fallible_view(&view, &prepared, &[], &options)
                             .map(|_| ()),
                         "governed" => engine
                             .query_governed_fallible_view(
                                 &view,
                                 request,
-                                options,
+                                &options,
                                 &QueryGovernors::METERED,
                             )
                             .map(|_| ())
@@ -2733,7 +2914,7 @@ mod tests {
                                 &view,
                                 &prepared,
                                 &[],
-                                options,
+                                &options,
                                 &QueryGovernors::METERED,
                             )
                             .map(|_| ())
@@ -2743,20 +2924,20 @@ mod tests {
                                 &view,
                                 &prepared,
                                 &[],
-                                options,
+                                &options,
                                 &state,
                             )
                             .map(|_| ())
                             .map_err(|error| error.map_evidence(|evidence| evidence.view)),
                         "explain" => engine
-                            .explain_query_with_options_fallible_view(&view, &query, None, options)
+                            .explain_query_with_options_fallible_view(&view, &query, None, &options)
                             .map(|_| ()),
                         "execute" => {
                             let mut execution = engine
-                                .prepare_execution(&query, None, &[], options)
+                                .prepare_execution(&query, None, &[], &options)
                                 .expect("prepared execution");
                             engine
-                                .execute_fallible(&mut execution, &view, options, |_| ())
+                                .execute_fallible(&mut execution, &view, &options, |_| ())
                                 .map(|_| ())
                         }
                         "construct" => engine
@@ -2764,7 +2945,7 @@ mod tests {
                                 &view,
                                 &graph,
                                 &[],
-                                options,
+                                &options,
                                 &state,
                                 &mut RdfDatasetBuilder::new(),
                             )
@@ -2838,7 +3019,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY
+                    &QueryOptions::EMPTY
                         .with_functions(&bound)
                         .with_user_function_admission(&law),
                 )
@@ -3040,7 +3221,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY
+                    &QueryOptions::EMPTY
                         .with_functions(&bound)
                         .with_user_function_admission(&law),
                 )
@@ -3146,7 +3327,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
@@ -3358,7 +3539,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3401,7 +3582,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions {
+                    &QueryOptions {
                         functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                         ..QueryOptions::EMPTY
                     },
@@ -3446,7 +3627,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3489,7 +3670,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3529,7 +3710,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3562,7 +3743,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
@@ -3605,7 +3786,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3642,7 +3823,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3654,25 +3835,39 @@ mod tests {
         );
     }
 
-    /// A self-recursive function fails closed at the depth bound rather than
-    /// overflowing the stack.
+    /// A non-tail recursive function respects the default and removable ceiling
+    /// while its deepest expression callback retains actual host stack safety.
     #[test]
     fn unbounded_recursion_fails_closed() {
         let mut registry = UserFunctionRegistry::default();
-        // loop(?n) calls loop(?n) â a non-terminating self-recursion.
+        let observed = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let callback = Arc::clone(&observed);
+        registry.register_expr(
+            EX_EXPR_COUNT,
+            Arity::Exact(0),
+            Arc::new(move |call| {
+                callback.store(call.depth, std::sync::atomic::Ordering::Relaxed);
+                Ok(Some(TermValue::typed_literal("0", XSD_INTEGER)))
+            }),
+        );
         registry.insert(
             EX_LOOP,
             UserFunction {
                 params: vec![int_param("n")],
                 required: 1,
-                body: body_text(&format!("SELECT ((<{EX_LOOP}>(?n)) AS ?result) WHERE {{}}")),
+                body: body_text(&format!("SELECT (IF(?n = 0, <{EX_EXPR_COUNT}>(), <{EX_LOOP}>(?n - 1) + 1) AS ?result) WHERE {{}}")),
                 kind: UserFnBody::Select,
                 return_constraint: TypeConstraint::default(),
             },
         );
         let ds = empty_dataset();
-        let query = format!("SELECT ((<{EX_LOOP}>(1)) AS ?v) WHERE {{}}");
-        let err = NativeSparqlEngine::new()
+        let registry = BoundFunctionRegistry::bound_for_test(registry);
+        let query = format!("SELECT ((<{EX_LOOP}>(9999)) AS ?v) WHERE {{}}");
+        let engine = NativeSparqlEngine::new();
+        let options = QueryOptions::EMPTY
+            .with_functions(&registry)
+            .with_focus_graph(Some(&ds));
+        let err = engine
             .query_with_options_view(
                 &ds,
                 SparqlRequest {
@@ -3680,10 +3875,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
-                    functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
-                    ..QueryOptions::EMPTY
-                },
+                &options,
             )
             .expect_err("runaway recursion must fail");
         assert!(
@@ -3691,6 +3883,25 @@ mod tests {
             "expected recursion-bound error, got {err}"
         );
         assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
+        assert_eq!(observed.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let result = engine
+            .query_with_options_view(
+                &ds,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &options.without_udf_depth_limit(),
+            )
+            .expect("ten thousand heap frames on the default stack");
+        let SparqlResult::Solutions { rows, .. } = result else {
+            panic!("SELECT result");
+        };
+        assert!(
+            matches!(rows[0][0].as_ref(), Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "9999")
+        );
+        assert_eq!(observed.load(std::sync::atomic::Ordering::Relaxed), 10001);
     }
 
     #[test]
@@ -3784,7 +3995,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions {
+                    &QueryOptions {
                         functions: &registry,
                         ..QueryOptions::EMPTY
                     },
@@ -3916,7 +4127,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -3931,8 +4142,8 @@ mod tests {
             exhausted.tripped,
             TrippedGovernor::Budget {
                 dimension: ResourceDimension::UdfDepth,
-                limit: u64::from(crate::eval::MAX_UDF_DEPTH),
-                consumed: u64::from(crate::eval::MAX_UDF_DEPTH) + 1,
+                limit: crate::eval::DEFAULT_UDF_DEPTH,
+                consumed: crate::eval::DEFAULT_UDF_DEPTH + 1,
             }
         );
         let PartialAnswers::Unknown(barrier) = exhausted.partial else {
@@ -3972,7 +4183,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4011,7 +4222,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4057,7 +4268,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     focus_graph: Some(&ds),
                     ..QueryOptions::EMPTY
@@ -4102,7 +4313,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4137,7 +4348,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     focus_graph: Some(&ds),
                     call_depth,
@@ -4155,7 +4366,8 @@ mod tests {
             }
             other => panic!("expected solutions, got {other:?}"),
         }
-        let err = run(crate::eval::MAX_UDF_DEPTH).expect_err("the ceiling must be enforced");
+        let err = run(u32::try_from(crate::eval::DEFAULT_UDF_DEPTH).unwrap())
+            .expect_err("the ceiling must be enforced");
         assert!(err.to_string().contains("depth bound"), "got: {err}");
         assert_eq!(err.code, EvalError::FUNCTION_OPERATIONAL_CODE);
     }
@@ -4268,7 +4480,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry),
                     ..QueryOptions::EMPTY
                 },
@@ -4330,7 +4542,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4397,7 +4609,7 @@ mod tests {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions {
+                        &QueryOptions {
                             functions: &functions,
                             focus_graph: Some(&ds),
                             ..QueryOptions::EMPTY
@@ -4438,7 +4650,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4482,7 +4694,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4519,7 +4731,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },
@@ -4621,7 +4833,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     functions: &BoundFunctionRegistry::bound_for_test(registry.clone()),
                     ..QueryOptions::EMPTY
                 },

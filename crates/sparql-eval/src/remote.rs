@@ -873,7 +873,7 @@ pub trait ServiceResolver {
 /// `wrap_with_expr_term_only_values`) wraps a correlated `LATERAL`'s substituted leaves in
 /// `Join(leaf, Values { v → outer_term })`: a SEMI-JOIN PUSHDOWN that restricts the
 /// evaluation to the outer row's bindings. It is an OPTIMIZATION, not the sole source of
-/// that restriction — [`crate::binop::eval_lateral`]'s own compatibility merge, joining
+/// that restriction — [`crate::binop::begin_lateral`]'s own compatibility merge, joining
 /// every row this node returns against the outer row μ on their shared variables, filters
 /// to the identical rows regardless of whether the remote endpoint was ever told about the
 /// restriction.

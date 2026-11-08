@@ -63,14 +63,14 @@ mod report;
 #[path = "support/w3c_earl.rs"]
 mod w3c_earl;
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 use report::merge;
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Arc;
 
-use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, canonicalize};
+use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, try_canonicalize};
 use purrdf_shapes::data::{GraphFilter, ShaclData, native_quads};
 use purrdf_shapes::expression::{
     Binding, NodeExpr, RecursionGuard, Scope, eval_node_expr_in_scope,
@@ -272,7 +272,7 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
     let text = fs::read_to_string(&tc.file)
         .map_err(|e| format!("cannot read {}: {e}", tc.file.display()))?;
     let doc_prefixes = text_ingest::parse_turtle_document(&text, Some(&file_iri(&tc.file)))
-        .map_err(|errors| format!("node-expression graph parse error: {}", errors.join("; ")))?
+        .map_err(|errors| format!("node-expression graph parse error: {errors}"))?
         .prefixes;
     // The node-expression loader and evaluator take no profile: node expressions exist
     // only in SHACL 1.2, so there is no compatibility alternative to select. The
@@ -321,8 +321,9 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         }
     };
 
-    let _function_scope =
-        sparql::enter_function_scope(sparql::bind_in_current_env(&shapes.functions)?);
+    let _function_scope = sparql::enter_function_scope(
+        sparql::bind_in_current_env(&shapes, None).map_err(|error| error.to_string())?,
+    );
     let _aggregate_scope = sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut guard = RecursionGuard::default();
     eval_in_scope(&data, &focus, &expr, &mut guard, &tc.scope, Scope::EMPTY)
@@ -345,7 +346,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         prefixes: doc_prefixes,
         ..
     } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| format!("shapes graph parse error: {errors}"))?;
     // Rules run under the editor's draft law, which the suite's commit pins.
     let shapes = shapes::from_dataset_with_options(
         &shapes_dataset,
@@ -442,8 +443,18 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
     }
     let (inferred, base) = outcome?;
     let expected_full = merge(base.as_ref(), expected_triples(&tc.expected)?.as_ref())?;
-    let produced = canonicalize(inferred.as_ref()).nquads;
-    let expected = canonicalize(expected_full.as_ref()).nquads;
+    let produced_owner = try_canonicalize(
+        inferred.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let produced = produced_owner.nquads();
+    let expected_owner = try_canonicalize(
+        expected_full.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let expected = expected_owner.nquads();
     if produced == expected {
         return Ok(());
     }
@@ -536,8 +547,24 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let produced =
                 expected_triples(&InferExpected::Triples(inference.inferred().to_vec()))?;
             let expected = parse_turtle_file(result)?;
-            let produced = canonicalize(produced.as_ref()).nquads;
-            let expected = canonicalize(expected.as_ref()).nquads;
+            let produced_owner = try_canonicalize(
+                produced.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            let produced = produced_owner.nquads();
+            let expected_owner = try_canonicalize(
+                expected.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            let expected = expected_owner.nquads();
             if produced == expected {
                 return Ok(());
             }
@@ -1706,7 +1733,7 @@ fn engine_spells_a_whole_computed_decimal_with_a_point() {
     let projected = engine::project_dataset(dataset.as_ref()).expect("projection");
     let data = ShaclData::new(Arc::clone(&projected), projected, None);
     let _function_scope =
-        sparql::enter_function_scope(sparql::bind_in_current_env(&shapes.functions).expect("bind"));
+        sparql::enter_function_scope(sparql::bind_in_current_env(&shapes, None).expect("bind"));
     let mut guard = RecursionGuard::default();
     let out = eval_node_expr_in_scope(
         &data,

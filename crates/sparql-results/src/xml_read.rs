@@ -442,8 +442,7 @@ mod tests {
             matches!(fields.field("column"), ErrorValue::Unsigned(value) if value == column as u128)
         );
         assert_eq!(fields.child("cause").code, Capture::read(original).code);
-        let retained = error.clone();
-        drop(error);
+        let retained = error;
         drop(input);
         assert_eq!(Capture::read(&retained).code, "sparql-results-xml-syntax");
 

@@ -57,7 +57,7 @@ fn rows(result: &SparqlResult) -> String {
 
 fn try_governed(
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedOutcome, purrdf_core::RdfDiagnostic> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
@@ -75,7 +75,7 @@ fn try_governed(
 
 fn governed(
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> GovernedOutcome {
     try_governed(query, options, governors).unwrap_or_else(|e| panic!("{query}: {e}"))
@@ -178,7 +178,7 @@ fn transcript() -> String {
     for (query, policy) in queries() {
         let answered = match try_governed(
             &query,
-            QueryOptions::EMPTY.with_division(policy),
+            &QueryOptions::EMPTY.with_division(policy),
             &QueryGovernors::METERED,
         ) {
             Ok(outcome) => outcome_text(&outcome),
@@ -200,16 +200,16 @@ fn transcript() -> String {
 /// metered consumption: the neighbour answers, the vast chain is refused before it runs.
 fn refusal_beside_neighbour(dimension: ResourceDimension) -> (String, String) {
     let neighbour = squaring_chain_from("1.0", 20);
-    let metered = governed(&neighbour, QueryOptions::EMPTY, &QueryGovernors::METERED);
+    let metered = governed(&neighbour, &QueryOptions::EMPTY, &QueryGovernors::METERED);
     let spent = metered.evidence().consumed_in(dimension);
     let ceiling = match dimension {
         ResourceDimension::Fuel => QueryGovernors::UNBOUNDED.with_fuel(spent),
         _ => QueryGovernors::UNBOUNDED.with_max_scratch_bytes(spent),
     };
-    let answered = governed(&neighbour, QueryOptions::EMPTY, &ceiling);
+    let answered = governed(&neighbour, &QueryOptions::EMPTY, &ceiling);
     let refused = governed(
         &squaring_chain_from("0.1", 20),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ceiling,
     );
     assert!(
@@ -234,7 +234,7 @@ fn the_hand_answers_are_reproduced_on_this_target() {
     let answer = |query: &str, policy: DivisionPolicy| {
         outcome_text(&governed(
             query,
-            QueryOptions::EMPTY.with_division(policy),
+            &QueryOptions::EMPTY.with_division(policy),
             &QueryGovernors::METERED,
         ))
     };
@@ -271,7 +271,7 @@ fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
     assert_eq!(
         outcome_text(&governed(
             "SELECT (xsd:anyURI(\"  /relative\\t \\n\") AS ?a) WHERE {}",
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )),
         "/relative^^anyURI"
@@ -289,7 +289,7 @@ fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
             assert_eq!(
                 outcome_text(&governed(
                     &query,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED
                 )),
                 "-",
@@ -306,7 +306,7 @@ fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
         assert_eq!(
             outcome_text(&governed(
                 &query,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED
             )),
             expected
@@ -317,7 +317,7 @@ fn any_uri_casts_keep_their_primitive_domain_on_this_target() {
         assert_eq!(
             outcome_text(&governed(
                 &query,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED
             )),
             "-",
@@ -422,7 +422,7 @@ fn borrowed_value_equality_matches_the_query_operator_on_this_target() {
         let outcome = NativeSparqlEngine::new().query_governed(&dataset, SparqlRequest {
             query: "SELECT (?l = ?r AS ?answer) WHERE { <urn:pair> <urn:left> ?l ; <urn:right> ?r }",
             base_iri: None, substitutions: &[],
-        }, QueryOptions::EMPTY, &QueryGovernors::METERED).unwrap();
+        }, &QueryOptions::EMPTY, &QueryGovernors::METERED).unwrap();
         let GovernedOutcome::Complete {
             result: SparqlResult::Solutions { rows, .. },
             ..

@@ -247,7 +247,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
     // Prepared outside the measured window on both lanes, so neither phase pays for
     // parsing and planning and the figures are the evaluation's own.
     let prepared = engine
-        .prepare_query_with_options(PER_ROW_CALL, None, with_env(&relations))
+        .prepare_query_with_options(PER_ROW_CALL, None, &with_env(&relations))
         .expect("the fixture query prepares against the registry");
 
     let window = WholeProcessWindow::open();
@@ -258,7 +258,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
                     &**dataset,
                     &prepared,
                     &[],
-                    with_env(&relations),
+                    &with_env(&relations),
                     &QueryGovernors::UNBOUNDED,
                 )
                 .expect("a governed run of the fixture query is an outcome");
@@ -266,7 +266,7 @@ fn phase(label: &str, attests: Attests, lane: Lane, dataset: &Arc<RdfDataset>) {
         }
         Lane::Ungoverned => {
             let result = engine
-                .query_with_options_view(&**dataset, request, with_env(&relations))
+                .query_with_options_view(&**dataset, request, &with_env(&relations))
                 .expect("the fixture relation declares nothing short, so this answers");
             black_box(&result);
         }

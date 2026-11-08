@@ -73,6 +73,7 @@ fn iri(s: &str) -> NamedNode {
 #[test]
 fn shape_is_still_a_bare_literal() {
     let shape = Shape {
+        owner: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: vec![Target::Class(iri("https://example.org/Person"))],
         constraints: vec![Constraint::MinCount(1)],
@@ -137,6 +138,7 @@ fn property_shape_is_still_a_bare_literal() {
 #[test]
 fn shapes_still_builds_via_default_then_field_assignment() {
     let shape = Shape {
+        owner: None,
         id: iri("https://example.org/PersonShape").into_term(),
         targets: Vec::new(),
         constraints: Vec::new(),
@@ -170,6 +172,8 @@ fn shapes_still_builds_via_default_then_field_assignment() {
 /// top-level wildcard; a new variant still has no arm to match here.
 fn constraint_name(constraint: &Constraint) -> &'static str {
     match constraint {
+        Constraint::Reference(_) => "reference",
+        Constraint::PropertyReference(_) => "property_reference",
         Constraint::Class(_) => "class",
         Constraint::Datatype(_) => "datatype",
         Constraint::NodeKind(_) => "node-kind",
@@ -230,6 +234,7 @@ fn constraint_match_is_exhaustive_and_reachable() {
 /// expression form stops this function compiling.
 fn node_expr_name(expr: &NodeExpr) -> &'static str {
     match expr {
+        NodeExpr::Owned { expr, .. } => node_expr_name(expr),
         NodeExpr::Constant(_) => "constant",
         NodeExpr::This => "this",
         NodeExpr::Path(_) => "path",
@@ -299,6 +304,8 @@ const fn dimension_ordinal(dimension: ProductDimension) -> u8 {
         ProductDimension::UnsupportedCapability => 19,
         ProductDimension::DepthLimit => 20,
         ProductDimension::Malformed => 21,
+        ProductDimension::Resource => 22,
+        ProductDimension::Model => 23,
     }
 }
 

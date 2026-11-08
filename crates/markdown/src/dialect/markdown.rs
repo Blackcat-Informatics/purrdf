@@ -1,48 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The Markdown dialect reader: lines to sections, units, and
-//! concordance rows.
+//! The slicing-policy projection over the shared native Markdown syntax.
+//! Native syntax owns headings, containers, code, comments, blocks and lines.
+//! This projection retains the custom U+2042 movements, full-u64 `N.` verses,
+//! and concordance tables, including inherited concordance containment and
+//! GFM cell escapes. Opaque native regions cannot open policy markers.
 //!
-//! Everything Markdown-specific in this crate is here — ATX headings,
-//! the U+2042 movement marker, `N.` verses, blank-line paragraphs,
-//! horizontal rules, the `## Concordance` table and the GFM escapes its
-//! cells are read through — and nothing else in the crate reads a line.
-//! See [`crate::dialect`] for the contract this reader satisfies.
-//!
-//! Two of the concordance's rules are containment rules rather than
-//! line rules, and both are places where a wrong reading loses a row in
-//! silence rather than refusing it: a table row is a citation row when
-//! the concordance is in force at **any** depth above it
-//! ([`Walker::in_concordance`]), and a row's cells are delimited by its
-//! **unescaped** pipes only ([`cells`]).
-//!
-//! Both edges of a line are read, and neither is ever taken from a
-//! span. The trailing edge trims away, so a CRLF document states the
-//! structure its LF twin states; the leading edge is **bounded** rather
-//! than trimmed, so an indented marker is still a marker up to three
-//! spaces and is ordinary content past them ([`after_indent`]).
-//!
-//! What "trims" means here is [`SPACE_OR_TAB`] and never
-//! [`char::is_whitespace`]. Every clause this reader implements — the
-//! blank line of CommonMark §2.1, the ATX heading of §4.2, the thematic
-//! break of §4.1, the table cell of GFM §4.10 — enumerates space-or-tab,
-//! and the one CommonMark clause that does name a Unicode property
-//! (§6.2's flanking delimiter runs) governs emphasis, which this dialect
-//! does not state. The distinction is structural: these trims decide
-//! whether a line closes a unit or opens a row, so widening them moves
-//! unit boundaries in documents a conforming reader slices differently.
+//! Policy trims use space-or-tab, never Unicode whitespace. Container prefixes
+//! are recognized by syntax; unit spans still retain original source bytes.
 
 use std::sync::Arc;
 
-use purrdf_core::terminals::{ByteClass, byte_run_count};
-
 use super::{DefectiveRow, RawRow, RawSection, RawUnit, Reading};
 use crate::model::RowDefect;
-
-/// The byte order mark, `EF BB BF`: a statement about the encoding when
-/// it opens a document, ordinary content anywhere else.
-const BYTE_ORDER_MARK: char = '\u{feff}';
 
 /// The heading that opens a concordance table, matched without regard
 /// to case.
@@ -53,10 +24,16 @@ const CONCORDANCE: &str = "Concordance";
 const CONCORDANCE_CELLS: usize = 3;
 
 /// Reads a Markdown document into the structure the law then works on.
-pub(crate) fn read(text: &str) -> Reading {
+pub(crate) fn read(syntax: &crate::syntax::SyntaxDocument<'_>) -> Reading {
+    let text = syntax.source();
     let mut w = Walker::default();
-    for (start, end) in lines(text) {
-        w.line(text, start, end);
+    for line in &syntax.sliced {
+        if !line.eligible {
+            w.close_unit();
+            w.table_row_index = 0;
+            continue;
+        }
+        w.line(text, *line);
     }
     w.close_unit();
     Reading {
@@ -89,85 +66,6 @@ struct Walker {
     table_row_index: usize,
 }
 
-/// Byte ranges of each line, excluding the terminating newline.
-///
-/// A byte order mark at the very start of the document is not part of
-/// the first line: the mark is a statement about the encoding, so a
-/// heading or a verse that opens the document is read as if it began
-/// the line, and a document that carries one slices into the same
-/// structure as the one that does not. It is skipped for structure
-/// only. Every span still counts the document's own bytes, so the mark
-/// falls before the first span and no unit's literal is ever anything
-/// but the verbatim bytes of its span. At any other offset the mark is
-/// ordinary content and stays inside the unit that holds it.
-///
-/// Each line feed is found by one chunked scan ([`find_line_feed`]), so a
-/// line's bytes are crossed sixteen at a time rather than one.
-fn lines(text: &str) -> Vec<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::new();
-    let mut start = if text.starts_with(BYTE_ORDER_MARK) {
-        BYTE_ORDER_MARK.len_utf8()
-    } else {
-        0
-    };
-    // The mark is three bytes and holds no line feed, so scanning from `start`
-    // finds exactly the line feeds a scan from zero finds.
-    while let Some(offset) = find_line_feed(&bytes[start..]) {
-        let end = start + offset;
-        out.push((start, end));
-        start = end + 1;
-    }
-    if start < text.len() {
-        out.push((start, text.len()));
-    }
-    out
-}
-
-/// The line feed, as a byte class table: the one byte a line ends at.
-const LINE_FEED_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    table[b'\n' as usize] = 1;
-    table
-};
-
-const LINE_FEED: ByteClass<{ byte_run_count(&LINE_FEED_TABLE) }> =
-    ByteClass::from_table(LINE_FEED_TABLE);
-
-/// The offset of the first line feed of `bytes`, or `None`.
-///
-/// The workspace's chunked byte-class kernel
-/// ([`ByteClass`](purrdf_core::terminals::ByteClass)): sixteen-byte chunks
-/// compared against `\n` as `0x00`/`0xFF` lanes, the lanes' maximum as the
-/// branch-free clean-chunk test (the one-run form of the kernel), and the hit
-/// chunk's bytes tested again for the offset. It reaches this crate through
-/// `purrdf-core`, its one dependency.
-#[inline(never)]
-fn find_line_feed(bytes: &[u8]) -> Option<usize> {
-    LINE_FEED.find_first(bytes)
-}
-
-/// The per-byte line split [`lines`] replaced, kept verbatim as the oracle.
-#[cfg(test)]
-fn lines_reference(text: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let mut start = if text.starts_with(BYTE_ORDER_MARK) {
-        BYTE_ORDER_MARK.len_utf8()
-    } else {
-        0
-    };
-    for (i, b) in text.bytes().enumerate() {
-        if b == b'\n' {
-            out.push((start, i));
-            start = i + 1;
-        }
-    }
-    if start < text.len() {
-        out.push((start, text.len()));
-    }
-    out
-}
-
 impl Walker {
     /// One line, read for what it opens or continues.
     ///
@@ -196,15 +94,17 @@ impl Walker {
     /// the spaces a line opens with alike stay in the unit's verbatim
     /// literal, where a reader who returns to the bytes at the span
     /// will find them.
-    fn line(&mut self, text: &str, start: usize, end: usize) {
-        let line = &text[start..end];
+    fn line(&mut self, text: &str, native: crate::syntax::SliceLine) {
+        let start = native.source.start as usize;
+        let end = native.source.end as usize;
+        let line = &text[native.content.range()];
         if !trim_leading(without_line_ending(line)).starts_with('|') {
             // A table ended, so the next one starts its rows afresh.
             self.table_row_index = 0;
         }
-        if let Some((level, heading)) = atx_heading(line) {
+        if let Some((level, title)) = native.heading {
             self.close_unit();
-            self.open_section(start, end, level, heading, false);
+            self.open_section(start, end, level, text[title.range()].to_owned(), false);
         } else if let Some(name) = movement(line) {
             self.close_unit();
             // A movement sits one level under the nearest heading, so
@@ -216,7 +116,7 @@ impl Walker {
                 .find(|&&i| !self.sections[i].movement)
                 .map_or(1, |&i| self.sections[i].level + 1);
             self.open_section(start, end, level, name, true);
-        } else if is_blank_line(line) || is_rule(line) {
+        } else if is_blank_line(line) {
             self.close_unit();
         } else if trim_leading(without_line_ending(line)).starts_with('|') {
             self.close_unit();
@@ -429,11 +329,9 @@ const SPACE_OR_TAB: [char; 2] = [' ', '\t'];
 ///
 /// CommonMark §2.1: "A line ending is a newline (U+000A), a carriage return
 /// (U+000D) not followed by a newline, or a carriage return and a following
-/// newline." [`lines`] cuts the document at U+000A, so the only remnant a line
-/// can still carry is the U+000D of a CRLF pair — which belongs to the ending
-/// and not to the line. Stripping it here is what makes a CRLF document slice
-/// into the structure its LF twin slices into, and it is done by naming the one
-/// character rather than by trimming, so nothing else at the line's end moves.
+/// newline." The native projection separates those endings from payloads.
+/// This policy boundary also accepts a terminal U+000D, naming that character
+/// rather than trimming anything else from a line's end.
 fn without_line_ending(line: &str) -> &str {
     line.strip_suffix('\r').unwrap_or(line)
 }
@@ -470,10 +368,8 @@ fn is_blank_line(line: &str) -> bool {
 /// a leading run of at most [`MAX_MARKER_INDENT`] U+0020 SPACE
 /// characters, so `   # Title` is the heading `# Title` is, and
 /// `  1. one` is verse 1. A run of **four or more** spaces opens no
-/// marker at all: the line is ordinary content and falls into the
-/// paragraph or verse around it. That is not a refusal and it is not a
-/// code block — this dialect states no code block; it declines to read
-/// a marker that far in, which is where CommonMark puts the threshold.
+/// policy marker at all. Native syntax has already excluded code blocks;
+/// an eligible indented paragraph continuation stays ordinary content.
 ///
 /// A **tab** in the leading run opens no marker either, wherever in the
 /// run it falls. CommonMark expands a tab to the next four-column tab
@@ -483,7 +379,7 @@ fn is_blank_line(line: &str) -> bool {
 /// decided without ever expanding a tab, on a line's bytes alone.
 ///
 /// The run is read for **recognition only**, exactly as the byte order
-/// mark is ([`lines`]). Every span still counts the document's own
+/// mark is in the native line projection. Every span still counts the document's own
 /// bytes, so the leading spaces stay inside the unit's span and inside
 /// its verbatim literal; and because recognition begins after them, a
 /// heading's title, a movement's name and a verse number are what they
@@ -496,36 +392,6 @@ fn after_indent(line: &str) -> Option<&str> {
     }
     let rest = &line[indent..];
     (!rest.starts_with('\t')).then_some(rest)
-}
-
-/// `# Heading` through `###### Heading`, behind the leading indent
-/// [`after_indent`] admits.
-///
-/// CommonMark §4.2: "The opening sequence of `#` characters must be followed by
-/// spaces or tabs, or by the end of line", and "The raw contents of the heading
-/// are stripped of leading and trailing space or tabs before being parsed as
-/// inline content." Both trims here are therefore [`SPACE_OR_TAB`]: a heading
-/// `# Concordance\u{A0}` names `Concordance\u{A0}`, which is not the
-/// concordance, and trimming the U+00A0 away would open a citation table the
-/// document did not open.
-///
-/// The closing `#` run is read more loosely than §4.2 states — that clause
-/// requires the run to be "preceded by spaces or tabs", and this dialect strips
-/// it whether or not it is, so `# foo#` is the heading `foo` here and `foo#` in
-/// CommonMark. That is a dialect reading of the `#` run and not a reading of
-/// white space.
-fn atx_heading(line: &str) -> Option<(u32, String)> {
-    let line = after_indent(line)?;
-    let hashes = line.bytes().take_while(|b| *b == b'#').count();
-    if hashes == 0 || hashes > 6 {
-        return None;
-    }
-    let rest = &line[hashes..];
-    if !rest.starts_with([' ', '\t']) {
-        return None;
-    }
-    let heading = trim_edges(trim_edges(without_line_ending(rest)).trim_end_matches('#'));
-    Some((u32::try_from(hashes).ok()?, heading.to_owned()))
 }
 
 /// `⁂ *name*`: a movement marker, a section below the nearest heading,
@@ -548,24 +414,6 @@ fn movement(line: &str) -> Option<String> {
         .or_else(|| name.strip_prefix('_').and_then(|n| n.strip_suffix('_')))
         .unwrap_or(name);
     Some(trim_edges(name).to_owned())
-}
-
-/// `---`, `***`: a horizontal rule, which closes the open unit.
-///
-/// CommonMark §4.1: "A line consisting of optionally up to three spaces of
-/// indentation, followed by a sequence of three or more matching `-`, `_`, or
-/// `*` characters, each followed optionally by any number of spaces or tabs,
-/// forms a thematic break." The trims are therefore [`SPACE_OR_TAB`] and not a
-/// Unicode property: `\u{A0}---` is a paragraph, not a rule.
-///
-/// This dialect reads a NARROWER rule than §4.1 does, deliberately and on two
-/// axes: it states no `_` run, and it admits no white space BETWEEN the
-/// characters, so CommonMark's `- - -` is ordinary content here. Both are
-/// dialect choices about which lines close a unit; neither is a reading of
-/// white space.
-fn is_rule(line: &str) -> bool {
-    let t = line_body(line);
-    t.len() >= 3 && (t.bytes().all(|b| b == b'-') || t.bytes().all(|b| b == b'*'))
 }
 
 /// `12. text`: a numbered verse line, behind the leading indent
@@ -707,54 +555,22 @@ fn backticked(cell: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_testkit::rng::SplitMix64;
-
-    /// The chunked line split agrees with the per-byte one on fixed-seed text
-    /// holding line feeds, runs of them, CR, the byte order mark at the start
-    /// and elsewhere, and non-ASCII in every UTF-8 width, at lengths 0-70 and
-    /// past several chunks.
-    #[test]
-    fn chunked_lines_agree_with_the_per_byte_split() {
-        const PIECES: &[&str] = &[
-            "\n",
-            "\n\n",
-            "\r\n",
-            "\r",
-            " ",
-            "\t",
-            "#",
-            "|",
-            "\u{feff}",
-            "\u{a0}",
-            "\u{e9}",
-            "\u{2028}",
-            "\u{1f408}",
-        ];
-        let mut rng = SplitMix64::new(0x11AE_5000_0000_0001);
-        let mut far_breaks = 0_usize;
-        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
-            for round in 0..40 {
-                let density = if round % 2 == 0 { 4 } else { 40 };
-                let mut text = String::new();
-                if round % 3 == 0 {
-                    text.push('\u{feff}');
-                }
-                for _ in 0..len {
-                    if rng.below_usize(density) == 0 {
-                        text.push_str(PIECES[rng.below_usize(PIECES.len())]);
-                    } else {
-                        text.push('m');
-                    }
-                }
-                let got = lines(&text);
-                assert_eq!(got, lines_reference(&text), "{text:?}");
-                far_breaks += got
-                    .iter()
-                    .filter(|&&(start, end)| end - start >= 16)
-                    .count();
-            }
-        }
-        assert!(far_breaks > 0, "lines longer than one chunk were split");
+    fn read_text(text: &str) -> Reading {
+        read(&crate::syntax::syntax(text, crate::syntax::SyntaxLimits::unbounded()).unwrap())
+    }
+    fn atx_heading(text: &str) -> Option<(u32, String)> {
+        read_text(text)
+            .sections
+            .into_iter()
+            .next()
+            .map(|s| (s.level, s.heading))
+    }
+    fn is_rule(text: &str) -> bool {
+        crate::syntax::syntax(text, crate::syntax::SyntaxLimits::unbounded())
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|b| matches!(b.kind, crate::syntax::BlockKind::Rule))
     }
 
     #[test]
@@ -911,7 +727,7 @@ mod tests {
         // The refusal: a line of U+00A0 is a paragraph, so it does not close a
         // unit, and the unit around it stays one unit.
         assert!(!is_blank_line("\u{A0}"));
-        let reading = read("1. first\n\u{A0}\n2. second\n");
+        let reading = read_text("1. first\n\u{A0}\n2. second\n");
         assert_eq!(reading.units.len(), 2, "the U+00A0 line continues verse 1");
         // THE VALID NEIGHBOUR. Every line the clause DOES call blank still
         // closes the unit, including the CRLF spellings — so this is exactness
@@ -919,9 +735,9 @@ mod tests {
         for blank in ["", " ", "\t", "   \t ", "\r", "  \r"] {
             assert!(is_blank_line(blank), "{blank:?}");
         }
-        let reading = read("1. first\n\n2. second\n");
+        let reading = read_text("1. first\n\n2. second\n");
         assert_eq!(reading.units.len(), 2);
-        let crlf = read("1. first\r\n   \r\n2. second\r\n");
+        let crlf = read_text("1. first\r\n   \r\n2. second\r\n");
         assert_eq!(crlf.units.len(), 2, "a CRLF blank line is still blank");
     }
 
@@ -957,7 +773,7 @@ mod tests {
     fn a_rule_a_row_and_a_movement_are_not_opened_behind_a_no_break_space() {
         assert!(!is_rule("\u{A0}---"));
         assert!(movement("\u{A0}\u{2042} *name*").is_none());
-        let reading = read("## H\n\u{A0}| a | b | c |\n");
+        let reading = read_text("## H\n\u{A0}| a | b | c |\n");
         assert!(reading.rows.is_empty(), "that line is prose, not a row");
 
         // THE VALID NEIGHBOUR: each marker still opens behind the white space

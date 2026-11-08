@@ -384,7 +384,48 @@ fn base64_shape(lexical: &str) -> Result<Base64Shape, BinaryReadError> {
     })
 }
 
-/// The one native base64 group decoder; validation uses a zero-allocation sink.
+/// Visit decoded RFC 4648 bytes without allocating a stripped input or output.
+///
+/// Only XSD's four whitespace bytes (SP, HT, CR, LF) are ignored. Callers with
+/// another lexical policy filter their original input explicitly. The input is
+/// consumed once and need not be replayable. Emitted chunks are provisional:
+/// malformed later input returns an error after earlier chunks were visited.
+/// Callers must discard provisional output or digest state on failure.
+///
+/// # Errors
+/// Refuses incomplete groups, invalid alphabet bytes, padding or unused bits.
+pub fn visit_base64(
+    input: impl IntoIterator<Item = u8>,
+    mut emit: impl FnMut(&[u8]),
+) -> Result<(), BinaryReadError> {
+    let mut input = input
+        .into_iter()
+        .filter(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        .peekable();
+    while let Some(first) = input.next() {
+        let mut raw = [first, 0, 0, 0];
+        for byte in &mut raw[1..] {
+            *byte = input.next().ok_or_else(|| BinaryReadError::base64(
+                "base64Binary lexical length (after stripping whitespace) must be a multiple of 4",
+            ))?;
+        }
+        let padding = if input.peek().is_none() {
+            raw.iter().rev().take_while(|&&byte| byte == b'=').count()
+        } else {
+            0
+        };
+        if padding > 2 {
+            return Err(BinaryReadError::base64(
+                "base64Binary lexical has more than 2 padding characters",
+            ));
+        }
+        let (bytes, length) = decode_base64_group(raw, padding)?;
+        emit(&bytes[..length]);
+    }
+    Ok(())
+}
+
+/// Decode a previously checked immutable lexical with its established shape.
 fn decode_base64_groups(
     lexical: &str,
     shape: Base64Shape,
@@ -398,47 +439,57 @@ fn decode_base64_groups(
                 .next()
                 .expect("the checked shape counts all group bytes");
         }
-        let [a_raw, b_raw, c_raw, d_raw] = raw;
-        let invalid = || BinaryReadError::base64("invalid character in base64Binary lexical");
-        let a = decode_b64_char(a_raw).ok_or_else(invalid)?;
-        let b = decode_b64_char(b_raw).ok_or_else(invalid)?;
-        let last = group == shape.groups - 1;
-        let (c, d, length) = if last && shape.padding == 2 {
-            if c_raw != b'=' || d_raw != b'=' {
-                return Err(BinaryReadError::base64(
-                    "expected padding characters '==' in base64Binary lexical",
-                ));
-            }
-            if b & 0b1111 != 0 {
-                return Err(BinaryReadError::base64(
-                    "base64Binary character before '==' must be one of AQgw",
-                ));
-            }
-            (0, 0, 1)
-        } else if last && shape.padding == 1 {
-            let c = decode_b64_char(c_raw).ok_or_else(invalid)?;
-            if d_raw != b'=' {
-                return Err(BinaryReadError::base64(
-                    "expected padding character '=' in base64Binary lexical",
-                ));
-            }
-            if c & 0b11 != 0 {
-                return Err(BinaryReadError::base64(
-                    "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
-                ));
-            }
-            (c, 0, 2)
+        let padding = if group == shape.groups - 1 {
+            shape.padding
         } else {
-            (
-                decode_b64_char(c_raw).ok_or_else(invalid)?,
-                decode_b64_char(d_raw).ok_or_else(invalid)?,
-                3,
-            )
+            0
         };
-        let output = [(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d];
-        emit(&output[..length]);
+        let (bytes, length) = decode_base64_group(raw, padding)?;
+        emit(&bytes[..length]);
     }
     Ok(())
+}
+
+/// The single native alphabet, padding and unused-bit group decoder.
+fn decode_base64_group(raw: [u8; 4], padding: usize) -> Result<([u8; 3], usize), BinaryReadError> {
+    let [a_raw, b_raw, c_raw, d_raw] = raw;
+    let invalid = || BinaryReadError::base64("invalid character in base64Binary lexical");
+    let a = decode_b64_char(a_raw).ok_or_else(invalid)?;
+    let b = decode_b64_char(b_raw).ok_or_else(invalid)?;
+    let (c, d, length) = if padding == 2 {
+        if c_raw != b'=' || d_raw != b'=' {
+            return Err(BinaryReadError::base64(
+                "expected padding characters '==' in base64Binary lexical",
+            ));
+        }
+        if b & 0b1111 != 0 {
+            return Err(BinaryReadError::base64(
+                "base64Binary character before '==' must be one of AQgw",
+            ));
+        }
+        (0, 0, 1)
+    } else if padding == 1 {
+        let c = decode_b64_char(c_raw).ok_or_else(invalid)?;
+        if d_raw != b'=' {
+            return Err(BinaryReadError::base64(
+                "expected padding character '=' in base64Binary lexical",
+            ));
+        }
+        if c & 0b11 != 0 {
+            return Err(BinaryReadError::base64(
+                "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
+            ));
+        }
+        (c, 0, 2)
+    } else {
+        (
+            decode_b64_char(c_raw).ok_or_else(invalid)?,
+            decode_b64_char(d_raw).ok_or_else(invalid)?,
+            3,
+        )
+    };
+    let output = [(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d];
+    Ok((output, length))
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────────────
@@ -702,6 +753,10 @@ mod tests {
     fn base64_padding_bits_must_be_zero() {
         for refused in ["AQJ=", "AR==", "Zh==", "Zm9=", "AQ J="] {
             assert!(parse_base64(refused).is_err(), "{refused:?}");
+            assert!(
+                visit_base64(refused.bytes(), |_| {}).is_err(),
+                "{refused:?}"
+            );
         }
         for (accepted, bytes) in [
             ("AQI=", &[0x01, 0x02][..]),
@@ -711,6 +766,36 @@ mod tests {
             ("Zm9v", b"foo"),
         ] {
             assert_eq!(parse_base64(accepted).as_deref(), Ok(bytes), "{accepted:?}");
+            let mut streamed = Vec::new();
+            visit_base64(accepted.bytes(), |chunk| streamed.extend_from_slice(chunk)).unwrap();
+            assert_eq!(streamed, bytes);
+        }
+    }
+
+    #[test]
+    fn base64_visitor_handles_a_single_pass_and_refuses_malformed_suffixes() {
+        let input = b" Y W\r\nJj\tZA== ";
+        let mut offset = 0;
+        let stream = std::iter::from_fn(|| {
+            let byte = input.get(offset).copied();
+            offset += usize::from(byte.is_some());
+            byte
+        });
+        let mut decoded = Vec::new();
+        visit_base64(stream, |chunk| decoded.extend_from_slice(chunk)).unwrap();
+        assert_eq!(decoded, b"abcd");
+        for refused in [
+            "YWJjA",
+            "YWJj====",
+            "YWJjAR==",
+            "YWJjZA==AAAA",
+            "YWJj@AAA",
+            "YWJj\u{b}ZA==",
+        ] {
+            assert!(
+                visit_base64(refused.bytes(), |_| {}).is_err(),
+                "{refused:?}"
+            );
         }
     }
 

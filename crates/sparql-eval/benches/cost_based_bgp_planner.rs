@@ -83,7 +83,7 @@ fn bench_boundary_joins(c: &mut Bench) {
                         &*dataset,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &governors,
                     )
                     .expect("boundary benchmark evaluates");

@@ -91,6 +91,13 @@ pub struct SharedView<T, U> {
     value: NonNull<U>,
 }
 
+// SAFETY: the immutable descendant stays inside its retained Shared owner. Both
+// the owner's payload and the projected shared reference may cross threads.
+unsafe impl<T: Send + Sync, U: Sync> Send for SharedView<T, U> {}
+// SAFETY: projections provide shared access only; the original atomic owner
+// keeps the entire immutable descendant alive for every retained projection.
+unsafe impl<T: Send + Sync, U: Sync> Sync for SharedView<T, U> {}
+
 impl<T, U: fmt::Debug> fmt::Debug for SharedView<T, U> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)
@@ -151,6 +158,13 @@ unsafe impl<T: Send + Sync> Send for Shared<T> {}
 unsafe impl<T: Send + Sync> Sync for Shared<T> {}
 
 impl<T> Shared<T> {
+    /// Whether both owners retain the same live allocation, regardless of its value.
+    /// Distinct allocations remain distinct even for zero-sized payloads.
+    #[must_use]
+    pub fn ptr_eq(left: &Self, right: &Self) -> bool {
+        left.pointer == right.pointer
+    }
+
     /// Retain one immutable allocation while selecting a descendant of it.
     #[must_use]
     pub fn into_view<U>(self, select: impl for<'a> FnOnce(&'a T) -> &'a U) -> SharedView<T, U> {
@@ -726,6 +740,11 @@ mod tests {
         struct Aligned(u8);
         let empty = Shared::try_new(()).expect("zero-sized payload");
         assert_eq!(*empty, ());
+        assert!(Shared::ptr_eq(&empty, &empty.clone()));
+        assert!(!Shared::ptr_eq(
+            &empty,
+            &Shared::try_new(()).expect("distinct zero-sized payload"),
+        ));
         assert!(Shared::<()>::allocation_layout().size() >= size_of::<AtomicUsize>());
         let aligned = Shared::try_new(Aligned(7)).expect("aligned payload");
         assert_eq!(aligned.0, 7);

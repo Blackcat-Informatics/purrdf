@@ -640,7 +640,7 @@ impl Parser<'_> {
             // Record the shape IRIs this expression already NAMES, so they are
             // resolved at load rather than at the first value node that happens to
             // reach the constraint. See `Parser::node_by_expr_constants`.
-            self.record_node_by_expr_constants(id, &expr);
+            self.record_node_by_expr_constants(id, &expr)?;
 
             let messages = self.messages_of(&expr_node)?;
             let severity = self.severity_of(&expr_node)?;
@@ -1003,6 +1003,14 @@ impl Parser<'_> {
         ps_id: &Term,
         own_qvs: &Term,
     ) -> Result<Vec<Shape>, String> {
+        self.sibling_qualified_shape_nodes(ps_id, own_qvs)
+            .into_iter()
+            .map(|node| self.parse_inline_shape(node))
+            .collect()
+    }
+
+    /// The shared sibling identity lookup for parsing and dependency analysis.
+    pub(crate) fn sibling_qualified_shape_nodes(&self, ps_id: &Term, own_qvs: &Term) -> Vec<Term> {
         let property = Term::NamedNode(NamedNode::from(sh::PROPERTY));
         let mut sibling_nodes: Vec<Term> = Vec::new();
         let mut seen: FastSet<Term> = FastSet::default();
@@ -1032,11 +1040,7 @@ impl Parser<'_> {
                 }
             }
         }
-        let mut siblings = Vec::with_capacity(sibling_nodes.len());
-        for node in sibling_nodes {
-            siblings.push(self.parse_inline_shape(node)?);
-        }
-        Ok(siblings)
+        sibling_nodes
     }
 
     // ── SHACL-AF node expressions (spec §5) ─────────────────────────────────────
@@ -1067,14 +1071,9 @@ impl Parser<'_> {
         // the inner operand is this very node parsed with the paging keys
         // ignored, NOT a separate `sh:nodes` operand. A node carrying only paging
         // keys (no core expression) therefore hard-fails in `parse_node_expr_core`.
-        let guard_key = InFlight::NodeExpr(node.clone());
-        if self.in_flight.contains(&guard_key) {
-            return Err(format!("cyclic node expression on {node}"));
-        }
-        self.in_flight.insert(guard_key.clone());
-        let result = self.parse_node_expr_wrapped(node);
-        self.in_flight.remove(&guard_key);
-        result
+        self.with_expansion(InFlight::NodeExpr(node.clone()), |parser| {
+            parser.parse_node_expr_wrapped(node)
+        })
     }
 
     /// Apply the paging/ordering wrappers on top of the core expression.
@@ -1235,30 +1234,19 @@ impl Parser<'_> {
     ///
     /// It is deliberately a RECORDING pass and not a check: the index it resolves
     /// against is filled at the very end of the parse, after every shape exists.
-    fn record_node_by_expr_constants(&mut self, shape_id: &Term, expr: &NodeExpr) {
-        match expr {
-            NodeExpr::Constant(term @ Term::NamedNode(_)) => self
-                .node_by_expr_constants
-                .push((shape_id.clone(), term.clone())),
-            NodeExpr::List(members) => {
-                for member in members {
-                    if matches!(member, Term::NamedNode(_)) {
-                        self.node_by_expr_constants
-                            .push((shape_id.clone(), member.clone()));
-                    }
-                }
-            }
-            NodeExpr::Union(operands) | NodeExpr::Concat(operands) => {
-                for operand in operands {
-                    self.record_node_by_expr_constants(shape_id, operand);
-                }
-            }
-            NodeExpr::If { then, els, .. } => {
-                self.record_node_by_expr_constants(shape_id, then);
-                self.record_node_by_expr_constants(shape_id, els);
-            }
-            _ => {}
-        }
+    fn record_node_by_expr_constants(
+        &mut self,
+        shape_id: &Term,
+        expr: &NodeExpr,
+    ) -> Result<(), String> {
+        crate::expression::named_outputs::visit(expr, |term| {
+            purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident).push(
+                &mut self.node_by_expr_constants,
+                (shape_id.clone(), term.clone()),
+            )
+        })
+        .map(|_| ())
+        .map_err(|error| self.retain_native_refusal(crate::error::ShapesError::Storage(error)))
     }
 
     /// Parse a SHAPE-VALUED operand of a node expression, having first PROVED the
@@ -1283,8 +1271,8 @@ impl Parser<'_> {
     ///
     /// The test is [`Parser::node_is_a_shape`](super::Parser::node_is_a_shape), so
     /// an inline anonymous shape (`[ sh:property [ … ] ]`), a top-level
-    /// `sh:PropertyShape`, and an untyped node the shapes graph makes SHACL
-    /// statements about are all still accepted — only a node the shapes graph never
+    /// `sh:PropertyShape`, and an untyped node carrying constraint or target
+    /// declarations are all still accepted — only a node the shapes graph never
     /// described as a shape at all is refused.
     fn parse_shape_operand(
         &mut self,
@@ -1872,8 +1860,8 @@ impl Parser<'_> {
             // argument list has exactly two members — the node expression under
             // test and an expression producing the shape IRI. The spec constrains
             // that second argument to `sh:nodeKind sh:IRI` ("Must produce the IRI
-            // of a well-formed shape"), and this parser requires it to BE that IRI
-            // so the shape is resolved once, here, against the shapes graph.
+            // of a well-formed shape"). Named shapes resolve at load; computed
+            // arguments retain the original shape index for evaluation.
             ExprKind::ConformsToShape => {
                 let members = self.walk_rdf_list(&object, node)?;
                 let [node_arg, shape_arg] = members.as_slice() else {
@@ -1991,7 +1979,10 @@ impl Parser<'_> {
                 self.with_empty_node_expr_scope(|parser| parser.parse_node_expr(object))?,
             ));
         }
-        Ok(Some(NodeExpr::CustomCall { func, args: bound }))
+        Ok(Some(NodeExpr::CustomCall {
+            func: func.iri.clone(),
+            args: bound,
+        }))
     }
 
     /// Parse the RDF list at `(node, predicate)` into a vector of node expressions.
@@ -2170,7 +2161,7 @@ impl Parser<'_> {
                 bound.push((ArgKey::Index(key), arg));
             }
             return Ok(NodeExpr::CustomCall {
-                func: Arc::clone(func),
+                func: func.iri.clone(),
                 args: bound,
             });
         }
@@ -2182,20 +2173,29 @@ impl Parser<'_> {
         // result.
         if let Some(local) = fn_iri.as_str().strip_prefix(sparql_ns::NS) {
             let form = sparql_ns_lowering(local)
-                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+                .map_err(|cause| self.retain_native_refusal(cause.at_node(node).into()))?;
             let rendered = form
                 .render(fn_iri.as_str(), args.len())
-                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+                .map_err(|cause| self.retain_native_refusal(cause.at_node(node).into()))?;
             // The rendered text is evaluated as the projection of
             // `SELECT ((expr) AS ?result) WHERE {}` (see `crate::sparql::eval_scalar_expr`),
             // so it is validated in exactly that position.
             let probe = format!("SELECT (({rendered}) AS ?result) WHERE {{}}");
-            SparqlParser::new().parse_query(&probe).map_err(|e| {
-                format!(
-                    "SPARQL function node expression <{}> on {node} does not render a valid SPARQL \
-                     expression ({rendered}): {e}",
-                    fn_iri.as_str()
-                )
+            SparqlParser::new().parse_query(&probe).map_err(|cause| {
+                let refusal = match cause {
+                    purrdf_sparql_algebra::ParseError::Storage(cause) => {
+                        crate::error::ShapesError::Storage(cause)
+                    }
+                    cause => crate::expression::SparqlCallError::RenderedSyntax {
+                        iri: fn_iri.as_str().to_owned(),
+                        node: Box::new(node.clone()),
+                        expression: rendered.clone(),
+                        probe: probe.clone(),
+                        cause: Box::new(cause),
+                    }
+                    .into(),
+                };
+                self.retain_native_refusal(refusal)
             })?;
             return Ok(NodeExpr::Call(FnCall::Sparql {
                 iri: fn_iri,

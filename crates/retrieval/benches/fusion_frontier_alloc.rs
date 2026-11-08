@@ -56,6 +56,7 @@
 //! compare two runs against each other.
 
 use purrdf_alloc_probe::{report_peak, resident_kib as rss_kb};
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::env;
 use std::hint::black_box;
@@ -65,9 +66,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_retrieval::{
     CandidateDomains, Completeness, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis,
-    ExclusionVerdict, Fixed, FusionProfile, FusionStream, Iri, OrderFidelity, ProducerReceipt,
-    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, ScoreInterval, StreamContract,
-    Term, contribution,
+    ExclusionVerdict, FusionProfile, FusionStream, Iri, OrderFidelity, ProducerReceipt,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RowBlock, Score, ScoreInterval,
+    StreamContract, Term, contribution,
 };
 
 #[path = "../tests/support/streams.rs"]
@@ -169,7 +170,7 @@ struct LazyStream {
     pulls: Arc<AtomicUsize>,
     /// The stratum weight this stream's contributions are computed at, so the
     /// rows always carry the value the fixture's own profile re-derives.
-    weight: Fixed,
+    weight: Score,
     /// The block this stream draws its candidates from, or `None` for the
     /// overlapping fixture's shared, permuted universe.
     ///
@@ -277,6 +278,7 @@ impl RankedStream for LazyStream {
     fn contract(&self) -> StreamContract {
         if self.shared_block {
             return StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::within([
@@ -287,12 +289,14 @@ impl RankedStream for LazyStream {
         }
         match self.block {
             None => StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::Unrestricted,
                 self.exclusion,
             ),
             Some(block) => StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
                 DuplicatePolicy::Unique,
                 self.fidelity.clone(),
                 CandidateDomains::within([
@@ -342,7 +346,7 @@ impl RankedStream for LazyStream {
 fn fixture(
     total: u64,
     pulls: &Arc<AtomicUsize>,
-    weight: Fixed,
+    weight: Score,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
     fixture_declaring(
         total,
@@ -360,12 +364,13 @@ fn fixture(
 fn fixture_declaring(
     total: u64,
     pulls: &Arc<AtomicUsize>,
-    weight: Fixed,
+    weight: Score,
     fidelities: &[RankFidelity; STRATA.len()],
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let weights: BTreeMap<Iri, Score> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams = STRATA
         .iter()
         .enumerate()
@@ -393,7 +398,7 @@ fn fixture_declaring(
 /// Certify `rows` rows from three streams of `total` rows each, reporting the
 /// peak heap and the resident-set delta across the certifying window.
 fn phase(label: &str, total: u64, rows: usize) -> usize {
-    phase_at_weight(label, total, rows, Fixed::ONE)
+    phase_at_weight(label, total, rows, PRECISION_12.score(PRECISION_12.scale()))
 }
 
 /// The same phase at a stratum weight whose adjacent ranks collide, so the
@@ -404,7 +409,7 @@ fn phase(label: &str, total: u64, rows: usize) -> usize {
 /// certifies until the plateau ends. At a unit weight that regime begins past a
 /// million ranks — beyond `PULL_BUDGET`, so every phase above stops short of it
 /// and this bench has never once reported on it.
-fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Fixed) -> usize {
+fn phase_at_weight(label: &str, total: u64, rows: usize, weight: Score) -> usize {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, &pulls, weight);
     let mut fusion = FusionStream::new(streams, profile).expect("resident fusion setup");
@@ -489,7 +494,7 @@ fn degraded_phase(label: &str, total: u64, rows: usize, fidelity: &RankFidelity)
     let (profile, streams) = fixture_declaring(
         total,
         &pulls,
-        Fixed::ONE,
+        PRECISION_12.score(PRECISION_12.scale()),
         // One of the three, so the fusion holds degraded and undegraded strata
         // at once: the deficit loop then has both a stratum to charge a
         // rank-one contribution to and strata to charge only their open heads.
@@ -547,12 +552,13 @@ fn disjoint_fixture(
     total: u64,
     pulls: &Arc<AtomicUsize>,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA
+    let weights: BTreeMap<Iri, Score> = STRATA
         .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
+        .map(|name| (stratum(name), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams = STRATA
         .iter()
         .enumerate()
@@ -564,7 +570,7 @@ fn disjoint_fixture(
                     emitted: 0,
                     total,
                     pulls: Arc::clone(pulls),
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     block: Some(stream_index),
                     fidelity: RankFidelity::EXACT,
                     shared_block: false,
@@ -625,12 +631,13 @@ fn shared_block_fixture(
     lookups: &Arc<AtomicUsize>,
     basis: ExclusionBasis,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA
+    let weights: BTreeMap<Iri, Score> = STRATA
         .iter()
-        .map(|name| (stratum(name), Fixed::ONE))
+        .map(|name| (stratum(name), PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams = STRATA
         .iter()
         .enumerate()
@@ -642,7 +649,7 @@ fn shared_block_fixture(
                     emitted: 0,
                     total,
                     pulls: Arc::clone(pulls),
-                    weight: Fixed::ONE,
+                    weight: PRECISION_12.score(PRECISION_12.scale()),
                     block: None,
                     fidelity: RankFidelity::EXACT,
                     shared_block: true,
@@ -739,7 +746,7 @@ fn run_smoke() {
         "the overlapping fixture must fuse every requested row"
     );
 
-    let colliding = Fixed::from_raw(1_000);
+    let colliding = Score::from_raw(1_000, PRECISION_12);
     assert_eq!(
         phase_at_weight("smoke: collided", SMOKE_TOTAL, SMOKE_ROWS, colliding),
         SMOKE_ROWS,
@@ -820,7 +827,7 @@ fn main() {
     println!(
         "[fusion_frontier_alloc] --- collided regime (weight 1e-9), rows fused fixed at 32 ---"
     );
-    let colliding = Fixed::from_raw(1_000);
+    let colliding = Score::from_raw(1_000, PRECISION_12);
     for total in [1_000_u64, 10_000, 100_000, 1_000_000] {
         phase_at_weight(
             &format!("strata=3 rows=32 stream={total} collided"),

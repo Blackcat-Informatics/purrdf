@@ -408,7 +408,7 @@ test("the negotiated twin serializes by Accept and names the formats a dataset n
   assert.equal(outcome.isComplete, true);
   assert.equal(outcome.body.format, "csv");
   assert.equal(outcome.body.mediaType, "text/csv");
-  assert.equal(decoder.decode(outcome.body.bytes), engine.queryRaw(ds, select, { format: "csv" }));
+  assert.equal(decoder.decode(outcome.body.bytes), engine.queryRaw(ds, select, { format: "csv" }).body);
   assert.equal(typeof outcome.evidence.async.evaluateMs, "number");
 
   const graphs = `CONSTRUCT { GRAPH <${EX}out> { ?s ?p ?o } } WHERE { ?s ?p ?o }`;
@@ -965,14 +965,14 @@ test("refusal pair: a LOAD the catalog does not authorize is denied before any f
   const resolveLoad = createFetchLoadResolver({ fetch });
   const engine = new QueryEngine();
   const denied = await rejection(
-    engine.updateAsync(new Dataset(), `LOAD <${REMOTE_ORIGIN}/secret.ttl>`, { resolveLoad, catalog }),
+    engine.updateAsync(new Dataset(), `LOAD <${REMOTE_ORIGIN}/secret.ttl>`, { resolveLoad, catalog }).then(result => result.dataset),
   );
   assert.equal(denied.code, "native-sparql-load-denied");
   assert.match(denied.message, /withholds the network capability/);
   assert.equal(calls.length, 0, "nothing was fetched");
 
   const target = new Dataset();
-  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  await engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset);
   assert.equal(target.size, 1);
   const [accept, ...rest] = calls[0].init.headers;
   assert.equal(accept[0], "Accept");
@@ -995,10 +995,10 @@ test("a LOAD response without a Content-Type is a transport failure; with one it
     fetch: async () => new Response(TTL, { headers: { "Content-Type": "text/turtle" } }),
   });
   const target = new Dataset();
-  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad });
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }).then(result => result.dataset);
   assert.equal(target.size, 1);
   const missing = await rejection(
-    new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: bare }),
+    new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad: bare }).then(result => result.dataset),
   );
   assert.match(missing.message, /no Content-Type/);
 });
@@ -1035,7 +1035,7 @@ test("LOAD redirect: a redirect to an unlisted origin is denied, and the unliste
     return new Response(null, { status: 302, headers: { Location: `${evilOrigin}/steal.ttl` } });
   });
   const resolveLoad = createFetchLoadResolver({ fetch });
-  const denied = await rejection(new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }));
+  const denied = await rejection(new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset));
   assert.equal(denied.code, "native-sparql-load-denied");
   // The refusal names the redirect's own target (never the authorized DOC).
   assert.ok(
@@ -1060,7 +1060,7 @@ test("LOAD redirect: the valid neighbour — a redirect to a listed origin loads
   });
   const resolveLoad = createFetchLoadResolver({ fetch });
   const target = new Dataset();
-  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset);
   assert.equal(target.size, 1);
   // The oracle: the document's relative `<rel>` IRI is `${SECOND_ORIGIN}/rel` only if it
   // was resolved against the redirected document's own URL — a base of the originally
@@ -1086,7 +1086,7 @@ test("LOAD redirect: a redirect loop fails as typed transport after exactly five
     new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, {
       resolveLoad: createFetchLoadResolver({ fetch: looping.fetch }),
       catalog,
-    }),
+    }).then(result => result.dataset),
   );
   assert.equal(error.code, "native-sparql-load-failed");
   assert.match(error.message, /exceeded 5 redirect hops/);
@@ -1102,7 +1102,7 @@ test("LOAD redirect: a redirect loop fails as typed transport after exactly five
   await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, {
     resolveLoad: createFetchLoadResolver({ fetch: chain.fetch }),
     catalog,
-  });
+  }).then(result => result.dataset);
   assert.equal(target.size, 1);
   assert.equal(chain.calls.length, 5);
 });
@@ -1119,7 +1119,7 @@ test("LOAD redirect: the redirected origin's own profile headers are sent, never
   );
   const resolveLoad = createFetchLoadResolver({ fetch });
   const target = new Dataset();
-  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog });
+  await new QueryEngine().updateAsync(target, `LOAD <${DOC}>`, { resolveLoad, catalog }).then(result => result.dataset);
   assert.equal(target.size, 1);
   assert.equal(calls.length, 2);
   const sourceHeaders = calls[0].init.headers;
@@ -1162,7 +1162,7 @@ test("refusal pair: handleSparqlRequest requires governors with deadlineMs", asy
 test("every request form answers", async () => {
   const engine = new QueryEngine();
   const options = { engine, dataset: dataset(), governors: GOVERNORS };
-  const expected = rowsOf(engine.queryRaw(dataset(), SELECT_S));
+  const expected = rowsOf(engine.queryRaw(dataset(), SELECT_S).body);
   const forms = [
     httpRequest({ query: q(SELECT_S) }),
     httpRequest({ method: "POST", contentType: "application/sparql-query", body: SELECT_S }),
@@ -1229,7 +1229,7 @@ test("each Accept is answered in its format, byte for byte what queryRaw writes"
     assert.equal(response.status, 200, `${accept}`);
     assert.equal(response.headers.get("Content-Type"), mediaType);
     assert.equal(response.headers.get("Vary"), "Accept");
-    assert.equal(await response.text(), engine.queryRaw(ds, query, { format }), `${accept}`);
+    assert.equal(await response.text(), engine.queryRaw(ds, query, { format }).body, `${accept}`);
   }
 });
 
@@ -1364,14 +1364,14 @@ test("dataset parameters are honoured, and without them the query's own dataset 
     { ...options, dataset: target },
   );
   assert.equal(update.status, 204);
-  const copied = JSON.parse(target.query(`SELECT ?o WHERE { <${EX}copy> <${EX}has> ?o }`));
+  const copied = JSON.parse(target.query(`SELECT ?o WHERE { <${EX}copy> <${EX}has> ?o }`).body);
   assert.deepEqual(rowsOf(copied), [`o=${EX}inG2`]);
   const neighbour = dataset();
   await handleSparqlRequest(
     httpRequest({ method: "POST", contentType: "application/sparql-update", body: copy }),
     { ...options, dataset: neighbour },
   );
-  const unrestricted = JSON.parse(neighbour.query(`SELECT ?o WHERE { <${EX}copy> <${EX}has> ?o }`));
+  const unrestricted = JSON.parse(neighbour.query(`SELECT ?o WHERE { <${EX}copy> <${EX}has> ?o }`).body);
   assert.deepEqual(rowsOf(unrestricted), [`o=${EX}o1`, `o=${EX}o2`]);
 });
 
@@ -2233,7 +2233,7 @@ test("a federated query runs end to end through a service binding", async () => 
   );
   const binding = recordingFetch(async (_url, init) => {
     assert.equal(init.body, `SELECT * WHERE { ?o ^(^<${EX}q>) ?x . }`, "exactly the protected SERVICE pattern");
-    return srjResponse(remote.query(init.body));
+    return srjResponse(remote.query(init.body).body);
   });
   const response = await handleSparqlRequest(httpRequest({ query: q(FEDERATED()) }), {
     engine: new QueryEngine(),
@@ -2277,21 +2277,21 @@ test("CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS
     { ...base, cors },
   );
   assert.equal(echoed.status, 200);
-  assert.equal(echoed.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
+  assert.deepEqual([echoed.headers.get("Access-Control-Allow-Origin"), echoed.headers.get("Access-Control-Expose-Headers")], ["https://app.example.org", "Purrdf-Execution-Receipt"]);
   assert.equal(echoed.headers.get("Vary"), "Accept, Origin");
 
   const star = await handleSparqlRequest(
     httpRequest({ query: q(SELECT_S), origin: "https://any.example.org" }),
     { ...base, cors: { origins: "*" } },
   );
-  assert.equal(star.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.deepEqual([star.headers.get("Access-Control-Allow-Origin"), star.headers.get("Access-Control-Expose-Headers")], ["*", "Purrdf-Execution-Receipt"]);
 
   const problemWithCors = await handleSparqlRequest(
     httpRequest({ query: "x=1", origin: "https://app.example.org" }),
     { ...base, cors },
   );
   assert.equal(problemWithCors.status, 400);
-  assert.equal(problemWithCors.headers.get("Access-Control-Allow-Origin"), "https://app.example.org");
+  assert.deepEqual([problemWithCors.headers.get("Access-Control-Allow-Origin"), problemWithCors.headers.get("Access-Control-Expose-Headers")], ["https://app.example.org", "Purrdf-Execution-Receipt"]);
 
   const plain = await handleSparqlRequest(
     httpRequest({ query: q(SELECT_S), origin: "https://app.example.org" }),

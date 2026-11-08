@@ -8,9 +8,9 @@
 #pragma once
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
-#define PURRDF_MAJOR 3
+#define PURRDF_MAJOR 4
 #define PURRDF_MINOR 0
-#define PURRDF_PATCH 1
+#define PURRDF_PATCH 0
 
 
 #include <stdarg.h>
@@ -41,35 +41,36 @@
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
  *
- * # The bump rule this triple obeys
+ * # Compatibility during workspace v4
  *
- * The project's pre-1.0 policy — `docs/book/src/project/releases.md`, the
- * "Pre-1.0 semver policy" section — is: while the version is `0.x`, a **minor**
- * bump (`0.x` → `0.(x+1)`) may include breaking changes, and a **patch** bump
- * (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. So while MAJOR is
- * `0`, **an incompatible C-ABI change rides the MINOR component**; MAJOR does
- * not move, because moving it would declare the 1.0 stability this surface has
- * explicitly not earned yet (the paragraph above).
+ * The C ABI row in `docs/MIGRATION-4.0.md`, "Compatibility after 4.0", governs
+ * workspace v4: the ABI 0.20.0 surface shipped with v4.0 remains compatible
+ * throughout v4 despite its separate beta version. Existing exported signatures,
+ * return contracts, status discriminants, struct layouts and array dimensions
+ * are frozen. Add symbols or retained handles for new capabilities, and retain
+ * the existing entry points and layouts. An ABI version bump never authorizes
+ * a breaking change within workspace v4.
  *
- * A change is incompatible — and therefore MUST bump MINOR — when a host built
- * against the previous header would mis-execute against the new library:
- * removing an exported function, renaming one, retyping or reordering its
- * parameters, inserting a parameter anywhere but the end, changing its return
- * type, or renumbering a status discriminant. `tests/abi_signatures.rs` pins
- * the complete exported prototype list to this triple, so such a change cannot
- * reach a release without an author deliberately touching these constants.
+ * Earlier workspace releases permitted incompatible changes on an ABI minor
+ * bump while this major component was zero. That historical policy does not
+ * apply during workspace v4. `tests/abi_signatures.rs` pins the exported
+ * prototype list to this triple; additive exports still update the minor
+ * version so callers can identify the surface available in a loaded library.
  */
 #define PURRDF_ABI_MAJOR 0
 
 /**
- * ABI minor version. It TRACKS THE EXPORTED SIGNATURES: every change to the
- * parameter list, the return contract, or the documented behaviour of an exported
- * symbol bumps it, including a purely additive out-param — additive in source is
- * still a recompile for every C consumer, and a library whose minor is below the
- * header's cannot honour the call the header describes. It is the number a consumer
- * linking against an unknown build reads back from `purrdf_abi_version` to decide
- * whether the header it compiled against and the library it loaded agree, so it must
- * never stand still across a signature change.
+ * ABI minor version. During workspace v4, additive exported symbols bump it;
+ * existing parameter lists, return contracts and layouts remain compatible.
+ * Adding an out-parameter to an existing symbol is an incompatible change and
+ * is forbidden during v4. A caller reads this number through
+ * `purrdf_abi_version` to determine whether a loaded library provides the
+ * additional symbols its header declares.
+ *
+ * # Historical changes before the workspace v4 compatibility baseline
+ *
+ * The examples below describe earlier ABI revisions and do not authorize
+ * incompatible changes during workspace v4.
  *
  * `0.6.0` → `0.7.0` carries four incompatible signature changes, deliberately
  * bundled into one unreleased bump rather than split across four:
@@ -296,8 +297,73 @@
  * admission refusal from a malformed shapes graph; error accessors retain the
  * diagnostic. No earlier status is renumbered, and the wildcard-free status test
  * pins the appended value.
+ *
+ * # `0.11.0` → `0.12.0`: caller-controlled regime term arenas
+ *
+ * Seven prototypes gain nullable `const uint64_t *max_term_arena_bytes` after
+ * `max_join_steps`: the four `purrdf_entail_` materialization/conclusion services
+ * and `purrdf_query_entailment_governed` with its XPath and geo variants. This
+ * inserts an argument before existing controls/out-pointers and requires every
+ * affected C caller to rebuild. Null retains the engine default; a supplied
+ * limit is enforced and arena refusals name the actual calling parameter.
+ *
+ * # `0.12.0` → `0.13.0`: supplied query coordinates
+ *
+ * All twelve ordinary, JSON, governed and entailment query prototypes, including
+ * XPath and geographic variants, gain nullable `now` and `entropy_seed` pointers
+ * immediately before their first output. Callers must rebuild; each null pointer
+ * independently requests the native default, and a pointed zero is a supplied seed.
+ *
+ * # `0.13.0` → `0.14.0`: supplied UPDATE coordinates
+ *
+ * The three governed UPDATE entries add independently nullable `now` and
+ * `entropy_seed` inputs after governors and before the first output. Rebuild C
+ * callers against the new header. Exact time and the copied unsigned seed are
+ * owned for the request; NULL independently retains a fresh native default.
+ *
+ * # `0.14.0` → `0.15.0`: supplied rule execution coordinates
+ *
+ * Both entailment and rule-application entries, including their XPath variants,
+ * gain nullable `now` and `entropy_seed` inputs immediately before their first
+ * output. Callers must rebuild. Rule application covers both SHACL and SRL;
+ * owned inputs retain exact time and the unsigned seed while preserving request limits.
+ *
+ * # `0.15.0` → `0.16.0`: owned execution receipts
+ *
+ * Every query, UPDATE and rule execution export requires an independent
+ * `out_receipt` buffer slot after the seed input. Release it with
+ * `purrdf_buffer_free`. Failed executions expose their receipt through
+ * `purrdf_error_execution_receipt_json` on the original error handle.
+ *
+ * # `0.16.0` → `0.17.0`: explicit canonical-search policy and evidence
+ *
+ * Canonicalizing entailment, session, SHACL materialization and product exports
+ * require `canonical_search`, optional `cancellation`, and an independent
+ * `out_canonicalization_json` slot before `out_error`. The policy is `unlimited`
+ * or a canonical decimal `u64`. Every run reports its own effective policy and
+ * charged work. Errors retain original native causes and receipts until freed.
+ * All output slots must be distinct; rebuild affected callers against this header.
+ *
+ * # `0.17.0` → `0.18.0`: caller-selected logical UDF depth
+ *
+ * `PurrdfQueryGovernors` gains `max_udf_depth` before `deadline_millis`.
+ * MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
+ * the default depth limit of 32. The two flag bits conflict. Rebuild callers
+ * against the new structure layout and regenerate any copied declarations.
+ *
+ * # `0.18.0` → `0.19.0`: configured YAML-LD input
+ *
+ * `purrdf_parse` gains nullable `input_options` bytes and `input_options_len`
+ * after `source_name`. Pass null and zero for the existing default behavior.
+ * Rebuild all consumers against the new header; options select Basic only.
+ *
+ * # `0.19.0` → `0.20.0`: native YAML source carrier pair
+ *
+ * Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
+ * existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
+ * The native-cause accessor also exposes original YAML source refusals.
  */
-#define PURRDF_ABI_MINOR 11
+#define PURRDF_ABI_MINOR 20
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -397,6 +463,11 @@ enum PurrdfStatus
      * Logical capacity or physical storage refused; the diagnostic retains its cause.
      */
     PURRDF_STATUS_STORAGE_ERROR = 15,
+    /**
+     * Canonicalization was refused by its profile or explicit search control.
+     * The error retains exact native cause and per-run execution receipt JSON.
+     */
+    PURRDF_STATUS_CANONICALIZATION_ERROR = 16,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -582,6 +653,14 @@ enum PurrdfGovernorFlag
      * Poll `cancellation`.
      */
     PURRDF_GOVERNOR_FLAG_CANCELLATION = (1 << 6),
+    /**
+     * Enforce the inclusive logical depth in `max_udf_depth`.
+     */
+    PURRDF_GOVERNOR_FLAG_MAX_UDF_DEPTH = (1 << 7),
+    /**
+     * Remove the default logical user-function depth ceiling.
+     */
+    PURRDF_GOVERNOR_FLAG_UNLIMITED_UDF_DEPTH = (1 << 8),
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -942,7 +1021,7 @@ typedef int32_t PurrdfSrlCheckLevel;
 
 /**
  * An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
- * with `purrdf_buffer_free`.
+ * with `purrdf_buffer_free`. Canonical payloads retain their source's grant.
  */
 typedef struct PurrdfBuffer PurrdfBuffer;
 
@@ -1124,7 +1203,9 @@ typedef struct {
  * Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
  * meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
  * every governed call still meters them at the native `METERED` ceiling so its evidence
- * is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+ * is useful. Logical UDF depth defaults to 32. Enable MaxUdfDepth for an inclusive
+ * finite depth or UnlimitedUdfDepth to remove it; enabling both is an error.
+ * `reserved` must be zero. `cancellation`, when enabled, must remain a live
  * handle until the synchronous call returns.
  */
 typedef struct {
@@ -1157,6 +1238,11 @@ typedef struct {
      */
     uint64_t max_remote_requests;
     /**
+     * Inclusive logical depth when MaxUdfDepth is enabled.
+     * MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
+     */
+    uint64_t max_udf_depth;
+    /**
      * Relative wall-clock budget in milliseconds.
      */
     uint64_t deadline_millis;
@@ -1167,7 +1253,10 @@ typedef struct {
 } PurrdfQueryGovernors;
 
 /**
- * A fixed, named C representation of the kernel's eight-dimensional resource vector.
+ * A fixed projection of the kernel's eight currently named resource dimensions.
+ *
+ * This layout remains fixed when the Rust vocabulary grows. New dimensions need
+ * an additional C evidence carrier retaining the complete native receipt.
  */
 typedef struct {
     /**
@@ -1213,7 +1302,8 @@ typedef struct {
      */
     int32_t kind;
     /**
-     * [`PurrdfResourceDimension`] discriminant, or `-1` for a stop/none/unknown.
+     * [`PurrdfResourceDimension`] discriminant, or `-1` when absent or not represented
+     * by this ABI. A budget/refusal still retains its kind and counts in that case.
      */
     int32_t dimension;
     /**
@@ -1235,7 +1325,11 @@ typedef struct {
 } PurrdfGovernorTrip;
 
 /**
- * One governed execution's deterministic accounting receipt.
+ * One governed execution's deterministic accounting receipt projected to this ABI.
+ *
+ * The consumed and limit vectors retain their eight fixed fields. Complete evidence
+ * for a future Rust dimension needs an additive carrier owning the native receipt;
+ * the projected fields cannot recover measurements that they do not represent.
  */
 typedef struct {
     /**
@@ -1440,6 +1534,70 @@ int32_t purrdf_cursor_next(PurrdfCursor *cursor,
 void purrdf_cursor_free(PurrdfCursor *cursor);
 
 /**
+ * Expand original JSON-LD/YAML-LD source bytes into owned expanded JSON bytes.
+ * Source/request pointers are borrowed only during this synchronous call.
+ * Success publishes one buffer, without an added newline or NUL. Release it
+ * with `purrdf_buffer_free`; diagnostic ownership ends at `purrdf_error_free`.
+ * Request/native phases and the final host buffer control are separate accounts.
+ * # Safety
+ * Both input pointers must be non-null and readable for their addressable lengths.
+ * Output/error slots must be writable, initially empty, and independent of input
+ * storage. Aliased output/error slots are refused without writing through either.
+ */
+int32_t purrdf_document_expand(const uint8_t *source,
+                               size_t source_len,
+                               const uint8_t *request_json,
+                               size_t request_len,
+                               PurrdfBuffer **out_buffer,
+                               PurrdfError **out_error);
+
+/**
+ * Compact source bytes under the explicit output context in the request.
+ * Returns one owned UTF-8 JSON buffer; release buffer/error through their free functions.
+ * # Safety
+ * Inputs must be readable for their addressable lengths, and non-null. Output
+ * slots must be writable, initially empty and independent of the input storage.
+ */
+int32_t purrdf_document_compact(const uint8_t *source,
+                                size_t source_len,
+                                const uint8_t *request_json,
+                                size_t request_len,
+                                PurrdfBuffer **out_buffer,
+                                PurrdfError **out_error);
+
+/**
+ * Flatten source bytes, compacting only with a non-null request output context.
+ * Returns one owned UTF-8 JSON buffer; release buffer/error through their free functions.
+ * # Safety
+ * Inputs must be readable for their addressable lengths, and non-null. Output
+ * slots must be writable, initially empty and independent of the input storage.
+ */
+int32_t purrdf_document_flatten(const uint8_t *source,
+                                size_t source_len,
+                                const uint8_t *request_json,
+                                size_t request_len,
+                                PurrdfBuffer **out_buffer,
+                                PurrdfError **out_error);
+
+/**
+ * Frame separate source/frame bytes through the native two-document operation.
+ * Success publishes one owned UTF-8 JSON buffer without a newline or NUL.
+ * Release the buffer with `purrdf_buffer_free` and errors with `purrdf_error_free`.
+ * # Safety
+ * All three inputs must be non-null and readable for their addressable lengths.
+ * Output/error slots must be writable, initially empty and independent of input
+ * storage. Aliased slots are refused without writing through either.
+ */
+int32_t purrdf_document_frame(const uint8_t *source,
+                              size_t source_len,
+                              const uint8_t *frame,
+                              size_t frame_len,
+                              const uint8_t *request_json,
+                              size_t request_len,
+                              PurrdfBuffer **out_buffer,
+                              PurrdfError **out_error);
+
+/**
  * Materialize an RDF document under a SPARQL entailment regime.
  *
  * `document` is parsed as N-Quads, which accepts an N-Triples document
@@ -1470,7 +1628,8 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `max_stored_facts` bounds the facts each evaluation store may hold and
  * `max_join_steps` the candidate solutions the rules may enumerate, for the `rdf`, `rdfs`,
  * `owl-rl` and `d` regimes. Each may be NULL for the target's default — 4194304 facts and
- * 1048576 join steps natively — or point at an exact limit. A run past either fails
+ * 1048576 join steps natively — or point at an exact limit. `max_term_arena_bytes`
+ * bounds retained term surfaces, defaulting to 16777216 bytes. A run past a limit fails
  * the call naming the limit, the numbers and the parameter that raises it; a run inside
  * them returns exactly the closure larger limits would, and the report's
  * `contract-hash` names the calculus under the limits in force.
@@ -1491,7 +1650,7 @@ void purrdf_cursor_free(PurrdfCursor *cursor);
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
  * null or writable.
  */
@@ -1505,8 +1664,12 @@ int32_t purrdf_entail_materialize_to_nquads(const char *document,
                                             size_t premise_iri_count,
                                             const uint64_t *max_stored_facts,
                                             const uint64_t *max_join_steps,
+                                            const uint64_t *max_term_arena_bytes,
                                             PurrdfBuffer **out_nquads,
                                             PurrdfBuffer **out_report,
+                                            const char *canonical_search,
+                                            const PurrdfCancellation *cancellation,
+                                            PurrdfBuffer **out_canonicalization_json,
                                             PurrdfError **out_error);
 
 /**
@@ -1612,6 +1775,9 @@ int32_t purrdf_entail_consistency(const char *document,
                                   uint32_t work_cap,
                                   PurrdfBuffer **out_answer,
                                   PurrdfBuffer **out_certificate,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -1622,9 +1788,10 @@ int32_t purrdf_entail_consistency(const char *document,
  * block. **Free BOTH with `purrdf_buffer_free`.** `step_cap` and `work_cap` behave
  * exactly as in [`purrdf_entail_consistency`].
  *
- * Costs one tableau decision per ORDERED pair of named classes plus the
- * consistency check, which the certificate's `decisions` line reports so the cost
- * is a measurement rather than a surprise.
+ * Classification reuses shared saturation; the certificate's `decisions` line
+ * records its actual tableau runs. Incomplete directness returns an error with
+ * `owl-directness-unavailable` and the original full certificate in its message;
+ * neither answer out-parameter is written.
  *
  * # Safety
  * As [`purrdf_entail_consistency`].
@@ -1634,6 +1801,9 @@ int32_t purrdf_entail_classify(const char *document,
                                uint32_t work_cap,
                                PurrdfBuffer **out_answer,
                                PurrdfBuffer **out_certificate,
+                               const char *canonical_search,
+                               const PurrdfCancellation *cancellation,
+                               PurrdfBuffer **out_canonicalization_json,
                                PurrdfError **out_error);
 
 /**
@@ -1645,6 +1815,9 @@ int32_t purrdf_entail_classify(const char *document,
  * `purrdf_buffer_free`.** `step_cap` and `work_cap` behave exactly as in
  * [`purrdf_entail_consistency`].
  *
+ * Incomplete directness returns an error with `owl-directness-unavailable` and
+ * the original full certificate in its message; neither answer out-parameter is written.
+ *
  * # Safety
  * As [`purrdf_entail_consistency`].
  */
@@ -1653,6 +1826,9 @@ int32_t purrdf_entail_realize(const char *document,
                               uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -1677,6 +1853,9 @@ int32_t purrdf_entail_instances(const char *document,
                                 uint32_t work_cap,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -1705,6 +1884,9 @@ int32_t purrdf_entail_entails(const char *document,
                               uint32_t work_cap,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -1757,6 +1939,9 @@ int32_t purrdf_entail_extract_module(const char *document,
                                      const char *method,
                                      PurrdfBuffer **out_answer,
                                      PurrdfBuffer **out_certificate,
+                                     const char *canonical_search,
+                                     const PurrdfCancellation *cancellation,
+                                     PurrdfBuffer **out_canonicalization_json,
                                      PurrdfError **out_error);
 
 /**
@@ -1791,6 +1976,9 @@ int32_t purrdf_entail_justify(const char *document,
                               const char *axiom,
                               PurrdfBuffer **out_answer,
                               PurrdfBuffer **out_certificate,
+                              const char *canonical_search,
+                              const PurrdfCancellation *cancellation,
+                              PurrdfBuffer **out_canonicalization_json,
                               PurrdfError **out_error);
 
 /**
@@ -1900,7 +2088,7 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1914,6 +2102,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
                                       size_t premise_iri_count,
                                       const uint64_t *max_stored_facts,
                                       const uint64_t *max_join_steps,
+                                      const uint64_t *max_term_arena_bytes,
                                       PurrdfBuffer **out_answer,
                                       PurrdfBuffer **out_certificate,
                                       PurrdfError **out_error);
@@ -1962,7 +2151,7 @@ int32_t purrdf_entail_certain_answers(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -1976,6 +2165,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
                                     size_t premise_iri_count,
                                     const uint64_t *max_stored_facts,
                                     const uint64_t *max_join_steps,
+                                    const uint64_t *max_term_arena_bytes,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
                                     PurrdfError **out_error);
@@ -2015,7 +2205,7 @@ int32_t purrdf_entail_graph_entails(const char *regime,
  * `import_count` is non-zero, `import_iris` and `import_documents` must each address at
  * least `import_count` readable, non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
- * NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+ * NUL-terminated C strings; `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or
  * readable; `out_answer` and `out_certificate` must be writable pointers;
  * `out_error` must be null or writable.
  */
@@ -2029,6 +2219,7 @@ int32_t purrdf_entail_verify_entailment(const char *regime,
                                         size_t premise_iri_count,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
+                                        const uint64_t *max_term_arena_bytes,
                                         PurrdfBuffer **out_answer,
                                         PurrdfBuffer **out_certificate,
                                         PurrdfError **out_error);
@@ -2073,6 +2264,9 @@ int32_t purrdf_entail_prove(const char *document,
                             PurrdfBuffer **out_answer,
                             PurrdfBuffer **out_certificate,
                             PurrdfBuffer **out_proof,
+                            const char *canonical_search,
+                            const PurrdfCancellation *cancellation,
+                            PurrdfBuffer **out_canonicalization_json,
                             PurrdfError **out_error);
 
 /**
@@ -2112,6 +2306,9 @@ int32_t purrdf_entail_check_proof(const char *document,
                                   const char *certificate,
                                   const char *proof,
                                   PurrdfBuffer **out_report,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -2162,6 +2359,9 @@ void purrdf_reasoner_free(PurrdfReasoner *reasoner);
 int32_t purrdf_reasoner_consistency(PurrdfReasoner *reasoner,
                                     PurrdfBuffer **out_answer,
                                     PurrdfBuffer **out_certificate,
+                                    const char *canonical_search,
+                                    const PurrdfCancellation *cancellation,
+                                    PurrdfBuffer **out_canonicalization_json,
                                     PurrdfError **out_error);
 
 /**
@@ -2177,6 +2377,9 @@ int32_t purrdf_reasoner_consistency(PurrdfReasoner *reasoner,
 int32_t purrdf_reasoner_classify(PurrdfReasoner *reasoner,
                                  PurrdfBuffer **out_answer,
                                  PurrdfBuffer **out_certificate,
+                                 const char *canonical_search,
+                                 const PurrdfCancellation *cancellation,
+                                 PurrdfBuffer **out_canonicalization_json,
                                  PurrdfError **out_error);
 
 /**
@@ -2192,6 +2395,9 @@ int32_t purrdf_reasoner_classify(PurrdfReasoner *reasoner,
 int32_t purrdf_reasoner_realize(PurrdfReasoner *reasoner,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2209,6 +2415,9 @@ int32_t purrdf_reasoner_instances(PurrdfReasoner *reasoner,
                                   const char *class_,
                                   PurrdfBuffer **out_answer,
                                   PurrdfBuffer **out_certificate,
+                                  const char *canonical_search,
+                                  const PurrdfCancellation *cancellation,
+                                  PurrdfBuffer **out_canonicalization_json,
                                   PurrdfError **out_error);
 
 /**
@@ -2226,6 +2435,9 @@ int32_t purrdf_reasoner_entails(PurrdfReasoner *reasoner,
                                 const char *axiom,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2243,6 +2455,9 @@ int32_t purrdf_reasoner_justify(PurrdfReasoner *reasoner,
                                 const char *axiom,
                                 PurrdfBuffer **out_answer,
                                 PurrdfBuffer **out_certificate,
+                                const char *canonical_search,
+                                const PurrdfCancellation *cancellation,
+                                PurrdfBuffer **out_canonicalization_json,
                                 PurrdfError **out_error);
 
 /**
@@ -2273,6 +2488,9 @@ int32_t purrdf_reasoner_extract_module(const PurrdfReasoner *reasoner,
                                        const char *method,
                                        PurrdfBuffer **out_answer,
                                        PurrdfBuffer **out_certificate,
+                                       const char *canonical_search,
+                                       const PurrdfCancellation *cancellation,
+                                       PurrdfBuffer **out_canonicalization_json,
                                        PurrdfError **out_error);
 
 /**
@@ -2290,6 +2508,32 @@ int32_t purrdf_reasoner_explain_conclusion(const PurrdfReasoner *reasoner,
                                            PurrdfBuffer **out_answer,
                                            PurrdfBuffer **out_certificate,
                                            PurrdfError **out_error);
+
+/**
+ * Borrow a failed execution's JSON receipt, or null when no execution was attempted.
+ *
+ * # Safety
+ * `error` must be null or a live error handle; the returned text lives with it.
+ */
+const char *purrdf_error_execution_receipt_json(const PurrdfError *error);
+
+/**
+ * Borrow this canonicalization request's receipt JSON, including `[]` if no run
+ * started. Null denotes an error from another kind of operation.
+ * # Safety
+ * `error` must be null or a live error handle. The text lives until that handle is freed.
+ */
+const char *purrdf_error_canonicalization_json(const PurrdfError *error);
+
+/**
+ * Borrow the original native cause's closed fields as JSON.
+ * The original native cause and its admission grant remain owned until error_free.
+ * Null means no native cause record is available. An inspection failure is
+ * reported explicitly by the error status/message and diagnostic, never as success.
+ * # Safety
+ * `error` must be null or a live error handle. The text lives until that handle is freed.
+ */
+const char *purrdf_error_native_cause_json(const PurrdfError *error);
 
 /**
  * Return the status code carried by an error, or `Panic` if `err` is null.
@@ -2402,7 +2646,8 @@ int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index,
 void purrdf_geo_point_index_free(PurrdfGeoPointIndex *index);
 
 /**
- * Initialize `*out` as a metered governed call with no finite caller ceiling.
+ * Initialize `*out` as a metered governed call with the default UDF depth limit.
+ * Other resource dimensions have no finite caller ceiling.
  *
  * # Safety
  * `out` must be writable.
@@ -2570,18 +2815,23 @@ int32_t purrdf_dataset_term_count(const PurrdfDataset *dataset, size_t *out);
 /**
  * Parse `len` bytes of `media_type` (e.g. `"text/turtle"`, `"application/n-quads"`)
  * into a fresh frozen dataset. `base_iri` and `source_name` may be null. On
+ * `input_options` is nullable UTF-8 JSON with an explicit byte length. Null requires
+ * length zero and retains default parsing. Present options require YAML-LD. On
  * success `*out_dataset` is a caller-owned handle (free with
  * `purrdf_dataset_free`); on failure `*out_error` is set.
  *
  * # Safety
  * `bytes` must be valid for `len` bytes; the `c_char` pointers must be null or
- * NUL-terminated; the out-params must be writable.
+ * NUL-terminated; `input_options` must be valid for `input_options_len` bytes
+ * when non-null; the out-params must be writable.
  */
 int32_t purrdf_parse(const uint8_t *bytes,
                      size_t len,
                      const char *media_type,
                      const char *base_iri,
                      const char *source_name,
+                     const uint8_t *input_options,
+                     size_t input_options_len,
                      PurrdfDataset **out_dataset,
                      PurrdfError **out_error);
 
@@ -2707,13 +2957,25 @@ int32_t purrdf_dataset_division_policy(const PurrdfDataset *dataset,
  * is `0`/`1`. Exactly one output is set per kind. `base_iri` may be null. The query runs
  * under the dataset's division policy (`purrdf_dataset_set_division_policy`).
  *
+ * `now` supplies an exact `xsd:dateTime` lexical form, including its fractional
+ * seconds and timezone. `entropy_seed` supplies an unsigned seed for `RAND`,
+ * `UUID` and `STRUUID`; pointed zero is valid. Each null pointer independently
+ * requests the native default for this execution. Both inputs are copied before
+ * execution; no caller memory is retained by results. Malformed time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ *
  * # Safety
+ * `now` must be null or a NUL-terminated UTF-8 C string live for the call.
+ * `entropy_seed` must be null or point to a readable, aligned `uint64_t`.
  * `dataset` must be a live handle; `query` must be a NUL-terminated C string;
  * the out-params must be writable.
  */
 int32_t purrdf_query(const PurrdfDataset *dataset,
                      const char *query,
                      const char *base_iri,
+                     const char *now,
+                     const uint64_t *entropy_seed,
+                     PurrdfBuffer **out_receipt,
                      int32_t *out_kind,
                      PurrdfRowCursor **out_rows,
                      PurrdfDataset **out_graph,
@@ -2744,6 +3006,9 @@ int32_t purrdf_query_xpath_regex(const PurrdfDataset *dataset,
                                  const char *query,
                                  const char *base_iri,
                                  const char *regex_profile,
+                                 const char *now,
+                                 const uint64_t *entropy_seed,
+                                 PurrdfBuffer **out_receipt,
                                  int32_t *out_kind,
                                  PurrdfRowCursor **out_rows,
                                  PurrdfDataset **out_graph,
@@ -2802,7 +3067,16 @@ int32_t purrdf_query_xpath_regex(const PurrdfDataset *dataset,
  * (it is not a SPARQL-results document). Read the extension back with
  * `purrdf_sparql_results::provenance_from_json` under the SAME namespace.
  *
+ * `now` supplies an exact `xsd:dateTime` lexical form, including its fractional
+ * seconds and timezone. `entropy_seed` supplies an unsigned seed for `RAND`,
+ * `UUID` and `STRUUID`; pointed zero is valid. Each null pointer independently
+ * requests the native default for this execution. Both inputs are copied before
+ * execution; no caller memory is retained by results. Malformed time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ *
  * # Safety
+ * `now` must be null or a NUL-terminated UTF-8 C string live for the call.
+ * `entropy_seed` must be null or point to a readable, aligned `uint64_t`.
  * `dataset` must be a live handle; `query` must be a NUL-terminated C string;
  * the out-params must be writable. `provenance_prefix`/`provenance_iri`, if non-null,
  * must be NUL-terminated UTF-8 C strings live for the call.
@@ -2812,6 +3086,9 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           const char *base_iri,
                           const char *provenance_prefix,
                           const char *provenance_iri,
+                          const char *now,
+                          const uint64_t *entropy_seed,
+                          PurrdfBuffer **out_receipt,
                           PurrdfBuffer **out_buffer,
                           PurrdfError **out_error);
 
@@ -2833,6 +3110,9 @@ int32_t purrdf_query_json_xpath_regex(const PurrdfDataset *dataset,
                                       const char *provenance_prefix,
                                       const char *provenance_iri,
                                       const char *regex_profile,
+                                      const char *now,
+                                      const uint64_t *entropy_seed,
+                                      PurrdfBuffer **out_receipt,
                                       PurrdfBuffer **out_buffer,
                                       PurrdfError **out_error);
 
@@ -2855,7 +3135,16 @@ int32_t purrdf_query_json_xpath_regex(const PurrdfDataset *dataset,
  * names an ordinary unregistered custom-aggregate IRI, exactly as before this parameter
  * existed.
  *
+ * `now` supplies an exact `xsd:dateTime` lexical form, including its fractional
+ * seconds and timezone. `entropy_seed` supplies an unsigned seed for `RAND`,
+ * `UUID` and `STRUUID`; pointed zero is valid. Each null pointer independently
+ * requests the native default for this execution. Both inputs are copied before
+ * execution; no caller memory is retained by results. Malformed time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ *
  * # Safety
+ * `now` must be null or a NUL-terminated UTF-8 C string live for the call.
+ * `entropy_seed` must be null or point to a readable, aligned `uint64_t`.
  * `dataset`, `query`, and `governors` must remain live for the call. `out_outcome`,
  * `out_kind`, `out_evidence`, and `out_partial` must be writable. The shape-specific
  * result pointer must be writable when that shape is returned. Any enabled cancellation
@@ -2867,6 +3156,9 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               const char *base_iri,
                               const char *aggregate_namespace,
                               const PurrdfQueryGovernors *governors,
+                              const char *now,
+                              const uint64_t *entropy_seed,
+                              PurrdfBuffer **out_receipt,
                               int32_t *out_outcome,
                               int32_t *out_kind,
                               PurrdfRowCursor **out_rows,
@@ -2897,6 +3189,9 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
                                           const char *aggregate_namespace,
                                           const char *regex_profile,
                                           const PurrdfQueryGovernors *governors,
+                                          const char *now,
+                                          const uint64_t *entropy_seed,
+                                          PurrdfBuffer **out_receipt,
                                           int32_t *out_outcome,
                                           int32_t *out_kind,
                                           PurrdfRowCursor **out_rows,
@@ -2941,7 +3236,16 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
  * (`purrdf_query_entailment_governed's max_stored_facts`, …); the query governors price the
  * evaluation over the closure and never become a limit on it.
  *
+ * `now` supplies an exact `xsd:dateTime` lexical form, including its fractional
+ * seconds and timezone. `entropy_seed` supplies an unsigned seed for `RAND`,
+ * `UUID` and `STRUUID`; pointed zero is valid. Each null pointer independently
+ * requests the native default for this execution. Both inputs are copied before
+ * execution; no caller memory is retained by results. Malformed time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ *
  * # Safety
+ * `now` must be null or a NUL-terminated UTF-8 C string live for the call.
+ * `entropy_seed` must be null or point to a readable, aligned `uint64_t`.
  * All input strings and handles must remain live for the synchronous call. Required
  * out-pointers must be writable; any enabled cancellation handle must remain live until
  * return. Shape-specific result pointers are required when that shape is returned.
@@ -2949,7 +3253,7 @@ int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
  * the call. When `import_count` is non-zero, `import_iris` and `import_documents` must
  * each address at least `import_count` non-null, NUL-terminated C strings; when
  * `premise_iri_count` is non-zero, `premise_iris` must address that many.
- * `max_stored_facts` and `max_join_steps` must each be null or readable.
+ * `max_stored_facts`, `max_join_steps` and `max_term_arena_bytes` must each be null or readable.
  */
 int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          const char *query,
@@ -2963,8 +3267,12 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          size_t premise_iri_count,
                                          const uint64_t *max_stored_facts,
                                          const uint64_t *max_join_steps,
+                                         const uint64_t *max_term_arena_bytes,
                                          const char *aggregate_namespace,
                                          const PurrdfQueryGovernors *governors,
+                                         const char *now,
+                                         const uint64_t *entropy_seed,
+                                         PurrdfBuffer **out_receipt,
                                          int32_t *out_outcome,
                                          int32_t *out_kind,
                                          PurrdfRowCursor **out_rows,
@@ -3000,9 +3308,13 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
                                                      size_t premise_iri_count,
                                                      const uint64_t *max_stored_facts,
                                                      const uint64_t *max_join_steps,
+                                                     const uint64_t *max_term_arena_bytes,
                                                      const char *aggregate_namespace,
                                                      const char *regex_profile,
                                                      const PurrdfQueryGovernors *governors,
+                                                     const char *now,
+                                                     const uint64_t *entropy_seed,
+                                                     PurrdfBuffer **out_receipt,
                                                      int32_t *out_outcome,
                                                      int32_t *out_kind,
                                                      PurrdfRowCursor **out_rows,
@@ -3033,11 +3345,23 @@ int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *datase
  * reachable from a `DELETE`/`INSERT … WHERE` clause through a nested
  * `SELECT … GROUP BY` — the only place SPARQL UPDATE's grammar admits an aggregate.
  *
+ * `now` and `entropy_seed` are independently nullable: NULL selects a fresh native
+ * default for this request, while a pointed zero supplies seed zero. Time uses the
+ * exact native `xsd:dateTime` lexical form, retaining fractional seconds and timezone.
+ * Supplied coordinates give the request one fixed time and one progressing random
+ * stream across its operations. Omitted coordinates preserve native defaults. Inputs
+ * are owned before execution; inserted values retain no caller memory.
+ * Invalid time is `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 is
+ * `PURRDF_STATUS_INVALID_UTF8`. A refusal leaves the dataset, outcome and evidence
+ * unchanged, including when the request would otherwise mutate it.
+ *
  * # Safety
  * `dataset` must be a live, exclusively borrowed handle; `request` a NUL-terminated C
  * string; `governors` live for the call; and both output pointers writable. Any enabled
  * cancellation handle must remain live until the call returns. `aggregate_namespace`, if
- * non-null, must be a NUL-terminated UTF-8 C string live for the call.
+ * non-null, must be a NUL-terminated UTF-8 C string live for the call. `now` must be
+ * null or a NUL-terminated C string live for the call; `entropy_seed` must be null
+ * or point to a readable, aligned `uint64_t` live for the call.
  */
 int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *request,
@@ -3045,6 +3369,9 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                const char *aggregate_namespace,
                                int32_t graph_existence,
                                const PurrdfQueryGovernors *governors,
+                               const char *now,
+                               const uint64_t *entropy_seed,
+                               PurrdfBuffer **out_receipt,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
                                PurrdfError **out_error);
@@ -3071,13 +3398,16 @@ int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
                                            const char *regex_profile,
                                            int32_t graph_existence,
                                            const PurrdfQueryGovernors *governors,
+                                           const char *now,
+                                           const uint64_t *entropy_seed,
+                                           PurrdfBuffer **out_receipt,
                                            int32_t *out_outcome,
                                            PurrdfGovernorEvidence *out_evidence,
                                            PurrdfError **out_error);
 
 /**
  * [`purrdf_query_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3089,6 +3419,9 @@ int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
                               const char *query,
                               const char *base_iri,
                               const char *regex_profile,
+                              const char *now,
+                              const uint64_t *entropy_seed,
+                              PurrdfBuffer **out_receipt,
                               int32_t *out_kind,
                               PurrdfRowCursor **out_rows,
                               PurrdfDataset **out_graph,
@@ -3097,7 +3430,7 @@ int32_t purrdf_query_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_query_json_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3111,12 +3444,15 @@ int32_t purrdf_query_json_with_geo(const PurrdfGeoSession *geo,
                                    const char *provenance_prefix,
                                    const char *provenance_iri,
                                    const char *regex_profile,
+                                   const char *now,
+                                   const uint64_t *entropy_seed,
+                                   PurrdfBuffer **out_receipt,
                                    PurrdfBuffer **out_buffer,
                                    PurrdfError **out_error);
 
 /**
  * [`purrdf_query_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3130,6 +3466,9 @@ int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
                                        const char *aggregate_namespace,
                                        const char *regex_profile,
                                        const PurrdfQueryGovernors *governors,
+                                       const char *now,
+                                       const uint64_t *entropy_seed,
+                                       PurrdfBuffer **out_receipt,
                                        int32_t *out_outcome,
                                        int32_t *out_kind,
                                        PurrdfRowCursor **out_rows,
@@ -3141,7 +3480,7 @@ int32_t purrdf_query_governed_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_query_entailment_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3161,9 +3500,13 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
                                                   size_t premise_iri_count,
                                                   const uint64_t *max_stored_facts,
                                                   const uint64_t *max_join_steps,
+                                                  const uint64_t *max_term_arena_bytes,
                                                   const char *aggregate_namespace,
                                                   const char *regex_profile,
                                                   const PurrdfQueryGovernors *governors,
+                                                  const char *now,
+                                                  const uint64_t *entropy_seed,
+                                                  PurrdfBuffer **out_receipt,
                                                   int32_t *out_outcome,
                                                   int32_t *out_kind,
                                                   PurrdfRowCursor **out_rows,
@@ -3176,7 +3519,7 @@ int32_t purrdf_query_entailment_governed_with_geo(const PurrdfGeoSession *geo,
 
 /**
  * [`purrdf_update_governed_xpath_regex`] with an explicit immutable geographic session.
- * A null session selects standard CRS84; `regex_profile` retains the original
+ * A null session selects standard `CRS84`; `regex_profile` retains the original
  * dated-law selector, so both selections reach the same native query path.
  *
  * # Safety
@@ -3191,6 +3534,9 @@ int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo,
                                         const char *regex_profile,
                                         int32_t graph_existence,
                                         const PurrdfQueryGovernors *governors,
+                                        const char *now,
+                                        const uint64_t *entropy_seed,
+                                        PurrdfBuffer **out_receipt,
                                         int32_t *out_outcome,
                                         PurrdfGovernorEvidence *out_evidence,
                                         PurrdfError **out_error);
@@ -3769,6 +4115,18 @@ int32_t purrdf_shacl_validate_changes_to_sarif_xpath_regex(const char *shapes_tt
  * `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
  * readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
  * must each be null or writable.
+ *
+ * `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+ * time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+ * The seed selects the reproducible sequence of the rule execution's queries.
+ * Omitted inputs retain native defaults. Invalid time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ * Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+ * XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+ * Successful buffers own their values after input storage is released.
+ *
+ * The coordinate pointers must be null or live for this call: `now` points to a
+ * NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *shapes_base_iri,
@@ -3781,8 +4139,14 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const uint64_t *max_generated_terms,
                                         const uint64_t *max_stored_facts,
                                         const uint64_t *max_join_steps,
+                                        const char *now,
+                                        const uint64_t *entropy_seed,
+                                        PurrdfBuffer **out_receipt,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfBuffer **out_diagnostics,
+                                        const char *canonical_search,
+                                        const PurrdfCancellation *cancellation,
+                                        PurrdfBuffer **out_canonicalization_json,
                                         PurrdfError **out_error);
 
 /**
@@ -3814,8 +4178,14 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
                                                     const uint64_t *max_stored_facts,
                                                     const uint64_t *max_join_steps,
                                                     const char *regex_profile,
+                                                    const char *now,
+                                                    const uint64_t *entropy_seed,
+                                                    PurrdfBuffer **out_receipt,
                                                     PurrdfBuffer **out_buffer,
                                                     PurrdfBuffer **out_diagnostics,
+                                                    const char *canonical_search,
+                                                    const PurrdfCancellation *cancellation,
+                                                    PurrdfBuffer **out_canonicalization_json,
                                                     PurrdfError **out_error);
 
 /**
@@ -3878,6 +4248,18 @@ int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
  * Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
  * space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
  * second, the field order every host's structured value (`{rule, shape}`) carries.
+ *
+ * `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+ * time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+ * The seed selects the reproducible sequence of the rule execution's queries.
+ * Omitted inputs retain native defaults. Invalid time returns
+ * `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+ * Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+ * XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+ * Successful buffers own their values after input storage is released.
+ *
+ * The coordinate pointers must be null or live for this call: `now` points to a
+ * NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
  */
 int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *shapes_ttl,
@@ -3892,6 +4274,9 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  const char *const *import_iris,
                                  const char *const *import_documents,
                                  size_t import_count,
+                                 const char *now,
+                                 const uint64_t *entropy_seed,
+                                 PurrdfBuffer **out_receipt,
                                  PurrdfBuffer **out_inferred,
                                  PurrdfBuffer **out_proof,
                                  PurrdfBuffer **out_diagnostics,
@@ -3929,6 +4314,9 @@ int32_t purrdf_shacl_apply_rules_xpath_regex(const char *data_nt,
                                              const char *const *import_documents,
                                              size_t import_count,
                                              const char *regex_profile,
+                                             const char *now,
+                                             const uint64_t *entropy_seed,
+                                             PurrdfBuffer **out_receipt,
                                              PurrdfBuffer **out_inferred,
                                              PurrdfBuffer **out_proof,
                                              PurrdfBuffer **out_diagnostics,
@@ -4163,6 +4551,9 @@ int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
                                      const char *const *import_documents,
                                      size_t import_count,
                                      PurrdfBuffer **out_buffer,
+                                     const char *canonical_search,
+                                     const PurrdfCancellation *cancellation,
+                                     PurrdfBuffer **out_canonicalization_json,
                                      PurrdfError **out_error);
 
 /**
@@ -4415,8 +4806,10 @@ int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *produ
  * `purrdf_shapes_product_admit` already verifies every section digest and the whole
  * container.
  *
- * There is no out-buffer: the answer is the status. `PURRDF_STATUS_OK` means the product's
- * dataset canonicalizes to the digest it claims.
+ * The answer is the status: `PURRDF_STATUS_OK` means the product's dataset
+ * canonicalizes to the digest it claims. The separate required
+ * `out_canonicalization_json` buffer records the actual search and must be freed
+ * with `purrdf_buffer_free`.
  *
  * # Safety
  * `product` must be valid for reads of `product_len` bytes; `out_error` must be null
@@ -4424,6 +4817,9 @@ int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *produ
  */
 int32_t purrdf_shapes_product_certify(const uint8_t *product,
                                       size_t product_len,
+                                      const char *canonical_search,
+                                      const PurrdfCancellation *cancellation,
+                                      PurrdfBuffer **out_canonicalization_json,
                                       PurrdfError **out_error);
 
 /**
@@ -4574,6 +4970,59 @@ int32_t purrdf_xsd_value_compare(const char *left_lexical,
                                  uint8_t *out_comparable,
                                  int32_t *out_order,
                                  PurrdfError **out_error);
+
+/**
+ * Export original YAML bytes to a frozen dataset and its computed stream root.
+ *
+ * `profile_json` is mandatory version-one profile JSON. Source and profile are
+ * borrowed only during this synchronous call. On success both results are owned
+ * independently: release the dataset with `purrdf_dataset_free`, and the root
+ * with `purrdf_buffer_free`. The root buffer contains exact UTF-8 IRI bytes,
+ * without a trailing NUL or newline. Both handles are prepared before either
+ * output is published. Valid output slots are cleared before input processing;
+ * failure publishes neither result. Host handle/buffer controls and the native
+ * profile, parser, partition and projection accounts remain separate.
+ *
+ * # Safety
+ * Non-null source/profile pointers must be readable for their admitted lengths.
+ * Null inputs are rejected even at zero length; oversized lengths are rejected
+ * before constructing a slice. Non-null `source_iri` points to a live
+ * NUL-terminated C string whose UTF-8 is checked. Non-null output/error slots
+ * are writable and initially empty. Aliasing error slots are rejected by status alone,
+ * without writing an error through the aliased pointer. No allocator abort can
+ * be converted to a returned status by the existing FFI panic guard.
+ */
+int32_t purrdf_yaml_source_export(const uint8_t *source,
+                                  size_t source_len,
+                                  const char *source_iri,
+                                  const uint8_t *profile_json,
+                                  size_t profile_len,
+                                  PurrdfDataset **out_dataset,
+                                  PurrdfBuffer **out_root,
+                                  PurrdfError **out_error);
+
+/**
+ * Reconstruct exact verified YAML source bytes from an existing frozen dataset.
+ *
+ * Supply the exact expected root and matching explicit profile. The returned
+ * source has no added newline or NUL and lives independently of the input
+ * dataset/profile/root. Release it with `purrdf_buffer_free`. Caller RDF storage,
+ * native decode/reparse/reprojection, and host buffer control are separate.
+ * Valid output slots are cleared before work; no source is published on refusal.
+ *
+ * # Safety
+ * Non-null `dataset` is a live dataset handle; non-null `root` points to a live
+ * NUL-terminated C string whose UTF-8 is checked. Non-null profile bytes are
+ * readable for their admitted length. Non-null output/error slots are writable
+ * and initially empty. Null required inputs and outputs are rejected; an
+ * aliased error slot is rejected without writing it.
+ */
+int32_t purrdf_yaml_source_reconstruct(const PurrdfDataset *dataset,
+                                       const char *root,
+                                       const uint8_t *profile_json,
+                                       size_t profile_len,
+                                       PurrdfBuffer **out_source,
+                                       PurrdfError **out_error);
 
 #ifdef __cplusplus
 }  // extern "C"

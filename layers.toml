@@ -39,6 +39,10 @@
 root = "purrdf-hash"
 
 [[crate]]
+name = "purrdf-shacl-conformance"
+deps = ["purrdf-core", "purrdf-iri", "purrdf-rdf", "purrdf-shapes", "purrdf-sparql-eval", "purrdf-xsd"]
+
+[[crate]]
 name = "purrdf-conformance-kit"
 deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex", "purrdf-sparql-results"]
 
@@ -64,12 +68,17 @@ deps = []
 
 [[crate]]
 name = "helper-census"
-deps = ["purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-testkit"]
+deps = ["purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-testkit", "purrdf-toml"]
 
 [[crate]]
 name = "purrdf-deflate"
 deps = ["purrdf-hash"]
 external = []
+
+[[crate]]
+name = "purrdf-zstd"
+deps = ["purrdf-hash", "purrdf-lex"]
+external = ["twox-hash"]
 
 [[crate]]
 name = "purrdf-events"
@@ -130,6 +139,7 @@ deps = [
     "purrdf-iri",
     "purrdf-xsd",
     "purrdf-lex",
+    "purrdf-zstd",
 ]
 
 [[crate]]
@@ -155,6 +165,7 @@ deps = [
     "purrdf-iri",
     "purrdf-xsd",
     "purrdf-lex",
+    "purrdf-stack",
 ]
 
 [[crate]]
@@ -169,7 +180,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-columnar"
-deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+deps = ["purrdf-core", "purrdf-deflate", "purrdf-hash", "purrdf-lex", "purrdf-zstd"]
 
 [[crate]]
 name = "purrdf-datalog"
@@ -180,8 +191,20 @@ name = "purrdf-json"
 deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
 
 [[crate]]
+name = "purrdf-toml"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-xsd"]
+
+[[crate]]
+name = "purrdf-yaml"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+
+[[crate]]
+name = "purrdf-glob"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex"]
+
+[[crate]]
 name = "purrdf-markdown"
-deps = ["purrdf-core", "purrdf-hash"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-mime"
@@ -286,6 +309,7 @@ deps = [
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-text",
+    "purrdf-xsd",
 ]
 
 [[crate]]
@@ -313,6 +337,7 @@ deps = [
     "purrdf-slice",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
+    "purrdf-stack",
     "purrdf-xsd",
 ]
 
@@ -342,12 +367,15 @@ deps = [
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-xsd",
+    "purrdf-yaml",
 ]
 
 [[crate]]
 name = "purrdf"
 deps = [
     "purrdf-columnar",
+    "purrdf-core",
+    "purrdf-hash",
     "purrdf-datalog",
     "purrdf-entail",
     "purrdf-events",
@@ -368,6 +396,9 @@ deps = [
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-text",
+    "purrdf-toml",
+    "purrdf-yaml",
+    "purrdf-glob",
     "purrdf-validate",
     "purrdf-xsd",
 ]
@@ -377,6 +408,7 @@ name = "purrdf-capi"
 deps = [
     "purrdf",
     "purrdf-core",
+    "purrdf-lex",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-validate",
@@ -388,6 +420,7 @@ deps = [
     "purrdf",
     "purrdf-core",
     "purrdf-entail",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
     "purrdf-rdf",
@@ -421,6 +454,7 @@ deps = [
     "purrdf-core",
     "purrdf-entail",
     "purrdf-gts",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
     "purrdf-shapes",

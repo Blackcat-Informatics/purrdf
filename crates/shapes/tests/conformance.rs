@@ -13,7 +13,7 @@
 //! reader for this crate's two SHACL corpora, so this file is only the grading
 //! half.
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -95,9 +95,11 @@ fn conformance_corpus() {
         }
 
         // Compare the report graphs, sh:resultMessage aside.
-        let produced_graph =
+        let produced_graph_owner =
             canonical_without_messages(&report.to_ntriples().expect("report serializes"));
-        let expected_graph = canonical_without_messages(&expected_nt);
+        let produced_graph = produced_graph_owner.nquads();
+        let expected_graph_owner = canonical_without_messages(&expected_nt);
+        let expected_graph = expected_graph_owner.nquads();
         if produced_graph != expected_graph {
             failures.push(format!(
                 "[{case_name}] report graph differs from the frozen report (RDFC-1.0, \
@@ -142,7 +144,7 @@ const RESULT_MESSAGE: &str = "<http://www.w3.org/ns/shacl#resultMessage>";
 /// `sh:resultMessage` triples. N-Triples holds one triple per line, and every
 /// report subject is a blank node or an IRI, so a line's predicate is its second
 /// whitespace-separated token.
-fn canonical_without_messages(nt: &str) -> String {
+fn canonical_without_messages(nt: &str) -> purrdf_core::Canonicalized {
     let mut kept = String::with_capacity(nt.len());
     for line in nt
         .lines()
@@ -153,5 +155,9 @@ fn canonical_without_messages(nt: &str) -> String {
     }
     let dataset = purrdf_rdf::parse_dataset(kept.as_bytes(), "application/n-triples", None)
         .unwrap_or_else(|e| panic!("a report's N-Triples parse: {e}"));
-    purrdf_rdf::canonicalize(dataset.as_ref()).nquads
+    purrdf_rdf::try_canonicalize(
+        dataset.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }

@@ -69,7 +69,7 @@ fn qualify(source: Vec<u8>, encoded_receipt: &[u8], trusted_pin: &str) -> Result
         return Err(format!("expected 1000000 source rows, found {source_rows}"));
     }
     let answer = engine
-        .query_prepared_fallible_view(&session, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&session, &prepared, &[], &QueryOptions::EMPTY)
         .map_err(|error| error.to_string())?;
     let Some((_, rows)) = answer.result.solutions() else {
         return Err("SELECT did not return solutions".to_owned());
@@ -145,7 +145,15 @@ pub fn qualify_resident_envelope(actual_hundred_thousand: bool) -> Result<String
     );
     for (index, workload) in WORKLOADS.iter().enumerate() {
         let window = WholeProcessWindow::open();
-        let result = run(workload, profile, &window);
+        let result = run(
+            workload,
+            profile,
+            &window,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let measured = window.close();
         let metrics = result.map_err(|error| JsError::new(&error))?;
         if actual_hundred_thousand

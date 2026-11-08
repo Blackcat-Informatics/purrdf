@@ -121,7 +121,7 @@ weights for admission to check. The two things a weight dimension would
 have asked are answered where the fusing weights live instead. A weight
 unusable under §5 cannot exist, because `FusionProfile` construction
 refuses a non-positive weight, an empty weight map, and a weight vector
-whose admitted ceiling leaves the fixed-point range. And the mismatch
+whose exact sum of rank-one contributions exceeds `u128`. And the mismatch
 that can actually cost a caller rows — a stratum the plan reaches that the
 profile does not weight — is *reported* per stratum on the answer rather
 than refused, because a profile is a reusable law chosen without
@@ -222,32 +222,59 @@ where `recip` is the reciprocal evaluated in fixed point at a declared
 scale with a declared rounding, `w_stratum` is the stratum's declared
 weight, and `K` is the profile's smoothing constant. An item appearing in
 several strata **sums** its contributions, and the final order is by
-fused score descending with a declared, total tie-break.
+the profile's declared total order. The default is fused score descending,
+best stratum rank ascending, then canonical term ascending. Caller ordering
+compares normalized leading bytes (when enabled), fused score descending,
+normalized caller tie bytes, then canonical term. Bytes compare unsigned and
+lexicographically, with a shorter prefix first. The caller owns the key-layout
+semantic IRI and encodes directions such as tier ascending and activation
+descending before supplying keys.
+
+Caller ordering is certified inside fusion. Every source pins semantic and
+key-snapshot identities before its first row, supplies immutable candidate keys,
+and supplies a lower bound on unread leading keys. Bounds may tighten but never
+widen, and each row must satisfy the previous bound. Buffered heads remain part
+of the unread population. A degraded source also needs a bound over its full
+domain; exhaustion alone cannot prove that domain empty. Missing keys, changed
+evidence and insufficient bounds produce typed refusals. The same comparator
+orders final candidates and optimistic rivals, including candidates not yet
+seen. Row witnesses and the terminal remainder retain this full-order proof.
+
+`ReadBound::CallerOrdered(k)` keeps the fused row limit without licensing a
+score-prefix depth reduction, including score plateaus resolved by caller tie
+keys. Select it before planning. Decoding, certification and compilation reject
+plans that claim this bound while retaining a licensed score prefix. Native
+`search_ordered` chooses the bound before calling the original pipeline; its
+optional `OrderCatalog` binds policy and key data into a content identity.
+External streams may supply the typed ordering protocol directly. The profile's
+additive ordering tag preserves legacy profile encodings. Key-data snapshots
+affect evidence identity rather than the arithmetic profile identity.
 
 **Where the weight enters is a declared rule, not an implementation
 detail.** Evaluating `recip` first and applying the weight afterwards
 rounds twice, and the inner rounding is a ceiling the weight cannot
-lift: `trunc(S / D)` with `S = 10^12` stops strictly decreasing once
-`D² > S`, so under that rule *every* weight at or above one shares one
-monotone range ending near a million ranks, and a stratum read deeper
+lift: `trunc(S / D)` with caller-selected `S = 10^scale_digits` stops
+strictly decreasing once `D² > S`, so under that rule every weight at or
+above one shares a monotone range ending near `sqrt(S)` ranks, and a stratum read deeper
 than that answers at a coarser rank resolution rather than being
 refused. Folding the weight into the numerator
 computes the same quantity with one exactly-rounded division —
 `trunc(w_raw / D)`, where a weight's raw integer is already `w · S` —
-and its monotone range runs to about `10^6 · sqrt(w)`. Both are §5 laws;
+and its monotone range runs to about `sqrt(S · w)`. Both are §5 laws;
 neither needs a transcendental; the profile names which one it runs
 under and carries that choice in its identity, so the second rule adds a
 capability without moving any number a previously issued profile ever
 produced. The relation reads in both directions, and a profile author
 needs both: a weight caps the depth that stays ordered, and a required
-depth therefore sets a floor under the weight — `w ≳ (depth / 10^6)²`.
+depth therefore sets a floor under the weight — `w ≳ depth² / S`.
 Weights are only ever compared with each other, so scaling the whole
-vector buys depth without changing any fused order.
+vector buys resolution while preserving the declared ratios; finer rounding
+can distinguish ties the smaller raw weights could not.
 
 The arithmetic is exact for the same reason `purrdf-text`'s is, and the
 reasoning transfers where the kNN module's deliberately does not. The kNN
-kernels stay in binary64 because every operation they need is correctly
-rounded and their artifact format is already binary64; BM25 left floating
+kernels use 64-bit binary floats because every operation they need is correctly
+rounded and their artifact format stores those same bits; BM25 left floating
 point because `ln` is not correctly rounded and last-bit disagreement
 reorders near-ties. Rank fusion needs no transcendental — a reciprocal at
 a declared scale is one exactly-rounded division — and near-ties are not
@@ -320,13 +347,26 @@ question a host can act on while reading the refusal is therefore: *do
 you want these two weighted differently, and is the score bounded? Then
 separate strata.*
 
-**The input protocol has one fixed rank law and one declared duplicate
-policy.** Ranks are 1-based, contiguous and ascending for every ranked
-stream there is, and `fuse` measures each row against the next rank it
-expects from that stream — a lower rank is `OutOfOrderRanks`, a higher one
-`NonContiguousRanks`. Nothing a producer may state at registration softens
-that. What a ranked producer does state, where it is registered, is
-whether an item may repeat within one invocation. `fuse` is the consumer
+**The input protocol declares rank progression independently from duplicate
+handling.** `RankSource::Ordinal` assigns distinct contiguous ranks from one.
+`RankSource::Shared { position }` reads positive nondecreasing integer ranks
+from the producer's declared output column: several subjects stating one
+ranked literal retain that literal's rank and receive equal contributions.
+The registration's source and position participate in registry and plan
+identities. Native execution projects that column as `?rank`; caller-supplied
+shared-rank query text must project it too. Fusion and unscored union enforce
+the same `RankLaw`, refusing zero and descending ranks under either law,
+and repeated or gapped ranks under the ordinal law.
+
+Row depth remains a physical prefix bound, independent of rank values.
+Terminal exhaustion counts rows; bounded endings report the last emitted rank.
+The trailer reports physical `rows_pulled`, highest `ranks_pulled`, deliberate
+`shared_ranks_observed`, and quantization `collisions_observed` separately.
+Shared ranks preserve non-increasing contributions, so the existing threshold
+bound remains sound and a score tie still waits for its canonical tie-break.
+
+A ranked producer also declares whether an item may repeat within one
+invocation. `fuse` is the consumer
 that declaration was written for, so it reaches it — carried from the
 registry through the compiled unit and the executed stream rather than
 re-fetched at the end — and is honoured on its own terms. A producer that declares its
@@ -409,7 +449,8 @@ and the class width at a depth is the layer's resolution there. A width of
 one means the fused score alone orders that rank. A width of `w` means `w`
 consecutive ranks are indistinguishable by score, and their relative order
 falls through to the declared tie-break's later keys: best stratum rank
-ascending, then canonical term bytes. That key is **total**, so the answer
+ascending under the default policy, or caller tie bytes under caller ordering,
+then canonical term bytes. That key is **total**, so the answer
 remains a pure function of its inputs at every depth. It is never wrong;
 it is coarser.
 
@@ -418,10 +459,10 @@ difference is not a matter of degree. `ReciprocalRank` truncates the
 reciprocal *before* applying the weight, so once `trunc(S / D)` and
 `trunc(S / (D + 1))` coincide the two ranks have already merged at the
 point the weight arrives: no weight can part them, and the rule saturates
-near `D = sqrt(S) = 10^6` for every weight at or above one.
+near `D = sqrt(S)` for every weight at or above one.
 `WeightedReciprocalRank` folds the weight into the numerator as one
 exactly-rounded division and has no such ceiling; its range runs to
-roughly `10^6 · sqrt(w)`. Read in reverse this is a design calculus rather
+roughly `sqrt(S · w)`. Read in reverse this is a design calculus rather
 than a limit — name the depth, get the weight — and it is exposed as one.
 
 Because none of this is a defect, none of it is a refusal. It is
@@ -874,36 +915,31 @@ as questions a shipped design record still asks.
    exists to prevent. The `fuse` primitive is still separable *as a
    surface*: it takes streams and a profile and knows nothing about
    planning, and a caller that wants only that rung calls only that rung.
-2. **The reciprocal's scale, rounding and overflow bound — decided.** The
-   scale is `purrdf-text`'s own, twelve fractional digits, reusing that
-   crate's `Fixed` rather than defining a second base-10 type: two
-   fixed-point types in one workspace would be two conventions for what a
-   rounded reciprocal means. The rounding direction is **truncation toward
-   zero**, applied to the reciprocal once, at the declared scale, before
-   the weight is applied. The overflow bound is the profile's own admitted
-   ceiling — the largest declared weight times the admitted contribution
-   count — checked at profile construction, and every intermediate is
-   checked at the point it is formed, so an intermediate that leaves the
-   range is a loud refusal rather than a wrapped score. All three are part
-   of the profile's canonical bytes, so a change to any of them is a new
-   profile identity.
+2. **Explicit unsigned precision, rounding and exact admission — decided.**
+   A fusion law names zero through 38 decimal fractional digits. Its weights
+   and scores are unsigned `u128` raw values; standalone `Score` values also
+   carry the precision. Profile-scoped frontier cells retain only raw values.
+   This is independent of BM25's signed scale 12 arithmetic and of signed
+   numeric request endpoints. The reciprocal-first rule computes
+   `floor(w_raw * floor(S / D) / S)` and the weighted rule computes
+   `floor(w_raw / D)`, directly at the selected `S = 10^scale_digits`.
+   Wide intermediate products use the shared exact arithmetic home, with
+   narrow division retained when the actual operands fit. A large
+   intermediate is not an overflow if its result fits.
 
-   The consequence that must be stated with them is the coupling between
-   the weight, that scale, and the per-stratum depth. Truncating the
-   reciprocal *before* weighting makes the reciprocal's own resolution a
-   ceiling no weight can lift: at any weight of one or more, two adjacent
-   ranks stop producing distinct contributions just above rank
-   `sqrt(10^12) − K`, whatever the weight is, and below one the weight
-   binds earlier. Beyond that depth nothing errors and nothing becomes
-   nondeterministic — the declared tie-break is total — but the fused
-   score stops separating ranks, so the sum across strata stops being
-   rank-weighted. The bound is therefore a reported dimension rather than
-   a footnote: the profile answers for it before a plan is written, the
-   compiled plan records each stratum's planned depth against it, and the
-   fused trailer reports how deep the answer in hand was actually read and
-   how many adjacent ranks its score could not separate. It is not a
-   refusal — a coarser answer is still a correct one, and §5.1 is where
-   that reading is set out.
+   The admitted ceiling is the exact checked sum of rank-one contributions.
+   It admits every representable full-width score and refuses genuine sum
+   overflow. Degraded unseen-score bounds charge each stratum once: a live
+   head and that stratum's rank-one missing-row allowance are alternatives,
+   rather than two contributions. Resolution, inverse minimum weights and
+   crossing calculations use the same declared precision and rounding law.
+   Exact nonmonotone constraint jumps remain the minimum-weight algorithm.
+
+   Precision and unsigned weights enter canonical profile layout version 2;
+   obsolete versions are refused. Candidate-union layout version 3 also
+   carries the precision of score-bound statuses. A pure plan has no fusion
+   input and keeps its independent identity; the answer's profile identity
+   names the units and arithmetic under which that plan was fused.
 3. **The request lattice is closed, and stays closed.** The modalities a
    request can name are not bounded by the producers that happen to exist
    in-tree — producers are caller-supplied configuration, and a registry

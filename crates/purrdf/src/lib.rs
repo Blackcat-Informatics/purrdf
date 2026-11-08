@@ -24,6 +24,7 @@
 //! | [`retrieval`] | [`purrdf_retrieval`] (the composition layer over the ranked producers) |
 //! | [`validate`](mod@validate) | [`purrdf_validate`] (SARIF 2.1.0 reporting boundary) |
 //! | [`json`] | [`purrdf_json`] (byte-identical ordered JSON codec) |
+//! | [`glob`] | [`purrdf_glob`] (compiled, metered Unicode glob matching) |
 //! | [`markdown`] | [`purrdf_markdown`] (structural Markdown slicer under the shipped specification) |
 //! | [`slice`](mod@slice) | [`purrdf_slice`] |
 //! | [`viz`] | [`purrdf_rdf::viz`] |
@@ -132,10 +133,25 @@
 )]
 #![forbid(unsafe_code)]
 
+pub use purrdf_core::{VerifiedPack, verify_pack_bytes};
 pub use purrdf_rdf::*;
+
+pub mod embedding;
+pub use embedding::{
+    CanonicalMetadataInput, CanonicalMetadataSections, CertifiedEmbeddingSource, EmbeddingBuilder,
+    EmbeddingSource, EmbeddingStreamWriter, EncodedArtifact, MatrixInput, MatrixRow,
+    ProjectionSpec, SourceAttachmentError, SourceVerificationReport, bind_external_pack,
+    verify_embedding_source, verify_external_pack,
+};
 
 /// Borrowed typed error inspection, available without a sub-crate dependency.
 pub use purrdf_lex::error;
+
+pub mod gts_columnar;
+pub use gts_columnar::{
+    GtsBlobExportReport, GtsColumnarError, GtsColumnarSource, GtsStagedColumnarSource,
+    prepare_gts_columnar, prepare_gts_columnar_to,
+};
 
 pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
@@ -196,7 +212,7 @@ pub mod gts {
 ///         "SELECT ?o WHERE { ?this <https://example.org/p> ?o }",
 ///         None,
 ///         &["this"],
-///         QueryOptions::EMPTY,
+///         &QueryOptions::EMPTY,
 ///     )
 ///     .expect("prepare");
 /// assert_eq!(execution.parameters().len(), 1);
@@ -345,6 +361,24 @@ pub mod markdown {
 
 /// Original-byte MIME carrier with explicit profiles, ordered RDF occurrences
 /// and reconstruction through the shared kernel cover law.
+///
+/// An analyzed document exposes immutable occurrences through borrowed views.
+///
+/// ```no_run
+/// use purrdf::mime::{Limits, Profile, SourceDocument, Vocabulary, analyze, project};
+/// let profile = Profile::new("example", Vocabulary::standard()?, Limits::unbounded())?;
+/// let source = SourceDocument {
+///     id: "https://example.org/message",
+///     bytes: b"Subject: original\r\n\r\nbody\r\n",
+/// };
+/// let document = analyze(source, &profile)?;
+/// let subject = document.headers()[0].unfolded(document.source().bytes);
+/// assert_eq!(subject, b" original");
+/// let graph = project(&document, &profile)?;
+/// let restored = purrdf::mime::decode_document(&graph, document.id(), &profile)?;
+/// assert_eq!(restored, source.bytes);
+/// # Ok::<(), purrdf::mime::MimeError>(())
+/// ```
 pub mod mime {
     pub use purrdf_mime::*;
 }
@@ -352,6 +386,34 @@ pub mod mime {
 /// Ordered JSON as a verified RDF 1.2 byte cover with queryable occurrences.
 pub mod json {
     pub use purrdf_json::*;
+}
+
+/// Lossless TOML 1.1 authoring model and verified RDF 1.2 byte-cover codec.
+pub mod toml {
+    pub use purrdf_toml::*;
+}
+
+/// Source-preserving YAML stream model and strict RDF byte-cover reconstruction.
+///
+/// ```
+/// use purrdf::yaml::{Profile, SourceDocument, analyze, decode_stream, project};
+/// let profile = Profile::standard()?;
+/// let source = SourceDocument {
+///     id: "https://example.org/source.yaml",
+///     bytes: b"---\nkey: 'value'\n",
+/// };
+/// let document = analyze(source, &profile)?;
+/// let graph = project(&document, &profile)?;
+/// assert_eq!(decode_stream(&graph, document.id(), &profile)?.as_bytes(), source.bytes);
+/// # Ok::<(), purrdf::yaml::YamlError>(())
+/// ```
+pub mod yaml {
+    pub use purrdf_yaml::*;
+}
+
+/// Compiled, explicitly metered Unicode glob matching over literal and IRI surfaces.
+pub mod glob {
+    pub use purrdf_glob::*;
 }
 
 /// The common umbrella surface, for `use purrdf::prelude::*;`.
@@ -530,10 +592,15 @@ mod tests {
 
         let stratum = retrieval::Iri::parse(STRATUM).expect("the fixture stratum IRI is valid");
         let mut weights = BTreeMap::new();
-        weights.insert(stratum.clone(), retrieval::Fixed::ONE);
+        weights.insert(
+            stratum.clone(),
+            purrdf_retrieval::fixture::PRECISION_12
+                .score(purrdf_retrieval::fixture::PRECISION_12.scale()),
+        );
         let profile = retrieval::FusionProfile::with_decay(
             weights,
             retrieval::DecayRule::ReciprocalRank { k: 60 },
+            purrdf_retrieval::fixture::PRECISION_12,
         )
         .expect("the fixture fusion profile is valid");
 
@@ -725,16 +792,19 @@ mod tests {
 
     #[test]
     fn facade_exposes_ontology_schema_compilation_contract() {
-        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
-            compile_schema;
+        type CompilationWithExpressions = (SchemaCompilation, SchemaClassExpressionReport);
+        let _: fn(
+            &SchemaCompileRequest<'_>,
+            &mut CanonicalizationControl<'_>,
+        ) -> Result<SchemaCompilation, SchemaCompileError> = compile_schema;
         let mode = SchemaSurfaceMode::OntologyComplete;
         assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
         let _: Option<SchemaCoverageReport> = None;
         let _: Option<SchemaCompilationKey> = None;
         let _: fn(
             &SchemaCompileRequest<'_>,
-        )
-            -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> =
+            &mut CanonicalizationControl<'_>,
+        ) -> Result<CompilationWithExpressions, SchemaCompileError> =
             compile_schema_with_class_expressions;
         let _: Option<SchemaExpressionOutcome> = None;
     }
@@ -773,7 +843,11 @@ mod tests {
         // The supported umbrella also exposes the succinct dataset-pack cache
         // boundary; downstreams never need to depend on purrdf-core directly.
         let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-        let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
+        let pack = PackBuilder::build_bytes(
+            &empty,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
         assert_eq!(restored.quad_count(), 0);
 
@@ -783,7 +857,12 @@ mod tests {
         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
 
         let page_rows = std::num::NonZeroUsize::new(1).expect("positive canonical bound");
-        let base = canonical_paged_seal(restored.as_ref(), page_rows).expect("empty paged base");
+        let base = canonical_paged_seal(
+            restored.as_ref(),
+            page_rows,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("empty paged base");
         let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
         let value = TermValue::iri("https://example.org/value");
         stack
@@ -798,7 +877,7 @@ mod tests {
         let complete = sparql::NativeSparqlEngine::new().query_fallible_view(&view, SparqlRequest {
             query: "ASK { <https://example.org/value> <https://example.org/p> <https://example.org/value> }",
             base_iri: None, substitutions: &[],
-        }, sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
+        }, &sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
         assert_eq!(complete.result.boolean(), Some(true));
         assert_eq!(
             complete.evidence.requested_origins,
@@ -806,7 +885,11 @@ mod tests {
         );
         assert_eq!(
             snapshot
-                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    page_rows,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                )
                 .expect("root canonical fold")
                 .page_count(),
             1

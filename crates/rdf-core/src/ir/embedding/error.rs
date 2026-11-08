@@ -101,11 +101,7 @@ impl DigestKind {
     /// digest and typed identity PURREMB carries — written or read — is verified
     /// through this one comparison, so a mismatch always names its kind and both
     /// values.
-    pub(super) fn verify(
-        self,
-        expected: &[u8; 32],
-        actual: &[u8; 32],
-    ) -> Result<(), EmbeddingError> {
+    pub fn verify(self, expected: &[u8; 32], actual: &[u8; 32]) -> Result<(), EmbeddingError> {
         if expected != actual {
             return Err(EmbeddingError::DigestMismatch {
                 kind: self,
@@ -246,6 +242,8 @@ pub enum EmbeddingError {
     CertificateMismatch,
     /// The file is structurally inconsistent.
     Malformed(&'static str),
+    /// Original literal-component refusal, including native language grammar.
+    LiteralComponents(crate::LiteralComponentError),
 }
 
 impl purrdf_hash::error::StructuredError for EmbeddingError {
@@ -305,6 +303,7 @@ impl purrdf_hash::error::StructuredError for EmbeddingError {
         },
         CertificateMismatch => "purremb-certificate-mismatch" {},
         Malformed(context) => "purremb-malformed" { "context" => Text(context) },
+        LiteralComponents(cause) => "purremb-malformed" { "context" => Text(cause.message()), "cause" => Cause(cause) },
     }
 }
 
@@ -390,6 +389,7 @@ impl fmt::Display for EmbeddingError {
                 f.write_str("resident certificate does not match this byte slice")
             }
             Self::Malformed(context) => write!(f, "malformed PURREMB artifact: {context}"),
+            Self::LiteralComponents(cause) => write!(f, "malformed PURREMB artifact: {cause}"),
         }
     }
 }
@@ -398,6 +398,7 @@ impl std::error::Error for EmbeddingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FloatEnvironment(error) => Some(error),
+            Self::LiteralComponents(cause) => Some(cause),
             Self::InvalidSourcePack(cause) | Self::InvalidExternalPack(cause) => {
                 Some(cause.as_ref())
             }
@@ -407,11 +408,13 @@ impl std::error::Error for EmbeddingError {
 }
 
 impl EmbeddingError {
-    pub(super) fn source_pack(cause: impl Into<EmbeddingSourceError>) -> Self {
+    /// Retain the original native pack opening or RDF certification refusal.
+    pub fn source_pack(cause: impl Into<EmbeddingSourceError>) -> Self {
         Self::InvalidSourcePack(Arc::new(cause.into()))
     }
 
-    pub(super) fn external_pack(cause: crate::PackError) -> Self {
+    /// Retain the original native refusal from an external pack attachment.
+    pub fn external_pack(cause: crate::PackError) -> Self {
         Self::InvalidExternalPack(Arc::new(cause.into()))
     }
 }

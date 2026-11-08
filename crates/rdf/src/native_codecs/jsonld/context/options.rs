@@ -11,10 +11,12 @@ use purrdf_lex::json::{self, Object, Value};
 use super::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContextLimits,
     JsonLdContextRegistry, canonicalize, context_error, parse_strict_json,
+    validate_yaml_schema_url,
 };
 use crate::RdfDiagnostic;
 
 const OPTION_KEYS: &[&str] = &[
+    "compact_arrays",
     "context",
     "document_iri",
     "mode",
@@ -44,6 +46,7 @@ pub struct JsonLdSerializeOptions {
     version: u32,
     mode: JsonLdSerializeMode,
     yaml_schema_url: Option<String>,
+    compact_arrays: bool,
 }
 
 impl JsonLdSerializeOptions {
@@ -53,6 +56,7 @@ impl JsonLdSerializeOptions {
             version: JSON_LD_SERIALIZE_OPTIONS_VERSION,
             mode: JsonLdSerializeMode::Expanded,
             yaml_schema_url: None,
+            compact_arrays: true,
         }
     }
 
@@ -62,6 +66,7 @@ impl JsonLdSerializeOptions {
             version: JSON_LD_SERIALIZE_OPTIONS_VERSION,
             mode: JsonLdSerializeMode::Derived,
             yaml_schema_url: None,
+            compact_arrays: true,
         }
     }
 
@@ -71,6 +76,7 @@ impl JsonLdSerializeOptions {
             version: JSON_LD_SERIALIZE_OPTIONS_VERSION,
             mode: JsonLdSerializeMode::Context(context),
             yaml_schema_url: None,
+            compact_arrays: true,
         }
     }
 
@@ -128,20 +134,32 @@ impl JsonLdSerializeOptions {
         self.yaml_schema_url.as_deref()
     }
 
+    /// Whether eligible singleton collections compact to their sole value.
+    /// Defaults to `true`; scalar keyword positions and list-item arrays are separate.
+    pub const fn compact_arrays(&self) -> bool {
+        self.compact_arrays
+    }
+
+    /// Select singleton-array compaction for context or derived output.
+    /// # Errors
+    /// Rejects expanded compatibility mode, including an explicit `true`.
+    pub fn with_compact_arrays(mut self, compact_arrays: bool) -> Result<Self, RdfDiagnostic> {
+        if matches!(self.mode, JsonLdSerializeMode::Expanded) {
+            return Err(context_error(
+                "JSON-LD mode `expanded` does not accept compact_arrays",
+            ));
+        }
+        self.compact_arrays = compact_arrays;
+        Ok(self)
+    }
+
     /// Attach a non-empty YAML language-server schema IRI reference.
     pub fn with_yaml_schema_url(
         mut self,
         schema_url: impl Into<String>,
     ) -> Result<Self, RdfDiagnostic> {
         let schema_url = schema_url.into();
-        if schema_url.is_empty()
-            || schema_url.chars().any(char::is_whitespace)
-            || purrdf_iri::parse(&schema_url).is_err()
-        {
-            return Err(context_error(format!(
-                "invalid YAML-LD schema IRI reference `{schema_url}`"
-            )));
-        }
+        validate_yaml_schema_url(&schema_url)?;
         self.yaml_schema_url = Some(schema_url);
         Ok(self)
     }
@@ -153,6 +171,7 @@ impl JsonLdSerializeOptions {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "additionalProperties": false,
             "properties": {{
+                "compact_arrays": {{"type": "boolean", "default": true}},
                 "context": {{}},
                 "document_iri": {{"type": "string"}},
                 "mode": {{"enum": ["expanded", "context", "derived"]}},
@@ -172,6 +191,10 @@ impl JsonLdSerializeOptions {
                 "yaml_schema_url": {{"type": "string"}}
             }},
             "allOf": [
+                {{
+                    "if": {{"properties": {{"mode": {{"const": "expanded"}}}}, "required": ["mode"]}},
+                    "then": {{"not": {{"required": ["compact_arrays"]}}}}
+                }},
                 {{
                     "if": {{
                         "properties": {{"mode": {{"enum": ["expanded", "derived"]}}}},
@@ -271,6 +294,12 @@ fn decode_options(
             )));
         }
     };
+    if let Some(compact_arrays) = object.get("compact_arrays") {
+        let compact_arrays = compact_arrays
+            .as_bool()
+            .ok_or_else(|| context_error("compact_arrays must be a boolean"))?;
+        options = options.with_compact_arrays(compact_arrays)?;
+    }
     if let Some(schema_url) = object.get("yaml_schema_url") {
         let schema_url = schema_url
             .as_str()

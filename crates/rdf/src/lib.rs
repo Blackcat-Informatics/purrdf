@@ -36,8 +36,8 @@
 // ---------------------------------------------------------------------------
 pub mod gts_write;
 pub use purrdf_core::{
-    backend, blank_label, bundle, content_store, dataset_view, diagnostic, fno, ir, lookaside,
-    loss, model, provenance, sssom, store, turtle, turtle_render,
+    backend, blank_label, bundle, content_alias, content_store, dataset_view, diagnostic, fno, ir,
+    lookaside, loss, model, provenance, sssom, store, turtle, turtle_render,
 };
 
 pub mod gts;
@@ -79,12 +79,12 @@ pub mod gts_compose;
 // The native OWL ↔ RDF 1.2 statement codec folds over the native flat-quad stream.
 pub mod statements;
 // Shared corpus-classification helpers: the pure corpus
-// enumeration / classification helpers the native golden-capture binary
-// (src/bin/capture_sparql_goldens.rs) uses.
+// enumeration / classification helpers the native golden-capture example
+// (examples/capture_sparql_goldens.rs) uses.
 pub mod capture_support;
 // The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
-// sources and authoring recipes, shared by the maintainer freezing binary
-// (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
+// sources and authoring recipes, shared by the maintainer freezing example
+// (examples/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
 pub mod gts_dict_vectors;
 // The ONE definition of the keystone GTS-ingestion fixture, shared by the
 // integration suite (tests/gts_view_ingestion.rs) and the bench
@@ -111,8 +111,10 @@ pub use dataset_io::dataset_from_bytes;
 pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
 pub use gts_import_blobs::{
     DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
-    GtsBlobMetadataSource, GtsBlobSelector, GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob,
-    import_gts_events_with_blobs,
+    GtsBlobMetadataSource, GtsBlobOmission, GtsBlobOmissionKind, GtsBlobRecord,
+    GtsBlobRetentionRefusal, GtsBlobSelector, GtsBlobStager, GtsBlobUsage, GtsImportWithBlobs,
+    GtsImportedBlob, GtsInlineExport, GtsRefusedBlob, GtsStagedBlob, GtsStagedPayload,
+    import_gts_events_with_blobs, import_gts_inline_for_export, import_gts_inline_to,
 };
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;
@@ -140,13 +142,16 @@ pub use purrdf_gts::transport::{
 };
 
 pub use native_codecs::{
-    GTS_EXTENSIONS, GtsCodecBackend, NativeRdfFormat, PACK_EXTENSIONS, ParseFailure, ParseOptions,
-    ParseOutcome, SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat, SpanTable,
-    StatementLayer, classify, classify_source, empty_named_graphs_dropped, parse_dataset,
-    parse_dataset_from_reader, parse_dataset_reporting_failure, parse_dataset_with,
-    serialize_dataset, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
-    serialize_dataset_to_writer_with, serialize_dataset_with,
+    BorrowedReadError, BorrowedSource, GTS_EXTENSIONS, GtsCodecBackend, NativeParseError,
+    NativeRdfFormat, PACK_EXTENSIONS, ParseControlError, ParseFailure, ParseOptions, ParseOutcome,
+    ParseRefusal, RetainedParse, SerializeOptions, SerializeOutcome, SerializeReport,
+    SourceAssociationError, SourceFormat, SourceOccurrence, SourceOccurrences, SourceOriginId,
+    SourceOriginKind, SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind,
+    SourceTermOrigin, SpanTable, StatementLayer, classify, classify_source,
+    empty_named_graphs_dropped, parse_dataset, parse_dataset_controlled, parse_dataset_from_reader,
+    parse_dataset_reporting_failure, parse_dataset_with, serialize_dataset,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options, transcode_under_document_base,
 };
 pub use native_quads::{
@@ -155,10 +160,10 @@ pub use native_quads::{
     flat_dataset_from_quads_declaring, flat_rdf_quads, flat_rdf_quads_from_dataset,
 };
 pub use projections::{
-    CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CSVW_TERMS_PROFILE,
-    ConstructViewConfig, ConstructViewProjection, CroissantConfig, CroissantRole,
-    CroissantVocabulary, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig,
-    CsvwContext, CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection,
+    CANONICAL_TERM_JSON_LAW_ID, CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES,
+    CSVW_TERMS_PROFILE, ConstructViewConfig, ConstructViewProjection, CroissantConfig,
+    CroissantRole, CroissantVocabulary, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn,
+    CsvwConfig, CsvwContext, CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection,
     CsvwExactReadOutcome, CsvwForeignKey, CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup,
     CsvwMode, CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome,
     CsvwReference, CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup,
@@ -222,48 +227,54 @@ pub use purrdf_core::{
     ContentStore, ContentStoreError, DatasetDiff, DatasetMut, DatasetProvenance, DatasetSink,
     DatasetStateDigest, DatasetStateError, DatasetView, DeltaDatasetView, DeltaViewId,
     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
-    DrainCheckpoint, DrainFailure, FallibleDatasetView, FastHasher, FastMap, FastSet, FnFunction,
-    FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping, FnoCatalog,
-    FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GraphExistenceMode, GraphLayer, GraphMatch,
-    GraphMatchValue, GraphPlacement, GtsBundle, HandleEntry, HandleKey, IdSet, IdVec, IriError,
-    LossEntry, LossLedger, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, OwnerKey,
+    DrainCheckpoint, DrainFailure, FallibleDatasetView, FastHasher, FastMap, FastSet, FnBlank,
+    FnFunction, FnImpl, FnMapping, FnOutput, FnParam, FnParamMapping, FnReturnMapping,
+    FnoAdmissionError, FnoAdmissionReason, FnoCatalog, FnoCatalogInput, FnoConstructionFailure,
+    FnoConstructorRefusal, FnoFieldKind, FnoReadError, FnoReadFailure, FnoReadSourceError,
+    FnoRejectedCatalog, FnoStructureKind, FrozenDatasetSource, GENID_WELL_KNOWN_PATH,
+    GraphExistenceMode, GraphLayer, GraphMatch, GraphMatchValue, GraphPlacement, GtsBundle,
+    HandleEntry, HandleKey, IdSet, IdVec, IriError, LossCompletenessError, LossEntry, LossLedger,
+    LossSoundnessError, MutableDataset, OriginKind, OriginSetId, OriginSetInterner, OwnerKey,
     OwnerMutability, PIPELINE_ROOT_DOMAIN, PROJECTION_CODECS, PageFault, PageFaultKind,
     PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
     PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
     PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack, PagedStackError,
     PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, PipelineBundle,
     PipelineBundleError, PipelineViewBundle, ProvenanceError, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESEARCH_OBJECT_CODECS,
+    QuadPatternCursor, QuadRef, QuadValues, RDFC_V2_CORPUS_POLICY, RESEARCH_OBJECT_CODECS,
     RESERVED_NAMESPACE, RdfAnnotation, RdfBlobOrigin, RdfBlobRecord, RdfBundle, RdfDataset,
     RdfDatasetBuilder, RdfDatasetVisitor, RdfDiagnostic, RdfEnvelope, RdfListError, RdfLiteral,
     RdfLocation, RdfLookaside, RdfLookasideKind, RdfLookasideResource, RdfMetadataEntry,
     RdfMetadataValue, RdfOpaqueNodeRecord, RdfParseRequest, RdfParserBackend, RdfQuad, RdfReifier,
     RdfSegmentRecord, RdfSerializeRequest, RdfSerializer, RdfSeverity, RdfSignatureRecord,
     RdfStoreCapabilities, RdfSuppressionRecord, RdfTerm, RdfTermKind, RdfTextDirection, RdfTriple,
-    ReservedVocabulary, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
-    SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap, SerializeGraph, SkolemError,
-    SmallVec, SparqlEngine, SparqlRequest, SparqlResult, SssomColumnLayout, SssomColumnLayoutError,
-    SssomCommentError, SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping,
-    SssomMappingSet, SssomMeta, SssomSetComment, StackPageOrigin, StackSource, StopSignal,
-    SubsetPageProvider, TermBox, TermFactory, TermId, TermPosition, TermRef, TermValue,
-    TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead, TripleReadError,
-    TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout, UnitCatalog, UnitId,
-    UnitInterner, UnitMetadata, ViewAccountingReport, ViewCanonError, ViewLimits,
-    ViewOperationStatus, ViewStats, ViewWork, assert_ledger_complete, assert_ledger_sound,
-    blank_count_view, canonical_paged_seal, canonical_relabel, canonical_relabel_with_mapping,
-    canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
-    check_admissible_flat_view, check_admissible_view, check_ledger_complete, check_ledger_sound,
-    check_provenance, checkpointed_drain, dataset_diff, datasets_isomorphic, deskolemize,
-    display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term,
-    fno_to_ntriples, fno_to_quads, graph_digest_view, gts_to_rdf_loss_ledger, loss_matrix_json,
-    lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,
-    rdf_gts_loss_matrix_json, rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger,
-    rdf_to_obo_graphs_loss_ledger, rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger,
-    rdf_to_skos_loss_ledger, registered_pairs, research_object_to_rdf_loss_ledger, rule_iri,
-    skolemize, smallvec, try_canonicalize, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
-    try_canonicalize_view_with_stop, try_canonicalize_with, try_flat_digest_view,
-    try_graph_digest_view,
+    RdfcActiveGroup, RdfcActivePath, RdfcCandidateProgress, RdfcGroupLabels, RdfcGroupObservation,
+    RdfcGroupObservations, RdfcGroupStats, RdfcRefusalObservation, RdfcRootProgress,
+    RdfcSearchContext, ReservedVocabulary, RetainedCharge, RetentionGuard, RetentionLedger,
+    RetentionSnapshot, SSSOM_DEFAULT_VALIDATION_TYPES, ScopeBinding, SegmentUnitMap,
+    SerializeGraph, SkolemError, SmallVec, SparqlEngine, SparqlRequest, SparqlResult,
+    SssomColumnLayout, SssomColumnLayoutError, SssomCommentError, SssomCommentKind,
+    SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet, SssomMeta,
+    SssomSetComment, StackPageOrigin, StackSource, StopSignal, SubsetPageProvider, TermBox,
+    TermFactory, TermId, TermPosition, TermRef, TermValue, TripleDataset, TripleDatasetBuilder,
+    TripleIds, TripleOrder, TripleRead, TripleReadError, TripleReifierRow, TripleReservation,
+    TripleRows, TripleStorageLayout, UnionDatasetView, UnionError, UnionSource, UnionTermGuard,
+    UnionTermId, UnitCatalog, UnitId, UnitInterner, UnitMetadata, ViewAccountingReport,
+    ViewCanonError, ViewLimits, ViewOperationStatus, ViewStats, ViewWork, assert_ledger_complete,
+    assert_ledger_sound, blank_count_view, canonical_paged_seal, canonical_relabel,
+    canonical_relabel_with_mapping, check_admissible, check_admissible_flat_view,
+    check_admissible_view, check_ledger_complete, check_ledger_sound, check_provenance,
+    checkpointed_drain, dataset_diff, datasets_isomorphic, deskolemize, display_term,
+    emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, fno_to_ntriples,
+    fno_to_quads, gts_to_rdf_loss_ledger, loss_matrix_json, lpg_to_rdf_loss_ledger,
+    okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for, rdf_gts_loss_matrix_json,
+    rdf_to_gts_loss_ledger, rdf_to_lpg_loss_ledger, rdf_to_obo_graphs_loss_ledger,
+    rdf_to_okf_loss_ledger, rdf_to_research_object_loss_ledger, rdf_to_skos_loss_ledger,
+    registered_pairs, research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec,
+    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_sha256_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_digest_view, try_graph_digest_view,
 };
 pub use purrdf_core::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
@@ -284,3 +295,8 @@ pub mod ustar;
 pub mod prelude {
     pub use purrdf_core::prelude::*;
 }
+
+pub use purrdf_core::{
+    CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
+    SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
+};

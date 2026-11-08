@@ -1465,3 +1465,26 @@ neighbour `a_whole_corpus_with_nothing_to_disclose_still_certifies_exact_scores`
 in `tests/real_producers.rs`, which run the whole ladder over a real sealed
 artifact holding half a corpus, and `fusion_trailer_names_reassociated_kernel`
 there, whose exact-producer control carries no such evidence; and by the `T8`/`T9` groups in `tests/fusion.rs`.
+
+## Caller ordering keys and unread bounds
+
+A `CallerKeys` fusion law requires `RankedStream::ordering_evidence` before the
+first pull. Its caller-owned semantic IRI must match the profile; its snapshot
+identity and full-domain leading-key bound remain fixed. Every returned row
+carries `CandidateKeys`, identical across all observations of that candidate.
+Score-first policies require empty leading bytes. Scoped original observations
+must supply the same keys through `candidate_keys`.
+
+`unread_key_bound` covers the source suffix and may only tighten. The returned
+row must satisfy the bound reported before that pull. Fusion includes a
+buffered head in its effective unread bound, so a source cannot discard a key
+merely by returning it. A complete exhausted source can report `Empty`; a lossy
+or closed non-exhaustive source retains its full-domain bound. `Unbounded` is
+honest absence of a useful bound and can cause an actionable certification
+refusal. Report stronger bounds only when the index can prove them.
+
+Keys compare as unsigned lexicographic bytes, shorter prefixes first. Encode
+composite directions before supplying them and name that encoding with the
+semantic IRI. Use `ReadBound::CallerOrdered` before planning: ordinary bounded
+plans may have discarded rows needed by caller ties or leading keys. Native
+adapters can use `OrderCatalog`; direct stream implementations need no catalog.

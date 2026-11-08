@@ -147,7 +147,7 @@ fn run_in(env: &ExtensionEnv<'_>, query: &str) -> Result<(Vec<String>, Vec<Vec<S
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(env),
+            &QueryOptions::new().with_env(env),
         )
         .map_err(|e| e.to_string())?;
     match result {
@@ -385,7 +385,7 @@ fn an_update_where_joins_a_shared_blank_like_a_query() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new().with_env(&env()),
+                &QueryOptions::new().with_env(&env()),
             )
             .expect("the update applies");
         let answer = NativeSparqlEngine::new()
@@ -396,7 +396,7 @@ fn an_update_where_joins_a_shared_blank_like_a_query() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("the read evaluates");
         let SparqlResult::Solutions { rows, .. } = answer else {

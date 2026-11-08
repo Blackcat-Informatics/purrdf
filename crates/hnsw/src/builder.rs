@@ -269,7 +269,7 @@ fn repair_connectivity<A: Arithmetic>(
                     orphan,
                     norm_of(norms, orphan),
                 )
-                .ok_or(HnswError::NonFiniteDistance { row: orphan })?;
+                .map_err(|cause| HnswError::NonFiniteDistance { row: orphan, cause })?;
             let linked = graph.link_protected(
                 host,
                 0,

@@ -120,8 +120,7 @@ use purrdf_validate::regime::{
 };
 
 use crate::argv_documents::{
-    ImportPair, ImportRole, import_document_legs, import_readers, parse_import_pairs,
-    refuse_shared_stdin,
+    ImportRole, import_document_legs, import_readers, refuse_shared_stdin,
 };
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
@@ -178,6 +177,10 @@ pub(crate) struct EntailsOptions<'a> {
     pub(crate) regime: CliRegime,
     /// `--premise`: the premise document, or `-`.
     pub(crate) premise: &'a str,
+    /// YAML-LD Basic options for the premise only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the conclusion only.
+    pub(crate) conclusion_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--conclusion`: the conclusion graph, when the question is a verdict.
     pub(crate) conclusion: Option<&'a str>,
     /// `--pattern`: the basic graph pattern, when the question is a relation.
@@ -186,6 +189,8 @@ pub(crate) struct EntailsOptions<'a> {
     pub(crate) verify: bool,
     /// `--import IRI=FILE`, in the order the operator wrote them.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--max-stored-facts` / `--max-join-steps`: the evaluation limits the question is
     /// answered under, spelled for the command line.
     pub(crate) limits: MaterializeLimits,
@@ -203,6 +208,7 @@ pub(crate) fn run(
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Refuse the two global document flags, which name outputs this command does not produce.
     //
@@ -225,38 +231,78 @@ pub(crate) fn run(
         "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
              none: its answer is a line-oriented verdict, not RDF",
     )?;
+    if options.conclusion_yamlld_input_options.is_some()
+        && (options.conclusion.is_none() || options.pattern.is_some())
+    {
+        return Err(CliError::Usage(
+            "--conclusion-yamlld-input-options requires --conclusion and conflicts with --pattern"
+                .to_owned(),
+        ));
+    }
     let question = question(options)?;
     refuse_unconsumable_base(options, question)?;
     // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
     // pair, or an ontology-IRI half that denotes nothing, is a defect in the command line and
     // must fail against it rather than surfacing later as the boundary's refusal naming the
     // premise's own `owl:imports`.
-    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::PREMISE,
+        options.from,
+    )?;
     // The premise, the question and every `--import` document may each be `-`, and at most
     // one of them may be.
     let mut readers = vec![
         ("--premise".to_owned(), options.premise),
         (question.flag().to_owned(), question.path()),
     ];
-    readers.extend(import_readers(&import_pairs));
+    readers.extend(import_readers(import_plan.arguments()));
     refuse_shared_stdin(&readers)?;
+
+    let premise_format = format::resolve(options.from, options.premise)?;
+    let conclusion_format = match question {
+        Question::Conclusion { path, .. } => Some(format::resolve(options.from, path)?),
+        Question::Pattern { .. } => None,
+    };
+    let premise_input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[premise_format]))
+        .transpose()?;
+    let conclusion_input_options = options
+        .conclusion_yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, conclusion_format.as_slice()))
+        .transpose()?;
 
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
     // to the premise's `owl:imports`.
-    let premise = read_as_nquads(options.premise, "--premise", options)?;
+    let premise = read_as_nquads(
+        options.premise,
+        "--premise",
+        premise_format,
+        premise_input_options.as_deref(),
+        options,
+        canonical,
+    )?;
     // The IRI the premise document was read FROM — the base it parsed under, which is its
     // `file://` retrieval IRI or `--base`. An `owl:imports` of that IRI names the premise
     // itself, so the boundary resolves it in place rather than refusing it as missing. A
     // container (pack, GTS) stores resolved IRIs and has no document base.
-    let premise_base = match format::resolve(options.from, options.premise)? {
+    let premise_base = match premise_format {
         SourceFormat::Native(native) => {
             source::effective_base(options.premise, native, options.base)?
         }
         SourceFormat::Pack | SourceFormat::Gts => None,
+        _ => {
+            return Err(format::unsupported_format(
+                premise_format,
+                "the premise input",
+            ));
+        }
     };
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
-    let imports = read_imports(&import_pairs, options)?;
+    let imports = read_imports(&import_plan, options, canonical)?;
     let table: Vec<(&str, &str)> = imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))
@@ -264,9 +310,16 @@ pub(crate) fn run(
     refuse_unreached_pairs(&premise, &imports, &premise_iris)?;
     let regime = purrdf_validate::regime::regime_name(options.regime.to_native());
 
-    let answer: ReasoningAnswer = match question {
+    let answer: ReasoningAnswer<String> = match question {
         Question::Conclusion { path, verify } => {
-            let conclusion = read_as_nquads(path, "--conclusion", options)?;
+            let conclusion = read_as_nquads(
+                path,
+                "--conclusion",
+                format::resolve(options.from, path)?,
+                conclusion_input_options.as_deref(),
+                options,
+                canonical,
+            )?;
             let decide = if verify {
                 verify_entailment_to_string
             } else {
@@ -280,7 +333,7 @@ pub(crate) fn run(
                 &premise_iris,
                 &options.limits,
             )
-            .map_err(CliError::Runtime)?
+            .map_err(CliError::native)?
         }
         Question::Pattern { path } => {
             let pattern = source::read_text(path, "--pattern")?;
@@ -292,15 +345,15 @@ pub(crate) fn run(
                 &premise_iris,
                 &options.limits,
             )
-            .map_err(CliError::Runtime)?
+            .map_err(CliError::native)?
         }
     };
 
     // The verdict goes to the sink and the certificate goes to `--report`: this command
     // answers a question, and the evidence of what produced the answer is a second output
     // rather than a discarded one.
-    report::surface_rendered(report_target, answer.certificate())?;
-    sink::write_out(output, answer.answer().as_bytes())
+    report::surface_rendered(report_target, answer.certificate(), canonical)?;
+    sink::write_out_with_request(output, answer.answer().as_bytes(), canonical)
 }
 
 /// The question the flags name, as the closed [`Question`].
@@ -377,15 +430,23 @@ pub(crate) fn refuse_unreached_pairs(
 /// Every argument-level decision was already made by [`crate::argv_documents::parse_import_pairs`], so what remains
 /// here is I/O: this function reads documents and nothing else refuses a command line.
 fn read_imports(
-    pairs: &[ImportPair<'_>],
+    plan: &crate::rdf_imports::RdfImportPlan<'_>,
     options: &EntailsOptions<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Vec<(String, String)>, CliError> {
-    let mut resolved = Vec::with_capacity(pairs.len());
-    for pair in pairs {
+    let mut resolved = Vec::with_capacity(plan.pairs().len());
+    for pair in plan.pairs() {
         let what = format!("--import {}", pair.iri);
         resolved.push((
             pair.iri.to_owned(),
-            read_as_nquads(pair.path, &what, options)?,
+            read_as_nquads(
+                pair.path,
+                &what,
+                pair.format,
+                pair.input_options.as_deref(),
+                options,
+                canonical,
+            )?,
         ));
     }
     Ok(resolved)
@@ -449,12 +510,15 @@ fn refuse_unconsumable_base(
 fn read_as_nquads(
     path: &str,
     what: &str,
+    format: SourceFormat,
+    input_options: Option<&[u8]>,
     options: &EntailsOptions<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
-    let format = format::resolve(options.from, path)?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, options.base)?;
+    let outcome =
+        source::serialize_input_to_nquads(path, format, options.base, input_options, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{what} {path}: reading this document into the entailment boundary's N-Quads \

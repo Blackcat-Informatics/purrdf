@@ -6,12 +6,11 @@
 //! `vectors/25-streamable-source.gts` (which this file only READS; it is a
 //! separately frozen top-level GTS vector, never regenerated here).
 //!
-//! Frozen by `crates/rdf/src/bin/gen_streamable_vectors.rs`; this file
-//! duplicates that binary's exact fixed timestamp/packaging key so a fresh
-//! regeneration here always starts from the SAME parameters the frozen
-//! vector was authored from (a `[[bin]]` target exposes no library surface a
-//! test could import — matches the `dict_vectors.rs` pattern for
-//! `30-dict-rawcontent`/`31-dict-trained`).
+//! Frozen by `crates/rdf/examples/gen_streamable_vectors.rs`. This file uses
+//! the same fixed timestamp and the shared
+//! `purrdf_rdf::gts_dict_vectors::streamable_packaging_key`. Both regenerate
+//! through `compact_and_certify` with `DictPlan::undicted()`, starting from
+//! the same source bytes and authoring parameters.
 //!
 //! `crates/gts/tests/frozen_canonical_bytes.rs` separately covers this vector
 //! for canonical-CBOR byte-exactness; the tests here are the purrdf-local
@@ -65,6 +64,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (streamable_packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("streamable compaction over the frozen source succeeds");
 
@@ -94,7 +94,13 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
         streamable_packaging_key().verifying_key(),
     );
 
-    let report = verify_compaction(&source, &frozen, &keyring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &frozen,
+        &keyring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.refold_equivalent,
         "compaction must preserve content (RDFC-1.0 refold equivalence): {report:?}"

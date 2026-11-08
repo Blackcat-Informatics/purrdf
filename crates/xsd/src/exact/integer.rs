@@ -23,7 +23,7 @@ use crate::bigint::BigInt;
 /// canonical — a value has exactly one representation — so the derived
 /// equality and hash are value equality and value hash, and the small-value path
 /// costs one checked machine operation and no allocation (the `exact` bench
-/// measures it against the bounded `i128` path).
+/// measures it beside the public value dispatch over the same tower).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Integer(Repr);
 
@@ -66,6 +66,23 @@ impl Integer {
         value
             .to_i128()
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
+    }
+
+    /// Copy an integer's native buffer under an admission retained by its caller.
+    /// Already admitted immutable limbs keep their original lease; new buffers
+    /// must remain with the supplied admission until destruction.
+    /// # Errors
+    /// Returns the original admission or allocation refusal before publication.
+    pub fn copy_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(Self::from_i128(*value)),
+            Repr::Big(value) => value
+                .detached_buffer_with_memory(memory)
+                .map(Self::from_bigint),
+        }
     }
 
     /// Copy a canonical coefficient into an original preparation account.
@@ -306,14 +323,19 @@ impl Integer {
     pub fn prepare_decimal_digits(
         &self,
     ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
-        self.with_bigint(BigInt::prepare_decimal_digits)
+        self.prepare_decimal_digits_using(&crate::bigint::scratch::Fallible)
     }
 
     pub(crate) fn prepare_decimal_digits_using(
         &self,
         storage: &impl crate::bigint::scratch::Allocate,
     ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
-        self.with_bigint(|value| value.prepare_decimal_digits_using(storage))
+        match &self.0 {
+            Repr::Small(value) => {
+                BigInt::from_inline_i128(*value).prepare_decimal_digits_using(storage)
+            }
+            Repr::Big(value) => value.prepare_decimal_digits_using(storage),
+        }
     }
 
     /// Checked render layout including sign, point and fractional padding.

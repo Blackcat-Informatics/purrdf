@@ -249,6 +249,20 @@ fn streaming_boundary_answers() {
             stream.reset();
             record.reset();
             assert_eq!(stream.finalize(), record.finalize());
+            stream
+                .try_update(&data[..len], |_| Ok::<_, ()>(()))
+                .unwrap();
+            record
+                .try_update(&data[..len], |_| Ok::<_, ()>(()))
+                .unwrap();
+            assert_eq!(
+                Lower(stream.try_finalize(|_| Ok::<_, ()>(())).unwrap().as_bytes()).to_string(),
+                expected
+            );
+            assert_eq!(
+                Lower(record.try_finalize(|_| Ok::<_, ()>(())).unwrap().as_bytes()).to_string(),
+                expected
+            );
         }
     }
 }

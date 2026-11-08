@@ -170,7 +170,7 @@ pub fn rif_resolver(
 /// neither `map` nor the closure resolves; [`EntailError::UnreachedImport`] naming every map
 /// entry the closure never reaches; [`EntailError::IncompatibleImports`] naming every
 /// pair of ontologies of the closure that are two versions of one series or of which one
-/// declares `owl:incompatibleWith` the other (OWL 2 §3.4); [`EntailError::Build`] if the
+/// declares `owl:incompatibleWith` the other (OWL 2 §3.4); [`EntailError::Dataset`] if the
 /// merged dataset cannot be frozen.
 ///
 /// Public as [`crate::resolve_imports`] for a caller that closes a premise through a lane
@@ -205,9 +205,7 @@ pub fn resolve(
             closure.conflicts().to_vec(),
         ));
     }
-    closure
-        .merge(premise)
-        .map_err(|e| EntailError::Build(e.to_string()))
+    closure.merge(premise).map_err(EntailError::from)
 }
 
 #[cfg(test)]

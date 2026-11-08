@@ -19,11 +19,11 @@ test("every results alias has the same bytes through all raw format APIs", async
   const engine = new QueryEngine();
   const ds = new Dataset();
   for (const [canonical, names] of Object.entries(aliases)) {
-    const expected = engine.queryRaw(ds, query, { format: canonical });
+    const expected = engine.queryRaw(ds, query, { format: canonical }).body;
     for (const name of names) for (const format of [name, ` \t${name.toUpperCase()}\n`]) {
-      assert.equal(engine.queryRaw(ds, query, { format }), expected, format);
-      assert.equal(await engine.queryRawAsync(ds, query, { format }), expected, format);
-      assert.equal(new TextDecoder().decode(await engine.queryRawBytesAsync(ds, query, { format })), expected, format);
+      assert.equal(engine.queryRaw(ds, query, { format }).body, expected, format);
+      assert.equal(await engine.queryRawAsync(ds, query, { format }).then(result => result.body), expected, format);
+      assert.equal(new TextDecoder().decode(await engine.queryRawBytesAsync(ds, query, { format }).then(result => result.body)), expected, format);
     }
   }
 });

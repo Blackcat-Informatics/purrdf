@@ -12,7 +12,7 @@ use std::fmt;
 use std::ops::{Add, Mul, Neg, Sub};
 use std::str::FromStr;
 
-use super::binary::{BINARY32, BINARY64, decompose_f64, round_ratio};
+use super::binary::{BINARY32, BINARY64, round_ratio};
 use super::cost::{self, Cost};
 use super::decimal::{Decimal, round_quotient, strip_factor};
 use super::error::{ExactError, ExactKind};
@@ -130,20 +130,7 @@ impl Rational {
     ///
     /// [`ExactError::NotFinite`] (`err:FOCA0002`) for `NaN` and the infinities.
     pub fn from_f64(value: f64) -> Result<Self, ExactError> {
-        let (negative, significand, exponent) =
-            decompose_f64(value).ok_or(ExactError::NotFinite)?;
-        let significand = Integer::from(significand);
-        let numerator = if negative { -significand } else { significand };
-        Ok(if exponent >= 0 {
-            Self::from_integer(Integer::from_bigint(
-                numerator.to_bigint().mul_pow2(exponent.unsigned_abs()),
-            ))
-        } else {
-            Self::reduced(
-                numerator,
-                Integer::from_bigint(BigInt::one().mul_pow2(exponent.unsigned_abs())),
-            )
-        })
+        Self::from_binary64(value).ok_or(ExactError::NotFinite)
     }
 
     /// The exact value of a finite `f32`.
@@ -219,7 +206,22 @@ impl Rational {
     ///
     /// [`ExactError::DivisionByZero`] for zero.
     pub fn recip(&self) -> Result<Self, ExactError> {
-        Self::new(self.denominator.clone(), self.numerator.clone())
+        if self.is_zero() {
+            return Err(ExactError::DivisionByZero);
+        }
+        // Swapping coprime operands preserves their gcd. Only a negative
+        // numerator needs sign normalization to keep the new denominator positive.
+        Ok(if self.is_negative() {
+            Self {
+                numerator: -&self.denominator,
+                denominator: -&self.numerator,
+            }
+        } else {
+            Self {
+                numerator: self.denominator.clone(),
+                denominator: self.numerator.clone(),
+            }
+        })
     }
 
     /// `self ÷ rhs`, exactly.
@@ -273,12 +275,11 @@ impl Rational {
     }
 
     fn ratio_bits(&self, format: &super::binary::Format) -> u64 {
-        round_ratio(
-            self.is_negative(),
-            &self.numerator.abs().to_bigint(),
-            &self.denominator.to_bigint(),
-            format,
-        )
+        self.numerator.with_bigint(|numerator| {
+            self.denominator.with_bigint(|denominator| {
+                round_ratio(self.is_negative(), numerator, denominator, format)
+            })
+        })
     }
 
     /// The exact value an [`XsdValue`] holds on the integer or decimal branch;

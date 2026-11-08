@@ -59,6 +59,7 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
     ctx: &mut C,
     mut text: impl FnMut(&mut C, &str) -> Result<String, E>,
     lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+    check_ready: bool,
 ) -> Result<TermValue, E> {
     Ok(match term {
         TermRef::Iri(iri) => TermValue::Iri(text(ctx, iri)?),
@@ -72,18 +73,30 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
             language,
             direction,
         } => {
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
+            }
             let guard = view
                 .resolve(datatype)
-                .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
-            let TermRef::Iri(datatype) = guard.term() else {
+                .map_err(|cause| lookup_error(TermLookupError::Read(cause)))?;
+            let term = guard.term();
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
+            }
+            let TermRef::Iri(datatype) = term else {
                 return Err(lookup_error(TermLookupError::ForeignId));
             };
-            TermValue::Literal {
+            let value = TermValue::Literal {
                 lexical_form: text(ctx, lexical)?,
                 datatype: text(ctx, datatype)?,
                 language: language.map(|language| text(ctx, language)).transpose()?,
                 direction,
+            };
+            drop(guard);
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
             }
+            value
         }
         TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
     })
@@ -100,6 +113,74 @@ fn owned_term_triple<E>(
         s: boxed(s)?,
         p: boxed(p)?,
         o: boxed(o)?,
+    })
+}
+
+/// Shared native conversion; only snapshot acquisition requests readiness
+/// at each source boundary. Ordinary cached term copying keeps its old policy.
+pub(crate) fn term_value_with_memory_inner<
+    D: DatasetView + ?Sized,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E,
+>(
+    view: &D,
+    id: D::Id,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+    storage_error: impl Fn(
+        purrdf_lex::allocation::StorageError,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> E,
+    check_ready: bool,
+) -> Result<TermValue, E> {
+    // Public factories run only after the closed copier destroys partial
+    // payloads and the shared fold releases its exact traversal scratch.
+    enum CopyError<R> {
+        Lookup(TermLookupError<R>),
+        Storage(purrdf_lex::allocation::StorageError),
+    }
+    let baseline = memory.admitted_bytes();
+    let result = crate::ir::try_fold_term_with_memory_inner(
+        (view, check_ready),
+        id,
+        |_, term, memory| {
+            owned_term_leaf(
+                view,
+                term,
+                memory,
+                |memory, source| {
+                    memory
+                        .string_with_progress(source)
+                        .map_err(CopyError::Storage)
+                },
+                CopyError::Lookup,
+                check_ready,
+            )
+        },
+        |_, s, p, o, memory| {
+            owned_term_triple(s, p, o, |value| {
+                memory
+                    .boxed(value)
+                    .map(Into::into)
+                    .map_err(CopyError::Storage)
+            })
+        },
+        |error| CopyError::Lookup(TermLookupError::Read(error)),
+        |answer, _| drop(answer),
+        |error, _| CopyError::Storage(error),
+        memory,
+    );
+    if result.is_err() {
+        // This closed operation admits only copied strings and boxes. Source
+        // read errors retain their own carriers; public error factories have
+        // not run and cannot own any of this local allocation delta.
+        if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+            let _ = memory.release_bytes(bytes);
+        }
+    }
+    result.map_err(|error| match error {
+        CopyError::Lookup(error) => lookup_error(error),
+        CopyError::Storage(error) => storage_error(error, memory),
     })
 }
 
@@ -217,6 +298,15 @@ impl<E> WorkspaceReservation for NoopReservation<E> {
     type Error = E;
     fn resize(&mut self, _: u64) -> Result<(), E> {
         Ok(())
+    }
+}
+
+impl<E: 'static> NoopReservation<E> {
+    /// Explicit retained admission for a verified unbounded resident carrier.
+    /// The boxed value is zero-sized and allocates no physical storage.
+    #[must_use]
+    pub fn owned() -> OwnedWorkspaceReservation<E> {
+        Box::new(Self::default())
     }
 }
 
@@ -397,6 +487,21 @@ pub trait ViewTermId:
     /// Encode an evaluator-minted computed-term scratch index (a `u32`) into the join-key
     /// space, disjoint from every [`encode`](Self::encode) image (see the trait docs).
     fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
+}
+
+/// Implement the computed-key arm of [`ViewTermId`] for a wide join space.
+///
+/// Invoke inside an implementation whose `JoinKeyAtom` is `u128` and whose
+/// existing IDs never set bit 127. The high bit separates every computed
+/// scratch index from those existing IDs. The original ID encoding remains
+/// the implementation's responsibility.
+#[macro_export]
+macro_rules! wide_computed_join_key_method {
+    () => {
+        fn encode_computed(scratch_index: u32) -> u128 {
+            (1_u128 << 127) | u128::from(scratch_index)
+        }
+    };
 }
 
 impl ViewTermId for TermId {
@@ -596,6 +701,19 @@ impl GraphSelector {
 ///   silently drops the layer it was told to expect, and reports success. Claim what
 ///   the view enumerates, and enumerate what it claims.
 pub trait DatasetView {
+    /// Retained-source accounting already established by a composed carrier.
+    /// A further composition carries these original aggregate dimensions forward
+    /// instead of treating a nested union as one fresh source. Ordinary backends
+    /// return `None`; their reached RDF is counted by the composing view.
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        None
+    }
+    /// Immutable snapshot identity when the view carries a certified content or
+    /// representation binding. Unknown identity is explicit, never an address,
+    /// statistics fingerprint or session-local term identifier.
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(None)
+    }
     /// The dataset-local id type this view mints and reads in (C0.8). For the
     /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
     /// its own id, which is meaningful only within this view.
@@ -715,16 +833,40 @@ pub trait DatasetView {
     /// work on failure. A missing guard is an operational stop, never an RDF term.
     /// This adapter preserves the internal iterator/visitor shape; public lookup
     /// boundaries use [`Self::resolve`] to retain the typed cause immediately.
+    ///
+    /// # Panics
+    /// Panics if a failed resolution is not retained by [`Self::read_error`].
     #[doc(hidden)]
     fn resolve_if_ready(&self, id: Self::Id) -> Option<Self::TermGuard<'_>> {
-        self.resolve(id).ok()
+        match self.resolve(id) {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                assert!(
+                    self.read_error().is_some(),
+                    "DatasetView read_error must retain a failed resolution"
+                );
+                None
+            }
+        }
     }
 
     /// Reverse lookup inside a checked drain. Operational failure is sticky and
     /// the drain may publish no result unless its final checkpoint succeeds.
+    ///
+    /// # Panics
+    /// Panics if a failed reverse lookup is not retained by [`Self::read_error`].
     #[doc(hidden)]
     fn term_id_if_ready(&self, value: &TermValue) -> Option<Self::Id> {
-        self.term_id_by_value(value).ok().flatten()
+        match self.term_id_by_value(value) {
+            Ok(id) => id,
+            Err(_) => {
+                assert!(
+                    self.read_error().is_some(),
+                    "DatasetView read_error must retain a failed reverse lookup"
+                );
+                None
+            }
+        }
     }
 
     /// The opaque, loop-invariant probe plan a pattern query precomputes once (from
@@ -834,6 +976,7 @@ pub trait DatasetView {
                     &mut (),
                     |(), source| crate::ir::try_owned_text(source).map_err(&storage_error),
                     &lookup_error,
+                    false,
                 )
             },
             |_, s, p, o| {
@@ -869,34 +1012,7 @@ pub trait DatasetView {
             &mut purrdf_lex::allocation::Memory<'_, S>,
         ) -> E,
     ) -> Result<TermValue, E> {
-        crate::ir::try_fold_term_with_memory(
-            self,
-            id,
-            |_, term, memory| {
-                owned_term_leaf(
-                    self,
-                    term,
-                    memory,
-                    |memory, source| {
-                        memory
-                            .string(source)
-                            .map_err(|error| storage_error(error, memory))
-                    },
-                    &lookup_error,
-                )
-            },
-            |_, s, p, o, memory| {
-                owned_term_triple(s, p, o, |value| {
-                    memory
-                        .boxed(value)
-                        .map(Into::into)
-                        .map_err(|error| storage_error(error, memory))
-                })
-            },
-            |error| lookup_error(TermLookupError::Read(error)),
-            &storage_error,
-            memory,
-        )
+        term_value_with_memory_inner(self, id, memory, lookup_error, storage_error, false)
     }
 
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
@@ -1156,6 +1272,64 @@ pub trait DatasetView {
         None
     }
 
+    /// Exact source content for this predicate, graph selection and physical
+    /// stream. An absent predicate is an empty summary; `None` means that the
+    /// provider cannot supply independently maintained content evidence.
+    ///
+    /// This must not derive from a consumer's proposed delta or sizing bounds.
+    /// Operational failures return the original typed read error, including
+    /// from providers that do not latch errors. Consumers must also check final
+    /// completion before publishing any summary-based result. The default
+    /// performs no source scan and supplies no substitute evidence.
+    ///
+    /// # Errors
+    /// Returns the provider's original metadata, identity or admission failure.
+    fn source_summary(
+        &self,
+        _predicate: Self::Id,
+        _graph: GraphMatch<Self::Id>,
+        _stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Capture an independently observed source version for later transitions.
+    /// A first observation may read the source; successor transitions must use
+    /// its retained immutable source ownership and native change indexes.
+    ///
+    /// # Errors
+    /// Returns original source, identity or admission failure.
+    fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Exact total statement population, available without scanning payloads.
+    /// Includes nonliteral rows and the reifier family. None is unavailable,
+    /// never an estimate or a substitute zero.
+    ///
+    /// # Errors
+    /// Returns the provider's original metadata/read failure.
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(None)
+    }
+
+    /// Visit effective changes discovered by the source, independently of a
+    /// consumer's supplied delta. Values remain borrowed for each callback.
+    ///
+    /// # Errors
+    /// Returns the original typed read failure, including final readiness.
+    fn visit_source_changes<B>(
+        &self,
+        _previous: &crate::source::SourceVersion,
+        _visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::source::SourceFamily,
+            crate::source::SourceRowRef<'_>,
+        ) -> std::ops::ControlFlow<B>,
+    ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
+        Ok(crate::source::SourceVisit::Unavailable)
+    }
+
     /// The RDF 1.2 reifier side-table AS resolved virtual triples: each
     /// `(reifier, triple-term)` binding becomes a `(reifier, rdf:reifies, triple-term)`
     /// quad carrying the declaration's own graph slot. Capability-gated: a backend
@@ -1240,6 +1414,20 @@ pub trait DatasetView {
         })
     }
 
+    /// Conservative annotation candidates for an ordered object FILTER. Storage
+    /// implementations may skip certified non-overlapping pages before payload
+    /// admission; the caller must still evaluate its original FILTER exactly.
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        let _ = range;
+        self.annotation_quads_for_pattern(predicate, object, graph)
+    }
+
     /// The RDF 1.2 annotation side-table AS resolved virtual triples: each
     /// `(reifier, predicate, object)` annotation becomes a quad carrying its own graph
     /// slot. Capability-gated: a backend with no annotation layer yields nothing.
@@ -1249,13 +1437,15 @@ pub trait DatasetView {
 
     /// The `(predicate, object, graph)` annotations declared for `reifier` (`graph`
     /// `None` ⇒ default graph). Capability-gated: a backend with no annotation layer
-    /// yields nothing (the default ignores `reifier`).
+    /// yields nothing. The default filters the annotation stream; indexed
+    /// backends override it with a subject probe.
     fn annotations_of_with_graph(
         &self,
         reifier: Self::Id,
     ) -> impl Iterator<Item = (Self::Id, Self::Id, Option<Self::Id>)> + '_ {
-        let _ = reifier;
-        std::iter::empty()
+        self.annotation_quads()
+            .filter(move |quad| quad.s == reifier)
+            .map(|quad| (quad.p, quad.o, quad.g))
     }
 
     /// The reifier side-table rows scoped to graph `g`: the graph-narrowed twin of
@@ -1827,8 +2017,35 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.frozen_snapshot_identity()))
+    }
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(NoopReservation::owned()))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        Ok(Some(self.predicate_statistics().statement_count()))
+    }
+
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         Some(self.predicate_statistics())
+    }
+
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        Ok(Some(
+            self.predicate_statistics()
+                .source_summary(predicate, graph, stream),
+        ))
     }
 
     frozen_term_nesting_bound_method! {
@@ -2035,6 +2252,25 @@ impl DatasetView for RdfDataset {
 /// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
 /// can silently diverge from the inner view.
 impl<T: DatasetView> DatasetView for Arc<T> {
+    fn checked_read<U>(&self, read: impl FnOnce(&Self) -> U) -> Result<U, Self::ReadError> {
+        (**self).checked_read(|_| read(self))
+    }
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        (**self).retained_view_stats()
+    }
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        (**self).snapshot_identity()
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        (**self).annotation_quads_for_range(predicate, object, graph, range)
+    }
     type Id = T::Id;
     type ReadError = T::ReadError;
     type TermGuard<'a>
@@ -2214,6 +2450,35 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         (**self).statistics()
     }
 
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        (**self).source_summary(predicate, graph, stream)
+    }
+
+    fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
+        (**self).source_version()
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        (**self).source_statement_count()
+    }
+
+    fn visit_source_changes<B>(
+        &self,
+        previous: &crate::source::SourceVersion,
+        visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::source::SourceFamily,
+            crate::source::SourceRowRef<'_>,
+        ) -> std::ops::ControlFlow<B>,
+    ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
+        (**self).visit_source_changes(previous, visit)
+    }
+
     #[inline]
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         (**self).reifier_quads()
@@ -2309,6 +2574,8 @@ impl<T: DatasetView> DatasetView for Arc<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     use super::*;
     use crate::ir::RdfDatasetBuilder;
 
@@ -2473,21 +2740,20 @@ mod tests {
     /// the whole surface under test.
     struct ProbeView {
         inner: Arc<RdfDataset>,
-        status: std::cell::Cell<u8>,
+        status: AtomicU8,
     }
 
     impl ProbeView {
         /// `0` = Ready, `1` = Failed; the native import control uses `2` to
-        /// become Failed when quad draining begins. A `Cell<u8>` rather than a
-        /// `Cell<ViewOperationStatus<..>>` because the status carries a
-        /// non-`Copy` payload (the fault); the discriminant alone is all
-        /// `operation_status` needs to reconstruct it.
+        /// become Failed when quad draining begins; `3` returns a direct
+        /// metadata error without changing Ready status. The atomic discriminant
+        /// permits Arc forwarding; the test orders its own state transitions.
         fn new(faulted: bool) -> Self {
             Self {
                 inner: RdfDatasetBuilder::new()
                     .freeze()
                     .expect("empty dataset freezes"),
-                status: std::cell::Cell::new(u8::from(faulted)),
+                status: AtomicU8::new(u8::from(faulted)),
             }
         }
 
@@ -2495,7 +2761,7 @@ mod tests {
         /// from the `drain` closure `checkpointed_drain` invokes, standing in
         /// for a real view that broke partway through its own read.
         fn fault_now(&self) {
-            self.status.set(1);
+            self.status.store(1, Ordering::Relaxed);
         }
     }
 
@@ -2512,8 +2778,20 @@ mod tests {
             self.operation_status().error().cloned()
         }
 
+        fn source_summary(
+            &self,
+            _predicate: Self::Id,
+            _graph: GraphMatch<Self::Id>,
+            _stream: crate::StatisticsStream,
+        ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+            if self.status.load(Ordering::Relaxed) == 3 {
+                return Err(ProbeFault("source summary direct read failure"));
+            }
+            self.read_error().map_or(Ok(None), Err)
+        }
+
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-            if self.status.get() == 2 {
+            if self.status.load(Ordering::Relaxed) == 2 {
                 self.fault_now();
             }
             self.inner.quads()
@@ -2558,7 +2836,7 @@ mod tests {
         /// thereafter — the whole point of `ProbeView` is that this is the
         /// ONLY thing that determines the status a checkpoint observes.
         fn operation_status(&self) -> ViewOperationStatus<ProbeFault, u32> {
-            if self.status.get() != 1 {
+            if self.status.load(Ordering::Relaxed) != 1 {
                 ViewOperationStatus::Ready { evidence: 0 }
             } else {
                 ViewOperationStatus::Failed {
@@ -2570,6 +2848,45 @@ mod tests {
     }
 
     #[test]
+    fn source_summary_distinguishes_unavailable_empty_and_direct_read_failure() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("urn:source-predicate").unwrap();
+        let view = Arc::new(ProbeView {
+            inner: builder.freeze().unwrap(),
+            status: AtomicU8::new(0),
+        });
+        let source = |provider: &Arc<ProbeView>| {
+            provider.source_summary(
+                predicate,
+                GraphMatch::Any,
+                crate::StatisticsStream::Asserted,
+            )
+        };
+        assert_eq!(source(&view), Ok(None));
+        assert_eq!(
+            view.inner.source_summary(
+                predicate,
+                GraphMatch::Any,
+                crate::StatisticsStream::Asserted,
+            ),
+            Ok(Some(crate::source::SourceSummary::default()))
+        );
+        view.status.store(3, Ordering::Relaxed);
+        assert_eq!(
+            source(&view),
+            Err(ProbeFault("source summary direct read failure"))
+        );
+        assert!(
+            view.read_error().is_none(),
+            "direct failure is not a status latch"
+        );
+        assert!(matches!(
+            view.operation_status(),
+            ViewOperationStatus::Ready { .. }
+        ));
+    }
+
+    #[test]
     fn materialization_preserves_native_read_failure_before_and_after_drain() {
         use crate::ir::import::DatasetImportError;
         use crate::{DatasetMaterializationError, dataset_from_view};
@@ -2578,7 +2895,7 @@ mod tests {
 
         for status in [1, 2] {
             let view = ProbeView::new(false);
-            view.status.set(status);
+            view.status.store(status, Ordering::Relaxed);
             let error = dataset_from_view(&view).unwrap_err();
             drop(view);
             let expected = ProbeFault("the probe view was told to fault");
@@ -2715,6 +3032,53 @@ mod term_value_tests {
         );
         // A term with no literal in it still resolves through the same view.
         assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
+        use purrdf_lex::allocation::{Memory, Resident, StorageError};
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let parent = memory.string("parent").unwrap();
+        let baseline = memory.admitted_bytes();
+        assert!(matches!(
+            view.term_value_with_memory(
+                quoted,
+                &mut memory,
+                |cause| cause,
+                |_, _| { panic!("the original foreign datatype is the first error") }
+            ),
+            Err(TermLookupError::ForeignId)
+        ));
+        assert_eq!(
+            memory.admitted_bytes(),
+            baseline,
+            "partial subject/predicate copies were refunded"
+        );
+        memory.release_string(parent).unwrap();
+
+        // The public storage factory receives the account after private copy cleanup.
+        // Its admitted error string remains live and independently releasable.
+        let baseline = usize::MAX - (3 * size_of::<TermValue>() + format!("{EX}s").len() + 1);
+        memory.add_bytes(baseline).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let error = view
+            .term_value_with_memory(
+                quoted,
+                &mut memory,
+                |_| panic!("the subject/predicate copy fails before datatype resolution"),
+                |cause, memory| {
+                    assert_eq!(cause, StorageError::SizeOverflow);
+                    assert_eq!(
+                        memory.admitted_bytes(),
+                        baseline,
+                        "partial copies and scratch died before the factory"
+                    );
+                    calls.set(calls.get() + 1);
+                    memory.string("owned-error").unwrap()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(memory.admitted_bytes(), baseline + error.capacity());
+        memory.release_string(error).unwrap();
+        memory.release_bytes(baseline).unwrap();
     }
 
     #[test]

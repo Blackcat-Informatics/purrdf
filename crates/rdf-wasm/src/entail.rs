@@ -23,8 +23,10 @@
 //! C-ABI and PyO3 hosts call, so a byte difference between the three hosts is one
 //! shared golden vector failing rather than three surfaces that quietly stopped
 //! agreeing. This module converts JS values to plain Rust `&str`, calls that
-//! boundary, and maps its `Result<_, String>` onto a thrown `JsError`. That is
-//! its whole job.
+//! boundary, retaining native canonicalization failures and immutable request receipts.
+//! Canonicalizing exports require `canonical_search`: `unlimited` or canonical decimal
+//! `u64`, with no default. Cancellation can be observed when already signaled; a
+//! synchronous call blocks JavaScript callbacks on the same event loop.
 //!
 //! # Why the report is not optional
 //!
@@ -39,8 +41,8 @@
 //! unchanged.
 
 use purrdf_validate::regime::{
-    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer,
-    RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
+    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer, ReasoningError,
+    ReasoningText, RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
     check_absent_proof_is_not_verifiable, check_dl_proof, check_dl_proof_golden_vectors,
     check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
     consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
@@ -49,6 +51,20 @@ use purrdf_validate::regime::{
     prove_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
+
+/// Preserve the original native fields with the existing plain rejection message.
+pub(crate) fn reasoning_error(error: ReasoningError) -> JsValue {
+    crate::operation::native_diagnostic_to_js_with_message(error.into_diagnostic())
+}
+
+/// Use the shared canonical executor with the native reasoning error mapper.
+fn run_reasoning<T>(
+    policy: &str,
+    cancel: Option<&crate::query::CancellationToken>,
+    operation: impl FnOnce(&mut purrdf_core::CanonicalizationControl<'_>) -> Result<T, ReasoningError>,
+) -> Result<(T, String), JsValue> {
+    crate::canonical::run_with(policy, cancel, operation, reasoning_error)
+}
 
 /// One closure of one document under one regime: the canonical N-Quads and the
 /// rendered reasoning report.
@@ -59,19 +75,27 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug)]
 pub struct RegimeClosure {
     /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
-    nquads: String,
+    nquads: purrdf_core::Canonicalized,
     /// The run's reasoning report, in the boundary's byte-stable rendering.
     report: String,
+    canonicalization_json: String,
 }
 
 #[wasm_bindgen]
 impl RegimeClosure {
+    /// Ordered canonical-search receipts; each constituent run has its own ceiling.
+    #[wasm_bindgen(getter, js_name = canonicalizationJson)]
+    #[must_use]
+    pub fn canonicalization_json(&self) -> String {
+        self.canonicalization_json.clone()
+    }
+
     /// The materialized dataset — every input quad plus every inferred triple —
     /// as canonical (RDFC-1.0) N-Quads.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn nquads(&self) -> String {
-        self.nquads.clone()
+        self.nquads.nquads().to_owned()
     }
 
     /// What the run actually did: which rules fired and how often, which
@@ -87,15 +111,18 @@ impl RegimeClosure {
 impl From<BoundaryClosure> for RegimeClosure {
     fn from(closure: BoundaryClosure) -> Self {
         let (nquads, report) = closure.into_parts();
-        Self { nquads, report }
+        Self {
+            nquads,
+            report,
+            canonicalization_json: "[]".to_owned(),
+        }
     }
 }
 
 /// Close `document` under the regime spelled `regime`.
 ///
-/// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
-/// native build — constructing a `JsError` calls a wasm-only import that panics
-/// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+/// Retains the native service error until the export attaches request evidence.
+/// This twin remains callable in native Rust without invoking JavaScript imports.
 #[allow(
     clippy::too_many_arguments,
     reason = "the pointer-free twin of `entailMaterialize`, taking its arguments one for one"
@@ -109,7 +136,9 @@ pub(crate) fn materialize_impl(
     premise_iris: &[String],
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<RegimeClosure, String> {
+    max_term_arena_bytes: Option<u64>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<RegimeClosure, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     materialize_to_nquads_string_with(
@@ -121,14 +150,16 @@ pub(crate) fn materialize_impl(
         &MaterializeLimits {
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             host: RegimeHost::Wasm,
         },
+        control,
     )
     .map(RegimeClosure::from)
 }
 
 /// `entailMaterialize(document, regime, program, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → a `RegimeClosure` carrying the canonical N-Quads
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → a `RegimeClosure` carrying the canonical N-Quads
 /// closure and the rendered reasoning report.
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
@@ -144,9 +175,9 @@ pub(crate) fn materialize_impl(
 ///
 /// `maxStoredFacts` (a `bigint`) bounds the facts each evaluation store may hold and
 /// `maxJoinSteps` (a `bigint`) the candidate solutions the rules may enumerate, for the
-/// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted, each is this target's default:
-/// 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory — a
-/// native build's defaults are 4194304 and 1048576. A run past either throws naming
+/// `rdf`, `rdfs`, `owl-rl` and `d` regimes. Omitted capacity settings impose no
+/// logical ceiling. `maxTermArenaBytes` selects a retained term-surface ceiling.
+/// A run past a caller-selected limit throws naming
 /// the limit, the numbers and the argument that raises it; a run inside them returns
 /// exactly the closure larger limits would, and the report's `contract-hash` names the
 /// calculus under the limits in force.
@@ -178,22 +209,30 @@ pub fn entail_materialize(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<RegimeClosure, JsError> {
-    materialize_impl(
-        document,
-        regime,
-        program,
-        &import_iris,
-        &import_documents,
-        &premise_iris,
-        max_stored_facts,
-        max_join_steps,
-    )
-    .map_err(|e| JsError::new(&e))
+    max_term_arena_bytes: Option<u64>,
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<RegimeClosure, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        materialize_impl(
+            document,
+            regime,
+            program,
+            &import_iris,
+            &import_documents,
+            &premise_iris,
+            max_stored_facts,
+            max_join_steps,
+            max_term_arena_bytes,
+            control,
+        )
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// The rule table `regime` is *defined by*. See [`entail_rules`].
-pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(rules_string(regime)?.lines().map(str::to_owned).collect())
 }
 
@@ -208,12 +247,12 @@ pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailRules)]
-pub fn entail_rules(regime: &str) -> Result<Vec<String>, JsError> {
-    rules_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_rules(regime: &str) -> Result<Vec<String>, JsValue> {
+    rules_impl(regime).map_err(reasoning_error)
 }
 
 /// The subset of the rule table this build fires. See [`entail_implemented_rules`].
-pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(implemented_rules_string(regime)?
         .lines()
         .map(str::to_owned)
@@ -228,12 +267,12 @@ pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, String
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailImplementedRules)]
-pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsError> {
-    implemented_rules_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsValue> {
+    implemented_rules_impl(regime).map_err(reasoning_error)
 }
 
 /// The rules this build fires beyond the specification table. See [`entail_extensions`].
-pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(extension_rules_string(regime)?
         .lines()
         .map(str::to_owned)
@@ -253,8 +292,8 @@ pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, String> {
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailExtensions)]
-pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsError> {
-    extensions_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsValue> {
+    extensions_impl(regime).map_err(reasoning_error)
 }
 
 /// `entailCheckGoldenVectors()` — run the committed tri-host golden vector
@@ -276,8 +315,21 @@ pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsError> {
 ///
 /// Throws with the case name and a diff of the two strings on any mismatch.
 #[wasm_bindgen(js_name = entailCheckGoldenVectors)]
-pub fn entail_check_golden_vectors() -> Result<(), JsError> {
-    check_regime_golden_vectors().map_err(|e| JsError::new(&e))
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn entail_check_golden_vectors(
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        check_regime_golden_vectors(control)
+    })?;
+    Ok(crate::canonical::CanonicalResult::new(
+        JsValue::UNDEFINED,
+        receipts,
+    ))
 }
 
 /// `entailCheckInconsistentRefusal()` — prove that an INCONSISTENT input is refused
@@ -293,8 +345,21 @@ pub fn entail_check_golden_vectors() -> Result<(), JsError> {
 ///
 /// Throws naming the fragment the refusal failed to carry, with the refusal verbatim.
 #[wasm_bindgen(js_name = entailCheckInconsistentRefusal)]
-pub fn entail_check_inconsistent_refusal() -> Result<(), JsError> {
-    check_inconsistent_refusal().map_err(|e| JsError::new(&e))
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn entail_check_inconsistent_refusal(
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        check_inconsistent_refusal(control)
+    })?;
+    Ok(crate::canonical::CanonicalResult::new(
+        JsValue::UNDEFINED,
+        receipts,
+    ))
 }
 
 // ── The Description-Logic reasoning services ────────────────────────────────
@@ -310,16 +375,24 @@ pub fn entail_check_inconsistent_refusal() -> Result<(), JsError> {
 #[derive(Debug)]
 pub struct ReasoningAnswer {
     /// The service's answer, in the boundary's line-oriented rendering.
-    answer: String,
+    answer: ReasoningText,
     /// The certificate of the run that produced it.
     certificate: String,
     /// The proof term of the run that produced it, or the `availability not-recorded`
     /// document when nobody asked for one. NEVER empty — see [`Self::proof`].
     proof: String,
+    canonicalization_json: String,
 }
 
 #[wasm_bindgen]
 impl ReasoningAnswer {
+    /// Ordered canonical-search receipts; each constituent run has its own ceiling.
+    #[wasm_bindgen(getter, js_name = canonicalizationJson)]
+    #[must_use]
+    pub fn canonicalization_json(&self) -> String {
+        self.canonicalization_json.clone()
+    }
+
     /// The service's answer.
     ///
     /// Line-oriented and byte-stable. A dataset-valued answer
@@ -328,7 +401,7 @@ impl ReasoningAnswer {
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn answer(&self) -> String {
-        self.answer.clone()
+        self.answer.as_ref().to_owned()
     }
 
     /// How completely the service decided, in one of THREE certificate grammars —
@@ -379,13 +452,14 @@ impl ReasoningAnswer {
     }
 }
 
-impl From<BoundaryAnswer> for ReasoningAnswer {
-    fn from(produced: BoundaryAnswer) -> Self {
-        let (answer, certificate, proof) = produced.into_proved_parts();
+impl<A: AsRef<str> + Into<ReasoningText>> From<BoundaryAnswer<A>> for ReasoningAnswer {
+    fn from(produced: BoundaryAnswer<A>) -> Self {
+        let (answer, certificate, proof) = produced.map_answer(Into::into).into_proved_parts();
         Self {
             answer,
             certificate,
             proof,
+            canonicalization_json: "[]".to_owned(),
         }
     }
 }
@@ -399,11 +473,19 @@ pub(crate) fn consistency_impl(
     premise_iris: &[String],
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
-    consistency_to_string(document, &imports, &premise_iris, step_cap, work_cap)
-        .map(ReasoningAnswer::from)
+    consistency_to_string(
+        document,
+        &imports,
+        &premise_iris,
+        step_cap,
+        work_cap,
+        control,
+    )
+    .map(ReasoningAnswer::from)
 }
 
 /// `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap, workCap)`
@@ -435,6 +517,7 @@ pub(crate) fn consistency_impl(
 /// mapping fails.
 #[wasm_bindgen(js_name = entailConsistency)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned arrays
+#[allow(clippy::too_many_arguments)] // existing service inputs plus explicit canonical controls
 pub fn entail_consistency(
     document: &str,
     import_iris: Vec<String>,
@@ -442,16 +525,22 @@ pub fn entail_consistency(
     premise_iris: Vec<String>,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    consistency_impl(
-        document,
-        &import_iris,
-        &import_documents,
-        &premise_iris,
-        step_cap,
-        work_cap,
-    )
-    .map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        consistency_impl(
+            document,
+            &import_iris,
+            &import_documents,
+            &premise_iris,
+            step_cap,
+            work_cap,
+            control,
+        )
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// The subsumption hierarchy over the named classes. See [`entail_classify`].
@@ -459,8 +548,9 @@ pub(crate) fn classify_impl(
     document: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
-    classify_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    classify_to_string(document, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
 /// `entailClassify(document, stepCap, workCap)` → the entailed subsumption hierarchy over
@@ -468,20 +558,29 @@ pub(crate) fn classify_impl(
 ///
 /// The answer carries `equivalent`, `subclass` (the full transitively-closed
 /// relation), `direct` (its transitive reduction) and `unsatisfiable` lines, in
-/// that block order. Both subsumption blocks are emitted because they are different
-/// facts: `direct` is "direct as far as this run decided", which weakens under a
-/// `budget-exhausted` certificate while every listed pair stays a genuine
-/// subsumption.
+/// that block order. Directness requires the complete supplied ontology to be
+/// decided; incomplete runs throw `owl-directness-unavailable` with the full
+/// original certificate in the message before emitting any answer rows.
 ///
 /// Throws on a malformed document, or on an ontology with no model — every class
 /// then subsumes every other and the hierarchy would be a complete graph.
 #[wasm_bindgen(js_name = entailClassify)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_classify(
     document: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    classify_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        classify_impl(document, step_cap, work_cap, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// The entailed types of the named individuals. See [`entail_realize`].
@@ -489,21 +588,33 @@ pub(crate) fn realize_impl(
     document: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
-    realize_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    realize_to_string(document, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
 /// `entailRealize(document, stepCap, workCap)` → the entailed types of the ontology's named
 /// individuals, and the most specific of them (`type` then `direct-type` lines).
 ///
-/// Throws on a malformed document or an ontology with no model.
+/// Throws on a malformed document, an ontology with no model, or incomplete
+/// directness. The latter retains the complete original certificate in the message.
 #[wasm_bindgen(js_name = entailRealize)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_realize(
     document: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    realize_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        realize_impl(document, step_cap, work_cap, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// Instance retrieval for one named class. See [`entail_instances`].
@@ -512,8 +623,9 @@ pub(crate) fn instances_impl(
     class: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
-    instances_to_string(document, class, step_cap, work_cap).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    instances_to_string(document, class, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
 /// `entailInstances(document, class, stepCap, workCap)` → the named individuals entailed to
@@ -526,13 +638,23 @@ pub(crate) fn instances_impl(
 /// Throws on a malformed document, a `class` that is not one N-Triples term, or an
 /// ontology with no model.
 #[wasm_bindgen(js_name = entailInstances)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_instances(
     document: &str,
     class: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    instances_impl(document, class, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        instances_impl(document, class, step_cap, work_cap, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// Axiom entailment by refutation. See [`entail_entails`].
@@ -541,8 +663,9 @@ pub(crate) fn entails_impl(
     axiom: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
-    entails_to_string(document, axiom, step_cap, work_cap).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    entails_to_string(document, axiom, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
 /// `entailEntails(document, axiom, stepCap, workCap)` → does the ontology entail `axiom`?
@@ -562,17 +685,27 @@ pub(crate) fn entails_impl(
 /// Throws on a malformed document, an `axiom` that is not one triple, or an
 /// ontology with no model.
 #[wasm_bindgen(js_name = entailEntails)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_entails(
     document: &str,
     axiom: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    entails_impl(document, axiom, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        entails_impl(document, axiom, step_cap, work_cap, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// OWL 2 profile certification. See [`entail_profile`].
-pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, String> {
+pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, ReasoningError> {
     profile_to_string(document).map(ReasoningAnswer::from)
 }
 
@@ -590,8 +723,8 @@ pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, String> {
 ///
 /// Throws on a malformed document.
 #[wasm_bindgen(js_name = entailProfile)]
-pub fn entail_profile(document: &str) -> Result<ReasoningAnswer, JsError> {
-    profile_impl(document).map_err(|e| JsError::new(&e))
+pub fn entail_profile(document: &str) -> Result<ReasoningAnswer, JsValue> {
+    profile_impl(document).map_err(reasoning_error)
 }
 
 /// Locality-based module extraction. See [`entail_extract_module`].
@@ -599,8 +732,9 @@ pub(crate) fn extract_module_impl(
     document: &str,
     signature: &str,
     method: &str,
-) -> Result<ReasoningAnswer, String> {
-    extract_module_to_string(document, signature, method).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    extract_module_to_string(document, signature, method, control).map(ReasoningAnswer::from)
 }
 
 /// `entailExtractModule(document, signature, method)` → the locality module of the
@@ -617,17 +751,31 @@ pub(crate) fn extract_module_impl(
 /// Throws on a malformed document, a signature line that is not one N-Triples term,
 /// an unknown method, or a module that cannot be frozen.
 #[wasm_bindgen(js_name = entailExtractModule)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_extract_module(
     document: &str,
     signature: &str,
     method: &str,
-) -> Result<ReasoningAnswer, JsError> {
-    extract_module_impl(document, signature, method).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        extract_module_impl(document, signature, method, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// A minimal entailing subset for a DL axiom. See [`entail_justify`].
-pub(crate) fn justify_impl(document: &str, axiom: &str) -> Result<ReasoningAnswer, String> {
-    justify_to_string(document, axiom).map(ReasoningAnswer::from)
+pub(crate) fn justify_impl(
+    document: &str,
+    axiom: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    justify_to_string(document, axiom, control).map(ReasoningAnswer::from)
 }
 
 /// `entailJustify(document, axiom)` → WHY a Description-Logic axiom is entailed: a
@@ -647,8 +795,21 @@ pub(crate) fn justify_impl(document: &str, axiom: &str) -> Result<ReasoningAnswe
 /// "nothing is needed" and means the opposite — or if the tableau could not decide
 /// it, leaving no answer to shrink against.
 #[wasm_bindgen(js_name = entailJustify)]
-pub fn entail_justify(document: &str, axiom: &str) -> Result<ReasoningAnswer, JsError> {
-    justify_impl(document, axiom).map_err(|e| JsError::new(&e))
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn entail_justify(
+    document: &str,
+    axiom: &str,
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        justify_impl(document, axiom, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// A checked derivation for one chase conclusion. See [`entail_explain_conclusion`].
@@ -656,7 +817,7 @@ pub(crate) fn explain_conclusion_impl(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     explain_conclusion_to_string(document, regime, conclusion).map(ReasoningAnswer::from)
 }
 
@@ -681,8 +842,8 @@ pub fn entail_explain_conclusion(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer, JsError> {
-    explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
+) -> Result<ReasoningAnswer, JsValue> {
+    explain_conclusion_impl(document, regime, conclusion).map_err(reasoning_error)
 }
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
@@ -694,21 +855,23 @@ pub(crate) fn entailment_import_map(
     import_iris: &[String],
     import_documents: &[String],
     premise_iris: &[String],
-) -> Result<purrdf::entail::ImportMap, String> {
+) -> Result<purrdf::entail::ImportMap, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     purrdf_validate::premise_import_map(&imports, &premise_iris)
 }
 
-/// The two optional evaluation limits every entailment entry point of this host takes, as
+/// The three optional evaluation limits every entailment entry point of this host takes, as
 /// the boundary's limits, spelled for this host.
 pub(crate) const fn wasm_limits(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> MaterializeLimits {
     MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: RegimeHost::Wasm,
     }
 }
@@ -736,20 +899,22 @@ pub(crate) const fn wasm_limits(
 pub(crate) fn import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
-) -> Result<Vec<(&'a str, &'a str)>, String> {
+) -> Result<Vec<(&'a str, &'a str)>, purrdf_core::imports::ImportArrayError> {
     if iris.len() != documents.len() {
-        return Err(format!(
-            "the import table has {} ontology IRI(s) and {} document(s); an entry is a PAIR, \
-             so truncating to the shorter array would drop an import the caller supplied",
-            iris.len(),
-            documents.len()
-        ));
+        return Err(purrdf_core::imports::ImportArrayError::Length {
+            iris: iris.len(),
+            documents: documents.len(),
+        });
     }
-    Ok(iris
-        .iter()
-        .zip(documents)
-        .map(|(iri, document)| (iri.as_str(), document.as_str()))
-        .collect())
+    let mut pairs = Vec::new();
+    let mut resident = purrdf_lex::allocation::Resident;
+    purrdf_lex::allocation::Memory::new(&mut resident).reserve(&mut pairs, iris.len())?;
+    pairs.extend(
+        iris.iter()
+            .zip(documents)
+            .map(|(iri, document)| (iri.as_str(), document.as_str())),
+    );
+    Ok(pairs)
 }
 
 /// The certain answers of a basic graph pattern. See [`entail_certain_answers`].
@@ -761,7 +926,7 @@ pub(crate) fn certain_answers_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     certain_answers_to_string(regime, document, pattern, &imports, &premise_iris, limits)
@@ -769,7 +934,7 @@ pub(crate) fn certain_answers_impl(
 }
 
 /// `entailCertainAnswers(regime, document, pattern, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → the substitutions the knowledge
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → the substitutions the knowledge
 /// base ENTAILS the pattern under, as `var` and `row` lines.
 ///
 /// A certain answer is true in every model, not merely present in one closure, which is
@@ -843,7 +1008,8 @@ pub fn entail_certain_answers(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+    max_term_arena_bytes: Option<u64>,
+) -> Result<ReasoningAnswer, JsValue> {
     certain_answers_impl(
         regime,
         document,
@@ -851,9 +1017,9 @@ pub fn entail_certain_answers(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 /// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
@@ -865,7 +1031,7 @@ pub(crate) fn graph_entails_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
@@ -873,7 +1039,7 @@ pub(crate) fn graph_entails_impl(
 }
 
 /// `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → does the premise entail the
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → does the premise entail the
 /// conclusion GRAPH under the regime's rule table?
 ///
 /// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
@@ -913,7 +1079,8 @@ pub fn entail_graph_entails(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+    max_term_arena_bytes: Option<u64>,
+) -> Result<ReasoningAnswer, JsValue> {
     graph_entails_impl(
         regime,
         premise,
@@ -921,9 +1088,9 @@ pub fn entail_graph_entails(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 /// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
@@ -935,7 +1102,7 @@ pub(crate) fn verify_entailment_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
@@ -943,7 +1110,7 @@ pub(crate) fn verify_entailment_impl(
 }
 
 /// `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments, premiseIris,
-/// maxStoredFacts?, maxJoinSteps?)` → [`entail_graph_entails`] with
+/// maxStoredFacts?, maxJoinSteps?, maxTermArenaBytes?)` → [`entail_graph_entails`] with
 /// the warrant re-decided, without running a reasoner.
 ///
 /// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
@@ -976,7 +1143,8 @@ pub fn entail_verify_entailment(
     premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+    max_term_arena_bytes: Option<u64>,
+) -> Result<ReasoningAnswer, JsValue> {
     verify_entailment_impl(
         regime,
         premise,
@@ -984,9 +1152,9 @@ pub fn entail_verify_entailment(
         &import_iris,
         &import_documents,
         &premise_iris,
-        &wasm_limits(max_stored_facts, max_join_steps),
+        &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 // ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
@@ -998,8 +1166,10 @@ pub(crate) fn prove_impl(
     argument: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, String> {
-    prove_to_string(document, service, argument, step_cap, work_cap).map(ReasoningAnswer::from)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<ReasoningAnswer, ReasoningError> {
+    prove_to_string(document, service, argument, step_cap, work_cap, control)
+        .map(ReasoningAnswer::from)
 }
 
 /// `entailProve(document, service, argument, stepCap, workCap)` → a `ReasoningAnswer` whose
@@ -1025,14 +1195,24 @@ pub(crate) fn prove_impl(
 /// Throws on a malformed document, an unknown service, an argument wrong for the service, or
 /// whatever that service itself refuses.
 #[wasm_bindgen(js_name = entailProve)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_prove(
     document: &str,
     service: &str,
     argument: &str,
     step_cap: u32,
     work_cap: u32,
-) -> Result<ReasoningAnswer, JsError> {
-    prove_impl(document, service, argument, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<ReasoningAnswer, JsValue> {
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        prove_impl(document, service, argument, step_cap, work_cap, control)
+    })?;
+    value.canonicalization_json = receipts;
+    Ok(value)
 }
 
 /// Check a proof against the caller's own ontology, question and answer. See
@@ -1044,8 +1224,17 @@ pub(crate) fn check_proof_impl(
     answer: &str,
     certificate: &str,
     proof: &str,
-) -> Result<String, String> {
-    check_dl_proof(document, service, argument, answer, certificate, proof)
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, ReasoningError> {
+    check_dl_proof(
+        document,
+        service,
+        argument,
+        answer,
+        certificate,
+        proof,
+        control,
+    )
 }
 
 /// `entailCheckProof(document, service, argument, answer, certificate, proof)` → the
@@ -1066,6 +1255,11 @@ pub(crate) fn check_proof_impl(
 /// Throws for a proof document that says `availability not-recorded` — an answer nobody asked
 /// to record is never presented as a verified one — and for every other rejection.
 #[wasm_bindgen(js_name = entailCheckProof)]
+#[allow(clippy::too_many_arguments)] // existing service inputs plus explicit canonical controls
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_proof(
     document: &str,
     service: &str,
@@ -1073,9 +1267,24 @@ pub fn entail_check_proof(
     answer: &str,
     certificate: &str,
     proof: &str,
-) -> Result<String, JsError> {
-    check_proof_impl(document, service, argument, answer, certificate, proof)
-        .map_err(|e| JsError::new(&e))
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let (value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        check_proof_impl(
+            document,
+            service,
+            argument,
+            answer,
+            certificate,
+            proof,
+            control,
+        )
+    })?;
+    Ok(crate::canonical::CanonicalResult::new(
+        value.into(),
+        receipts,
+    ))
 }
 
 /// `entailCheckProofGoldenVectors()` — run the committed proof golden-vector artifact through
@@ -1092,8 +1301,21 @@ pub fn entail_check_proof(
 ///
 /// Throws with the case name and a diff of the two strings on any mismatch.
 #[wasm_bindgen(js_name = entailCheckProofGoldenVectors)]
-pub fn entail_check_proof_golden_vectors() -> Result<(), JsError> {
-    check_dl_proof_golden_vectors().map_err(|e| JsError::new(&e))
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn entail_check_proof_golden_vectors(
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        check_dl_proof_golden_vectors(control)
+    })?;
+    Ok(crate::canonical::CanonicalResult::new(
+        JsValue::UNDEFINED,
+        receipts,
+    ))
 }
 
 /// `entailCheckAbsentProof()` — prove that an answer nobody asked to record is NOT
@@ -1107,8 +1329,21 @@ pub fn entail_check_proof_golden_vectors() -> Result<(), JsError> {
 ///
 /// Throws naming which of the three failed.
 #[wasm_bindgen(js_name = entailCheckAbsentProof)]
-pub fn entail_check_absent_proof() -> Result<(), JsError> {
-    check_absent_proof_is_not_verifiable().map_err(|e| JsError::new(&e))
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn entail_check_absent_proof(
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        check_absent_proof_is_not_verifiable(control)
+    })?;
+    Ok(crate::canonical::CanonicalResult::new(
+        JsValue::UNDEFINED,
+        receipts,
+    ))
 }
 
 // ── The session ─────────────────────────────────────────────────────────────────
@@ -1127,8 +1362,8 @@ pub fn entail_check_absent_proof() -> Result<(), JsError> {
 ///
 /// ```js
 /// const r = new Reasoner(document, 0);
-/// const consistent = r.consistency();
-/// const hierarchy = r.classify();   // no second parse
+/// const consistent = r.consistency("unlimited", undefined);
+/// const hierarchy = r.classify("unlimited", undefined);   // no second parse
 /// r.free();                         // wasm objects are not garbage-collected for you
 /// ```
 #[wasm_bindgen]
@@ -1164,10 +1399,10 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+    pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsValue> {
         ReasonerSession::open(document, step_cap, work_cap)
             .map(|session| Self { session })
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 
     /// `Reasoner.withProofs(document, stepCap, workCap)` → a session that RECORDS a proof
@@ -1182,10 +1417,10 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(js_name = withProofs)]
-    pub fn with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+    pub fn with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsValue> {
         ReasonerSession::open_with_proofs(document, step_cap, work_cap)
             .map(|session| Self { session })
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 
     /// Whether this session records proof terms — `true` only for `Reasoner.withProofs`.
@@ -1198,51 +1433,115 @@ impl Reasoner {
     /// Answer `service` about `argument`, with its proof. See `entailProve`.
     ///
     /// Throws on a session that records nothing: open it with `Reasoner.withProofs`.
-    pub fn prove(&mut self, service: &str, argument: &str) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .prove(service, argument)
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn prove(
+        &mut self,
+        service: &str,
+        argument: &str,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .prove(service, argument, control)
+                .map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// Is the knowledge base consistent? See `entailConsistency`.
-    pub fn consistency(&mut self) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .consistency()
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn consistency(
+        &mut self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.consistency(control).map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// The entailed subsumption hierarchy. See `entailClassify`.
-    pub fn classify(&mut self) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .classify()
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn classify(
+        &mut self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.classify(control).map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// The entailed types of the named individuals. See `entailRealize`.
-    pub fn realize(&mut self) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .realize()
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn realize(
+        &mut self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.realize(control).map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// The individuals entailed to be instances of `class`. See `entailInstances`.
-    pub fn instances(&mut self, class: &str) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .instances(class)
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn instances(
+        &mut self,
+        class: &str,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .instances(class, control)
+                .map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// Does the ontology entail `axiom`? See `entailEntails`.
-    pub fn entails(&mut self, axiom: &str) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .entails(axiom)
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn entails(
+        &mut self,
+        axiom: &str,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .entails(axiom, control)
+                .map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// Which OWL 2 profiles the ontology is provably in. See `entailProfile`.
@@ -1256,23 +1555,44 @@ impl Reasoner {
 
     /// A module for `signature`. See `entailExtractModule`.
     #[wasm_bindgen(js_name = extractModule)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn extract_module(
         &self,
         signature: &str,
         method: &str,
-    ) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .extract_module(signature, method)
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .extract_module(signature, method, control)
+                .map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// A justification for `axiom`. See `entailJustify`.
-    pub fn justify(&self, axiom: &str) -> Result<ReasoningAnswer, JsError> {
-        self.session
-            .justify(axiom)
-            .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn justify(
+        &self,
+        axiom: &str,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<ReasoningAnswer, JsValue> {
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .justify(axiom, control)
+                .map(ReasoningAnswer::from)
+        })?;
+        value.canonicalization_json = receipts;
+        Ok(value)
     }
 
     /// Why `conclusion` holds under `regime`. See `entailExplainConclusion`.
@@ -1281,11 +1601,11 @@ impl Reasoner {
         &self,
         regime: &str,
         conclusion: &str,
-    ) -> Result<ReasoningAnswer, JsError> {
+    ) -> Result<ReasoningAnswer, JsValue> {
         self.session
             .explain_conclusion(regime, conclusion)
             .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 }
 
@@ -1310,23 +1630,90 @@ mod tests {
         for (service, from_session, one_shot) in [
             (
                 "consistency",
-                session.consistency().expect("decides"),
-                consistency_impl(SCHEMA, &[], &[], &[], 0, 0).expect("decides"),
+                session
+                    .consistency(&mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ))
+                    .expect("decides"),
+                consistency_impl(
+                    SCHEMA,
+                    &[],
+                    &[],
+                    &[],
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string())
+                .expect("decides"),
             ),
             (
                 "classify",
-                session.classify().expect("decides"),
-                classify_impl(SCHEMA, 0, 0).expect("decides"),
+                session
+                    .classify(&mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ))
+                    .expect("decides"),
+                classify_impl(
+                    SCHEMA,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string())
+                .expect("decides"),
             ),
             (
                 "realize",
-                session.realize().expect("decides"),
-                realize_impl(SCHEMA, 0, 0).expect("decides"),
+                session
+                    .realize(&mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ))
+                    .expect("decides"),
+                realize_impl(
+                    SCHEMA,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string())
+                .expect("decides"),
             ),
             (
                 "instances",
-                session.instances(class).expect("decides"),
-                instances_impl(SCHEMA, class, 0, 0).expect("decides"),
+                session
+                    .instances(
+                        class,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::SearchPolicy::Unlimited,
+                            None,
+                        ),
+                    )
+                    .expect("decides"),
+                instances_impl(
+                    SCHEMA,
+                    class,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string())
+                .expect("decides"),
             ),
         ] {
             let from_session = ReasoningAnswer::from(from_session);
@@ -1358,7 +1745,11 @@ mod tests {
     /// committed artifact, so a native/wasm divergence is one failing case.
     #[test]
     fn the_golden_vector_matches_natively() {
-        check_regime_golden_vectors().expect("the regime golden vector");
+        check_regime_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::SearchPolicy::Unlimited,
+            None,
+        ))
+        .expect("the regime golden vector");
     }
 
     /// EVERY conclusion-directed service reaches THIS host, with its report.
@@ -1384,7 +1775,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("answers");
         assert!(
@@ -1406,7 +1797,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert_eq!(
@@ -1421,7 +1812,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert!(
@@ -1463,7 +1854,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &wasm_limits(None, None),
+            &wasm_limits(None, None, None),
         )
         .expect("decides");
         assert!(checked.answer().starts_with("mechanism strict-table\n"));
@@ -1489,10 +1880,10 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("defined by an input this signature does not carry");
-            assert!(refused.contains(regime), "{refused}");
+            assert!(refused.to_string().contains(regime), "{refused}");
         }
     }
 
@@ -1519,7 +1910,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
             (verify_entailment_impl, conclusion),
@@ -1533,10 +1924,10 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("an undeclared self-import is unresolved");
-            assert!(refused.contains(IRI), "{refused}");
+            assert!(refused.to_string().contains(IRI), "{refused}");
             let answered = service(
                 "simple",
                 &premise,
@@ -1544,7 +1935,7 @@ mod tests {
                 &[],
                 &[],
                 &named,
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("a declared premise IRI resolves the self-import");
             assert!(answered.answer().starts_with("mechanism strict-table\n"));
@@ -1567,7 +1958,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, document),
             (verify_entailment_impl, document),
@@ -1582,11 +1973,12 @@ mod tests {
                     &[],
                     &[],
                     &[bad.to_owned()],
-                    &wasm_limits(None, None),
+                    &wasm_limits(None, None, None),
                 )
                 .expect_err("a premise IRI that is not absolute");
                 assert!(
-                    refused.contains("premise IRI") && refused.contains(&format!("{bad:?}")),
+                    refused.to_string().contains("premise IRI")
+                        && refused.to_string().contains(&format!("{bad:?}")),
                     "{refused}"
                 );
             }
@@ -1597,7 +1989,7 @@ mod tests {
                 &[],
                 &[],
                 &["http://example.org/onto".to_owned()],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("an absolute premise IRI");
             assert!(answered.answer().starts_with("mechanism "));
@@ -1633,7 +2025,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
             (verify_entailment_impl, conclusion),
@@ -1647,12 +2039,12 @@ mod tests {
                 &iris,
                 &documents,
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect_err("an entry nothing imports is refused");
             assert!(
-                refused.contains(&format!("<{LIB}>"))
-                    && refused.contains("would be read and never used"),
+                refused.to_string().contains(&format!("<{LIB}>"))
+                    && refused.to_string().contains("would be read and never used"),
                 "{refused}"
             );
             service(
@@ -1662,7 +2054,7 @@ mod tests {
                 &iris,
                 &documents,
                 &[],
-                &wasm_limits(None, None),
+                &wasm_limits(None, None, None),
             )
             .expect("the importing premise uses the entry");
         }
@@ -1694,35 +2086,148 @@ mod tests {
         let iris = [LIB.to_owned()];
         let documents = [schema.to_owned()];
 
-        let refused = materialize_impl(&importing, "rdfs", "", &[], &[], &[], None, None)
-            .expect_err("an unsupplied import");
+        let refused = materialize_impl(
+            &importing,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("an unsupplied import");
         assert!(refused.contains(&format!("<{LIB}>")), "{refused}");
-        let closed = materialize_impl(&importing, "rdfs", "", &iris, &documents, &[], None, None)
-            .expect("closes over the import");
-        assert!(closed.nquads.contains(derived), "{}", closed.nquads);
-        let unreached = materialize_impl(fact, "rdfs", "", &iris, &documents, &[], None, None)
-            .expect_err("an unreached entry");
+        let closed = materialize_impl(
+            &importing,
+            "rdfs",
+            "",
+            &iris,
+            &documents,
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("closes over the import");
+        assert!(
+            closed.nquads.nquads().contains(derived),
+            "{}",
+            closed.nquads.nquads()
+        );
+        let unreached = materialize_impl(
+            fact,
+            "rdfs",
+            "",
+            &iris,
+            &documents,
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("an unreached entry");
         assert!(
             unreached.contains("would be read and never used"),
             "{unreached}"
         );
-        let plain =
-            materialize_impl(fact, "rdfs", "", &[], &[], &[], None, None).expect("imports nothing");
-        assert!(!plain.nquads.contains(derived));
+        let plain = materialize_impl(
+            fact,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("imports nothing");
+        assert!(!plain.nquads.nquads().contains(derived));
 
-        let refused =
-            consistency_impl(&importing, &[], &[], &[], 0, 0).expect_err("an unsupplied import");
+        let refused = consistency_impl(
+            &importing,
+            &[],
+            &[],
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("an unsupplied import");
         assert!(refused.contains(&format!("<{LIB}>")), "{refused}");
-        let decided = consistency_impl(&importing, &iris, &documents, &[], 0, 0)
-            .expect("decides the closure");
-        assert_eq!(decided.answer, "consistency false\n");
-        let unreached =
-            consistency_impl(fact, &iris, &documents, &[], 0, 0).expect_err("an unreached entry");
+        let decided = consistency_impl(
+            &importing,
+            &iris,
+            &documents,
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("decides the closure");
+        assert_eq!(decided.answer.as_ref(), "consistency false\n");
+        let unreached = consistency_impl(
+            fact,
+            &iris,
+            &documents,
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("an unreached entry");
         assert!(unreached.contains(&format!("<{LIB}>")), "{unreached}");
         assert_eq!(
-            consistency_impl(fact, &[], &[], &[], 0, 0)
-                .expect("imports nothing")
-                .answer,
+            consistency_impl(
+                fact,
+                &[],
+                &[],
+                &[],
+                0,
+                0,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
+            )
+            .map_err(|error| error.to_string())
+            .expect("imports nothing")
+            .answer
+            .as_ref(),
             "consistency true\n"
         );
     }
@@ -1748,7 +2253,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str, &str); 3] = [
             (certain_answers_impl, pattern, "entailCertainAnswers"),
             (graph_entails_impl, conclusion, "entailGraphEntails"),
@@ -1762,12 +2267,16 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(None, Some(1)),
+                &wasm_limits(None, Some(1), None),
             )
             .expect_err("one join step");
             assert!(
-                refused.contains("evaluation exceeded the join-step limit: ")
-                    && refused.ends_with(&format!("raise it with {name}'s maxJoinSteps")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the join-step limit: ")
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {name}'s maxJoinSteps")),
                 "{refused}"
             );
             let refused = service(
@@ -1777,11 +2286,13 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(Some(1), None),
+                &wasm_limits(Some(1), None, None),
             )
             .expect_err("one stored fact");
             assert!(
-                refused.ends_with(&format!("raise it with {name}'s maxStoredFacts")),
+                refused
+                    .to_string()
+                    .ends_with(&format!("raise it with {name}'s maxStoredFacts")),
                 "{refused}"
             );
             service(
@@ -1791,7 +2302,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &wasm_limits(Some(4_194_304), Some(1_048_576)),
+                &wasm_limits(Some(4_194_304), Some(1_048_576), None),
             )
             .expect("the native defaults, stated");
         }
@@ -1804,13 +2315,21 @@ mod tests {
     /// artifact, so a native/wasm divergence in a PROOF TERM is one failing case.
     #[test]
     fn the_dl_proof_golden_vector_matches_natively() {
-        check_dl_proof_golden_vectors().expect("the DL proof golden vector");
+        check_dl_proof_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::SearchPolicy::Unlimited,
+            None,
+        ))
+        .expect("the DL proof golden vector");
     }
 
     /// An answer nobody asked to record is never presented as a verified one, on this host.
     #[test]
     fn an_absent_proof_is_never_presented_as_a_verified_one() {
-        check_absent_proof_is_not_verifiable().expect("the absent-proof refusal");
+        check_absent_proof_is_not_verifiable(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::SearchPolicy::Unlimited,
+            None,
+        ))
+        .expect("the absent-proof refusal");
     }
 
     /// EVERY proof-bearing service reaches this host, with a proof this host can CHECK.
@@ -1831,8 +2350,19 @@ mod tests {
         ];
         assert_eq!(questions.len(), 7, "seven services carry a proof term");
         for (service, argument) in questions {
-            let proved = prove_impl(TAXONOMY, service, argument, 0, 0)
-                .unwrap_or_else(|error| panic!("{service}: {error}"));
+            let proved = prove_impl(
+                TAXONOMY,
+                service,
+                argument,
+                0,
+                0,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .map_err(|error| error.to_string())
+            .unwrap_or_else(|error| panic!("{service}: {error}"));
             assert!(
                 proved.proof().contains("\navailability recorded\n"),
                 "{service}: {}",
@@ -1845,7 +2375,12 @@ mod tests {
                 &proved.answer(),
                 &proved.certificate(),
                 &proved.proof(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
             )
+            .map_err(|error| error.to_string())
             .unwrap_or_else(|error| panic!("{service}: {error}"));
             assert!(
                 report.starts_with("purrdf-dl-proof-check 1\n"),
@@ -1859,7 +2394,20 @@ mod tests {
     /// verified emptiness.
     #[test]
     fn an_unasked_answer_carries_the_absent_proof_document_on_this_host() {
-        let plain = consistency_impl(TAXONOMY, &[], &[], &[], 0, 0).expect("decides");
+        let plain = consistency_impl(
+            TAXONOMY,
+            &[],
+            &[],
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("decides");
         assert_eq!(
             plain.proof(),
             "purrdf-dl-proof 1\navailability not-recorded\n"
@@ -1872,14 +2420,26 @@ mod tests {
                 &plain.answer(),
                 &plain.certificate(),
                 &plain.proof(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
             )
+            .map_err(|error| error.to_string())
             .is_err(),
             "an absent proof must never check"
         );
         // …and the recording session says the opposite, with the same answer bytes.
         let mut recording = ReasonerSession::open_with_proofs(TAXONOMY, 0, 0).expect("parses");
         assert!(recording.records_proofs());
-        let proved = ReasoningAnswer::from(recording.consistency().expect("decides"));
+        let proved = ReasoningAnswer::from(
+            recording
+                .consistency(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ))
+                .expect("decides"),
+        );
         assert_eq!(proved.answer(), plain.answer());
         assert_eq!(proved.certificate(), plain.certificate());
         assert!(proved.proof().contains("\navailability recorded\n"));
@@ -1893,13 +2453,32 @@ mod tests {
     /// likely to drop the evidence, because the only channel it has is the error string.
     #[test]
     fn an_inconsistent_input_is_refused_with_its_report_natively() {
-        check_inconsistent_refusal().expect("the inconsistent refusal");
+        check_inconsistent_refusal(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::SearchPolicy::Unlimited,
+            None,
+        ))
+        .expect("the inconsistent refusal");
     }
 
     #[test]
     fn materialize_infers_and_reports() {
-        let closed =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs closure");
+        let closed = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("rdfs closure");
         assert!(closed.nquads().contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -1925,10 +2504,27 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_impl(SCHEMA, "RDFS", "", &[], &[], &[], None, None)
-                .expect_err("case-sensitive"),
-            rules_impl("rdfs-plus").expect_err("unknown"),
-            implemented_rules_impl("rdfs-plus").expect_err("unknown"),
+            materialize_impl(
+                SCHEMA,
+                "RDFS",
+                "",
+                &[],
+                &[],
+                &[],
+                None,
+                None,
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .map_err(|error| error.to_string())
+            .expect_err("case-sensitive"),
+            rules_impl("rdfs-plus").expect_err("unknown").to_string(),
+            implemented_rules_impl("rdfs-plus")
+                .expect_err("unknown")
+                .to_string(),
         ] {
             assert!(error.contains("accepted: simple, rdf, rdfs"), "{error}");
         }
@@ -1949,8 +2545,23 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let closed = materialize_impl(SCHEMA, regime, program, &[], &[], &[], None, None)
-                .unwrap_or_else(|error| panic!("{regime}: {error}"));
+            let closed = materialize_impl(
+                SCHEMA,
+                regime,
+                program,
+                &[],
+                &[],
+                &[],
+                None,
+                None,
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .map_err(|error| error.to_string())
+            .unwrap_or_else(|error| panic!("{regime}: {error}"));
             assert!(
                 closed.report().contains(&format!("\nregime {regime}\n")),
                 "{}",
@@ -1959,8 +2570,23 @@ mod tests {
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], &[], None, None)
-            .expect_err("a rule document for a rule-table regime");
+        let error = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            RIF_PROGRAM,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
 
@@ -1968,7 +2594,23 @@ mod tests {
     /// holding exactly the store the run needs returns the default closure.
     #[test]
     fn the_evaluation_limits_name_this_hosts_arguments() {
-        let closed = materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs");
+        let closed = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("rdfs");
         let stored: u64 = closed
             .report
             .lines()
@@ -1976,9 +2618,22 @@ mod tests {
             .expect("a stored-facts line")
             .parse()
             .expect("a count");
-        let Err(refused) =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored - 1), None)
-        else {
+        let Err(refused) = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            Some(stored - 1),
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string()) else {
             panic!("one fact short must be refused");
         };
         assert!(
@@ -1986,17 +2641,121 @@ mod tests {
                 && refused.ends_with("raise it with entailMaterialize's maxStoredFacts"),
             "{refused}"
         );
-        let exact =
-            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored), None).expect("exact");
-        assert_eq!(exact.nquads, closed.nquads);
-        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, Some(1))
-        else {
+        let exact = materialize_impl(
+            SCHEMA,
+            "rdfs",
+            "",
+            &[],
+            &[],
+            &[],
+            Some(stored),
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("exact");
+        assert_eq!(exact.nquads.nquads(), closed.nquads.nquads());
+        let Err(steps) = materialize_impl(
+            SCHEMA,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            Some(1),
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string()) else {
             panic!("one join step must be refused");
         };
         assert!(
             steps.ends_with("raise it with entailMaterialize's maxJoinSteps"),
             "{steps}"
         );
+    }
+
+    #[test]
+    fn materialization_arena_limit_uses_the_wasm_argument() {
+        let reference = materialize_impl(
+            SCHEMA,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .unwrap();
+        let bytes: u64 = reference
+            .report
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(bytes > 0);
+        let refused = materialize_impl(
+            SCHEMA,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            Some(bytes - 1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .unwrap_err();
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with("raise it with entailMaterialize's maxTermArenaBytes"),
+            "{refused}"
+        );
+        let exact = materialize_impl(
+            SCHEMA,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            Some(bytes),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .unwrap();
+        assert_eq!(exact.nquads.nquads(), reference.nquads.nquads());
     }
 
     #[test]
@@ -2010,8 +2769,14 @@ mod tests {
                 &[],
                 &[],
                 None,
-                None
+                None,
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
             )
+            .map_err(|error| error.to_string())
             .is_err()
         );
     }
@@ -2070,21 +2835,103 @@ mod tests {
         let services = [
             (
                 "consistency",
-                consistency_impl(TAXONOMY, &[], &[], &[], 0, 0),
+                consistency_impl(
+                    TAXONOMY,
+                    &[],
+                    &[],
+                    &[],
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
             ),
-            ("classify", classify_impl(TAXONOMY, 0, 0)),
-            ("realize", realize_impl(TAXONOMY, 0, 0)),
+            (
+                "classify",
+                classify_impl(
+                    TAXONOMY,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
+            ),
+            (
+                "realize",
+                realize_impl(
+                    TAXONOMY,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
+            ),
             (
                 "instances",
-                instances_impl(TAXONOMY, "<http://example.org/C>", 0, 0),
+                instances_impl(
+                    TAXONOMY,
+                    "<http://example.org/C>",
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
             ),
-            ("entails", entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 0)),
-            ("profile", profile_impl(TAXONOMY)),
+            (
+                "entails",
+                entails_impl(
+                    TAXONOMY,
+                    CHAIN_AXIOM,
+                    0,
+                    0,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
+            ),
+            (
+                "profile",
+                profile_impl(TAXONOMY).map_err(|error| error.to_string()),
+            ),
             (
                 "extract-module",
-                extract_module_impl(TAXONOMY, "<http://example.org/A>\n", "star"),
+                extract_module_impl(
+                    TAXONOMY,
+                    "<http://example.org/A>\n",
+                    "star",
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
             ),
-            ("justify", justify_impl(TAXONOMY, CHAIN_AXIOM)),
+            (
+                "justify",
+                justify_impl(
+                    TAXONOMY,
+                    CHAIN_AXIOM,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .map_err(|error| error.to_string()),
+            ),
             (
                 "explain-conclusion",
                 explain_conclusion_impl(
@@ -2093,7 +2940,8 @@ mod tests {
                     "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/C> .\n",
-                ),
+                )
+                .map_err(|error| error.to_string()),
             ),
         ];
         assert_eq!(services.len(), 9);
@@ -2143,7 +2991,20 @@ mod tests {
     /// chase's — the distinction the whole certificate exists to make.
     #[test]
     fn the_dl_certificate_is_not_the_chase_report() {
-        let tableau = consistency_impl(TAXONOMY, &[], &[], &[], 0, 0).expect("consistency");
+        let tableau = consistency_impl(
+            TAXONOMY,
+            &[],
+            &[],
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("consistency");
         assert_eq!(tableau.answer(), "consistency true\n");
         assert!(
             tableau
@@ -2151,8 +3012,23 @@ mod tests {
                 .starts_with("purrdf-dl-certificate 1\n")
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
-        let chase =
-            materialize_impl(TAXONOMY, "owl-rl", "", &[], &[], &[], None, None).expect("owl-rl");
+        let chase = materialize_impl(
+            TAXONOMY,
+            "owl-rl",
+            "",
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("owl-rl");
         assert!(chase.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
@@ -2160,7 +3036,18 @@ mod tests {
     /// A starved search answers `unknown`, never `false`, and says so.
     #[test]
     fn an_exhausted_budget_crosses_this_host_intact() {
-        let starved = entails_impl(TAXONOMY, CHAIN_AXIOM, 1, 0).expect("decides nothing");
+        let starved = entails_impl(
+            TAXONOMY,
+            CHAIN_AXIOM,
+            1,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("decides nothing");
         assert_eq!(starved.answer().lines().next(), Some("entails unknown"));
         assert!(
             starved
@@ -2170,7 +3057,18 @@ mod tests {
         // The SECOND cap, starved on its own: a round is a pass rather than a unit of
         // cost, so this one bounds the work done inside a round — and it reaches the
         // same honest three-valued answer through this host.
-        let overworked = entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 1).expect("decides nothing");
+        let overworked = entails_impl(
+            TAXONOMY,
+            CHAIN_AXIOM,
+            0,
+            1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect("decides nothing");
         assert_eq!(overworked.answer().lines().next(), Some("entails unknown"));
         assert!(
             overworked
@@ -2179,19 +3077,67 @@ mod tests {
         );
         assert!(overworked.certificate().contains("\nwork-budget 1\n"));
         assert!(
-            entails_impl(TAXONOMY, CHAIN_AXIOM, 0, 0)
-                .expect("decides")
-                .answer()
-                .starts_with("entails true\n")
+            entails_impl(
+                TAXONOMY,
+                CHAIN_AXIOM,
+                0,
+                0,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
+            )
+            .map_err(|error| error.to_string())
+            .expect("decides")
+            .answer()
+            .starts_with("entails true\n")
         );
     }
 
     /// Refusals cross this host as messages a JS caller can act on.
     #[test]
     fn dl_refusals_name_what_went_wrong() {
-        assert!(consistency_impl("this is not n-quads\n", &[], &[], &[], 0, 0).is_err());
-        assert!(instances_impl(TAXONOMY, "not a term", 0, 0).is_err());
-        let error = extract_module_impl(TAXONOMY, "", "nested").expect_err("unknown method");
+        assert!(
+            consistency_impl(
+                "this is not n-quads\n",
+                &[],
+                &[],
+                &[],
+                0,
+                0,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
+            )
+            .map_err(|error| error.to_string())
+            .is_err()
+        );
+        assert!(
+            instances_impl(
+                TAXONOMY,
+                "not a term",
+                0,
+                0,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
+            )
+            .map_err(|error| error.to_string())
+            .is_err()
+        );
+        let error = extract_module_impl(
+            TAXONOMY,
+            "",
+            "nested",
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .map_err(|error| error.to_string())
+        .expect_err("unknown method");
         assert!(error.contains("bot, top, star"), "{error}");
         // The existential refusal is per CONCLUSION, not per regime: `rdfs`
         // derives the chain axiom through plain Datalog rules and explains it,
@@ -2201,6 +3147,6 @@ mod tests {
             .expect("rdfs derives the chain axiom by Datalog rules");
         assert!(proof.certificate().contains("\nchecked true\n"));
         let error = explain_conclusion_impl(TAXONOMY, "rdf", CHAIN_AXIOM).expect_err("existential");
-        assert!(error.contains("existential"), "{error}");
+        assert!(error.to_string().contains("existential"), "{error}");
     }
 }

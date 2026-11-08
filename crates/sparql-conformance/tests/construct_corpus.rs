@@ -57,13 +57,16 @@ fn manifest() -> PathBuf {
 /// against what the engine happens to do.
 #[test]
 fn construct_corpus_is_green() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let manifest = manifest();
     assert!(manifest.is_file(), "corpus manifest missing: {manifest:?}");
 
     let total = purrdf_sparql_conformance::manifest::load(&manifest)
         .unwrap_or_else(|e| panic!("load the CONSTRUCT corpus manifest: {e}"))
         .len();
-    let summary = purrdf_sparql_conformance::run_manifest(&manifest)
+    let summary = purrdf_sparql_conformance::run_manifest(&manifest, &mut control)
         .unwrap_or_else(|e| panic!("run the CONSTRUCT corpus: {e}"));
 
     // The scoreboard line the conformance matrix scrapes. Printed BEFORE the

@@ -980,6 +980,7 @@ fn registry_declaring(domains: CandidateDomains) -> PropertyFunctionRegistry<'st
             stratum: purrdf_core::parse_iri("http://example.org/stratum/a").expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity::EXACT,
@@ -2109,35 +2110,89 @@ fn certify_names_the_first_disagreement_in_stratum_order() {
         plan
     };
 
-    for round in 0..64 {
-        match wide(false, round)
-            .certify()
-            .expect_err("every one of the thirty-two depths is wrong")
-        {
-            PlanError::DepthNotDerivable {
+    let assert_first = |error, round| match error {
+        PlanError::DepthNotDerivable {
+            stratum,
+            recorded,
+            derived,
+        } => {
+            assert_eq!(
                 stratum,
-                recorded,
-                derived,
-            } => {
-                assert_eq!(
-                    stratum,
-                    format!("http://example.org/round/{round:02}/stratum/00"),
-                    "round {round} named another stratum, so which disagreement is \
+                format!("http://example.org/round/{round:02}/stratum/00"),
+                "round {round} named another stratum, so which disagreement is \
                      reported depends on hash order rather than on the plan"
-                );
-                assert_eq!(
-                    (recorded, derived),
-                    (2, 1),
-                    "and the values are that stratum's own, not another's"
-                );
-            }
-            other => panic!("refused by the wrong name: {other:?}"),
+            );
+            assert_eq!(
+                (recorded, derived),
+                (2, 1),
+                "and the values are that stratum's own, not another's"
+            );
+        }
+        other => panic!("refused by the wrong name: {other:?}"),
+    };
+    for round in 0..64 {
+        let mut forged = wide(false, round);
+        assert_first(
+            forged.certify().expect_err("every recorded depth is wrong"),
+            round,
+        );
+        forged.read_bound = ReadBound::CallerOrdered(TopK::new(25));
+        for error in [
+            forged
+                .certify()
+                .expect_err("caller ordering checks coherence"),
+            Plan::from_canonical_bytes(&forged.canonical_bytes())
+                .expect_err("caller-order byte ingress refuses inconsistent depths"),
+            Plan::from_json(&forged.to_json())
+                .expect_err("caller-order JSON ingress refuses inconsistent depths"),
+        ] {
+            assert_first(error, round);
         }
     }
 
     wide(true, 0)
         .certify()
         .expect("thirty-two honest strata certify; the ordering rule refuses nothing");
+
+    let mut complete = wide(false, 0);
+    complete.read_bound = ReadBound::Complete;
+    for decoded in [
+        Plan::from_canonical_bytes(&complete.canonical_bytes())
+            .expect("complete-plan byte decoding defers coherence"),
+        Plan::from_json(&complete.to_json()).expect("complete-plan JSON decoding defers coherence"),
+    ] {
+        assert_first(
+            decoded
+                .certify()
+                .expect_err("certification still refuses the mismatch"),
+            0,
+        );
+    }
+    for bound in [ReadBound::Complete, ReadBound::CallerOrdered(TopK::new(25))] {
+        let mut honest = wide(true, 0);
+        honest.read_bound = bound;
+        Plan::from_canonical_bytes(&honest.canonical_bytes())
+            .expect("coherent full-depth bytes decode")
+            .certify()
+            .expect("coherent full-depth plan certifies");
+        Plan::from_json(&honest.to_json())
+            .expect("coherent full-depth JSON decodes")
+            .certify()
+            .expect("coherent full-depth JSON plan certifies");
+    }
+    complete
+        .stratum_derivations
+        .values_mut()
+        .next()
+        .expect("the wide plan has a first derivation")
+        .licensed_prefix = Some(1);
+    for error in [
+        Plan::from_canonical_bytes(&complete.canonical_bytes())
+            .expect_err("complete bytes cannot license a prefix"),
+        Plan::from_json(&complete.to_json()).expect_err("complete JSON cannot license a prefix"),
+    ] {
+        assert!(matches!(error, PlanError::OrderBoundPrefix { .. }));
+    }
 }
 
 /// A version-3 document is refused by name rather than reinterpreted under the
@@ -2199,7 +2254,10 @@ fn every_plan_refusal_has_its_own_pinned_name() {
             what: "metric",
             tag: 9,
         },
-        PlanError::InvalidUtf8 { what: "producer" },
+        PlanError::InvalidUtf8 {
+            what: "producer",
+            source: String::from_utf8(vec![255]).unwrap_err().utf8_error(),
+        },
         Iri::parse("not an iri").expect_err("a malformed IRI is refused"),
         PlanError::TrailingBytes { extra: 1 },
         PlanError::UndeclaredRowBound {

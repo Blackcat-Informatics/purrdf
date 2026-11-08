@@ -97,7 +97,7 @@ unsafe fn response_call<T>(
             *out_response = std::ptr::null_mut();
             let (text, success) = response(&*handle, cstr_to_str(request)?)
                 .map_err(|error| PurrdfError::new(PurrdfStatus::GeoError, error.to_string()))?;
-            *out_response = into_handle(PurrdfBuffer(text.into_bytes()));
+            *out_response = into_handle(PurrdfBuffer::from(text.into_bytes()));
             if !success {
                 return Err(PurrdfError::new(
                     PurrdfStatus::GeoError,
@@ -408,6 +408,9 @@ mod tests {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     response,
                     error,
                 )

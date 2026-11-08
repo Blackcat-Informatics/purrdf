@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+#![expect(
+    clippy::result_large_err,
+    reason = "Certificate errors retain the original compaction refusal inline; propagating that owner must not allocate a failure-only box."
+)]
+
 //! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2).
 //!
 //! A [`CompactionCertificate`] is the correctness-critical proof that a
@@ -18,7 +23,7 @@
 //!   compaction against a verifier's own keyring — never trusts the pack's own
 //!   embedded digest without recomputing it from the *pre* bytes too.
 //! - [`compact_and_certify`]: the certifying authoring wrapper — folds,
-//!   computes the pre digest (poison-guarded), compacts, and certifies that
+//!   computes the pre digest under caller control, compacts, and certifies that
 //!   the post digest agrees.
 //!
 //! [`compose`] chains two certificates end-to-end (`A→B`, `B→C` ⇒ `A→C`) for
@@ -26,8 +31,10 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
+mod error;
+pub use error::{CertificateCborError, CertificateFieldType, CertifyError};
+
 use purrdf_lex::cbor::{Integer, Value};
-use sha2::{Digest, Sha256};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
 use purrdf_gts::cose::{self, SigStatus};
@@ -38,81 +45,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
-
-/// Blank-node count above which [`refold_digest`] refuses to canonicalize the
-/// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree
-/// search is combinatorial in pathologically symmetric blank graphs, and a
-/// certificate/verification path must never be a resource-exhaustion vector).
-pub const POISON_BLANK_LIMIT: usize = 100_000;
-
-/// Errors from certificate authoring, verification, and (de)serialization.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum CertifyError {
-    /// The compaction pipeline refused the input (`purrdf_gts::compact::CompactRefusedError`).
-    Refused(String),
-    /// The GTS→dataset bridge, or a fold, reported a diagnostic.
-    Dataset(RdfDiagnostic),
-    /// The content projection's blank-node count exceeds [`POISON_BLANK_LIMIT`]
-    /// — refused rather than risking a non-terminating RDFC-1.0 run.
-    Poison(usize),
-    /// An UNTRUSTED (verification-path) canonicalization exceeded RDFC-1.0's
-    /// n-degree search call budget — a pathologically symmetric blank graph
-    /// that [`Self::Poison`]'s cheap blank-node-COUNT pre-reject did not catch
-    /// (a small but highly symmetric graph can blow the call budget while
-    /// staying far under [`POISON_BLANK_LIMIT`]). [`verify_compaction`] routes
-    /// through the fallible canonicalizer and surfaces this instead of letting
-    /// the RDFC-1.0 engine panic on adversarial verifier input.
-    CanonRefused(CanonError),
-    /// The certificate's canonical CBOR encoding is malformed.
-    Cbor(String),
-    /// An internal invariant was violated (e.g. a freshly authored
-    /// compaction's post refold digest disagreeing with the pre digest it was
-    /// authored from — a compaction-authoring bug, never a caller error).
-    Invariant(String),
-}
-
-impl std::fmt::Display for CertifyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Refused(msg) => write!(f, "compaction refused: {msg}"),
-            Self::Dataset(diag) => write!(f, "GTS dataset bridge failed: {diag}"),
-            Self::Poison(count) => write!(
-                f,
-                "refusing to canonicalize a content projection with {count} blank node(s) \
-                 (exceeds the {POISON_BLANK_LIMIT} poison guard)"
-            ),
-            Self::CanonRefused(err) => write!(f, "compaction verification failed: {err}"),
-            Self::Cbor(msg) => write!(f, "compaction certificate CBOR error: {msg}"),
-            Self::Invariant(msg) => {
-                write!(f, "compaction certificate invariant violated: {msg}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for CertifyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Dataset(diag) => Some(diag),
-            Self::CanonRefused(err) => Some(err),
-            Self::Refused(_) | Self::Poison(_) | Self::Cbor(_) | Self::Invariant(_) => None,
-        }
-    }
-}
-
-impl From<RdfDiagnostic> for CertifyError {
-    fn from(diag: RdfDiagnostic) -> Self {
-        Self::Dataset(diag)
-    }
-}
-
-impl From<compact::CompactRefusedError> for CertifyError {
-    fn from(err: compact::CompactRefusedError) -> Self {
-        Self::Refused(err.to_string())
-    }
-}
+use crate::{CanonHash, try_canonical_sha256_view};
 
 // ---------------------------------------------------------------------------
 // Part 1 — content projection + refold digest
@@ -167,12 +100,13 @@ pub fn content_projection(g: &Graph) -> Graph {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
-/// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
-/// count exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
-/// n-degree search against untrusted, potentially adversarial input).
-pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
-    canonical_digest(&content_projection(g))
+/// into a frozen dataset. Returns [`CertifyError::CanonRefused`] with the
+/// original cause when canonicalization refuses under the caller's control.
+pub fn refold_digest(
+    g: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&content_projection(g), control)
 }
 
 /// The RDFC-1.0 (SHA-256) digest of an already-projected graph, as lowercase hex.
@@ -183,62 +117,16 @@ pub fn refold_digest(g: &Graph) -> Result<String, CertifyError> {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when `projected` cannot be bridged into a
-/// frozen dataset, and [`CertifyError::Poison`] when its blank-node count
-/// exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted (refuse-don't-trust: never runs RDFC-1.0's combinatorial
-/// n-degree search against untrusted, potentially adversarial input).
-fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
+/// frozen dataset. Returns [`CertifyError::CanonRefused`] with the original
+/// cause when canonicalization refuses under the caller's control.
+fn canonical_digest(
+    projected: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
     let dataset = dataset_from_gts_graph(projected)?;
-    let blanks = crate::ir::canon::blank_count(&dataset);
-    if blanks > POISON_BLANK_LIMIT {
-        return Err(CertifyError::Poison(blanks));
-    }
-    let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
-    let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(purrdf_hash::hex::encode(digest.as_slice()))
-}
-
-/// The fallible twin of [`canonical_digest`], for UNTRUSTED input
-/// ([`verify_compaction`] and everything it calls): identical up through the
-/// cheap [`POISON_BLANK_LIMIT`] blank-COUNT pre-reject, but canonicalizes
-/// through [`try_canonicalize_with`] so a pathologically symmetric graph that
-/// stays under the count limit yet exhausts RDFC-1.0's n-degree search call
-/// budget surfaces as [`CertifyError::CanonRefused`] instead of
-/// panicking. Byte-identical `Ok` digest to [`canonical_digest`] on any input
-/// both accept — determinism is unaffected, only the failure mode on
-/// adversarial input changes from abort to a returned error.
-fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
-    let dataset = dataset_from_gts_graph(projected)?;
-    let blanks = crate::ir::canon::blank_count(&dataset);
-    if blanks > POISON_BLANK_LIMIT {
-        return Err(CertifyError::Poison(blanks));
-    }
-    let canonical =
-        try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
-    let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(purrdf_hash::hex::encode(digest.as_slice()))
-}
-
-/// The fallible twin of [`refold_digest`], for UNTRUSTED input — see
-/// [`try_canonical_digest`].
-///
-/// # Errors
-/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonRefused`] — never panics, regardless of how
-/// adversarially symmetric `g`'s content projection is.
-fn try_refold_digest(g: &Graph) -> Result<String, CertifyError> {
-    try_canonical_digest(&content_projection(g))
-}
-
-/// The fallible twin of [`effective_digest`], for UNTRUSTED input — see
-/// [`try_canonical_digest`].
-///
-/// # Errors
-/// Returns [`CertifyError::Dataset`], [`CertifyError::Poison`], or
-/// [`CertifyError::CanonRefused`] — never panics, regardless of how
-/// adversarially symmetric `g`'s effective projection is.
-fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
-    try_canonical_digest(&effective_projection(g))
+    let canonical = try_canonical_sha256_view(&*dataset, CanonHash::Sha256, control)
+        .map_err(CertifyError::CanonRefused)?;
+    Ok(canonical.to_hex())
 }
 
 /// A term-id resolved to its own `value` string, or `None` when the id is
@@ -388,10 +276,13 @@ pub fn effective_projection(g: &Graph) -> Graph {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
-/// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
-/// count exceeds [`POISON_BLANK_LIMIT`].
-pub fn effective_digest(g: &Graph) -> Result<String, CertifyError> {
-    canonical_digest(&effective_projection(g))
+/// into a frozen dataset. Canonicalization refusals retain their
+/// original cause in [`CertifyError::CanonRefused`].
+pub fn effective_digest(
+    g: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&effective_projection(g), control)
 }
 
 // ---------------------------------------------------------------------------
@@ -637,19 +528,21 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 /// (RAW), AND `pre`/`post` agree on [`effective_digest`] (EFFECTIVE) — the
 /// suppression↔compaction commuting square (see [`CompactionReport::suppressions_ok`]).
 ///
-/// Called only from [`verify_compaction`] over UNTRUSTED bytes, so the
-/// effective-digest agreement is computed via `try_effective_digest`
-/// (fail-closed on a poison-budget graph) rather than [`effective_digest`]
-/// (which panics for trusted callers).
+/// Called from [`verify_compaction`] over caller-supplied bytes. Both sides use
+/// [`effective_digest`], retaining the original canonicalization refusal.
 ///
 /// # Errors
 /// Returns [`CertifyError`] only when an effective projection genuinely
 /// cannot be canonicalized (dataset bridge failure, the blank-count poison
 /// guard, or RDFC-1.0 call-budget exhaustion) — never for a suppression
 /// mismatch, which surfaces as `Ok(false)`.
-fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
+fn suppressions_ok(
+    pre: &Graph,
+    post: &Graph,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<bool, CertifyError> {
     let retained = suppression_retention_ok(pre, post);
-    let effective_equivalent = try_effective_digest(pre)? == try_effective_digest(post)?;
+    let effective_equivalent = effective_digest(pre, control)? == effective_digest(post, control)?;
     Ok(retained && effective_equivalent)
 }
 
@@ -663,13 +556,10 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
 /// point is to not trust the claimant), so every digest this function
 /// computes over them goes through the fallible RDFC-1.0 canonicalizer
-/// (`try_refold_digest`/`try_effective_digest`, backing
-/// [`try_canonicalize_with`]) rather than the panicking
-/// [`canonicalize_with`]: a pathologically symmetric blank graph that stays
-/// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
-/// RDFC-1.0's n-degree search call budget surfaces as
-/// [`CertifyError::CanonRefused`], never a process-aborting panic —
-/// this function must never be a resource-exhaustion (or crash) vector.
+/// ([`refold_digest`]/[`effective_digest`], backed by
+/// [`try_canonical_sha256_view`]). The caller supplies the per-run search
+/// policy and optional stop signal. A search refusal on a symmetric blank
+/// graph retains its original cause in [`CertifyError::CanonRefused`].
 ///
 /// A post pack with a broken hash chain (a corrupted frame) still returns
 /// `Ok` with `seam_chain_ok: false` rather than erroring — the reader
@@ -678,23 +568,23 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 ///
 /// # Errors
 /// Returns [`CertifyError`] only when a content projection genuinely cannot be
-/// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
-/// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
-/// graph.
+/// canonicalized: the GTS→dataset bridge fails or canonicalization refuses
+/// under the caller's control.
 pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
     keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
 
-    let refold_equivalent = try_refold_digest(&pre)? == try_refold_digest(&post)?;
+    let refold_equivalent = refold_digest(&pre, control)? == refold_digest(&post, control)?;
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);
     let packaging_sig_ok = packaging_signature_ok(post_bytes, &post, keyring);
-    let suppressions_ok = suppressions_ok(&pre, &post)?;
+    let suppressions_ok = suppressions_ok(&pre, &post, control)?;
 
     Ok(CompactionReport {
         refold_equivalent,
@@ -731,32 +621,55 @@ pub struct CompactionCertificate {
     pub packaging_kids: Vec<String>,
 }
 
-fn text_field(entries: &[(Value, Value)], key: &str) -> Result<String, CertifyError> {
-    match wire::map_get(entries, key) {
-        Some(Value::Text(text)) => Ok(text.clone()),
-        Some(_) => Err(CertifyError::Cbor(format!("{key:?} must be a text string"))),
-        None => Err(CertifyError::Cbor(format!(
-            "certificate CBOR missing {key:?}"
-        ))),
-    }
+fn take_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<Value, CertificateCborError> {
+    // Keep first textual-key lookup and entry order, including duplicate and
+    // unknown keys. Taking only the value preserves the original refusal owner.
+    entries
+        .iter_mut()
+        .find(|(candidate, _)| candidate.as_text() == Some(field))
+        .map(|(_, value)| value.take())
+        .ok_or(CertificateCborError::MissingField { field })
 }
 
-fn text_array_field(entries: &[(Value, Value)], key: &str) -> Result<Vec<String>, CertifyError> {
-    match wire::map_get(entries, key) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| match item {
-                Value::Text(text) => Ok(text.clone()),
-                _ => Err(CertifyError::Cbor(format!(
-                    "{key:?} must be an array of text strings"
-                ))),
-            })
-            .collect(),
-        Some(_) => Err(CertifyError::Cbor(format!("{key:?} must be an array"))),
-        None => Err(CertifyError::Cbor(format!(
-            "certificate CBOR missing {key:?}"
-        ))),
-    }
+fn text_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<String, CertificateCborError> {
+    take_field(entries, field)?
+        .into_text()
+        .map_err(|actual| CertificateCborError::FieldType {
+            field,
+            expected: CertificateFieldType::Text,
+            actual,
+        })
+}
+
+fn text_array_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<Vec<String>, CertificateCborError> {
+    let items = take_field(entries, field)?.into_array().map_err(|actual| {
+        CertificateCborError::FieldType {
+            field,
+            expected: CertificateFieldType::Array,
+            actual,
+        }
+    })?;
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.into_text()
+                .map_err(|actual| CertificateCborError::ArrayElementType {
+                    field,
+                    index,
+                    actual,
+                })
+        })
+        .collect()
 }
 
 impl CompactionCertificate {
@@ -806,17 +719,15 @@ impl CompactionCertificate {
     /// missing/misshapes a required field.
     pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
         let value = purrdf_lex::cbor::decode(bytes, purrdf_lex::cbor::Limits::DEFAULT)
-            .map_err(|err| CertifyError::Cbor(format!("cannot parse certificate CBOR: {err}")))?;
-        let Ok(entries) = value.into_map() else {
-            return Err(CertifyError::Cbor(
-                "certificate CBOR root must be a map".to_string(),
-            ));
-        };
+            .map_err(CertificateCborError::Decode)?;
+        let mut entries = value
+            .into_map()
+            .map_err(|actual| CertificateCborError::RootType { actual })?;
         Ok(Self {
-            pre_refold_digest: text_field(&entries, FIELD_PRE)?,
-            post_refold_digest: text_field(&entries, FIELD_POST)?,
-            detached_sig_roots: text_array_field(&entries, FIELD_ROOTS)?,
-            packaging_kids: text_array_field(&entries, FIELD_KIDS)?,
+            pre_refold_digest: text_field(&mut entries, FIELD_PRE)?,
+            post_refold_digest: text_field(&mut entries, FIELD_POST)?,
+            detached_sig_roots: text_array_field(&mut entries, FIELD_ROOTS)?,
+            packaging_kids: text_array_field(&mut entries, FIELD_KIDS)?,
         })
     }
 }
@@ -863,8 +774,8 @@ pub fn compose(
 /// preserved content — the sole authoring entry point that both performs and
 /// certifies a compaction, so the two can never drift apart.
 ///
-/// Computes the pre-compaction content-refold digest FIRST (running the
-/// poison guard, refusing an uncanonicalizable input BEFORE authoring),
+/// Computes the pre-compaction content-refold digest FIRST under the caller's
+/// control, refusing an uncanonicalizable input BEFORE authoring,
 /// embeds it in the pack as `stream:contentRefoldDigest` (a proof-carrying
 /// pack, §10.1), then recomputes the digest from the freshly authored pack
 /// and asserts the two agree — an internal invariant, since a fresh
@@ -872,7 +783,7 @@ pub fn compose(
 /// compaction-authoring bug, never a caller error.
 ///
 /// # Errors
-/// Returns [`CertifyError::Dataset`]/[`CertifyError::Poison`] when the source
+/// Returns [`CertifyError::Dataset`]/[`CertifyError::CanonRefused`] when the source
 /// cannot be canonicalized, [`CertifyError::Refused`] when
 /// `compact_streamable` refuses the input, and [`CertifyError::Invariant`] if
 /// the freshly authored pack's digest ever disagrees with the one it was
@@ -888,14 +799,16 @@ pub fn compose(
 /// use purrdf_gts::cose::composite;
 /// use purrdf_gts::verify::SignatureKeyring;
 /// use purrdf_gts::writer::RandomnessProvider;
+/// use purrdf_rdf::CanonicalizationControl;
 /// use purrdf_rdf::gts_certify::{CertifyError, compact_and_certify, verify_compaction};
 /// fn certify<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
-///     provider: P, keys: &impl SignatureKeyring) -> Result<bool, CertifyError> {
+///     provider: P, keys: &impl SignatureKeyring,
+///     control: &mut CanonicalizationControl<'_>) -> Result<bool, CertifyError> {
 ///     let (pack, certificate) = compact_and_certify(source, DictPlan::undicted(),
 ///         "2026-01-01T00:00:00Z", false,
-///         CompositePackaging::new(key, "pack-key".into(), provider))?;
+///         CompositePackaging::new(key, "pack-key".into(), provider), control)?;
 ///     assert_eq!(certificate.packaging_kids, ["pack-key"]);
-///     Ok(verify_compaction(source, &pack, keys)?.all_ok())
+///     Ok(verify_compaction(source, &pack, keys, control)?.all_ok())
 /// }
 /// ```
 pub fn compact_and_certify<S: PackagingSigner>(
@@ -904,12 +817,13 @@ pub fn compact_and_certify<S: PackagingSigner>(
     timestamp: &str,
     seal_original: bool,
     packaging_signer: S,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
     let pre_fold = read(pre_bytes, true, None);
     if !pre_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&pre_fold).into());
     }
-    let digest = refold_digest(&pre_fold)?;
+    let digest = refold_digest(&pre_fold, control)?;
 
     let kid = packaging_signer.kid().to_string();
     let post_bytes = compact::compact_streamable(
@@ -927,11 +841,12 @@ pub fn compact_and_certify<S: PackagingSigner>(
     if !post_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&post_fold).into());
     }
-    let post_digest = refold_digest(&post_fold)?;
+    let post_digest = refold_digest(&post_fold, control)?;
     if post_digest != digest {
-        return Err(CertifyError::Invariant(format!(
-            "compaction changed the content-refold digest: pre={digest} post={post_digest}"
-        )));
+        return Err(CertifyError::Invariant {
+            pre_refold_digest: digest,
+            post_refold_digest: post_digest,
+        });
     }
 
     let detached_sig_roots =

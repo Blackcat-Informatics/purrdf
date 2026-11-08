@@ -5,17 +5,103 @@
 
 use std::fmt;
 
+mod sink;
+pub use sink::ColumnarSinkError;
+
+mod canonical;
+pub use canonical::CanonicalReason;
+mod zstd;
+pub use zstd::ZstdReason;
+mod compact;
+mod construction;
+pub use construction::ConstructionReason;
+mod metadata;
+pub use crate::parquet::{
+    ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile,
+};
+pub use metadata::MetadataReason;
+mod projection;
+mod reader;
+pub use compact::CompactReason;
+pub use projection::ProjectionReason;
+pub use reader::ReaderReason;
+mod value_body;
+pub use crate::parquet::EncodingReason;
+pub use value_body::ValueBodyReason;
+mod page_body;
+pub use page_body::PageBodyReason;
+
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ColumnarError {
+    /// A physical override names no column in the closed schema.
+    InvalidColumn {
+        /// Original table.
+        table: crate::Table,
+        /// Original zero-based column ordinal.
+        column: usize,
+        /// Actual number of schema columns.
+        columns: usize,
+    },
+    /// Multiple overrides name the same schema column.
+    DuplicateColumn {
+        /// Original table.
+        table: crate::Table,
+        /// Repeated zero-based column ordinal.
+        column: usize,
+    },
+    /// A numeric Zstandard level lies outside the native codec's supported range.
+    CompressionLevel {
+        /// Original numeric level.
+        level: i32,
+        /// Native codec's minimum numeric level.
+        minimum: i32,
+        /// Native codec's maximum numeric level.
+        maximum: i32,
+    },
+    /// A runtime physical target is zero or exceeds its wire representation.
+    InvalidOptions {
+        /// Original option name.
+        field: &'static str,
+        /// Original supplied value.
+        value: u64,
+        /// Smallest admitted value.
+        minimum: u64,
+        /// Largest representable value.
+        maximum: u64,
+    },
+    /// An exact file length cannot fit the canonical source manifest.
+    ManifestLength {
+        /// The original table.
+        table: crate::Table,
+        /// The original byte length.
+        length: usize,
+    },
+    /// A requested original row does not exist in the fully decoded source.
+    OrdinalOutOfRange {
+        /// The requested original table and row.
+        ordinal: crate::ColumnarOrdinal,
+        /// The actual number of rows in that table.
+        rows: u64,
+    },
     /// Logical capacity or physical storage refused RDF reconstruction.
     Storage(purrdf_lex::allocation::StorageError),
-    /// The source read session failed; this is not malformed RDF or an absent row.
-    SourceRead {
-        /// The operational source failure's diagnostic detail.
-        detail: String,
+    /// Original content-store integrity refusal during projection.
+    ContentStore(purrdf_core::ContentStoreError),
+    /// Original staged-payload source I/O failure.
+    BlobRead(purrdf_hash::error::IoFailure),
+    /// A replayable blob source repeated a canonical content identity.
+    DuplicateBlob(purrdf_core::ContentDigest),
+    /// Original blob integrity refusal at its decoded row.
+    BlobContent {
+        /// Zero-based blob table row.
+        row: usize,
+        /// The original content-store cause, including both digest identities.
+        cause: purrdf_core::ContentStoreError,
     },
+    /// Original reconstruction diagnostic, retaining its native attachments.
+    Reconstruction(purrdf_core::RdfDiagnostic),
     /// Input ended before a required byte range was available.
     Truncated {
         /// Structure being decoded.
@@ -25,12 +111,63 @@ pub enum ColumnarError {
         /// Bytes available in the enclosing buffer.
         available: usize,
     },
-    /// Bytes were present but violated the fixed schema or encoding contract.
-    Malformed {
-        /// Structure being decoded or constructed.
+    /// Original canonical-row shape refusal.
+    Canonical(CanonicalReason),
+    /// Original native codec refusal, retained in one fallible shared owner.
+    Zstd {
+        /// Structure being decoded.
         context: &'static str,
-        /// Stable diagnostic detail.
-        detail: String,
+        /// Original codec error and its complete native ownership.
+        reason: purrdf_lex::allocation::Shared<ZstdReason>,
+    },
+    /// Original native fixed-schema construction or encoding refusal.
+    Construction {
+        /// Structure being constructed or encoded.
+        context: &'static str,
+        /// Native reason, including original scalar operands.
+        reason: ConstructionReason,
+    },
+    /// Decoded rows violate the original RDF reconstruction contract.
+    Reader {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original native operands and causes.
+        reason: ReaderReason,
+    },
+    /// Original typed Compact metadata grammar refusal.
+    Compact {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Native reason, including original operands and causes.
+        reason: CompactReason,
+    },
+    /// Original native RDF projection refusal.
+    Projection {
+        /// Structure being projected.
+        context: &'static str,
+        /// Native reason and any already-owned rejected value.
+        reason: ProjectionReason,
+    },
+    /// Original native definition-level or PLAIN value-body refusal.
+    ValueBody {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Native reason, including original operands and causes.
+        reason: ValueBodyReason,
+    },
+    /// Original native envelope, metadata or physical profile refusal.
+    Metadata {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Original fields and their existing owning buffers.
+        reason: MetadataReason,
+    },
+    /// Original native page-body consistency refusal.
+    PageBody {
+        /// Structure being decoded.
+        context: &'static str,
+        /// Native reason, including original consistency operands.
+        reason: PageBodyReason,
     },
     /// A valid Parquet construct falls outside PurRDF's deliberately narrow profile.
     Unsupported {
@@ -52,12 +189,46 @@ pub enum ColumnarError {
 
 impl purrdf_hash::error::StructuredError for ColumnarError {
     purrdf_hash::error_visit! {
+        InvalidColumn { table, column, columns } => "columnar-invalid-column" {
+            "table" => Code(table.name()), "column" => Unsigned(*column as u128), "columns" => Unsigned(*columns as u128),
+        },
+        DuplicateColumn { table, column } => "columnar-duplicate-column" {
+            "table" => Code(table.name()), "column" => Unsigned(*column as u128),
+        },
+        CompressionLevel { level, minimum, maximum } => "columnar-compression-level" {
+            "level" => Signed(i128::from(*level)), "minimum" => Signed(i128::from(*minimum)), "maximum" => Signed(i128::from(*maximum)),
+        },
+        InvalidOptions { field, value, minimum, maximum } => "columnar-invalid-options" {
+            "field" => Code(field), "value" => Unsigned(u128::from(*value)),
+            "minimum" => Unsigned(u128::from(*minimum)),
+            "maximum" => Unsigned(u128::from(*maximum)),
+        },
+        ManifestLength { table, length } => "columnar-manifest-length" {
+            "table" => Code(table.name()), "length" => ByteCount(*length as u128),
+        },
+        OrdinalOutOfRange { ordinal, rows } => "columnar-ordinal-out-of-range" {
+            "table" => Code(ordinal.table().name()), "ordinal" => Unsigned(u128::from(ordinal.index())), "rows" => Unsigned(u128::from(*rows)),
+        },
         Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
-        SourceRead { detail } => "columnar-source-read" { "detail" => Text(detail) },
+        ContentStore(cause) => "columnar-content-store" { "cause" => Cause(cause) },
+        BlobRead(cause) => "columnar-blob-read" { "cause" => Cause(cause) },
+        DuplicateBlob(digest) => "columnar-duplicate-blob" { "digest" => Record(digest) },
+        BlobContent { row, cause } => "columnar-blob-content" {
+            "row" => Unsigned(*row as u128), "cause" => Cause(cause),
+        },
+        Reconstruction(cause) => "columnar-reconstruction" { "cause" => Cause(cause) },
         Truncated { context, needed, available } => "columnar-truncated" {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
-        Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Canonical(reason) => "columnar-malformed" { "context" => Code("canonical row"), "reason" => Cause(reason) },
+        Zstd { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(&**reason) },
+        Construction { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        Projection { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        ValueBody { context, reason } => "columnar-value-body" { "context" => Code(context), "reason" => Cause(reason) },
+        Metadata { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
+        PageBody { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Unsupported { context, value } => "columnar-unsupported" { "context" => Code(context), "value" => Signed(i128::from(*value)) },
         LimitExceeded { context, value, maximum } => "columnar-limit-exceeded" {
             "context" => Code(context), "value" => Unsigned(u128::from(*value)), "maximum" => Unsigned(u128::from(*maximum)),
@@ -66,10 +237,38 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
 }
 
 impl ColumnarError {
-    pub(crate) fn malformed(context: &'static str, detail: impl Into<String>) -> Self {
-        Self::Malformed {
-            context,
-            detail: detail.into(),
+    pub(crate) fn construction(context: &'static str, reason: ConstructionReason) -> Self {
+        Self::Construction { context, reason }
+    }
+
+    pub(crate) fn metadata(context: &'static str, reason: MetadataReason) -> Self {
+        Self::Metadata { context, reason }
+    }
+
+    pub(crate) fn reader_malformed(context: &'static str, reason: ReaderReason) -> Self {
+        Self::Reader { context, reason }
+    }
+
+    pub(crate) fn projection(context: &'static str, reason: ProjectionReason) -> Self {
+        Self::Projection { context, reason }
+    }
+
+    pub(crate) fn page_body(context: &'static str, reason: PageBodyReason) -> Self {
+        Self::PageBody { context, reason }
+    }
+
+    pub(crate) fn value_body(context: &'static str, reason: ValueBodyReason) -> Self {
+        Self::ValueBody { context, reason }
+    }
+
+    pub(crate) fn compact(context: &'static str, reason: CompactReason) -> Self {
+        Self::Compact { context, reason }
+    }
+
+    pub(crate) fn zstd(context: &'static str, reason: ZstdReason) -> Self {
+        match purrdf_lex::allocation::Shared::try_new(reason) {
+            Ok(reason) => Self::Zstd { context, reason },
+            Err(_) => Self::Storage(purrdf_lex::allocation::StorageError::AllocationFailed),
         }
     }
 
@@ -91,10 +290,69 @@ impl ColumnarError {
 }
 
 impl fmt::Display for ColumnarError {
+    /// Render the established human prefix from the retained native cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidColumn {
+                table,
+                column,
+                columns,
+            } => write!(
+                f,
+                "columnar {} column {column} is outside its {columns} columns",
+                table.name()
+            ),
+            Self::DuplicateColumn { table, column } => write!(
+                f,
+                "columnar {} column {column} has multiple overrides",
+                table.name()
+            ),
+            Self::CompressionLevel {
+                level,
+                minimum,
+                maximum,
+            } => write!(
+                f,
+                "columnar Zstandard level {level} is outside {minimum} through {maximum}"
+            ),
+            Self::InvalidOptions {
+                field,
+                value,
+                minimum,
+                maximum,
+            } => write!(
+                f,
+                "columnar option {field} is {value}; expected {minimum} through {maximum}"
+            ),
+            Self::ManifestLength { table, length } => write!(
+                f,
+                "columnar {} byte length {length} cannot fit the source manifest",
+                table.file_name()
+            ),
+            Self::OrdinalOutOfRange { ordinal, rows } => write!(
+                f,
+                "columnar {} ordinal {} is outside its {rows} rows",
+                ordinal.table().file_name(),
+                ordinal.index()
+            ),
             Self::Storage(error) => write!(f, "columnar storage: {error}"),
-            Self::SourceRead { detail } => write!(f, "columnar source read failed: {detail}"),
+            Self::ContentStore(cause) => {
+                write!(f, "columnar content store is malformed: {cause}")
+            }
+            Self::BlobRead(cause) => write!(f, "columnar blob source read failed: {cause}"),
+            Self::DuplicateBlob(digest) => {
+                write!(f, "columnar blob source repeats digest {digest}")
+            }
+            Self::BlobContent { row, cause } => {
+                write!(f, "columnar blobs.bytes is malformed: row {row}: {cause}")
+            }
+            Self::Reconstruction(cause) => {
+                if let Some(storage) = cause.storage_error() {
+                    write!(f, "columnar storage: {storage}")
+                } else {
+                    write!(f, "columnar RDF reconstruction is malformed: {cause}")
+                }
+            }
             Self::Truncated {
                 context,
                 needed,
@@ -103,8 +361,34 @@ impl fmt::Display for ColumnarError {
                 f,
                 "columnar {context} is truncated: needs {needed} bytes, has {available}"
             ),
-            Self::Malformed { context, detail } => {
-                write!(f, "columnar {context} is malformed: {detail}")
+            Self::Canonical(reason) => write!(f, "columnar canonical row is malformed: {reason}"),
+            Self::Zstd { context, reason } => {
+                write!(f, "columnar {context} is malformed: {}", **reason)
+            }
+            Self::Construction { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::Reader { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::Compact { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::Projection { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::ValueBody { context, reason } => {
+                if matches!(reason, ValueBodyReason::UnsupportedBitPackedRun { .. }) {
+                    write!(f, "columnar {context} value {reason} is unsupported")
+                } else {
+                    write!(f, "columnar {context} is malformed: {reason}")
+                }
+            }
+            Self::Metadata { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
+            }
+            Self::PageBody { context, reason } => {
+                write!(f, "columnar {context} is malformed: {reason}")
             }
             Self::Unsupported { context, value } => {
                 write!(f, "columnar {context} value {value} is unsupported")
@@ -121,6 +405,65 @@ impl fmt::Display for ColumnarError {
     }
 }
 
-purrdf_lex::error_source!(ColumnarError { Storage });
+purrdf_lex::error_source!(ColumnarError => {
+    Self::Canonical(reason) => reason,
+    Self::Zstd { reason, .. } => &**reason,
+    Self::Construction { reason, .. } => reason,
+    Self::PageBody { reason, .. } => reason,
+    Self::ValueBody { reason, .. } => reason,
+    Self::Compact { reason, .. } => reason,
+    Self::Metadata { reason, .. } => reason,
+    Self::Projection { reason, .. } => reason,
+    Self::Storage(cause) => cause,
+    Self::ContentStore(cause) => cause,
+    Self::BlobRead(cause) => cause,
+    Self::BlobContent { cause, .. } => cause,
+    Self::Reconstruction(cause) => cause,
+    Self::Reader { reason, .. } => reason,
+});
 
 purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::StorageError) });
+
+/// An RDF projection or encoding refusal, retaining its original source cause.
+///
+/// The source error remains owned and typed until the caller selects its human
+/// presentation. Inspection borrows it without rendering or cloning it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ColumnarWriteError<E> {
+    /// The native fixed-schema codec refused the input or output.
+    Codec(ColumnarError),
+    /// The original operational read session refused projection or term access.
+    SourceRead(E),
+}
+
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for ColumnarWriteError<E>
+{
+    purrdf_hash::error_visit! {
+        Codec(cause) => "columnar-write-codec" { "cause" => Cause(cause) },
+        SourceRead(cause) => "columnar-source-read" { "cause" => Cause(cause) },
+    }
+}
+
+impl<E: fmt::Display> fmt::Display for ColumnarWriteError<E> {
+    /// Render the original cause only when the caller requests human text.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Codec(cause) => cause.fmt(f),
+            Self::SourceRead(cause) => write!(f, "columnar source read failed: {cause}"),
+        }
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for ColumnarWriteError<E> {
+    /// Borrow the original cause directly, preserving standard downcasts.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Codec(cause) => Some(cause),
+            Self::SourceRead(cause) => Some(cause),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(impl<E> ColumnarWriteError<E> { Codec(ColumnarError) });

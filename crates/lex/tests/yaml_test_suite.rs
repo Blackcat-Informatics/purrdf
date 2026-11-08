@@ -40,7 +40,7 @@ use purrdf_lex::yaml::{self, ErrorKind};
 
 /// Whether `kind` says "valid YAML, but JSON (or this reader's JSON-shaped
 /// output) cannot hold it", as opposed to a grammar refusal.
-const fn unsupported(kind: ErrorKind) -> bool {
+const fn unsupported(kind: &ErrorKind) -> bool {
     matches!(
         kind,
         ErrorKind::Tag
@@ -334,7 +334,8 @@ fn the_reader_is_graded_against_the_yaml_test_suite() {
     assert_eq!(all.len(), 402, "the vendored suite's case count");
     assert_eq!(
         (pass, empty_stream, expected_refusal, unsupported_refused),
-        (244, 5, 94, 59),
+        // U3C3's declared !yaml! handle expands to the supported Core str tag.
+        (245, 5, 94, 58),
         "the pinned totals"
     );
 }

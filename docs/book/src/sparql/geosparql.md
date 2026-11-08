@@ -15,12 +15,12 @@ WebAssembly and the CLI.
 
 ## References are explicit
 
-The standard geographic profile assigns unprefixed WKT, OGC CRS84 and GeoJSON
-to WGS84 longitude followed by latitude. Original decimal coordinates remain
+The standard geographic profile assigns unprefixed WKT, OGC `CRS84` and GeoJSON
+to WGS 84 longitude followed by latitude. Original decimal coordinates remain
 exact rationals. Longitude outside `[-180, 180]` and latitude outside
 `[-90, 90]` refuse before conversion; valid inputs are never wrapped or clamped.
 
-EPSG:4326 requires an explicit WGS84 latitude/longitude registration. Other
+EPSG:4326 requires an explicit WGS 84 latitude/longitude registration. Other
 references, units and operation chains require caller registrations. An
 ellipsoid does not establish a datum transformation, and the engine does not
 guess zones, height, epoch, control points or regional transformation
@@ -56,7 +56,7 @@ let result = NativeSparqlEngine::new().query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::new().with_geo(&profile),
+    &QueryOptions::new().with_geo(&profile),
 )?;
 ```
 

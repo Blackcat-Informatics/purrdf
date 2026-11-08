@@ -9,7 +9,7 @@ use purrdf_entail::reasoner::{Reasoner, SchemaPreparationBudget, ServiceProof, V
 use purrdf_iri::vocab::{owl, rdf, rdfs};
 use std::sync::Arc;
 
-use super::INPUT_MEDIA_TYPE;
+use super::{EntailContext, FixtureError, FixtureInvariant, ReasoningError};
 
 const PREFIX: &str = "schema-preparation-";
 
@@ -195,65 +195,81 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-pub(super) fn check() -> Result<(), String> {
+pub(super) fn check(
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), ReasoningError> {
     let committed = super::dl_proof_golden_vectors()?;
     for case in cases() {
         let vector = committed
             .iter()
             .find(|vector| vector.name() == case.name)
-            .ok_or_else(|| {
-                format!(
-                    "missing canonical native/portable schema vector {}",
-                    case.name
-                )
+            .ok_or_else(|| FixtureError::SchemaMissing {
+                name: case.name.to_owned(),
             })?;
         if vector.input() != case.input
             || vector.answer() != case.answer
             || vector.service() != case.service
             || vector.argument().trim_end() != case.argument
         {
-            return Err(format!(
-                "schema vector {} no longer carries the actual authored control",
-                case.name
-            ));
+            return Err(FixtureError::SchemaControl {
+                name: case.name.to_owned(),
+                expected: [
+                    case.input,
+                    case.answer.to_owned(),
+                    case.service.to_owned(),
+                    case.argument.to_owned(),
+                ],
+                produced: [
+                    vector.input().to_owned(),
+                    vector.answer().to_owned(),
+                    vector.service().to_owned(),
+                    vector.argument().trim_end().to_owned(),
+                ],
+            }
+            .into());
         }
     }
-    if committed
+    let produced = committed
         .iter()
         .filter(|vector| vector.name().starts_with(PREFIX))
-        .count()
-        != cases().len()
-    {
-        return Err("schema preparation vector inventory mismatch".to_owned());
+        .count();
+    let expected = cases().len();
+    if produced != expected {
+        return Err(FixtureError::SchemaInventory { expected, produced }.into());
     }
-    controls()
+    controls(control)
 }
 
-fn controls() -> Result<(), String> {
+fn controls(control: &mut purrdf_core::CanonicalizationControl<'_>) -> Result<(), ReasoningError> {
     let too_large = cases()
         .into_iter()
         .find(|case| case.name == "schema-preparation-largest-count")
         .expect("authored production boundary")
         .input
         .replace("4294967294", "4294967295");
-    let refused_count = purrdf_rdf::parse_dataset(too_large.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|error| error.to_string())?;
+    let refused_count = super::parse_premise(&too_large)?;
+    let count_refusal = Reasoner::with_proofs(&refused_count, control).err();
     if !matches!(
-        Reasoner::with_proofs(&refused_count),
-        Err(purrdf_entail::EntailError::Parse(detail))
-            if detail.contains("4294967295") && detail.contains("4294967294")
+        count_refusal.as_ref(),
+        Some(purrdf_entail::EntailError::OwlSyntax(error))
+            if matches!(error.as_ref(), purrdf_entail::OwlSyntaxError::CardinalityRange {
+                value: u32::MAX, maximum, ..
+            } if *maximum == u32::MAX - 1)
     ) {
-        return Err(
-            "portable boundary did not preserve the typed unrepresentable-count refusal".to_owned(),
-        );
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::CardinalityRefusal,
+            actual: Some(too_large),
+            cause: count_refusal
+                .map(|cause| Box::new(ReasoningError::entail(EntailContext::Native, cause))),
+        }
+        .into());
     }
     let document = cases()
         .into_iter()
         .find(|case| case.name == "schema-preparation-derived")
         .expect("authored derived case")
         .input;
-    let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|error| error.to_string())?;
+    let dataset = super::parse_premise(&document)?;
     for budget in [
         SchemaPreparationBudget {
             work: Some(0),
@@ -264,38 +280,81 @@ fn controls() -> Result<(), String> {
             bytes: Some(0),
         },
     ] {
-        let mut owner = Reasoner::with_proofs_and_preparation_budget(&dataset, budget)
-            .map_err(|error| error.to_string())?;
+        let mut owner = Reasoner::with_proofs_and_preparation_budget(&dataset, budget, control)
+            .map_err(|error| {
+                ReasoningError::entail(
+                    EntailContext::Operation("schema vector owner".into()),
+                    error,
+                )
+            })?;
         let refused = owner.consistency();
         if *refused.answer() != Verdict::Unknown
             || refused.certificate().schema_obstruction().is_none()
         {
-            return Err("native schema refusal was reported as a decided answer".to_owned());
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::SchemaUnknown,
+                actual: Some(super::render_dl_certificate(
+                    "consistency",
+                    refused.certificate(),
+                )),
+                cause: None,
+            }
+            .into());
         }
-        let proof = refused
-            .proof()
-            .ok_or("refused recorded service has no receipt")?;
-        let decoded = ServiceProof::decode(&proof.encode()).map_err(|error| error.to_string())?;
+        let proof = refused.proof().ok_or_else(|| FixtureError::Invariant {
+            condition: FixtureInvariant::SchemaReceipt,
+            actual: Some(super::render_dl_certificate(
+                "consistency",
+                refused.certificate(),
+            )),
+            cause: None,
+        })?;
+        let decoded =
+            ServiceProof::decode(&proof.encode()).map_err(|cause| ReasoningError::Proof {
+                operation: None,
+                cause: Box::new(cause),
+            })?;
         if decoded.receipt() != proof.receipt() {
-            return Err("typed portable refusal receipt changed".to_owned());
+            return Err(FixtureError::SchemaOutput {
+                condition: FixtureInvariant::SchemaReceiptIdentity,
+                expected: super::render_dl_proof(proof),
+                produced: super::render_dl_proof(&decoded),
+            }
+            .into());
         }
         let rendered = super::render_dl_certificate("consistency", refused.certificate());
         let read = super::parse_dl_certificate(&rendered)?;
         if &read != refused.certificate() {
-            return Err("portable certificate lost its preparation obstruction".to_owned());
+            return Err(FixtureError::SchemaOutput {
+                condition: FixtureInvariant::SchemaCertificate,
+                expected: rendered,
+                produced: super::render_dl_certificate("consistency", &read),
+            }
+            .into());
         }
-        let checker = Reasoner::with_proofs_and_preparation_budget(&dataset, budget)
-            .map_err(|error| error.to_string())?;
-        let context = checker.proof_context().map_err(|error| error.to_string())?;
+        let checker = Reasoner::with_proofs_and_preparation_budget(&dataset, budget, control)
+            .map_err(|error| {
+                ReasoningError::entail(
+                    EntailContext::Operation("schema vector checker".into()),
+                    error,
+                )
+            })?;
+        let context = checker
+            .proof_context()
+            .map_err(|cause| ReasoningError::entail(EntailContext::Native, cause))?;
         decoded
             .verify(
                 &dataset,
                 &purrdf_entail::Question::Consistency,
                 Some(&read),
                 &context,
+                control,
             )
-            .map_err(|error| {
-                format!("typed portable refusal receipt failed independent replay: {error}")
+            .map_err(|cause| {
+                ReasoningError::proof(
+                    "typed portable refusal receipt failed independent replay",
+                    cause,
+                )
             })?;
         if decoded
             .verify(
@@ -305,16 +364,31 @@ fn controls() -> Result<(), String> {
                     purrdf_entail::reasoner::SchemaObstruction::Allocation,
                 )),
                 &context,
+                control,
             )
             .is_ok()
         {
-            return Err("portable refusal accepted a different original cause".to_owned());
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::SchemaOriginalCause,
+                actual: Some(super::render_dl_proof(&decoded)),
+                cause: None,
+            }
+            .into());
         }
         owner
             .retry_schema_preparation(SchemaPreparationBudget::default())
-            .map_err(|error| error.to_string())?;
-        if *owner.consistency().answer() != Verdict::False {
-            return Err("sufficient native retry did not complete the same source".to_owned());
+            .map_err(|cause| ReasoningError::entail(EntailContext::Native, cause))?;
+        let retried = owner.consistency();
+        if *retried.answer() != Verdict::False {
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::SchemaRetry,
+                actual: Some(super::render_dl_certificate(
+                    "consistency",
+                    retried.certificate(),
+                )),
+                cause: None,
+            }
+            .into());
         }
     }
     #[derive(Debug)]
@@ -324,11 +398,15 @@ fn controls() -> Result<(), String> {
             true
         }
     }
-    if !matches!(
-        Reasoner::with_stop(&dataset, Arc::new(Stop)),
-        Err(purrdf_entail::EntailError::Stopped)
-    ) {
-        return Err("native schema construction ignored a latched stop".to_owned());
+    let stopped = Reasoner::with_stop(&dataset, Arc::new(Stop)).err();
+    if !matches!(stopped.as_ref(), Some(purrdf_entail::EntailError::Stopped)) {
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::SchemaStop,
+            actual: Some(document),
+            cause: stopped
+                .map(|cause| Box::new(ReasoningError::entail(EntailContext::Native, cause))),
+        }
+        .into());
     }
     Ok(())
 }

@@ -7,7 +7,7 @@ use super::{Builtin, ShapeOffer};
 use crate::eval::EvalCtx;
 use crate::governor::{
     ChargePoint,
-    lift::{Evaluated, Lift, Truncation},
+    lift::{DetachedLift, Evaluated, Lift, Truncation},
 };
 use crate::property_fn::{OccurrenceDictionary, OccurrenceDictionaryInput, ServiceLevel};
 use crate::property_fn_eval::OccurrenceCallPlans;
@@ -371,11 +371,22 @@ impl<I: ViewTermId> Materialization<I> {
     }
 }
 
-pub(crate) fn execute<D: DatasetView + Sync>(
+pub(crate) enum Prepared<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Materialized(PreparedMaterialization<I>),
+}
+
+pub(crate) struct PreparedMaterialization<I: ViewTermId> {
+    pub(crate) overlay: SharedWorkspace<Materialization<I>>,
+    _inputs: AdmittedVec<SolutionSeq<I>>,
+    _lift: DetachedLift,
+}
+
+pub(crate) fn prepare<D: DatasetView + Sync>(
     root: &GraphPattern,
     spec: &ExpandedDictionary,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
+) -> Result<Prepared<D::Id>, EvalError> {
     let growth = ctx.growth.clone();
     let schema = crate::eval::syntactic_schema_admitted(root, &growth)?;
     let mut inputs = AdmittedVec::with_capacity(spec.arms.len(), &growth)?;
@@ -384,23 +395,23 @@ pub(crate) fn execute<D: DatasetView + Sync>(
     for (ordinal, arm) in spec.arms.iter().enumerate() {
         let values = follow(arm_root(root, arm)?, &arm.values_path)?;
         let Some(input) = lift.absorb(ordinal, crate::eval::eval_evaluated(values, ctx)?) else {
-            return Ok(lift.finish(SolutionSeq::empty(schema)));
+            return Ok(Prepared::Complete(lift.finish(SolutionSeq::empty(schema))));
         };
         inputs.push(input)?;
         outputs.push(RowsBuilder::new(&growth))?;
     }
     if spec.entries.is_empty() {
         // No invocation was reached, including in the retained search ledger.
-        return install(root, spec, &inputs, outputs, ctx);
+        return materialize(root, spec, inputs, outputs, lift.detach(), ctx);
     }
     if let Err(tripped) = ctx.charge(ChargePoint::PropertyFunctionInvocation) {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            root, tripped, schema,
+        return Ok(Prepared::Complete(Evaluated::Truncated(
+            Truncation::barred_at(root, tripped, schema),
         )));
     }
     if let Some(tripped) = ctx.stop_check() {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            root, tripped, schema,
+        return Ok(Prepared::Complete(Evaluated::Truncated(
+            Truncation::barred_at(root, tripped, schema),
         )));
     }
     let mut matches = crate::contain::call_contained_admitted(
@@ -425,8 +436,8 @@ pub(crate) fn execute<D: DatasetView + Sync>(
         .checked_add(work.transitions)
         .ok_or(EvalError::WorkspaceBoundOverflow)?;
     if let Err(tripped) = ctx.charge_occurrences(ChargePoint::PropertyFunctionWork, fuel) {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            root, tripped, schema,
+        return Ok(Prepared::Complete(Evaluated::Truncated(
+            Truncation::barred_at(root, tripped, schema),
         )));
     }
     if ctx.witnessing {
@@ -448,8 +459,8 @@ pub(crate) fn execute<D: DatasetView + Sync>(
         &growth,
     )? {
         if let Some(tripped) = ctx.stop_check() {
-            return Ok(Evaluated::Truncated(Truncation::barred_at(
-                root, tripped, schema,
+            return Ok(Prepared::Complete(Evaluated::Truncated(
+                Truncation::barred_at(root, tripped, schema),
             )));
         }
         let &(arm, input) = spec
@@ -469,26 +480,27 @@ pub(crate) fn execute<D: DatasetView + Sync>(
             ingest.admit(ctx, outputs[arm].len())
         {
             let tripped = tripped.ok_or(EvalError::WorkspaceBoundOverflow)?;
-            return Ok(Evaluated::Truncated(Truncation::barred_at(
-                root, tripped, schema,
+            return Ok(Prepared::Complete(Evaluated::Truncated(
+                Truncation::barred_at(root, tripped, schema),
             )));
         }
         if let Some(row) = spec.arms[arm].plans.bind(mu, &rows, ctx)? {
             outputs.as_mut_slice()[arm].push_row(row)?;
         }
     }
-    install(root, spec, &inputs, outputs, ctx)
+    materialize(root, spec, inputs, outputs, lift.detach(), ctx)
 }
 
-fn install<D: DatasetView + Sync>(
+fn materialize<D: DatasetView + Sync>(
     root: &GraphPattern,
     spec: &ExpandedDictionary,
-    inputs: &AdmittedVec<SolutionSeq<D::Id>>,
+    inputs: AdmittedVec<SolutionSeq<D::Id>>,
     outputs: AdmittedVec<RowsBuilder<D::Id>>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
+    lift: DetachedLift,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Prepared<D::Id>, EvalError> {
     let mut bags = AdmittedMap::default();
-    for ((arm, input), output) in spec.arms.iter().zip(inputs).zip(outputs) {
+    for ((arm, input), output) in spec.arms.iter().zip(&inputs).zip(outputs) {
         let mut rows = output.finish()?;
         // Complete native occurrence has uniform producer evidence. The WHOLE
         // driving search handle is retained, including the empty-output case.
@@ -506,11 +518,12 @@ fn install<D: DatasetView + Sync>(
     // A one-token region can be the offered root itself. Dispatching it
     // literally would bypass the overlay and reopen the original producer.
     if let Some(seq) = bags.get(&(std::ptr::from_ref(root) as usize)) {
-        return Ok(Evaluated::Complete(seq.clone()));
+        return Ok(Prepared::Complete(Evaluated::Complete(seq.clone())));
     }
     let materialized = SharedWorkspace::new_admitted(Materialization { bags }, &ctx.growth)?;
-    let previous = ctx.expanded_dictionary.replace(materialized);
-    let result = crate::eval::eval_literal_node(root, ctx);
-    ctx.expanded_dictionary = previous;
-    result
+    Ok(Prepared::Materialized(PreparedMaterialization {
+        overlay: materialized,
+        _inputs: inputs,
+        _lift: lift,
+    }))
 }

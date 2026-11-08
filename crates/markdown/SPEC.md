@@ -101,9 +101,9 @@ is *meets*, and the two share no byte.
 
 ## 2. The dialect grammar
 
-Recognition operates on **lines**. A line runs from the byte after the
-previous `\n` to the byte before the next `\n`, or to the end of the
-source; the terminating `\n` is part of no line.
+Recognition operates on **lines**. A line runs between LF, CRLF or bare CR
+endings, or to the end of the source. Each ending is retained separately
+from its payload in the native syntax model.
 
 Recognition operates on a line's **trimmed** text; spans never do. A
 document written with CRLF line endings therefore states the structure
@@ -123,20 +123,26 @@ leading run is **at most three** spaces. So `   # Title` states the
 heading `# Title` states, `  1. one` is verse 1, and ` ⁂ *m*` is a
 movement marker.
 
-A leading run of **four or more** spaces opens no marker. The line is
-ordinary content: it continues the unit it falls in, or opens a
-paragraph where none is open. This is not a refusal, and this law
-defines no indented code block — an implementation MUST NOT treat such a
-line as one. It simply declines to read a marker that far in, which is
-where CommonMark places its indented-code threshold.
+A leading run reaching **four columns** opens indented code when no
+paragraph is active. Tabs advance to four-column stops. An indented line
+inside an active paragraph continues that paragraph. Code is structural
+cover and opens no heading, movement or verse.
 
-A **tab** (U+0009) in the leading run opens no marker either, wherever
-in the run it falls: a line whose first non-space character is a tab
-states no heading, no movement and no verse. CommonMark expands a tab to
-the next four-column tab stop, so a run of nought to three spaces
-followed by a tab reaches column four exactly, at or past the bound
-above; this law states that outcome directly, so an implementation
-decides it on a line's bytes and MUST NOT expand a tab to do it.
+The shared source-syntax scanner first recognizes quote/list containers,
+fenced and indented code, HTML blocks and comments, reference definitions,
+ATX and Setext headings, thematic breaks and paragraphs. Container prefixes
+are excluded from recognition content, while every span still addresses
+original bytes. Fences use at least three backticks or tildes; a closer uses
+the same character and at least the opening run length. Unclosed fences
+extend to their container's end and retain their unclosed status. The syntax
+model exposes content and original newline spans for every code line;
+opening and closing delimiter lines are excluded from content extraction.
+If a container consumes only part of a source tab, each content line records
+the residual virtual indentation columns separately. These spaces are a
+rendering instruction, never normalized or invented source bytes.
+Code, HTML blocks, comment-only lines and reference definitions are
+structure rather than slicing units. A heading-looking line inside those
+regions MUST NOT open a section.
 
 The leading run is read for **recognition only**, exactly as the byte
 order mark below is. Its spaces are part of the source and therefore
@@ -153,21 +159,30 @@ A **byte order mark** (U+FEFF) at byte zero of the source is a statement
 about the encoding. Structure detection MUST skip it, so a document that
 opens with one states the same structure as the document that does not,
 and MUST NOT otherwise account for it: every span still counts the
-source's own bytes, so the mark falls before the first span and it is one
-scalar of the scalar count. At any other offset U+FEFF is ordinary
+source's own bytes. The mark precedes the first detected content or structural
+marker and remains one scalar of the scalar count; original physical-line and
+fenced-block envelopes retain it. At any other offset U+FEFF is ordinary
 content and stays inside the unit that holds it.
 
 ### 2.1 Headings and movements
 
 An **ATX heading** is a line whose marker text (§2) opens with one to
-six `#` characters followed by a space or a **tab**. Its level is the
+six `#` characters followed by a space, a **tab**, or the line's end. Its level is the
 number of hashes. Its title is the rest of that marker text, trimmed,
-with trailing `#` characters removed and trimmed again — so the leading
+with a closing hash run removed only when it follows space or tab,
+and trimmed again — so the leading
 run is no part of a title, and `   #   ` is a heading whose title is
 empty. A title MAY be **empty**: `# #` is a heading
 with an empty title, which is a title, and not the absence of one. Seven
 or more hashes open no heading, and hashes running straight into text
 (`#Title`) open no heading — the space or the tab is the mark.
+
+A **Setext heading** is an eligible paragraph followed by an underline of
+`=` or `-`, behind at most three indentation columns. Its level is one or
+two respectively. The underline is structural cover; the heading content
+is the paragraph's original content.
+Leading reference definitions are extracted before that decision. They are
+excluded from the title, and definitions alone cannot form an empty heading.
 
 A **movement marker** is a line whose marker text (§2) opens with U+2042
 (ASTERISM, `⁂`) followed by a space or a tab. Its name is the rest of
@@ -201,13 +216,138 @@ A **paragraph** is any other run of non-blank lines, bounded the same way.
 
 A **blank line** — one whose trimmed text is empty — closes the open
 unit and is part of no unit. A **horizontal rule** — a trimmed line of
-three or more characters, all `-` or all `*` — closes the open unit and is
+three or more identical `-`, `*` or `_` markers, optionally separated
+by spaces or tabs — closes the open unit and is
 part of no unit. A **table row** — a line whose trimmed text opens with
 `|` — closes the open unit and is part of no unit; inside a concordance
 section it is read as a citation row (§4).
 
 Every unit therefore covers a contiguous span of the source, and a unit
 never spans a section boundary.
+
+### 2.3 Native syntax and admission
+
+`syntax` returns an atomic source model with original-byte block/container,
+heading, code, comment and HTML ranges. Links and images retain raw
+component spelling plus decoded destinations and titles; reference uses
+resolve against the first matching definition, including later definitions.
+Reference matching uses raw decontainerized label spelling, full Unicode
+C/F folding, and collapse of spaces, tabs and line endings. Escapes and
+character references remain literal for matching; NBSP is a distinct label
+character. Labels contain at most 999 raw characters and no unescaped square
+brackets. Backslash escapes and character references decode in source order:
+an escaped ampersand cannot start a reference, and decoded output is never
+parsed again. Multiline spelling remains observable.
+
+HTML tag and attribute recognition uses the shared lex reader's CommonMark
+HTML subset. It preserves ordered attributes and their names and values. Names use the
+ASCII letter/underscore/colon start and letter/digit/underscore/dot/colon/hyphen
+continuation grammar; separators allow spaces, tabs and at most one line
+ending. Quoted values may contain further line endings;
+`href` and `src` values use HTML attribute character-reference rules. Complete
+inline processing instructions, declarations and CDATA sections are opaque HTML;
+unfinished inline forms remain text. Prose ranges exclude code, comments and
+HTML forms, including inline occurrences.
+
+Callers select inclusive source-byte, auxiliary-storage, work, container,
+inline-nesting and destination/title ceilings. The grammar imposes no RAF
+profile constants. All native scratch and retained storage is admitted
+before growth; native copies participate in work control. Exhaustion returns
+a typed resource, original position and limit, or original native cause.
+No partial syntax model is returned. `analyze_with_limits` selects those
+syntax controls; existing `analyze` explicitly retains allocator-only
+syntax admission. Both project the same native syntax implementation.
+
+### 2.4 Physical-line authoring projection
+
+`authoring(source, limits)` returns a distinct `AuthoringDocument`. It cannot
+be passed to `analyze_syntax`; the structural dialect revision and RDF output
+remain unchanged. The projection retains original physical payload and newline
+spans, raw fence/container structure, and admitted interpreted text. A span
+covering removed comments is an envelope; its associated interpreted value is
+authoritative rather than a request to parse the source again.
+
+Authoring physical lines split at LF and retain a preceding CR as part of the
+original CRLF terminator; a final CR is also kept outside the final payload.
+Bare CR inside a payload stays on that physical line, including within code
+spans and angle destinations. Source positions use this same line rule.
+An initial byte order mark is skipped for structure recognition; physical line
+spans and interpreted prose retain it at its original offset. A byte order mark
+at any later offset remains ordinary content.
+Fences are recognized before comments and remain opaque. A fence retains the
+opening list-column allowance until it closes. Its closing-prefix lookahead
+inspects at most 65 quote/list markers (the authoring profile's 64 levels plus
+one overflow probe), independently of caller admission. This fixed grammar
+policy prevents a later hidden marker from unexpectedly exposing fenced text. Outside fences,
+comments end only at `-->` and may continue across lines and excluded fences.
+Matched backtick spans protect comment markers on that physical line. Comments
+are removed by concatenation. ATX headings are then read from physical text,
+behind at most three literal spaces, with required space/tab after one through
+six hashes and a nonempty initial title. Unicode White_Space trims the title;
+closing hashes follow the authoring space/tab rule. Quote/list prefixes do not
+create physical headings. Setext does not create authoring headings.
+
+For prose and links, each matched physical-line code span becomes one space;
+unmatched runs remain text. Indentation, ordinary HTML and physical container
+prefixes remain in prose. Links join consecutive originally nonblank, nonfenced
+lines, stripping only quote prefixes; headings isolate Markdown link chunks.
+Comment-only and code-only nonblank lines do not reset chunks. Multiline inline
+links and images are reported separately as split links.
+
+Markdown destinations and titles unescape ASCII punctuation and preserve
+character references. Reference definition destinations remain observable,
+including duplicates and labels longer than CommonMark's label ceiling; labels
+beginning with `^` are excluded. Reference uses are not resolved. HTML href/src
+values remain literal. The authoring tag head is Unicode Alphabetic, and its
+name characters are Unicode Alphabetic or Numeric plus `_`, `-`, `:` and `.`;
+this intentionally differs from CommonMark's ASCII HTML tag grammar. Tolerant
+attribute inspection does not require a complete tag. Quoted values spanning
+physical lines are excluded, a value may begin on a later line, and trailing
+slashes are removed from unquoted interpreted values while their source spans
+retain them. Original source bounds, storage, work and component bounds cover
+all scratch views and retained output, with typed atomic refusal.
+
+A finite authoring admission for a 1 MiB document uses `source_bytes = 1048576`,
+`containers = 64`, `link_part_bytes = 4096`, and `nesting = source_bytes`.
+The last bound admits every possible inline opener within that source bound
+without confusing inline nesting with the separate quote/list ceiling. Callers
+must also choose finite `auxiliary_bytes` and `work` ceilings; construction can
+refuse scratch storage even when the final retained model would fit. No limit
+is silently relaxed and there is no unbounded authoring preset.
+
+### 2.5 Code-only decoded scalars
+
+`replace_code_spans(source, CodeSpanLimits)` interprets an already-decoded UTF-8
+scalar. Its three explicit inclusive ceilings are `source_bytes`,
+`auxiliary_bytes` and `work`. It borrows unchanged input and allocates native
+replacement text only after finding a complete span. No partial text is
+returned on refusal; typed causes and positions refer to the decoded scalar,
+without converting coordinates to any enclosing document.
+
+Matching covers the entire scalar, across LF, CR and CRLF. A maximal backtick
+run opens a span unless immediately preceded by an odd number of backslashes.
+The next maximal run of exactly equal length closes it; backslashes do not
+escape closing runs. Unmatched runs remain literal, and different run lengths
+do not close a span. Every complete span, including delimiters, becomes exactly
+one ASCII space. Every other byte remains verbatim, including Unicode text,
+encoding marks, comment delimiters, HTML, entities, YAML-looking strings and
+fence-looking text. Backticks inside those spellings remain eligible. This
+operation performs no other document or language interpretation.
+
+The scalar, Standard and Authoring readers share one admitted matcher. Byte
+probes and candidate-width comparisons are charged before inspection, and
+output capacity and copies use the same native admission account. Storage
+includes simultaneous old and replacement buffers during growth. Closing
+searches can revisit suffixes, so finite work limits may refuse an input even
+when source and output storage would fit; no linear-work guarantee is made.
+
+Standard opening-run scans and width comparisons that previously went
+uncharged now consume work. Authoring opener and backslash scans are charged
+before inspection rather than afterward, without rescanning unmatched runs.
+Consequently tight finite work ceilings can now refuse earlier, and refusal
+positions can identify a newly charged probe or comparison. These are resource
+accounting changes: grammar, output for admitted input, document physical-line
+policy and the structural dialect revision remain unchanged.
 
 ## 3. The split law
 
@@ -584,6 +724,23 @@ reproduce all five:
   unit and section where it was. The two signatures are opposite and both
   are observable, and they are the shape of the two ids: what a unit *is*
   did not change, and what a citation *reifies* did.
+
+### Migration between dialect revisions
+
+The implementation-owned dialect revision is part of the chunking
+preimage. Revision 2 replaces line-only marker recognition with the native
+source-syntax scanner described above. It deliberately changes both
+chunking and emission identities, including documents whose boundaries
+happen to stay unchanged. A caller's `Profile.version` remains its own
+profile label, not a switch selecting a historical parser.
+
+Existing slices and vectors retain their historical identities. To apply
+the revised law, re-slice original source bytes, regenerate RDF projections,
+and derive the new chunking stage and embedding family identities. Rebuild
+embeddings for the newly addressed units. Never relabel old vectors with a
+new stage or family identifier. The native golden writer regenerates the
+published examples under the revised preimages; unchanged source text is
+not evidence that its historical chunking law changed in place.
 
 ### 5.1 The three identities, and the verification law
 

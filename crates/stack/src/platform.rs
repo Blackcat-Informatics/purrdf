@@ -27,6 +27,14 @@
 //! on Windows, no handle at all), so none of it reaches across threads; none of it is safe
 //! to call from a signal handler, but nothing in this crate ever is.
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "netbsd",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd"
+))]
 use core::mem::MaybeUninit;
 
 /// The lowest address the calling thread's stack may reach, or `None` where this target's

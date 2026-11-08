@@ -48,7 +48,7 @@ fn values(values: &[(&str, &str)]) -> Arc<RdfDataset> {
 fn run(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     let query = format!("PREFIX xsd: <{XSD}>\nPREFIX ex: <{EX}>\n{query}");
     NativeSparqlEngine::new().query_with_options_view(
@@ -89,10 +89,10 @@ fn cells(result: &SparqlResult) -> Vec<Vec<String>> {
 
 /// The one cell of `SELECT (<expression> AS ?y) {}`.
 fn eval(expression: &str) -> String {
-    eval_with(expression, QueryOptions::EMPTY)
+    eval_with(expression, &QueryOptions::EMPTY)
 }
 
-fn eval_with(expression: &str, options: QueryOptions<'_, '_>) -> String {
+fn eval_with(expression: &str, options: &QueryOptions<'_, '_>) -> String {
     let result = run(
         &empty(),
         &format!("SELECT ({expression} AS ?y) WHERE {{}}"),
@@ -207,7 +207,7 @@ fn comparison_order_and_extremes_see_every_digit() {
     let ordered = run(
         &data,
         "SELECT ?v WHERE { ?s ex:v ?v } ORDER BY ?v",
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
     .expect("order");
     assert_eq!(
@@ -224,7 +224,7 @@ fn comparison_order_and_extremes_see_every_digit() {
     let extremes = run(
         &data,
         "SELECT (MIN(?v) AS ?lo) (MAX(?v) AS ?hi) WHERE { ?s ex:v ?v }",
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
     .expect("extremes");
     assert_eq!(
@@ -234,7 +234,7 @@ fn comparison_order_and_extremes_see_every_digit() {
     let filtered = run(
         &data,
         &format!("SELECT ?v WHERE {{ ?s ex:v ?v FILTER(?v > {a}) }}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
     .expect("filter");
     assert_eq!(cells(&filtered), vec![vec![format!("{b}^^integer")]]);
@@ -304,7 +304,7 @@ fn sum_count_and_avg_agree_under_every_policy() {
                 &data,
                 "SELECT (SUM(?v) AS ?s) (COUNT(?v) AS ?n) (AVG(?v) AS ?a) (SUM(?v) / COUNT(?v) AS ?q) \
                  WHERE { ?s ex:v ?v }",
-                options,
+                &options,
             );
             let row = cells(&answered.expect("an answer")).remove(0);
             if policy == DivisionPolicy::Exact && mean.to_canonical_decimal().is_none() {
@@ -347,13 +347,13 @@ fn sum_count_and_avg_agree_under_every_policy() {
 #[test]
 fn the_division_policy_is_the_query_s_and_leaves_only_non_terminating_quotients_unbound() {
     let exact = QueryOptions::EMPTY.with_division(DivisionPolicy::Exact);
-    assert_eq!(eval_with("1 / 8", exact), "0.125^^decimal");
+    assert_eq!(eval_with("1 / 8", &exact), "0.125^^decimal");
     assert_eq!(
-        eval_with(&format!("1 / {}", "2".to_owned() + &"0".repeat(60)), exact),
+        eval_with(&format!("1 / {}", "2".to_owned() + &"0".repeat(60)), &exact),
         format!("0.{}5^^decimal", "0".repeat(60))
     );
     // A quotient with no finite expansion is an expression error: unbound.
-    assert_eq!(eval_with("1 / 3", exact), "-");
+    assert_eq!(eval_with("1 / 3", &exact), "-");
     // The default policy rounds a repeating quotient at eighteen digits.
     assert_eq!(eval("1 / 3"), "0.333333333333333333^^decimal");
     // A scale policy rounds as stated.
@@ -361,9 +361,9 @@ fn the_division_policy_is_the_query_s_and_leaves_only_non_terminating_quotients_
         4,
         purrdf_xsd::exact::Rounding::HalfEven,
     ));
-    assert_eq!(eval_with("2 / 3", rounded), "0.6667^^decimal");
+    assert_eq!(eval_with("2 / 3", &rounded), "0.6667^^decimal");
     // Division by zero stays an expression error under every policy.
-    assert_eq!(eval_with("1 / 0", exact), "-");
+    assert_eq!(eval_with("1 / 0", &exact), "-");
     assert_eq!(eval("1 / 0"), "-");
 }
 
@@ -377,7 +377,7 @@ fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             governors,
         )
         .expect("a tripped governor is an outcome, not a query error")

@@ -230,15 +230,12 @@ impl GeoProfile {
                 progress,
             ));
         }
-        let same_surface = if selected.is_none() {
-            match self.reference_with_progress(source.crs(), context, progress) {
+        let same_surface = selected.is_none()
+            && match self.reference_with_progress(source.crs(), context, progress) {
                 Ok(source) => crate::numerical::reference_same_surface(source, context, progress)?,
                 Err(error) if matches!(error.original(), GeoError::UnregisteredCrs(_)) => false,
                 Err(error) => return Err(error),
-            }
-        } else {
-            false
-        };
+            };
         if same_surface {
             let policy = remaining(context)?;
             let result = {

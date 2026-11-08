@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use purrdf_lex::json::{Object as JsonObject, Value as JsonValue};
 use purrdf_rdf::RdfDataset;
 
-use crate::artifact::{ArtifactRecord, ArtifactRole};
+use crate::artifact::{ArtifactInput, ArtifactRecord, ArtifactRole};
 use crate::error::SliceError;
 use crate::json_form;
 use crate::rdf_query::{Dataset, Object};
@@ -156,6 +156,146 @@ impl ManifestView {
     }
 }
 
+/// Physical inputs for one slice with an admitted manifest and unadmitted artifacts.
+///
+/// Artifact bytes and roles come from the same discovery used by [`SliceCatalog`].
+/// Only the mandatory manifest has been parsed; other RDF artifacts have not been
+/// parsed or assigned semantic identities. Use [`Self::into_record`] before a
+/// semantic catalog operation.
+#[derive(Debug)]
+pub struct SliceInput {
+    /// The required manifest's parsed fields, including its slice owner IRI.
+    manifest: ManifestView,
+    /// The required manifest's complete native RDF dataset.
+    manifest_graph: Arc<RdfDataset>,
+    /// All physical artifacts, ordered by their relative logical paths.
+    artifacts: Vec<ArtifactInput>,
+    /// The directory containing the required `manifest.ttl`.
+    slice_dir: PathBuf,
+}
+
+impl SliceInput {
+    /// The admitted manifest fields, including the owner IRI of these physical inputs.
+    pub fn manifest(&self) -> &ManifestView {
+        &self.manifest
+    }
+
+    /// Physical artifacts in relative path order, without semantic identity claims.
+    pub fn artifacts(&self) -> &[ArtifactInput] {
+        &self.artifacts
+    }
+
+    /// The original directory containing this slice's required manifest.
+    pub fn slice_dir(&self) -> &Path {
+        &self.slice_dir
+    }
+
+    /// Admit every retained RDF artifact and consume these inputs into a catalog record.
+    ///
+    /// Uses the original bytes and retrieval IRI without rereading files or deriving
+    /// another base from the filesystem. Non-RDF files retain no semantic digest;
+    /// every RDF artifact must acquire one.
+    ///
+    /// # Errors
+    /// Returns the original artifact parse or canonicalization refusal.
+    /// No partially admitted record is returned.
+    pub fn into_record(
+        self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<SliceRecord, SliceError> {
+        let mut artifacts = Vec::with_capacity(self.artifacts.len());
+        for artifact in self.artifacts {
+            let semantic_digest = if let Some(base) = &artifact.rdf_base {
+                Some(compute_semantic_digest(
+                    &artifact.content,
+                    &self.slice_dir.join(&artifact.logical_path),
+                    base,
+                    control,
+                )?)
+            } else {
+                None
+            };
+            artifacts.push(ArtifactRecord {
+                role: artifact.role,
+                logical_path: artifact.logical_path,
+                media_type: artifact.media_type,
+                raw_digest: artifact.raw_digest,
+                semantic_digest,
+                content: artifact.content,
+            });
+        }
+        Ok(SliceRecord {
+            manifest: self.manifest,
+            manifest_graph: self.manifest_graph,
+            artifacts,
+            slice_dir: self.slice_dir,
+        })
+    }
+}
+
+/// A physical slice inventory with required manifest admission and no RDF artifact digests.
+#[derive(Debug)]
+pub struct SliceInventory {
+    records: Vec<SliceInput>,
+    vocab: SliceVocab,
+}
+
+impl SliceInventory {
+    /// Discover the same slice directories, manifests and artifact roles as [`SliceCatalog`].
+    ///
+    /// This operation selects physical inputs; it does not canonicalize RDF artifacts.
+    /// It returns no partial inventory if a required input cannot be loaded.
+    ///
+    /// # Errors
+    /// Returns directory, file, path or mandatory manifest failures.
+    pub fn discover(root: &Path, vocab: SliceVocab) -> Result<Self, SliceError> {
+        let records = find_slice_dirs(root)?
+            .par_iter()
+            .map(|dir| Self::from_slice_dir(dir, &vocab))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { records, vocab })
+    }
+
+    /// Load one physical slice, parsing its required manifest and retaining artifact bytes.
+    ///
+    /// # Errors
+    /// Returns directory, file, path or mandatory manifest failures. Invalid nonmanifest
+    /// RDF remains a physical input until [`SliceInput::into_record`] admits it.
+    pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceInput, SliceError> {
+        let manifest_path = dir.join("manifest.ttl");
+        let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::from)?;
+        let manifest_base = crate::retrieval::retrieval_base_iri(&manifest_path)?;
+        let dataset =
+            Dataset::parse_with_retained_base(&manifest_bytes, &manifest_path, &manifest_base)?;
+        let manifest = extract_manifest_view(&dataset, vocab)?;
+        let manifest_graph = Arc::new(dataset.into_inner());
+        let artifacts = discover_artifacts(dir, &manifest_bytes, &manifest_base)?;
+        Ok(SliceInput {
+            manifest,
+            manifest_graph,
+            artifacts,
+            slice_dir: dir.to_path_buf(),
+        })
+    }
+
+    /// The vocabulary used to interpret the required manifests.
+    pub fn vocab(&self) -> &SliceVocab {
+        &self.vocab
+    }
+
+    /// Physical slice inputs in the catalog's directory order.
+    pub fn records(&self) -> &[SliceInput] {
+        &self.records
+    }
+
+    /// Consume this inventory into its retained physical inputs for semantic admission.
+    pub fn into_records(self) -> Vec<SliceInput> {
+        self.records
+    }
+}
+
 /// A fully-loaded slice record: manifest view, manifest IR dataset, and artifact
 /// inventory.
 #[derive(Debug)]
@@ -203,13 +343,44 @@ impl SliceCatalog {
     /// Recursively discover all slice directories under `root` (directories
     /// containing a `manifest.ttl`) and load each one, interpreting manifests
     /// with the caller's `vocab`.
-    pub fn discover(root: &Path, vocab: SliceVocab) -> Result<Self, SliceError> {
+    pub fn discover(
+        root: &Path,
+        vocab: SliceVocab,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Self, SliceError> {
         let dirs = find_slice_dirs(root)?;
-        let records: Result<Vec<_>, _> = dirs
-            .par_iter()
-            .map(|dir| Self::from_slice_dir(dir, &vocab))
-            .collect();
-        let records = records?;
+        let completed = std::sync::Mutex::new(Vec::new());
+        // The unit error only stops dispatch. Every started task first retains its
+        // actual result and completed evidence, including an original native error.
+        let _dispatch = dirs.par_iter().enumerate().try_for_each(|(index, dir)| {
+            let mut child = control.fork();
+            let result = Self::from_slice_dir(dir, &vocab, &mut child);
+            let failed = result.is_err();
+            completed
+                .lock()
+                .expect("catalog receipt lock is not held during task execution")
+                .push((index, result, child));
+            if failed { Err(()) } else { Ok(()) }
+        });
+        let mut completed = completed
+            .into_inner()
+            .expect("catalog receipt lock is not held during task execution");
+        completed.sort_unstable_by_key(|(index, _, _)| *index);
+        let mut records = Vec::new();
+        let mut first_error = None;
+        for (_, result, child) in completed {
+            control.append_completed(child);
+            match result {
+                Ok(record) => records.push(record),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        // Directory order chooses among actual failed tasks. Unstarted tasks have
+        // neither fabricated results nor receipts; no partial catalog is published.
+        if let Some(error) = first_error {
+            return Err(error);
+        }
         Ok(Self { records, vocab })
     }
 
@@ -219,33 +390,12 @@ impl SliceCatalog {
     }
 
     /// Load a single slice from `dir` (which must contain `manifest.ttl`).
-    pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceRecord, SliceError> {
-        let manifest_path = dir.join("manifest.ttl");
-        let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::from)?;
-
-        // Parse Turtle once into the native IR (lenient: accepts @x-purrdf-* lang tags).
-        // The frozen dataset serves BOTH the manifest-view extraction and the
-        // lossless `manifest_graph` — no store→IR round-trip.
-        // Parsed under its own RFC-8089 retrieval IRI, so a manifest that spells a slice
-        // or a dependency as a relative reference resolves rather than hard-failing with
-        // the base sitting unused in the path.
-        let dataset = Dataset::parse_file(&manifest_bytes, &manifest_path)?;
-
-        // Extract manifest view from the dataset.
-        let manifest = extract_manifest_view(&dataset, vocab)?;
-
-        // Keep the frozen RdfDataset for lossless round-trip.
-        let manifest_graph = Arc::new(dataset.into_inner());
-
-        // Discover all artifacts.
-        let artifacts = discover_artifacts(dir)?;
-
-        Ok(SliceRecord {
-            manifest,
-            manifest_graph,
-            artifacts,
-            slice_dir: dir.to_path_buf(),
-        })
+    pub fn from_slice_dir(
+        dir: &Path,
+        vocab: &SliceVocab,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<SliceRecord, SliceError> {
+        SliceInventory::from_slice_dir(dir, vocab)?.into_record(control)
     }
 
     /// Returns all slice records.
@@ -376,9 +526,13 @@ fn literal_value(term: &Object) -> String {
 
 // ── Artifact discovery ────────────────────────────────────────────────────────
 
-fn discover_artifacts(dir: &Path) -> Result<Vec<ArtifactRecord>, SliceError> {
+fn discover_artifacts(
+    dir: &Path,
+    manifest_bytes: &[u8],
+    manifest_base: &purrdf_iri::BaseIri,
+) -> Result<Vec<ArtifactInput>, SliceError> {
     let mut artifacts = Vec::new();
-    collect_artifacts(dir, dir, &mut artifacts)?;
+    collect_artifacts(dir, dir, &mut artifacts, manifest_bytes, manifest_base)?;
     artifacts.sort_by(|a, b| a.logical_path.cmp(&b.logical_path));
     Ok(artifacts)
 }
@@ -386,7 +540,9 @@ fn discover_artifacts(dir: &Path) -> Result<Vec<ArtifactRecord>, SliceError> {
 fn collect_artifacts(
     root: &Path,
     current: &Path,
-    out: &mut Vec<ArtifactRecord>,
+    out: &mut Vec<ArtifactInput>,
+    manifest_bytes: &[u8],
+    manifest_base: &purrdf_iri::BaseIri,
 ) -> Result<(), SliceError> {
     for entry in std::fs::read_dir(current).map_err(SliceError::from)? {
         let entry = entry.map_err(SliceError::from)?;
@@ -394,7 +550,7 @@ fn collect_artifacts(
         let file_type = entry.file_type().map_err(SliceError::from)?;
 
         if file_type.is_dir() {
-            collect_artifacts(root, &path, out)?;
+            collect_artifacts(root, &path, out, manifest_bytes, manifest_base)?;
             continue;
         }
 
@@ -428,38 +584,31 @@ fn collect_artifacts(
         }
 
         let logical_path = rel.to_string_lossy().to_string();
-        let content = std::fs::read(&path).map_err(SliceError::from)?;
+        // The owner view and root manifest artifact must describe the same original
+        // bytes and retrieval identity, even if the file changes during discovery.
+        let (content, rdf_base) = if rel == Path::new("manifest.ttl") {
+            (manifest_bytes.to_vec(), Some(manifest_base.clone()))
+        } else {
+            let content = std::fs::read(&path).map_err(SliceError::from)?;
+            let base = if is_rdf_file(&logical_path) {
+                Some(crate::retrieval::retrieval_base_iri(&path)?)
+            } else {
+                None
+            };
+            (content, base)
+        };
         let raw_digest = hex_sha256(&content);
 
         let role = classify_role(&logical_path);
         let media_type =
             purrdf_gts::files::media_type_for_path(Path::new(&logical_path)).to_string();
-
-        // For RDF files, compute the semantic digest via canonical N-Triples.
-        //
-        // This PROPAGATES. `None` is the documented discriminant for "not an RDF file"
-        // (see `ArtifactRecord::semantic_digest`), and `cache::phase_artifact_digest`
-        // reads it that way — an RDF artifact reaching a semantics-sensitive phase
-        // without a digest is a hard failure there. Swallowing the error with `.ok()`
-        // therefore did not degrade gracefully: it forged that discriminant, telling
-        // every later reader that a file named `.ttl` was not RDF, and deferred the
-        // complaint to a distant phase that could only report "none was computed" rather
-        // than the syntax error at the file. The parse is also the identical one
-        // `ownership::parse_rdf_artifact` performs, whose own doctrine is to fail loudly;
-        // the two now agree.
-        let semantic_digest = if is_rdf_file(&logical_path) {
-            Some(compute_semantic_digest(&content, &path)?)
-        } else {
-            None
-        };
-
-        out.push(ArtifactRecord {
+        out.push(ArtifactInput {
             role,
             logical_path,
             media_type,
             raw_digest,
-            semantic_digest,
             content,
+            rdf_base,
         });
     }
     Ok(())
@@ -475,31 +624,35 @@ fn hex_sha256(bytes: &[u8]) -> String {
 /// # Errors
 ///
 /// Every failure is propagated and names the artifact: a file the extension declares to
-/// be RDF that does not parse, has no derivable retrieval IRI, or does not canonicalize
-/// is a defect in the slice, not an artifact without a semantic identity.
-fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
-    let dataset = Dataset::parse_file(bytes, path)?;
+/// be RDF that does not parse or canonicalize is a defect in the slice, not an
+/// artifact without a semantic identity. The base was captured during physical discovery.
+fn compute_semantic_digest(
+    bytes: &[u8],
+    path: &Path,
+    base: &purrdf_iri::BaseIri,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, SliceError> {
+    let dataset = Dataset::parse_with_retained_base(bytes, path, base)?;
 
-    // Canonicalize blank-node labels BEFORE digesting. Parsing assigns blank-node IDs
-    // non-deterministically, so a plain sorted-N-Triples digest would differ
-    // run-to-run for any artifact that uses blank nodes (e.g. SHACL property shapes,
-    // OWL restrictions). Canonicalization makes the *semantic* digest a stable
-    // function of the graph's identity ( §12 — semantic, path-independent,
-    // deterministic keys).
-    //
-    // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
-    // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
-    // canonicalizes that flat set.
-    let canonical = dataset
-        .canonical_nquads_flat()
-        .map_err(|error| match error {
-            purrdf_rdf::CanonError::Storage(storage) => SliceError::Storage(storage),
-            cause => SliceError::Canonicalize {
-                path: path.to_path_buf(),
-                cause: Box::new(cause),
-            },
-        })?;
-    Ok(hex_sha256(canonical.as_bytes()))
+    // Canonical label search and digest output share one measured native run.
+    let digest = match purrdf_core::try_flat_digest_view(
+        dataset.inner(),
+        purrdf_core::CanonHash::Sha256,
+        control,
+    ) {
+        Ok(digest) => digest,
+        Err(purrdf_core::ViewCanonError::Refused(cause)) => {
+            return Err(match cause {
+                purrdf_core::CanonError::Storage(storage) => SliceError::Storage(storage),
+                cause => SliceError::Canonicalize {
+                    path: path.to_path_buf(),
+                    cause: Box::new(cause),
+                },
+            });
+        }
+        Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {},
+    };
+    Ok(digest.to_hex())
 }
 
 // Artifact classification is deliberately byte-exact on lowercase extensions.
@@ -683,10 +836,26 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&ttl_path, turtle_bytes).expect("write the Turtle artifact");
         std::fs::write(&nt_path, nt_bytes).expect("write the N-Triples artifact");
 
-        let digest_ttl = compute_semantic_digest(turtle_bytes, &ttl_path)
-            .expect("Turtle semantic digest must not fail");
-        let digest_nt = compute_semantic_digest(nt_bytes, &nt_path)
-            .expect("N-Triples semantic digest must not fail");
+        let digest_ttl = compute_semantic_digest(
+            turtle_bytes,
+            &ttl_path,
+            &crate::retrieval::retrieval_base_iri(&ttl_path).expect("retrieval IRI"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("Turtle semantic digest must not fail");
+        let digest_nt = compute_semantic_digest(
+            nt_bytes,
+            &nt_path,
+            &crate::retrieval::retrieval_base_iri(&nt_path).expect("retrieval IRI"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("N-Triples semantic digest must not fail");
 
         assert!(
             !digest_ttl.is_empty(),
@@ -712,8 +881,16 @@ ex:subject ex:predicate ex:object .
         let relative = b"<> <https://example.org/declares> <thing> .\n";
         std::fs::write(&path, relative).expect("write the artifact");
 
-        let digest = compute_semantic_digest(relative, &path)
-            .expect("a relative-IRI artifact resolves under its own retrieval IRI");
+        let digest = compute_semantic_digest(
+            relative,
+            &path,
+            &crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("a relative-IRI artifact resolves under its own retrieval IRI");
         assert_ne!(digest, "");
 
         // The digest is of the RESOLVED graph: writing the same document with the
@@ -728,8 +905,16 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&expanded_path, &expanded).expect("write the expanded artifact");
         assert_eq!(
             digest,
-            compute_semantic_digest(expanded.as_bytes(), &expanded_path)
-                .expect("absolute artifact digests"),
+            compute_semantic_digest(
+                expanded.as_bytes(),
+                &expanded_path,
+                &crate::retrieval::retrieval_base_iri(&expanded_path).expect("retrieval IRI"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("absolute artifact digests"),
             "the relative form must denote exactly what the resolved form denotes"
         );
     }
@@ -745,7 +930,16 @@ ex:subject ex:predicate ex:object .
             let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
             let path = dir.path().join(name);
             std::fs::write(&path, absolute).expect("write");
-            compute_semantic_digest(absolute, &path).expect("digest")
+            compute_semantic_digest(
+                absolute,
+                &path,
+                &crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("digest")
         };
         assert_eq!(digest_at("one.ttl"), digest_at("two.ttl"));
     }

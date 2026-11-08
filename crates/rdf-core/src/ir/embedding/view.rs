@@ -22,6 +22,7 @@ use super::identity::{
     derive_chunking_contract_id,
 };
 use super::metadata::{edge_count, require_edge, require_edge_count};
+use super::model::EmbeddingSourceFormat;
 use super::target::{TargetKind, validate_target_identity as validate_canonical_target_identity};
 use super::wire::{
     PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC,
@@ -110,9 +111,10 @@ impl<'a> SectionView<'a> {
     }
 }
 
-/// Exact source-pack attachment carried by the `SOURCE` section.
+/// Exact native source attachment carried by the `SOURCE` section.
 #[derive(Debug, Clone, Copy)]
 pub struct SourceView {
+    source_format: EmbeddingSourceFormat,
     source_length: u64,
     source_exact_digest: ContentDigest,
     certified_rdf_digest: [u8; 32],
@@ -120,13 +122,19 @@ pub struct SourceView {
 }
 
 impl SourceView {
-    /// Required exact source byte length.
+    /// The carrier whose exact bytes or canonical manifest are bound.
+    #[must_use]
+    pub const fn source_format(self) -> EmbeddingSourceFormat {
+        self.source_format
+    }
+
+    /// Required exact source or canonical manifest byte length.
     #[must_use]
     pub const fn source_length(self) -> u64 {
         self.source_length
     }
 
-    /// Plain SHA-256 of the exact source pack.
+    /// Plain SHA-256 of the exact source bytes or canonical manifest.
     #[must_use]
     pub const fn source_exact_digest(self) -> ContentDigest {
         self.source_exact_digest
@@ -358,7 +366,7 @@ impl<'a> TargetView<'a> {
         self.identity
     }
 
-    /// Source-pack-local acceleration ordinal, if present.
+    /// Source-local acceleration ordinal, if present.
     #[must_use]
     pub fn source_local_ordinal(self) -> Option<u64> {
         (infallible_u32(self.record, 68) & SOURCE_ORDINAL_PRESENT != 0)
@@ -1522,7 +1530,7 @@ impl<'a> EmbeddingView<'a> {
         self.integrity
     }
 
-    /// Exact source-pack attachment.
+    /// Exact native source attachment.
     #[must_use]
     pub const fn source(&self) -> SourceView {
         self.source
@@ -2656,7 +2664,7 @@ fn parse_source(section: &[u8], file: &[u8]) -> Result<SourceView, EmbeddingErro
     }
     require_u32(section, 0, 1, "SOURCE schema version")?;
     require_u32(section, 4, 1, "SOURCE flags")?;
-    require_u32(section, 16, 1, "SOURCE format")?;
+    let source_format = EmbeddingSourceFormat::from_code(read_u32(section, 16)?)?;
     require_u32(section, 20, 0, "SOURCE reserved")?;
     require_zero(&section[120..128], "SOURCE reserved")?;
     let source_exact_digest = ContentDigest::from_raw(array32(section, 24));
@@ -2666,6 +2674,7 @@ fn parse_source(section: &[u8], file: &[u8]) -> Result<SourceView, EmbeddingErro
         ));
     }
     Ok(SourceView {
+        source_format,
         source_length: infallible_u64(section, 8),
         source_exact_digest,
         certified_rdf_digest: array32(section, 56),

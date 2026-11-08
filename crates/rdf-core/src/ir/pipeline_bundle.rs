@@ -33,14 +33,14 @@
 //! ## Content addressing
 //!
 //! [`PipelineBundle::digest`] is a SHA-256 fold over, in a fixed order:
-//! 1. the canonical N-Quads hash of the dataset ([`canonicalize`]),
+//! 1. the canonical N-Quads hash of the dataset ([`try_canonicalize_view`]),
 //! 2. each lookaside resource's `content_digest` (collected and SORTED),
 //! 3. each blob's [`ContentDigest`] in the store (SORTED),
 //! 4. the provenance's runtime-id-free PUBLIC projection
 //!    ([`DatasetProvenance::public_projection`]).
 //!
 //! [`PipelineViewBundle::digest`] folds exactly the same four sections, reading
-//! section 1 through [`try_canonicalize_view`] instead of [`canonicalize`]. A
+//! section 1 through the shared [`try_canonicalize_view`] implementation. A
 //! composite view and the flat dataset holding the same content canonicalize
 //! byte-identically, so the two folds agree by construction rather than by
 //! coincidence.
@@ -96,9 +96,9 @@ macro_rules! pin_handle_method {
             graph: impl Into<HandleKey>,
             payload: $handle,
             content_digest: ContentDigest,
-        ) -> Result<(), PipelineBundleError> {
+         control: &mut crate::CanonicalizationControl<'_>,) -> Result<(), PipelineBundleError> {
             let graph = graph.into();
-            let actual = self.graph_digest(&graph)?;
+            let actual = self.graph_digest(&graph, control)?;
             BundleCore::<$handle>::verify_pin(&graph, content_digest, actual)?;
             self.core
                 .handles
@@ -115,10 +115,7 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
-use super::canon::{
-    CanonError, CanonHash, canonicalize, canonicalize_view, try_canonicalize_view,
-    try_graph_digest_view,
-};
+use super::canon::{CanonError, CanonHash, try_canonicalize_view, try_graph_digest_view};
 use super::composite::{CompositeDatasetView, CompositeSource, GraphPlacement, owned_value};
 use super::dataset::RdfDataset;
 use super::mutable::DeltaDatasetView;
@@ -593,7 +590,30 @@ impl<H> BundleCore<H> {
         }
     }
 
-    /// The bundle digest over an already-computed canonical N-Quads document.
+    /// Canonicalize either carrier and fold its complete content identity.
+    fn digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
+        &self,
+        view: &D,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        let canonical = try_canonicalize_view(view, CanonHash::Sha256, control)
+            .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
+        DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
+        Ok(self.digest_over(canonical.nquads()))
+    }
+
+    fn residue_digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
+        &self,
+        view: &D,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        let residue = ResidueView(view);
+        let canonical = try_canonicalize_view(&residue, CanonHash::Sha256, control)
+            .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?;
+        DigestWorkCounter::bump(&self.work.residue_canonicalizations);
+        Ok(ContentDigest::of(canonical.nquads().as_bytes()))
+    }
+
     fn digest_over(&self, canonical_nquads: &str) -> ContentDigest {
         let mut hasher = Sha256::new();
         hasher.update(canonical_nquads.as_bytes());
@@ -638,7 +658,7 @@ fn finish(hasher: Sha256) -> ContentDigest {
 ///
 /// Blank-node graph names are deliberately absent: a per-graph digest is addressed
 /// by IRI on BOTH carriers (see
-/// [`canonicalize_graph_view`](super::canon::canonicalize_graph_view) and
+/// [`try_canonicalize_graph_view`](super::canon::try_canonicalize_graph_view) and
 /// [`RdfDataset::project_graph`]), and a blank name is not stable across
 /// carriers anyway — composition standardizes blank scopes apart. Rows in a
 /// blank-named graph are folded into the pipeline root's residue leaf instead.
@@ -771,6 +791,16 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
         Self: 'a;
     type ProbePlan = ();
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        const RESIDUE: Domain = Domain::new(b"purrdf-core/residue-snapshot/v1");
+        Ok(self.0.snapshot_identity()?.map(|identity| {
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            hash.update(RESIDUE.as_bytes());
+            hash.update(identity.as_bytes());
+            purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+        }))
+    }
+
     fn reserve_workspace(
         &self,
         bytes: u64,
@@ -849,6 +879,18 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.reifier_quads().filter(|q| self.keeps(q.g))
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.0
+            .annotation_quads_for_range(predicate, object, graph, range)
+            .filter(|quad| self.keeps(quad.g))
     }
 
     fn annotation_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
@@ -1019,7 +1061,8 @@ impl<H> PipelineBundle<H> {
     /// # Errors
     ///
     /// [`PipelineBundleError::HandleDigestMismatch`] if the pinned digest disagrees
-    /// with the backing graph.
+    /// with the backing graph; [`PipelineBundleError::Canonicalization`] if
+    /// canonicalization refuses that graph.
     }
 
     /// Detach the typed handle for `graph`, returning it if present. Detaching does
@@ -1065,12 +1108,14 @@ impl<H> PipelineBundle<H> {
     ///
     /// [`PipelineBundleError::GraphContainment`] if `graph_quads` reaches outside
     /// `graph`; [`PipelineBundleError::HandleDigestMismatch`] if folding `graph_quads`
-    /// would shift an already-pinned graph's digest.
+    /// would shift an already-pinned graph's digest;
+    /// [`PipelineBundleError::Canonicalization`] if a graph refuses canonicalization.
     pub fn accumulate_named_graph(
         &mut self,
         graph: impl Into<HandleKey>,
         graph_quads: &RdfDataset,
         payload: H,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<(), PipelineBundleError> {
         let graph = graph.into();
         // Containment first: nothing is folded until the contribution is known to
@@ -1092,11 +1137,12 @@ impl<H> PipelineBundle<H> {
         let mut seed = BTreeMap::new();
         // Additive invariant: no previously pinned graph may have shifted.
         for (k, pinned) in prior {
-            let actual = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &k)?;
+            let actual = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &k, control)?;
             BundleCore::<H>::verify_pin(&k, pinned, actual)?;
         }
         // The new handle's backing digest, from the same candidate.
-        let content_digest = seeded_flat_digest(&candidate, &self.core.work, &mut seed, &graph)?;
+        let content_digest =
+            seeded_flat_digest(&candidate, &self.core.work, &mut seed, &graph, control)?;
         // COMMIT. Every check has passed, so the candidate dataset, its memo and the
         // new handle are installed together. RESEATING the memo rather than clearing
         // it is what keeps a clone taken BEFORE this call reading digests of its OWN
@@ -1113,8 +1159,8 @@ impl<H> PipelineBundle<H> {
     /// The canonical [`ContentDigest`] of the named graph `graph` — the subgraph of
     /// the dataset asserted in `<graph>`, canonicalized to N-Quads.
     ///
-    /// Built by [`RdfDataset::project_graph`] and hashed over the projection's
-    /// canonical form. The RDF 1.2 reifier/annotation side-tables are keyed per graph
+    /// Built by [`super::try_graph_digest_view`] over the selected graph without
+    /// constructing a projection. The RDF 1.2 reifier/annotation side-tables are keyed per graph
     /// in this IR (each row carries the graph its declaration or annotation was
     /// asserted in), so the projection admits exactly the rows whose own graph slot is
     /// `<graph>` — a handle over a reified subgraph pins over that graph's statement
@@ -1125,19 +1171,20 @@ impl<H> PipelineBundle<H> {
     /// accidental. This is the value a handle's pinned digest is checked against in
     /// [`pin_handle`](Self::pin_handle).
     ///
-    /// This carrier owns its dataset, so its content is TRUSTED and the panicking
-    /// canonicalization entry point is the right one. The view carrier composes
-    /// caller-supplied sources and therefore returns
-    /// [`PipelineBundleError::Canonicalization`] instead of panicking — same bytes on
-    /// success, different obligation on refusal.
-    pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+    /// Both owned and view carriers return
+    /// [`PipelineBundleError::Canonicalization`] on canonicalization refusal.
+    pub fn graph_digest(
+        &self,
+        graph: &str,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
         // Memoized: the frozen dataset makes each graph's canonical digest stable, so
         // the second call in the `pinned = graph_digest(g); pin_handle(g, …, pinned)`
         // pattern reuses the first canonicalization instead of recomputing it.
         if let Some(cached) = self.core.cached(graph) {
             return Ok(cached);
         }
-        let digest = flat_graph_digest(&self.dataset, &self.core.work, graph)?;
+        let digest = flat_graph_digest(&self.dataset, &self.core.work, graph, control)?;
         self.core.remember(graph, digest);
         Ok(digest)
     }
@@ -1146,20 +1193,23 @@ impl<H> PipelineBundle<H> {
     /// dataset's canonical hash, the SORTED lookaside resource digests, the SORTED
     /// blob digests, and the runtime-id-free public provenance projection. The
     /// typed-handle lane contributes NOTHING (see the module docs).
-    #[must_use]
-    pub fn digest(&self) -> ContentDigest {
-        let canonical = canonicalize(&self.dataset).nquads;
-        DigestWorkCounter::bump(&self.core.work.dataset_canonicalizations);
-        self.core.digest_over(&canonical)
+    ///
+    /// # Errors
+    /// Returns the original carrier-scoped canonicalization refusal.
+    pub fn digest(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        self.core.digest_in(&*self.dataset, control)
     }
 
     /// The residue leaf: the canonical digest of every row this carrier holds outside
     /// its IRI-named graphs. See [`PIPELINE_ROOT_DOMAIN`].
-    fn residue_digest(&self) -> ContentDigest {
-        let residue = ResidueView(&*self.dataset);
-        let canonical = canonicalize_view(&residue, CanonHash::Sha256).nquads;
-        DigestWorkCounter::bump(&self.core.work.residue_canonicalizations);
-        ContentDigest::of(canonical.as_bytes())
+    fn residue_digest(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        self.core.residue_digest_in(&*self.dataset, control)
     }
 
     /// The carrier's PIPELINE ROOT: a second, versioned, domain-separated identity
@@ -1168,16 +1218,21 @@ impl<H> PipelineBundle<H> {
     /// See [`PIPELINE_ROOT_DOMAIN`] for the exact bytes and for why this is an
     /// ADDITIONAL identity rather than a replacement for [`digest`](Self::digest).
     /// A [`PipelineViewBundle`] over equal content produces an equal root.
-    pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+    pub fn pipeline_root(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
         let leaves: BTreeMap<HandleKey, ContentDigest> = self
             .named_graph_iris()
             .into_iter()
             .map(|graph| {
-                let digest = self.graph_digest(&graph)?;
+                let digest = self.graph_digest(&graph, control)?;
                 Ok((graph, digest))
             })
             .collect::<Result<_, PipelineBundleError>>()?;
-        Ok(self.core.pipeline_root_over(&leaves, self.residue_digest()))
+        Ok(self
+            .core
+            .pipeline_root_over(&leaves, self.residue_digest(control)?))
     }
 
     /// Carry this bundle's whole state onto a VIEW carrier that retains the same
@@ -1287,9 +1342,8 @@ struct SoleGraph {
 ///
 /// A composite view holds caller-supplied sources, so every digest on this carrier
 /// runs through the FALLIBLE canonicalization entry points and returns
-/// [`PipelineBundleError::Canonicalization`] rather than panicking. The flat carrier
-/// owns its dataset and keeps the trusted, panicking spelling; the bytes agree on
-/// success.
+/// [`PipelineBundleError::Canonicalization`] on refusal, as does the flat carrier.
+/// The bytes agree on success.
 #[derive(Debug, Clone)]
 pub struct PipelineViewBundle<H> {
     /// The composed, immutable RDF surface. PRIVATE: replacing it after
@@ -1557,11 +1611,16 @@ impl<H> PipelineViewBundle<H> {
     ///
     /// [`PipelineBundleError::Canonicalization`] if canonicalizing `<graph>`'s
     /// subgraph is refused.
-    pub fn graph_digest(&self, graph: &str) -> Result<ContentDigest, PipelineBundleError> {
+    pub fn graph_digest(
+        &self,
+        graph: &str,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
         if let Some(cached) = self.core.cached(graph) {
             return Ok(cached);
         }
-        let digest = composed_graph_digest(&self.view, &self.sole, &self.core.work, graph)?;
+        let digest =
+            composed_graph_digest(&self.view, &self.sole, &self.core.work, graph, control)?;
         self.core.remember(graph, digest);
         Ok(digest)
     }
@@ -1574,22 +1633,19 @@ impl<H> PipelineViewBundle<H> {
     ///
     /// [`PipelineBundleError::Canonicalization`] if canonicalizing the composed
     /// surface is refused.
-    pub fn digest(&self) -> Result<ContentDigest, PipelineBundleError> {
-        let canonical = try_canonicalize_view(&*self.view, CanonHash::Sha256)
-            .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?
-            .nquads;
-        DigestWorkCounter::bump(&self.core.work.dataset_canonicalizations);
-        Ok(self.core.digest_over(&canonical))
+    pub fn digest(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        self.core.digest_in(&*self.view, control)
     }
 
     /// The residue leaf. See [`PIPELINE_ROOT_DOMAIN`].
-    fn residue_digest(&self) -> Result<ContentDigest, PipelineBundleError> {
-        let residue = ResidueView(&*self.view);
-        let canonical = try_canonicalize_view(&residue, CanonHash::Sha256)
-            .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?
-            .nquads;
-        DigestWorkCounter::bump(&self.core.work.residue_canonicalizations);
-        Ok(ContentDigest::of(canonical.as_bytes()))
+    fn residue_digest(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
+        self.core.residue_digest_in(&*self.view, control)
     }
 
     /// The carrier's PIPELINE ROOT — see [`PIPELINE_ROOT_DOMAIN`] and
@@ -1599,13 +1655,16 @@ impl<H> PipelineViewBundle<H> {
     ///
     /// [`PipelineBundleError::Canonicalization`] if any leaf, or the residue, is
     /// refused.
-    pub fn pipeline_root(&self) -> Result<ContentDigest, PipelineBundleError> {
+    pub fn pipeline_root(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<ContentDigest, PipelineBundleError> {
         let mut leaves = BTreeMap::new();
         for graph in self.named_graph_iris() {
-            let digest = self.graph_digest(&graph)?;
+            let digest = self.graph_digest(&graph, control)?;
             leaves.insert(graph, digest);
         }
-        let residue = self.residue_digest()?;
+        let residue = self.residue_digest(control)?;
         Ok(self.core.pipeline_root_over(&leaves, residue))
     }
 
@@ -1679,6 +1738,7 @@ impl<H> PipelineViewBundle<H> {
         graph: impl Into<HandleKey>,
         graph_quads: &Arc<RdfDataset>,
         payload: H,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<(), PipelineBundleError> {
         let graph = graph.into();
         // Containment first: nothing is appended until the contribution is known to
@@ -1731,11 +1791,18 @@ impl<H> PipelineViewBundle<H> {
         seed.remove(&graph);
 
         for (k, pinned) in prior {
-            let actual = seeded_composed_digest(&candidate, &sole, &self.core.work, &mut seed, &k)?;
+            let actual =
+                seeded_composed_digest(&candidate, &sole, &self.core.work, &mut seed, &k, control)?;
             BundleCore::<H>::verify_pin(&k, pinned, actual)?;
         }
-        let content_digest =
-            seeded_composed_digest(&candidate, &sole, &self.core.work, &mut seed, &graph)?;
+        let content_digest = seeded_composed_digest(
+            &candidate,
+            &sole,
+            &self.core.work,
+            &mut seed,
+            &graph,
+            control,
+        )?;
         // COMMIT. Every check has passed, so the composed surface, the retention
         // guard, the sole-ownership map, the memo and the new handle are installed
         // together.
@@ -1780,11 +1847,14 @@ impl<H> PipelineViewBundle<H> {
     /// [`PipelineBundleError::Canonicalization`] if a pinned graph cannot be
     /// canonicalized; [`PipelineBundleError::HandleDigestMismatch`] if a pin does not
     /// survive the boundary.
-    pub fn to_flat_bundle(&self) -> Result<PipelineBundle<H>, PipelineBundleError>
+    pub fn to_flat_bundle(
+        &self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<PipelineBundle<H>, PipelineBundleError>
     where
         H: Clone,
     {
-        self.clone().into_flat_bundle()
+        self.clone().into_flat_bundle(control)
     }
 
     /// [`to_flat_bundle`](Self::to_flat_bundle) by value, for a payload `H` that is
@@ -1793,12 +1863,15 @@ impl<H> PipelineViewBundle<H> {
     /// # Errors
     ///
     /// Exactly [`to_flat_bundle`](Self::to_flat_bundle)'s.
-    pub fn into_flat_bundle(self) -> Result<PipelineBundle<H>, PipelineBundleError> {
+    pub fn into_flat_bundle(
+        self,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<PipelineBundle<H>, PipelineBundleError> {
         let dataset = self
             .materialize()
             .map_err(PipelineBundleError::ViewMaterialization)?;
         for (graph, entry) in &self.core.handles {
-            let actual = try_graph_digest_view(&*dataset, graph)
+            let actual = try_graph_digest_view(&*dataset, graph, control)
                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.clone()), source))?;
             BundleCore::<H>::verify_pin(graph, entry.content_digest, actual)?;
         }
@@ -1830,11 +1903,10 @@ fn flat_graph_digest(
     dataset: &RdfDataset,
     work: &DigestWorkCounter,
     graph: &str,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, PipelineBundleError> {
-    let subgraph = dataset
-        .project_graph(Some(&crate::RdfTerm::iri(graph)))
-        .map_err(PipelineBundleError::Materialization)?;
-    let digest = ContentDigest::of(canonicalize(&subgraph).nquads.as_bytes());
+    let digest = try_graph_digest_view(dataset, graph, control)
+        .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
     DigestWorkCounter::bump(&work.graph_canonicalizations);
     Ok(digest)
 }
@@ -1854,18 +1926,19 @@ fn composed_graph_digest(
     sole: &BTreeMap<HandleKey, SoleGraph>,
     work: &DigestWorkCounter,
     graph: &str,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, PipelineBundleError> {
     let digest = match sole.get(graph) {
         // The memo is filed against the BASE's ledger key, so it is computed from
         // that base — the thing the key names — not from this composite.
         Some(owner) => owner.guard.try_memoized_graph_digest(graph, || {
-            let digest = try_graph_digest_view(&*owner.base, graph)
+            let digest = try_graph_digest_view(&*owner.base, graph, control)
                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
             DigestWorkCounter::bump(&work.graph_canonicalizations);
             Ok(digest)
         })?,
         None => {
-            let digest = try_graph_digest_view(view, graph)
+            let digest = try_graph_digest_view(view, graph, control)
                 .map_err(|source| canon_refusal(CanonScopeName::Graph(graph.to_owned()), source))?;
             DigestWorkCounter::bump(&work.graph_canonicalizations);
             digest
@@ -1886,12 +1959,13 @@ fn seeded_flat_digest(
     work: &DigestWorkCounter,
     seed: &mut BTreeMap<HandleKey, ContentDigest>,
     graph: &str,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, PipelineBundleError> {
     if let Some(hit) = seed.get(graph) {
         DigestWorkCounter::bump(&work.graph_cache_hits);
         return Ok(*hit);
     }
-    let digest = flat_graph_digest(dataset, work, graph)?;
+    let digest = flat_graph_digest(dataset, work, graph, control)?;
     seed.insert(graph.to_owned(), digest);
     Ok(digest)
 }
@@ -1908,12 +1982,13 @@ fn seeded_composed_digest(
     work: &DigestWorkCounter,
     seed: &mut BTreeMap<HandleKey, ContentDigest>,
     graph: &str,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, PipelineBundleError> {
     if let Some(hit) = seed.get(graph) {
         DigestWorkCounter::bump(&work.graph_cache_hits);
         return Ok(*hit);
     }
-    let digest = composed_graph_digest(view, sole, work, graph)?;
+    let digest = composed_graph_digest(view, sole, work, graph, control)?;
     seed.insert(graph.to_owned(), digest);
     Ok(digest)
 }
@@ -1921,6 +1996,45 @@ fn seeded_composed_digest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Owned carriers preserve the same scoped native failures as view carriers.
+    #[test]
+    fn owned_carrier_identity_returns_scoped_canonicalization_refusals() {
+        for graph in [None, Some("http://example.org/g")] {
+            let mut builder = RdfDatasetBuilder::new();
+            let node = builder.intern_iri("http://example.org/node").unwrap();
+            let reserved = builder.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
+            let graph_id = graph.map(|name| builder.intern_iri(name).unwrap());
+            builder.push_quad(node, reserved, node, graph_id).unwrap();
+            let bundle = bundle_over(builder.freeze().unwrap());
+            let refusal = bundle
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ))
+                .unwrap_err();
+            assert!(matches!(
+                refusal,
+                PipelineBundleError::Canonicalization { scope: CanonScopeName::Carrier, ref source }
+                    if matches!(&**source, CanonError::ReservedVocabulary(_))
+            ));
+            let expected = graph.map_or(CanonScopeName::Residue, |name| {
+                CanonScopeName::Graph(name.to_owned())
+            });
+            assert!(matches!(
+                bundle.pipeline_root(&mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)),
+                Err(PipelineBundleError::Canonicalization { scope, source })
+                    if scope == expected && matches!(*source, CanonError::ReservedVocabulary(_))
+            ));
+            if let Some(graph) = graph {
+                assert!(matches!(
+                    bundle.graph_digest(graph, &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)),
+                    Err(PipelineBundleError::Canonicalization { scope: CanonScopeName::Graph(name), source })
+                        if name == graph && matches!(*source, CanonError::ReservedVocabulary(_))
+                ));
+            }
+        }
+    }
 
     #[test]
     fn canonical_refusal_retains_native_cause_without_large_result_slots() {
@@ -1990,12 +2104,22 @@ mod tests {
     fn pin_handle_matching_digest_succeeds() {
         let mut bundle = empty_bundle();
         let graph = "http://example.org/graph";
-        let digest = bundle.graph_digest(graph).unwrap();
+        let digest = bundle
+            .graph_digest(
+                graph,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         let payload = SyntheticHandle {
             note: "logic-program".to_owned(),
         };
         bundle
-            .pin_handle(graph, payload.clone(), digest)
+            .pin_handle(
+                graph,
+                payload.clone(),
+                digest,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
             .expect("matching digest pins");
         assert_eq!(bundle.handle(graph).map(|h| &h.payload), Some(&payload));
     }
@@ -2013,6 +2137,7 @@ mod tests {
                     note: "bad".to_owned(),
                 },
                 wrong,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect_err("mismatched digest must hard-fail");
         assert!(matches!(
@@ -2038,7 +2163,12 @@ mod tests {
         let mut bundle = empty_bundle();
         // Pin a handle to the existing named graph first.
         let g1 = "http://example.org/graph";
-        let d1 = bundle.graph_digest(g1).unwrap();
+        let d1 = bundle
+            .graph_digest(
+                g1,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2046,6 +2176,7 @@ mod tests {
                     note: "first".to_owned(),
                 },
                 d1,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("first pin");
         // Accumulate a NEW disjoint named graph + handle.
@@ -2058,6 +2189,7 @@ mod tests {
                 SyntheticHandle {
                     note: "second".to_owned(),
                 },
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("additive accumulate succeeds");
         // The first handle's pinned digest is UNCHANGED (additive), and both are present.
@@ -2065,8 +2197,18 @@ mod tests {
         assert!(bundle.handle(g2).is_some());
         // The new graph's content actually rides the carrier now.
         assert_ne!(
-            bundle.graph_digest(g2).unwrap(),
-            bundle.graph_digest("http://example.org/absent").unwrap()
+            bundle
+                .graph_digest(
+                    g2,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            bundle
+                .graph_digest(
+                    "http://example.org/absent",
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap()
         );
     }
 
@@ -2074,7 +2216,12 @@ mod tests {
     fn accumulate_disturbing_a_pinned_graph_hard_fails() {
         let mut bundle = empty_bundle();
         let g1 = "http://example.org/graph";
-        let d1 = bundle.graph_digest(g1).unwrap();
+        let d1 = bundle
+            .graph_digest(
+                g1,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2082,11 +2229,22 @@ mod tests {
                     note: "first".to_owned(),
                 },
                 d1,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("first pin");
         // Everything the refusal must leave exactly where it found it.
-        let before_digest = bundle.digest();
-        let before_root = bundle.pipeline_root().unwrap();
+        let before_digest = bundle
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
+        let before_root = bundle
+            .pipeline_root(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
         let before_graphs = bundle.named_graph_iris();
         let before_quads = bundle.dataset().quad_count();
 
@@ -2099,6 +2257,7 @@ mod tests {
                 SyntheticHandle {
                     note: "x".to_owned(),
                 },
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect_err("disturbing a pinned graph must hard-fail");
         assert!(matches!(
@@ -2109,15 +2268,33 @@ mod tests {
         // contribution in the dataset would be a silent corruption wearing a
         // refusal's clothes.
         assert_eq!(
-            bundle.digest(),
+            bundle
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             before_digest,
             "the carrier digest is intact"
         );
-        assert_eq!(bundle.pipeline_root().unwrap(), before_root);
+        assert_eq!(
+            bundle
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            before_root
+        );
         assert_eq!(bundle.named_graph_iris(), before_graphs);
         assert_eq!(bundle.dataset().quad_count(), before_quads);
         assert_eq!(
-            bundle.graph_digest(g1).unwrap(),
+            bundle
+                .graph_digest(
+                    g1,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
             d1,
             "the pinned graph never moved"
         );
@@ -2135,9 +2312,18 @@ mod tests {
                 SyntheticHandle {
                     note: "ok".to_owned(),
                 },
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("an undisturbing contribution must still be admitted");
-        assert_eq!(bundle.graph_digest(g1).unwrap(), d1);
+        assert_eq!(
+            bundle
+                .graph_digest(
+                    g1,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            d1
+        );
         assert!(bundle.handle("http://example.org/graph2").is_some());
     }
 
@@ -2146,14 +2332,32 @@ mod tests {
         let bundle = empty_bundle();
         // The named graph's projection (one quad) differs from an absent graph
         // (empty projection → canon of "").
-        let present = bundle.graph_digest("http://example.org/graph").unwrap();
-        let absent = bundle.graph_digest("http://example.org/missing").unwrap();
+        let present = bundle
+            .graph_digest(
+                "http://example.org/graph",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
+        let absent = bundle
+            .graph_digest(
+                "http://example.org/missing",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         assert_ne!(present, absent, "present vs empty projection differ");
         // The absent-graph digest is the canon of the empty dataset.
         let empty_ds = RdfDatasetBuilder::new().freeze().expect("empty");
         assert_eq!(
             absent,
-            ContentDigest::of(canonicalize(&empty_ds).nquads.as_bytes())
+            ContentDigest::of(
+                super::super::canon::try_canonicalize(
+                    &empty_ds,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap()
+                .nquads()
+                .as_bytes()
+            )
         );
     }
 
@@ -2212,21 +2416,47 @@ mod tests {
         let with = bundle_over(shared_reifier_dataset(true));
 
         assert_eq!(
-            without.graph_digest("http://example.org/g1").unwrap(),
-            with.graph_digest("http://example.org/g1").unwrap(),
+            without
+                .graph_digest(
+                    "http://example.org/g1",
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            with.graph_digest(
+                "http://example.org/g1",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
             "<g1>'s digest must not observe statement-layer rows asserted in <g2>"
         );
 
         // Non-vacuity of the fixture: <g2>'s own digest DOES move, and the two graphs
         // do not simply hash alike.
         assert_ne!(
-            without.graph_digest("http://example.org/g2").unwrap(),
-            with.graph_digest("http://example.org/g2").unwrap(),
+            without
+                .graph_digest(
+                    "http://example.org/g2",
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            with.graph_digest(
+                "http://example.org/g2",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
             "the added rows must be observable somewhere"
         );
         assert_ne!(
-            with.graph_digest("http://example.org/g1").unwrap(),
-            with.graph_digest("http://example.org/g2").unwrap()
+            with.graph_digest(
+                "http://example.org/g1",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap(),
+            with.graph_digest(
+                "http://example.org/g2",
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
         );
     }
 
@@ -2236,7 +2466,12 @@ mod tests {
     fn accumulating_a_graphs_statement_layer_leaves_a_pinned_graph_alone() {
         let mut bundle = bundle_over(shared_reifier_dataset(false));
         let g1 = "http://example.org/g1";
-        let pinned = bundle.graph_digest(g1).unwrap();
+        let pinned = bundle
+            .graph_digest(
+                g1,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         bundle
             .pin_handle(
                 g1,
@@ -2244,6 +2479,7 @@ mod tests {
                     note: "g1".to_owned(),
                 },
                 pinned,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("pin over <g1>");
 
@@ -2273,17 +2509,36 @@ mod tests {
                 SyntheticHandle {
                     note: "g2".to_owned(),
                 },
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("folding <g2> must not disturb the pinned <g1>");
-        assert_eq!(bundle.graph_digest(g1).unwrap(), pinned);
+        assert_eq!(
+            bundle
+                .graph_digest(
+                    g1,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            pinned
+        );
     }
 
     #[test]
     fn digest_is_stable_across_handle_attach_and_detach() {
         let mut bundle = empty_bundle();
-        let before = bundle.digest();
+        let before = bundle
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
         let graph = "http://example.org/graph";
-        let digest = bundle.graph_digest(graph).unwrap();
+        let digest = bundle
+            .graph_digest(
+                graph,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         bundle
             .pin_handle(
                 graph,
@@ -2291,16 +2546,27 @@ mod tests {
                     note: "h".to_owned(),
                 },
                 digest,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
             )
             .expect("pin");
         assert_eq!(
-            bundle.digest(),
+            bundle
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             before,
             "attaching a handle does not change the bundle digest"
         );
         let _ = bundle.detach_handle(graph);
         assert_eq!(
-            bundle.digest(),
+            bundle
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             before,
             "detaching a handle does not change the bundle digest"
         );
@@ -2325,8 +2591,16 @@ mod tests {
             )
         };
         assert_ne!(
-            a.digest(),
-            b.digest(),
+            a.digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+            b.digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
             "a different dataset changes the digest"
         );
     }
@@ -2334,7 +2608,12 @@ mod tests {
     #[test]
     fn digest_is_sensitive_to_a_lookaside_resource() {
         let base = empty_bundle();
-        let base_digest = base.digest();
+        let base_digest = base
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
         let mut with_lookaside = RdfLookaside::default();
         with_lookaside.resources.push(
             RdfLookasideResource::new(RdfLookasideKind::Reasoning)
@@ -2348,7 +2627,12 @@ mod tests {
             DatasetProvenance::new(),
         );
         assert_ne!(
-            with_resource.digest(),
+            with_resource
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             base_digest,
             "adding a lookaside resource changes the digest"
         );
@@ -2356,7 +2640,12 @@ mod tests {
 
     #[test]
     fn digest_is_sensitive_to_a_blob() {
-        let base_digest = empty_bundle().digest();
+        let base_digest = empty_bundle()
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
         let mut store = ContentStore::new();
         store.insert(b"a blob payload".to_vec());
         let with_blob = PipelineBundle::<SyntheticHandle>::new(
@@ -2366,7 +2655,12 @@ mod tests {
             DatasetProvenance::new(),
         );
         assert_ne!(
-            with_blob.digest(),
+            with_blob
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             base_digest,
             "adding a blob changes the digest"
         );
@@ -2374,7 +2668,12 @@ mod tests {
 
     #[test]
     fn digest_is_sensitive_to_the_public_provenance() {
-        let base_digest = empty_bundle().digest();
+        let base_digest = empty_bundle()
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap();
         let mut prov = DatasetProvenance::new();
         let unit = prov
             .register_unit("slices/core/epistemics", OriginKind::Source)
@@ -2395,7 +2694,12 @@ mod tests {
             prov,
         );
         assert_ne!(
-            with_prov.digest(),
+            with_prov
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             base_digest,
             "a non-empty public provenance changes the digest"
         );
@@ -2435,7 +2739,11 @@ mod tests {
                 Arc::new(ContentStore::new()),
                 prov,
             )
-            .digest()
+            .digest(&mut crate::CanonicalizationControl::new(
+                crate::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap()
         };
         assert_eq!(
             build(false),
@@ -2505,7 +2813,13 @@ mod core_tests {
     #[test]
     fn the_pipeline_root_is_frozen() {
         assert_eq!(
-            bundle(base()).pipeline_root().unwrap().to_hex(),
+            bundle(base())
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+                .to_hex(),
             "a04da97c5160a57a7a022ec256205bac9733b0840c65767144cc8240c33c4a98"
         );
     }
@@ -2524,20 +2838,58 @@ mod core_tests {
         );
         // The root is domain-separated from the bundle digest, and it moves when a
         // leaf moves.
-        assert_ne!(carrier.pipeline_root().unwrap(), carrier.digest());
+        assert_ne!(
+            carrier
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            carrier
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
 
         let mut grown = bundle(base());
         grown
-            .accumulate_named_graph(G2, &contribution(G2), Note("g2"))
+            .accumulate_named_graph(
+                G2,
+                &contribution(G2),
+                Note("g2"),
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
             .expect("single-graph accumulate succeeds");
         assert_ne!(
-            grown.pipeline_root().unwrap(),
-            carrier.pipeline_root().unwrap(),
+            grown
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            carrier
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
             "folding a graph in must move the root"
         );
         assert_eq!(
-            grown.graph_digest(G1).unwrap(),
-            carrier.graph_digest(G1).unwrap(),
+            grown
+                .graph_digest(
+                    G1,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
+            carrier
+                .graph_digest(
+                    G1,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
             "and must leave every other leaf alone"
         );
     }
@@ -2562,12 +2914,32 @@ mod core_tests {
             b.freeze().expect("valid")
         };
         assert_eq!(
-            bundle(without.clone()).digest(),
-            bundle(with.clone()).digest()
+            bundle(without.clone())
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            bundle(with.clone())
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
         assert_ne!(
-            bundle(without).pipeline_root().unwrap(),
-            bundle(with).pipeline_root().unwrap()
+            bundle(without)
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            bundle(with)
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
     }
 
@@ -2586,8 +2958,18 @@ mod core_tests {
             bundle(b.freeze().expect("valid"))
         };
         assert_ne!(
-            build(false).pipeline_root().unwrap(),
-            build(true).pipeline_root().unwrap()
+            build(false)
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            build(true)
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
         // Non-vacuity: the same content under a differently NUMBERED blank scope is
         // the same carrier, because canonicalization issues the label.
@@ -2602,8 +2984,18 @@ mod core_tests {
             bundle(b.freeze().expect("valid"))
         };
         assert_eq!(
-            build(true).pipeline_root().unwrap(),
-            renumbered.pipeline_root().unwrap()
+            build(true)
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            renumbered
+                .pipeline_root(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
     }
 
@@ -2664,9 +3056,19 @@ mod core_tests {
             ),
         ] {
             let mut carrier = bundle(base());
-            let before = carrier.digest();
+            let before = carrier
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ))
+                .unwrap();
             let err = carrier
-                .accumulate_named_graph(G2, &contribution, Note("x"))
+                .accumulate_named_graph(
+                    G2,
+                    &contribution,
+                    Note("x"),
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                )
                 .expect_err("a stray row outside the target graph must hard-fail");
             assert!(
                 matches!(&err, PipelineBundleError::GraphContainment { graph, layer: found, .. }
@@ -2674,7 +3076,12 @@ mod core_tests {
                 "{name}: {err}"
             );
             assert_eq!(
-                carrier.digest(),
+                carrier
+                    .digest(&mut crate::CanonicalizationControl::new(
+                        crate::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ))
+                    .unwrap(),
                 before,
                 "{name}: a refused contribution folds nothing"
             );
@@ -2684,7 +3091,12 @@ mod core_tests {
         // The twin that IS contained still folds.
         let mut carrier = bundle(base());
         carrier
-            .accumulate_named_graph(G2, &contribution(G2), Note("ok"))
+            .accumulate_named_graph(
+                G2,
+                &contribution(G2),
+                Note("ok"),
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
             .expect("a contained contribution must still be admitted");
         assert!(carrier.handle(G2).is_some());
     }
@@ -2694,19 +3106,52 @@ mod core_tests {
     #[test]
     fn a_clone_taken_before_accumulate_keeps_its_own_memo() {
         let mut carrier = bundle(base());
-        let before = carrier.graph_digest(G2).unwrap();
+        let before = carrier
+            .graph_digest(
+                G2,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         let snapshot = carrier.clone();
         carrier
-            .accumulate_named_graph(G2, &contribution(G2), Note("grown"))
+            .accumulate_named_graph(
+                G2,
+                &contribution(G2),
+                Note("grown"),
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
             .expect("accumulate");
-        let after = carrier.graph_digest(G2).unwrap();
+        let after = carrier
+            .graph_digest(
+                G2,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap();
         assert_ne!(before, after, "the fixture must actually move <g2>");
         assert_eq!(
-            snapshot.graph_digest(G2).unwrap(),
+            snapshot
+                .graph_digest(
+                    G2,
+                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                )
+                .unwrap(),
             before,
             "the pre-accumulate clone must answer for its own content"
         );
-        assert_eq!(snapshot.digest(), bundle(base()).digest());
+        assert_eq!(
+            snapshot
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            bundle(base())
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
     }
 }
 

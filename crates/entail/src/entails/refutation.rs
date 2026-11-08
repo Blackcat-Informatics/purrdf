@@ -389,7 +389,7 @@ pub(crate) fn recognizes(q: &Question<'_>) -> Recognized {
 /// # Errors
 ///
 /// Whatever the re-chase refuses with: [`EntailError::Evaluate`] for an evaluation ceiling,
-/// [`EntailError::MalformedList`] for a premise whose OWL collections are not well formed,
+/// [`EntailError::Collection`] for a premise whose OWL collections are not well formed,
 /// [`EntailError::Build`] for a subset that cannot be frozen, and
 /// [`EntailError::MatchBudget`] from the residual match.
 pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
@@ -440,12 +440,14 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         )));
     }
 
-    let mut refuter = Refuter::new(regime).under(*q.options);
+    let refuter = Refuter::new(regime)
+        .map_err(EntailError::with_read_error)?
+        .under(*q.options);
     let mut seeded = refuter.seed(premise)?;
     let mut clashes = Vec::with_capacity(facts.len());
     for fact in &facts {
         budget -= 1;
-        let Some(clash) = refuter.refute(&mut seeded, &fact.negation())? else {
+        let Some(clash) = seeded.refute(&fact.negation())? else {
             return Ok(Attempt::NotEstablished);
         };
         clashes.push(clash);
@@ -466,13 +468,19 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         // that survives is irreducible with respect to THIS decision procedure, and the
         // decision procedure is "does the negation still clash?".
         let mut holds = |subset: &RdfDataset| -> Result<bool, EntailError> {
-            // A subset this crate cannot even seed — a truncated OWL collection, which
-            // `Axioms` avoids for a blank-node collection and cannot for a named one — is
-            // not a subset that refutes, so the candidate axiom stays.
-            let Ok(mut seeded) = refuter.seed(subset) else {
-                return Ok(false);
+            // Removing part of a named OWL collection can make the subset malformed;
+            // retain that candidate. Other seed refusals do not decide entailment and
+            // must stop shrinking with their original evidence.
+            let mut seeded = match refuter.seed(subset) {
+                Ok(seeded) => seeded,
+                Err(EntailError::Collection(cause))
+                    if cause.phase == crate::CollectionPhase::OwlRl =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
             };
-            match refuter.refute(&mut seeded, &negation)? {
+            match seeded.refute(&negation)? {
                 Some(clash) => {
                     best = clash;
                     Ok(true)
@@ -1123,7 +1131,14 @@ mod tests {
                     (
                         r.fact().to_string(),
                         r.witness().clone(),
-                        purrdf_core::canonicalize(r.premises()).nquads,
+                        purrdf_core::try_canonicalize(
+                            r.premises(),
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None,
+                            ),
+                        )
+                        .unwrap(),
                         r.decisions(),
                     )
                 })

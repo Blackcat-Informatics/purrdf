@@ -1,27 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-"""`RdfDataset.to_nquads()` refuses a reserved-vocabulary IRI as a `ValueError`.
+"""Python canonical operations preserve explicit policy and owned evidence.
 
-`to_nquads()` serializes a frozen dataset through the typed, non-panicking
-`try_canonicalize_flat_view` entry point (`bindings/python/src/py_gts_dataset.rs`).
-The dataset it serializes is wholly caller-supplied — arbitrary bytes handed to the
-`RdfDataset` constructor — so a document carrying an IRI in the canonicalization
-overlay's own reserved namespace (`urn:purrdf:rdfc:`; see
-`crates/rdf-core/src/ir/canon.rs`) must come back as a `ValueError` naming the
-refusal, never abort the process. Before this surface routed through the typed
-entry point it did exactly that.
-
-`Dataset.canonicalize()` (`bindings/python/src/py_store/store.rs` +
-`bindings/python/src/py_store/canon.rs`) carries the same law over the MUTABLE
-quad-store `Dataset`: it used to call panicking `purrdf_core::canonicalize` /
-`.expect(...)` directly, so a caller-supplied reserved-vocabulary quad set aborted
-the process instead of raising. It now routes through `purrdf_core::try_canonicalize`
-and maps the refusal to `ValueError`, exactly like `to_nquads()`.
-
-Not to be confused with `test_entail_regimes.py`, which covers the same refusal on
-the entailment-regime closure surface (`purrdf.entail.materialize_nt` and friends) —
-a different call site sharing the same underlying law.
+RdfDataset.to_nquads returns an immutable result envelope. Dataset.canonicalize
+leaves its original input unchanged on refusal. Both retain the native cause
+and finalized receipt JSON when their caller-supplied content is refused.
 """
 
 from __future__ import annotations
@@ -51,14 +35,16 @@ NEIGHBOURING_ORDINARY_PREDICATE = (
 
 def test_to_nquads_raises_value_error_naming_the_reserved_iri() -> None:
     dataset = RdfDataset(RESERVED_PREDICATE_PLAIN_OBJECT, RdfFormat.N_TRIPLES)
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
-        dataset.to_nquads()
+    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies") as failure:
+        dataset.to_nquads(canonical_search="1000000").value
+    del dataset
+    assert failure.value.native_cause.json == failure.value.native_cause_json
 
 
 def test_to_nquads_still_serializes_an_ordinary_neighbouring_iri() -> None:
     """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
     dataset = RdfDataset(NEIGHBOURING_ORDINARY_PREDICATE, RdfFormat.N_TRIPLES)
-    out = dataset.to_nquads()
+    out = dataset.to_nquads(canonical_search="1000000").value
     assert "urn:purrdf:other:annotation" in out, out
 
 
@@ -74,7 +60,7 @@ def test_dataset_canonicalize_raises_value_error_naming_the_reserved_iri() -> No
         [_quad("http://example.org/r", "urn:purrdf:rdfc:reifies", "http://example.org/o")]
     )
     with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
-        dataset.canonicalize(purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+        dataset.canonicalize(canonical_search="1000000").value
 
 
 def test_dataset_canonicalize_still_admits_an_ordinary_neighbouring_dataset() -> None:
@@ -86,7 +72,7 @@ def test_dataset_canonicalize_still_admits_an_ordinary_neighbouring_dataset() ->
     dataset = purrdf.Dataset(
         [_quad("http://example.org/r", "urn:purrdf:other:annotation", "http://example.org/o")]
     )
-    dataset.canonicalize(purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+    dataset.canonicalize(canonical_search="1000000").value
     assert len(dataset) == 1
 
 
@@ -113,14 +99,14 @@ ISOMORPHIC_B = f"_:x <{EX}p> _:y .\n_:y <{EX}q> _:x .\n"
 NON_ISOMORPHIC = f"_:a <{EX}p> _:b .\n_:b <{EX}p> _:a .\n"
 
 
-def _canonical_rows(document: str, algorithm: object) -> list[str]:
-    """The canonical form of *document* under *algorithm*, as comparable rows.
+def _canonical_rows(document: str, canonical_search: str) -> list[str]:
+    """The canonical form of *document* under *canonical_search*, as comparable rows.
 
     `purrdf.parse` rather than a store load, because only it keeps the document's
     blank labels verbatim — and the labels are the whole subject of the exercise.
     """
     dataset = purrdf.Dataset(purrdf.parse(document, RdfFormat.N_TRIPLES))
-    dataset.canonicalize(algorithm)
+    dataset.canonicalize(canonical_search=canonical_search).value
     return sorted(f"{quad.subject} <{quad.predicate}> {quad.object}" for quad in dataset)
 
 
@@ -133,8 +119,8 @@ def test_two_isomorphic_graphs_canonicalize_to_one_form_under_rdfc_1_0() -> None
     the output too, because a form that kept the document's own labels would be
     stable only by accident of input.
     """
-    first = _canonical_rows(ISOMORPHIC_A, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
-    second = _canonical_rows(ISOMORPHIC_B, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+    first = _canonical_rows(ISOMORPHIC_A, "1000000")
+    second = _canonical_rows(ISOMORPHIC_B, "1000000")
 
     assert first == second, "isomorphic graphs canonicalize identically"
     assert all("_:c14n" in row for row in first), (
@@ -149,24 +135,31 @@ def test_two_isomorphic_graphs_canonicalize_to_one_form_under_rdfc_1_0() -> None
     # different form. Agreement that swallowed this would be information loss
     # wearing determinism.
     assert (
-        _canonical_rows(NON_ISOMORPHIC, purrdf.CanonicalizationAlgorithm.RDFC_1_0)
+        _canonical_rows(NON_ISOMORPHIC, "1000000")
         != first
     )
 
 
-def test_the_unstable_algorithm_is_self_consistent() -> None:
-    """The unstable algorithm makes no cross-version promise, but it is a function.
-
-    "Unstable" names what it does not promise — that the labels will be the same
-    in a later release — not a licence to answer differently twice in one process.
-    A caller using it to deduplicate within a run depends on exactly this, and
-    nothing else states it.
-    """
-    algorithm = purrdf.CanonicalizationAlgorithm.UNSTABLE
-    first = _canonical_rows(ISOMORPHIC_A, algorithm)
-    assert first == _canonical_rows(ISOMORPHIC_A, algorithm)
-    assert first, "the fixture canonicalizes to something"
-
-    # And it still tells two different graphs apart, which is the floor any
-    # labelling has to clear to be usable for anything.
-    assert _canonical_rows(NON_ISOMORPHIC, algorithm) != first
+def test_explicit_policy_grammar_controls_the_python_boundary() -> None:
+    """Policy refusal and immutable receipt envelopes belong to this host."""
+    dataset = purrdf.Dataset(purrdf.parse(ISOMORPHIC_A, RdfFormat.N_TRIPLES))
+    original = tuple(str(quad) for quad in dataset)
+    with pytest.raises(TypeError, match="canonical_search"):
+        dataset.canonicalize()
+    for policy in ("", "01", "-1", "18446744073709551616"):
+        with pytest.raises(ValueError) as failure:
+            dataset.canonicalize(canonical_search=policy)
+        assert failure.value.canonicalization_json == "[]"
+        assert tuple(str(quad) for quad in dataset) == original
+    for policy in ("1000000", "unlimited"):
+        result = dataset.canonicalize(canonical_search=policy)
+        assert result.value is None
+        with pytest.raises(AttributeError):
+            result.canonicalization_json = "[]"
+    signal = purrdf.CancellationToken()
+    signal.cancel()
+    before_stop = tuple(str(quad) for quad in dataset)
+    with pytest.raises(ValueError) as failure:
+        dataset.canonicalize(canonical_search="unlimited", cancel=signal)
+    assert tuple(str(quad) for quad in dataset) == before_stop
+    assert failure.value.native_cause.json == failure.value.native_cause_json

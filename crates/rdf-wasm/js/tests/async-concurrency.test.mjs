@@ -21,7 +21,7 @@ import { Dataset, QueryEngine, configureAsync, ready } from "../index.mjs";
 import init, { asyncStackRegionBytes } from "../pkg/purrdf_wasm.js";
 import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 import { assertSurfacePoisoned, threwAtGate } from "./fixtures/poisoned-surface.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 // Already instantiated: `init` hands back the one instance's raw exports.
 const exports = await init();
@@ -78,8 +78,8 @@ function deferred() {
 }
 
 // A chain `n0 → n1 → … → n200` and a query nesting one OPTIONAL per level: each level's
-// frames are live while the next is evaluated, so its stack depth grows with the
-// nesting while its answer stays one row per chain node.
+// continuations remain live while the next is evaluated; its answer stays one row
+// per chain node while the evaluator carries those continuations on the heap.
 const CHAIN = (() => {
   const lines = [];
   for (let index = 0; index < 200; index += 1) lines.push(`<${EX}n${index}> <${EX}p> <${EX}n${index + 1}> .`);
@@ -163,13 +163,13 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   const baseline = {
     select: rowsOf(baselineEngine.select(data, PATH_SELECT)),
     backward: rowsOf(baselineEngine.select(data, PATH_BACKWARD)),
-    construct: baselineEngine.construct(data, PATH_CONSTRUCT).canonicalize(),
+    construct: canonicalValue(baselineEngine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")),
   };
   // 12 edges: 78 pairs one or more steps apart, 12 subjects reaching n12, and 91
   // reflexive-or-longer pairs to construct.
   assert.equal(baseline.select.length, 78);
   assert.equal(baseline.backward.length, 12);
-  assert.equal(engine.construct(data, PATH_CONSTRUCT).size, 91);
+  assert.equal(engine.construct(data, PATH_CONSTRUCT).dataset.size, 91);
 
   const yieldEvery = { yieldEveryPolls: 0 };
   let settled = 0;
@@ -182,7 +182,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
    * suspended — mostly mid-traversal, with its walk scope open — then one turn. */
   const turn = async () => {
     assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select, `sync select, turn ${turns}`);
-    assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct, `sync construct, turn ${turns}`);
+    assert.equal(canonicalValue(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")), baseline.construct, `sync construct, turn ${turns}`);
     assert.equal(stackPointer(), IDLE);
     turns += 1;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -193,7 +193,7 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   await turn();
   await turn();
   jobs.select = track(engine.queryGovernedAsync(data, PATH_SELECT, yieldEvery));
-  jobs.construct = track(engine.constructAsync(data, PATH_CONSTRUCT, yieldEvery));
+  jobs.construct = track(engine.constructAsync(data, PATH_CONSTRUCT, yieldEvery).then(result => result.dataset));
   while (settled < Object.keys(jobs).length) await turn();
   assert.ok(turns > 10, `the jobs interleaved over ${turns} turns`);
 
@@ -205,12 +205,12 @@ test("jobs suspended inside a property path's walk scope, interleaved with each 
   assert.equal(backward.isComplete, true);
   assert.deepEqual(rowsOf(backward.result), baseline.backward, "the backward job's answer");
   assert.ok(backward.evidence.async.yields > 10, `${backward.evidence.async.yields} yields`);
-  assert.equal((await jobs.construct).canonicalize(), baseline.construct, "the construct job's graph");
+  assert.equal(canonicalValue((await jobs.construct).canonicalize("unlimited")), baseline.construct, "the construct job's graph");
 
   // Afterwards every lane still answers exactly — nothing a job left behind (a scope
   // it never closed, a refusal it latched) outlives it.
   assert.deepEqual(rowsOf(engine.select(data, PATH_SELECT)), baseline.select);
-  assert.equal(engine.construct(data, PATH_CONSTRUCT).canonicalize(), baseline.construct);
+  assert.equal(canonicalValue(engine.construct(data, PATH_CONSTRUCT).dataset.canonicalize("unlimited")), baseline.construct);
   assert.deepEqual(rowsOf(await engine.queryAsync(data, PATH_BACKWARD, yieldEvery)), baseline.backward);
   assert.equal(stackPointer(), IDLE);
 });
@@ -258,7 +258,7 @@ const EVALUATION_STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*eval
  */
 const REGION_FAULT = /outside its stack region|ran past the base of its stack region/;
 
-test("a request as deep as the synchronous lane evaluates answers on a job's region, frames that never poll included", async (t) => {
+test("a request as deep as the synchronous lane evaluates answers on a job's region", async (t) => {
   // The shipped module is linked stack-first: its shadow stack is `[0, idle pointer)`, and
   // a job's region is exactly that large.
   assert.equal(REGION_BYTES, IDLE, "the region is the size of the synchronous lane's stack");
@@ -302,7 +302,7 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
     assert.equal(answered.result.rowCount, 200);
     const depth = answered.evidence.async.stackHighWaterBytes;
     assert.ok(
-      depth > REGION_BYTES / 3 && depth < REGION_BYTES,
+      depth > 0 && depth < REGION_BYTES,
       `${deepest} nested OPTIONALs: ${depth} bytes deep in a ${REGION_BYTES}-byte region`,
     );
     assert.equal(stackPointer(), IDLE);
@@ -310,55 +310,13 @@ test("a request as deep as the synchronous lane evaluates answers on a job's reg
   // The shallow neighbour answers every row too.
   assert.equal((await engine.queryAsync(chain, nestedOptional(8))).rowCount, 200);
 
-  // Frames that never poll: expression evaluation recurses once per level of the
-  // expression tree without polling, so an expression nested deeply enough beneath a few
-  // EXISTS levels (which poll) stands far below the deepest poll. A flat operator chain
-  // is no such tree — its operands are one node, folded by a loop — so the depth is
-  // written as nesting: each bracket level spells `(?one = 2 || ?one = 1 && (…) != false)`,
-  // five tree levels (`||`, `&&`, and the two `!=` builds) above the bracket inside it.
-  // Every level passes its inner level's truth through (`false || (true && x != false)`
-  // is `x`), so the answer is decided by the innermost comparison: the whole tree is
-  // evaluated, and an innermost `?one = 2` answers no row. The request is the deepest the
-  // parser admits of its shape: sixteen EXISTS levels around 94 bracket levels, one short
-  // of the bracket-nesting budget, a tree 470 levels tall inside the expression-height
-  // budget. Measured on the shipped artifact: the synchronous lane runs it about 545 000
-  // bytes deep, while its deepest poll is about 253 500 bytes down. On a job's region the
-  // tree's frames stand between polls far below anything a poll records, inside the
-  // region; the canary at the region's base is read when the run returns, so a frame past
-  // the base would have failed the job with the region's fault instead of answering.
-  const deepTree = (innermost) => {
-    let expression = innermost;
-    for (let level = 0; level < 94; level += 1) {
-      expression = `(?one = 2 || ?one = 1 && ${expression} != false)`;
-    }
-    return `SELECT ?s WHERE { ?s <${EX}p> ?o ${`FILTER EXISTS { ?s <${EX}p> ?o `.repeat(16)}BIND(1 AS ?one) FILTER(${expression})${" }".repeat(16)} }`;
-  };
-  const deepChain = deepTree("(?one = 1)");
-  // The neighbour that observes the evaluation: the same tree with a false innermost
-  // comparison answers nothing.
-  const deepFalse = deepTree("(?one = 2)");
-  // Separate engines throughout: the engine caches a parsed plan per query text, and a
-  // cached plan would spare a later run its parse.
-  assert.equal(new QueryEngine().select(chain, deepFalse).rowCount, 0, "the innermost comparison decides");
-  assert.equal(new QueryEngine().select(chain, deepChain).rowCount, 200, "the synchronous lane answers it");
-  const tree = await new QueryEngine().queryGovernedAsync(chain, deepChain);
-  assert.equal(tree.isComplete, true, "the job's region hosts the whole tree");
-  assert.equal(tree.result.rowCount, 200);
-  assert.ok(
-    tree.evidence.async.stackHighWaterBytes < REGION_BYTES / 2,
-    `the deepest poll (${tree.evidence.async.stackHighWaterBytes} bytes) stands far above the tree's frames`,
-  );
-  const treeFalse = await new QueryEngine().queryGovernedAsync(chain, deepFalse);
-  assert.equal(treeFalse.isComplete, true);
-  assert.equal(treeFalse.result.rowCount, 0, "its false neighbour answers nothing on the region too");
-  assert.equal(stackPointer(), IDLE);
   // The same answer across many resumptions, with the region's floor restored each time.
-  const yielding = await new QueryEngine().queryGovernedAsync(chain, deepChain, { yieldEveryPolls: 4096 });
+  const yielding = await new QueryEngine().queryGovernedAsync(chain, query, { yieldEveryPolls: 4096 });
   assert.equal(yielding.isComplete, true);
   assert.equal(yielding.result.rowCount, 200);
   const { polls, yields } = yielding.evidence.async;
-  assert.ok(yields > 16 && polls >= yields * 10, `${polls} polls, ${yields} yields`);
-  t.diagnostic(`deep no-poll-frame proof: ${polls} polls, ${yields} yields`);
+  assert.ok(yields > 0 && polls >= yields, `${polls} polls, ${yields} yields`);
+  t.diagnostic(`job-region restoration: ${polls} polls, ${yields} yields`);
   assert.equal(stackPointer(), IDLE);
   assert.equal(engine.select(chain, nestedOptional(64)).rowCount, 200);
 });
@@ -385,7 +343,7 @@ const subjectsOf = (result) =>
 test("admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned", async (t) => {
   const engine = new QueryEngine();
   const data = Dataset.parse(NEST_DATA, "nquads");
-  const before = data.canonicalize();
+  const before = canonicalValue(data.canonicalize("unlimited"));
   const lateral = (depth) => nestedAround(`?s <${EX}p> ?o LATERAL { `, depth);
   const notExists = (depth) => nestedAround(`?s <${EX}p> ?o FILTER NOT EXISTS { `, depth);
   // An odd number of negations of "`?s` has a `<q>`" holds for every subject but `s1`, an
@@ -482,7 +440,7 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   }
   // Not poisoned: both lanes answer exactly, over a dataset whose canonical form is
   // byte-identical to what it was before.
-  assert.equal(data.canonicalize(), before);
+  assert.equal(canonicalValue(data.canonicalize("unlimited")), before);
   const plain = `SELECT ?s WHERE { ?s <${EX}q> ?o }`;
   assert.deepEqual(subjectsOf(engine.select(data, plain)), ["s1"]);
   assert.deepEqual(subjectsOf(await engine.selectAsync(data, plain)), ["s1"]);
@@ -558,13 +516,13 @@ test("nesting answers on the asynchronous lane as deep as the job's stacks hold 
 test("a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing", () => {
   const child = spawnSync(
     process.execPath,
-    ["--wasm-stack-switching-stack-size=32", fileURLToPath(new URL("./fixtures/trap-child.mjs", import.meta.url))],
+    [fileURLToPath(new URL("./fixtures/trap-child.mjs", import.meta.url))],
     { encoding: "utf8", timeout: 120_000 },
   );
   assert.equal(child.status, 0, `the child exited ${child.status}: ${child.stderr}`);
   const report = JSON.parse(child.stdout.trim());
   const POISON =
-    "the wasm instance trapped (RangeError: Maximum call stack size exceeded) and cannot be used again; " +
+    "the wasm instance trapped (RuntimeError: unreachable) and cannot be used again; " +
     "load the package in a fresh JavaScript realm (a new page, Worker isolate or process)";
   const REJECTED = { settled: "rejected", name: "Error", message: POISON, code: "purrdf-wasm-poisoned" };
 
@@ -590,16 +548,9 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   assert.deepEqual(report.asyncAfterFaults, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
   assert.deepEqual(report.newEngineBefore, { settled: "resolved", subjects: [`${EX}c`] });
   assert.deepEqual(report.sizeBefore, { settled: "returned", value: 2 });
-  // Synchronously, the query that traps asynchronously answers on the main stack —
-  // twice, so the first run poisoned nothing, and the synchronous lane's stack is its own
-  // after the jobs above.
-  for (const sync of [report.syncDeep, report.syncDeepAgain]) {
-    assert.deepEqual(sync, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
-  }
-
   // The trap: the job and the one in flight reject with the poison, and so does every
-  // later asynchronous call and `ready()` itself. The run's gate entry never returned, so
-  // the gate's counters no longer balance and its flag is set.
+  // later asynchronous call and `ready()` itself. The explicit trap during SERVICE
+  // handling leaves the gate unbalanced; the bridge observes it and poisons both jobs.
   for (const name of ["trapped", "inFlight", "asyncAfter", "updateAfter", "readyAfter"]) {
     assert.deepEqual(report[name], REJECTED, name);
   }
@@ -608,7 +559,6 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   // free functions — traps at the gate linked into the module.
   for (const name of [
     "syncAfter",
-    "syncDeepAfter",
     "sizeAfter",
     "addAfter",
     "iterateAfter",

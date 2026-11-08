@@ -395,6 +395,16 @@ impl Dataset {
     /// buffer, or freshly patched manifest text that is not yet on disk).
     pub fn parse_file(bytes: &[u8], path: &Path) -> Result<Self, SliceError> {
         let base = crate::retrieval::retrieval_base_iri(path)?;
+        Self::parse_with_retained_base(bytes, path, &base)
+    }
+
+    /// Parse retained file bytes under the retrieval identity captured when they were read.
+    /// Shares the file media type and diagnostic context law with [`Self::parse_file`].
+    pub(crate) fn parse_with_retained_base(
+        bytes: &[u8],
+        path: &Path,
+        base: &purrdf_iri::BaseIri,
+    ) -> Result<Self, SliceError> {
         Self::parse(
             bytes,
             rdf_media_type_for_path(path),
@@ -543,13 +553,11 @@ impl Dataset {
     ///
     /// # Errors
     /// Retains native storage, structural and canonicalization refusals.
-    pub fn canonical_nquads_flat(&self) -> Result<String, purrdf_rdf::CanonError> {
-        let mut builder = RdfDatasetBuilder::new();
-        for quad in purrdf_rdf::flat_rdf_quads(&self.ds) {
-            builder.push_owned_quad(&quad)?;
-        }
-        let frozen = builder.freeze()?;
-        Ok(purrdf_rdf::try_canonicalize(&frozen)?.nquads)
+    pub fn canonical_nquads_flat(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<purrdf_core::Canonicalized, purrdf_rdf::CanonError> {
+        purrdf_rdf::canonical_flat_nquads(&self.ds, control)
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -955,8 +963,12 @@ mod tests {
     fn flat_lines(trig: &str) -> Vec<String> {
         let ds = Dataset::parse(trig.as_bytes(), "application/trig", None, "test").unwrap();
         let mut lines: Vec<String> = ds
-            .canonical_nquads_flat()
+            .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
             .unwrap()
+            .nquads()
             .lines()
             .map(str::to_owned)
             .collect();

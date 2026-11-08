@@ -51,7 +51,7 @@ fn default_options_empty_load_declares_destination_and_constant_graph_sees_it() 
                     .update_governed(
                         &mut dataset,
                         request(text),
-                        options,
+                        &options,
                         &QueryGovernors::UNBOUNDED
                     )
                     .expect("empty LOAD"),
@@ -59,7 +59,7 @@ fn default_options_empty_load_declares_destination_and_constant_graph_sees_it() 
             ));
         } else {
             engine
-                .update_with_options(&mut dataset, request(text), options)
+                .update_with_options(&mut dataset, request(text), &options)
                 .expect("empty LOAD");
         }
         assert_eq!(observed(&engine, &dataset), 1);
@@ -74,7 +74,7 @@ fn default_options_empty_load_declares_destination_and_constant_graph_sees_it() 
             .update_with_options(
                 &mut implicit,
                 request(text),
-                options.with_graph_existence(GraphExistenceMode::Implicit),
+                &options.with_graph_existence(GraphExistenceMode::Implicit),
             )
             .expect("implicit LOAD neighbor");
         assert_eq!(observed(&engine, &implicit), 0);
@@ -105,7 +105,7 @@ fn omitted_update_options_retain_clear_and_empty_transfer_destinations() {
                     .update_governed(
                         &mut dataset,
                         request(text),
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::UNBOUNDED
                     )
                     .expect("governed update"),
@@ -127,7 +127,7 @@ fn omitted_update_options_retain_clear_and_empty_transfer_destinations() {
         .update_with_options(
             &mut implicit,
             request("CREATE GRAPH <http://example.org/g>"),
-            QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::Implicit),
+            &QueryOptions::EMPTY.with_graph_existence(GraphExistenceMode::Implicit),
         )
         .expect("explicit implicit neighbor");
     assert_eq!(observed(&engine, &implicit), 0);
@@ -143,7 +143,7 @@ fn omitted_governed_policy_refusal_publishes_no_declaration_prefix() {
         .update_governed(
             &mut dataset,
             request(text),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(0),
         )
         .expect("typed refusal");
@@ -158,7 +158,7 @@ fn omitted_governed_policy_refusal_publishes_no_declaration_prefix() {
             .update_governed(
                 &mut dataset,
                 request(text),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(1)
             )
             .expect("valid budget neighbor"),

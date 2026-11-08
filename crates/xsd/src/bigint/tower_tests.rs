@@ -376,7 +376,15 @@ mod tests {
 
     #[test]
     fn div_rem_u64_matches_i128_division_within_i128_range() {
-        for (dividend, divisor) in [(100_i128, 3_u64), (-100, 3), (7, 2), (-7, 2), (0, 5)] {
+        for (dividend, divisor) in [
+            (100_i128, 3_u64),
+            (-100, 3),
+            (7, 2),
+            (-7, 2),
+            (0, 5),
+            (i128::MAX, u64::MAX),
+            (i128::MIN, u64::MAX),
+        ] {
             let (quotient, remainder) = BigInt::from_i128(dividend).div_rem_u64(divisor).unwrap();
             let expected_q = dividend / i128::from(divisor);
             let expected_r = (dividend % i128::from(divisor)).unsigned_abs();

@@ -101,10 +101,15 @@ pub fn frame_be_labelled_len(label: &str, value: &[u8]) -> Option<usize> {
 #[inline]
 pub fn frame_be_labelled(out: &mut Vec<u8>, label: &str, value: &[u8]) {
     out.reserve(frame_be_labelled_len(label, value).expect("labelled frame size overflow"));
-    out.extend_from_slice(&(label.len() as u64).to_be_bytes());
-    out.extend_from_slice(label.as_bytes());
-    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    out.extend_from_slice(value);
+    frame_be_labelled_with(label, value, &mut |bytes| out.extend_from_slice(bytes));
+}
+
+/// Stream the exact labelled big-endian frame without retaining its bytes.
+pub fn frame_be_labelled_with(label: &str, value: &[u8], append: &mut impl FnMut(&[u8])) {
+    append(&(label.len() as u64).to_be_bytes());
+    append(label.as_bytes());
+    append(&(value.len() as u64).to_be_bytes());
+    append(value);
 }
 
 /// Absorb `bytes` into `digest` as one framed field: exactly the bytes

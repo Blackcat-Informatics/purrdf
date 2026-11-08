@@ -106,17 +106,7 @@ impl std::fmt::Display for JsonError {
     }
 }
 
-impl std::error::Error for JsonError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            Self::Iri(error) => Some(error),
-            Self::Rdf(error) => Some(error),
-            Self::Cover(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(JsonError, Storage, Iri, Rdf, Cover);
 
 purrdf_lex::variant_from!(JsonError { Storage(purrdf_lex::allocation::StorageError) });
 

@@ -111,12 +111,10 @@ impl ScoreBound {
     ) -> Result<Fixed, TextError> {
         if !(Fixed::ZERO..=self.maximum).contains(&score) {
             return Err(arithmetic_error(
-                true,
-                format_args!(
-                    "score {} is outside the prepared interval [0, {}]",
-                    score.decimal_display(),
-                    self.maximum.decimal_display()
-                ),
+                crate::arithmetic::ArithmeticRefusal::ScoreOutsideBound {
+                    score: score.into_raw(),
+                    maximum: self.maximum.into_raw(),
+                },
                 workspace,
             ));
         }
@@ -152,12 +150,19 @@ impl RankingField {
     pub fn new(name: impl Into<String>, weight: Fixed, b: Fixed) -> Result<Self, TextError> {
         let name = name.into();
         if name.is_empty() || weight < Fixed::ZERO {
-            return Err(TextError::config(
-                "a field needs a name and a nonnegative weight",
-            ));
+            return Err(
+                crate::configuration::ConfigurationRefusal::FieldNameOrWeight {
+                    name,
+                    weight: weight.into_raw(),
+                }
+                .into_error(),
+            );
         }
         if !(Fixed::ZERO..=Fixed::ONE).contains(&b) {
-            return Err(TextError::config("a field's b must be in [0, 1]"));
+            return Err(
+                crate::configuration::ConfigurationRefusal::FieldNormalization { b: b.into_raw() }
+                    .into_error(),
+            );
         }
         Ok(Self { name, weight, b })
     }
@@ -206,36 +211,44 @@ impl RankingProfile {
         unclassified: Option<usize>,
     ) -> Result<Self, TextError> {
         if fields.is_empty() {
-            return Err(TextError::config(
-                "a ranking profile needs at least one field",
-            ));
+            return Err(crate::configuration::ConfigurationRefusal::NoFields.into_error());
         }
         let mut names = FastSet::default();
         for field in &fields {
             if !names.insert(field.name.as_str()) {
-                return Err(TextError::config(format!(
-                    "repeated field name {:?}",
-                    field.name
-                )));
+                return Err(crate::configuration::ConfigurationRefusal::DuplicateField {
+                    name: field.name.clone(),
+                }
+                .into_error());
             }
         }
-        if unclassified.is_some_and(|field| field >= fields.len()) {
-            return Err(TextError::config(
-                "the unclassified field is not in this profile",
-            ));
+        if let Some(field) = unclassified.filter(|&field| field >= fields.len()) {
+            return Err(
+                crate::configuration::ConfigurationRefusal::UnclassifiedField {
+                    field,
+                    fields: fields.len(),
+                }
+                .into_error(),
+            );
         }
         mappings.sort_by(|left, right| left.0.cmp(&right.0));
         for (at, (predicate, field)) in mappings.iter().enumerate() {
             validate_predicate(predicate)?;
             if *field >= fields.len() {
-                return Err(TextError::config(
-                    "a predicate mapping needs an IRI and an existing field",
-                ));
+                return Err(crate::configuration::ConfigurationRefusal::MappingField {
+                    predicate: predicate.clone(),
+                    field: *field,
+                    fields: fields.len(),
+                }
+                .into_error());
             }
             if at > 0 && mappings[at - 1].0 == *predicate {
-                return Err(TextError::config(format!(
-                    "repeated mapped predicate {predicate:?}"
-                )));
+                return Err(
+                    crate::configuration::ConfigurationRefusal::DuplicateMapping {
+                        predicate: predicate.clone(),
+                    }
+                    .into_error(),
+                );
             }
         }
         let mut profile = Self {
@@ -305,9 +318,10 @@ impl RankingProfile {
             .map(|at| self.mappings[at].1)
             .or(self.unclassified)
             .ok_or_else(|| {
-                TextError::config(format!(
-                    "selected predicate {predicate:?} has no ranking field"
-                ))
+                crate::configuration::ConfigurationRefusal::UnmappedPredicate {
+                    predicate: predicate.clone(),
+                }
+                .into_error()
             })
     }
 
@@ -361,6 +375,83 @@ pub struct FieldInput {
     pub term_frequency: u64,
     /// Total analyzed tokens in the field.
     pub length: u64,
+}
+
+/// Raw extrema over actual posting records in one field. Providers retain these
+/// facts with their posting blocks; they contain no cached corpus normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FieldEnvelope {
+    /// Largest term frequency.
+    pub maximum_frequency: u64,
+    /// Smallest field length (including zero).
+    pub minimum_length: u64,
+    /// Largest field length.
+    pub maximum_length: u64,
+    /// Smallest positive field length, if present.
+    pub minimum_positive_length: Option<u64>,
+    /// Smallest length among positive-frequency records, if present.
+    pub minimum_active_length: Option<u64>,
+    /// Every actual record assembled successfully and had frequency <= length.
+    pub consistent: bool,
+}
+impl Default for FieldEnvelope {
+    fn default() -> Self {
+        Self {
+            maximum_frequency: 0,
+            minimum_length: u64::MAX,
+            maximum_length: 0,
+            minimum_positive_length: None,
+            minimum_active_length: None,
+            consistent: true,
+        }
+    }
+}
+impl FieldEnvelope {
+    /// Include one actual record, preserving independent extrema.
+    pub fn include(&mut self, input: FieldInput) {
+        self.maximum_frequency = self.maximum_frequency.max(input.term_frequency);
+        self.minimum_length = self.minimum_length.min(input.length);
+        self.maximum_length = self.maximum_length.max(input.length);
+        if input.length != 0 {
+            self.minimum_positive_length = Some(
+                self.minimum_positive_length
+                    .map_or(input.length, |old| old.min(input.length)),
+            );
+        }
+        if input.term_frequency != 0 {
+            self.minimum_active_length = Some(
+                self.minimum_active_length
+                    .map_or(input.length, |old| old.min(input.length)),
+            );
+        }
+        self.consistent &= input.term_frequency <= input.length;
+    }
+    /// Combine disjoint retained ranges without combining their extrema into a document.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        let minimum = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Self {
+            maximum_frequency: self.maximum_frequency.max(other.maximum_frequency),
+            minimum_length: self.minimum_length.min(other.minimum_length),
+            maximum_length: self.maximum_length.max(other.maximum_length),
+            minimum_positive_length: minimum(
+                self.minimum_positive_length,
+                other.minimum_positive_length,
+            ),
+            minimum_active_length: minimum(self.minimum_active_length, other.minimum_active_length),
+            consistent: self.consistent && other.consistent,
+        }
+    }
+}
+
+/// A successful-score upper bound and the separate required-validation proof.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RangeBound {
+    pub(crate) upper: Fixed,
+    pub(crate) certified: bool,
 }
 
 /// Validated corpus statistics and their ranking profile.
@@ -584,6 +675,81 @@ pub struct PreparedQuery<'c, 'p> {
 }
 
 impl PreparedQuery<'_, '_> {
+    /// Directed fixed-width envelope. Arithmetic overflow merely loosens the
+    /// successful-score bound to the genuine saturation cap; semantic uncertainty
+    /// requires visiting actual eligible records through the native scorer.
+    pub(crate) fn range_bound(&self, ordinal: usize, fields: &[FieldEnvelope]) -> RangeBound {
+        let (df, idf) = self
+            .term_statistics(ordinal)
+            .expect("prepared term ordinal");
+        let cap = idf
+            .checked_mul(K1.checked_add(Fixed::ONE).expect("constant saturation"))
+            .expect("prepared term cap");
+        let mut certified =
+            self.corpus.documents != 0 && fields.len() == self.corpus.profile.fields.len();
+        let mut pseudo = Some(0u128);
+        for (at, ((input, field), &total)) in fields
+            .iter()
+            .zip(&self.corpus.profile.fields)
+            .zip(self.corpus.totals.iter())
+            .enumerate()
+        {
+            let population = self.corpus.populations.get(at).copied();
+            let count = population.unwrap_or(self.corpus.documents);
+            certified &= input.consistent
+                && u128::from(input.maximum_length) <= total
+                && (count != 0 || input.maximum_length == 0)
+                && (df != 0 || input.maximum_frequency == 0);
+            let remainder_fits = |length: u64, remaining: u64| {
+                total
+                    .checked_sub(u128::from(length))
+                    .is_some_and(|rest| rest <= u128::from(remaining) * u128::from(u64::MAX))
+            };
+            if input.minimum_length == 0 {
+                let remaining = if population.is_some_and(|n| n < self.corpus.documents) {
+                    count
+                } else {
+                    count.saturating_sub(1)
+                };
+                certified &= remainder_fits(0, remaining);
+            }
+            if let Some(length) = input.minimum_positive_length {
+                certified &= remainder_fits(length, count.saturating_sub(1));
+            }
+            if input.maximum_frequency == 0 {
+                continue;
+            }
+            let normalization = input
+                .minimum_active_length
+                .filter(|length| *length != 0)
+                .and_then(|length| {
+                    if total == 0 {
+                        return None;
+                    }
+                    let relative =
+                        mul_div(u128::from(length) * u128::from(count), SCALE as u128, total)?;
+                    let b = field.b.into_raw() as u128;
+                    (SCALE as u128 - b).checked_add(mul_div(b, relative, SCALE as u128)?)
+                })
+                .filter(|value| *value != 0);
+            certified &= normalization.is_some();
+            let component = normalization.and_then(|norm| {
+                let frequency = u128::from(input.maximum_frequency).checked_mul(SCALE as u128)?;
+                let divided = mul_div(frequency, SCALE as u128, norm)?;
+                mul_div(divided, field.weight.into_raw() as u128, SCALE as u128)
+            });
+            pseudo = pseudo.zip(component).and_then(|(a, b)| a.checked_add(b));
+        }
+        let upper = pseudo
+            .and_then(|p| {
+                let denominator = p.checked_add(K1.into_raw() as u128)?;
+                let saturation = mul_div(p, (K1.into_raw() + SCALE) as u128, denominator)?;
+                let raw = mul_div(idf.into_raw() as u128, saturation, SCALE as u128)?;
+                Some(Fixed::from_raw(i128::try_from(raw).ok()?))
+            })
+            .unwrap_or(cap);
+        RangeBound { upper, certified }
+    }
     /// The actual prepared query's certified maximum and key width.
     pub const fn score_bound(&self) -> ScoreBound {
         self.bound
@@ -653,8 +819,11 @@ impl PreparedQuery<'_, '_> {
                 .checked_add_with(field.b.checked_mul_with(relative, workspace)?, workspace)?;
             if normalization <= Fixed::ZERO {
                 return Err(arithmetic_error(
-                    true,
-                    "field normalization rounds to zero under this profile",
+                    crate::arithmetic::ArithmeticRefusal::FieldNormalization {
+                        b: field.b.into_raw(),
+                        relative: relative.into_raw(),
+                        normalized: normalization.into_raw(),
+                    },
                     workspace,
                 ));
             }
@@ -793,15 +962,25 @@ fn from_count(value: u64, _workspace: Option<&WorkspaceCapability>) -> Result<Fi
 /// Require an absolute, lexically valid RDF predicate IRI.
 fn validate_predicate(predicate: &TermValue) -> Result<(), TextError> {
     let TermValue::Iri(iri) = predicate else {
-        return Err(TextError::config("a ranking predicate must be an IRI"));
+        return Err(
+            crate::configuration::ConfigurationRefusal::RankingPredicate {
+                predicate: predicate.clone(),
+            }
+            .into_error(),
+        );
     };
     let parsed = purrdf_core::parse_iri(iri).map_err(|error| {
-        TextError::config(format!("invalid ranking predicate {iri:?}: {error}"))
+        crate::configuration::ConfigurationRefusal::RankingIri {
+            iri: iri.clone(),
+            cause: error,
+        }
+        .into_error()
     })?;
     if !parsed.has_scheme() {
-        return Err(TextError::config(format!(
-            "ranking predicate {iri:?} must be absolute"
-        )));
+        return Err(
+            crate::configuration::ConfigurationRefusal::RelativeRankingIri { iri: iri.clone() }
+                .into_error(),
+        );
     }
     Ok(())
 }

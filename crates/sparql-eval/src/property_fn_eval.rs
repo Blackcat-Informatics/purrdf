@@ -61,7 +61,7 @@
 //! * A call written with nothing before it in its group is a plan node evaluated at its
 //!   own address, and the ceiling recorded there is its own.
 //! * A call written after a data pattern is the right operand of a `Lateral`, and
-//!   [`crate::binop::eval_lateral`] FUSES the pair: the rows produced below are already
+//!   [`crate::binop::begin_lateral`] FUSES the pair: the rows produced below are already
 //!   joined with the left row, so they are the `Lateral`'s output rows and the ceiling
 //!   that bounds them is the `Lateral`'s. That node's certificate is what licensed it;
 //!   nothing new is licensed by the fusion, and the call node itself carries no ceiling
@@ -133,7 +133,7 @@ pub(crate) fn eval_property_function<D: DatasetView + Sync>(
 ///
 /// `ceiling` is the row ceiling of the **`Lateral`**, not of the call node: the rows
 /// produced here are already joined with `left`, so they are the fused operator's — that
-/// is, the `Lateral`'s — output rows. [`crate::binop::eval_lateral`] reads it there and
+/// is, the `Lateral`'s — output rows. [`crate::binop::begin_lateral`] reads it there and
 /// hands it over; see [`crate::governor::soundness::child_row_ceiling`] for why the
 /// licence lives at that node and is not pushed across the edge.
 ///
@@ -4600,7 +4600,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions {
+                &crate::engine::QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                         .expect("the fixture declarations read cleanly"),
                     ..crate::engine::QueryOptions::EMPTY
@@ -4656,7 +4656,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions::EMPTY.with_env(&env),
+                &crate::engine::QueryOptions::EMPTY.with_env(&env),
                 false,
             );
             if expected {
@@ -4796,16 +4796,16 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                options,
+                &options,
             )
             .expect_err("the host emitted one value for a two-value declaration");
         assert_eq!(materialized.code, EvalError::FUNCTION_OPERATIONAL_CODE);
         assert!(materialized.message.contains("emitted a row of 1 value"));
 
         let prepared = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
-        let mut cursor = engine.open_call_cursor(&prepared, options).unwrap();
+        let mut cursor = engine.open_call_cursor(&prepared, &options).unwrap();
         let on_demand = cursor
             .next_row(&*dataset)
             .expect_err("the cursor checks the same row");
@@ -5470,7 +5470,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions {
+                &crate::engine::QueryOptions {
                     env: &env,
                     ..crate::engine::QueryOptions::EMPTY
                 },
@@ -5522,7 +5522,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions {
+                &crate::engine::QueryOptions {
                     env: &env,
                     ..crate::engine::QueryOptions::EMPTY
                 },
@@ -5823,7 +5823,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::QueryOptions {
+                &crate::QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                         .expect("the fixture declarations read cleanly"),
                     ..crate::QueryOptions::EMPTY
@@ -6049,7 +6049,7 @@ mod tests {
                 .query_with_options_view(
                     &*dataset,
                     request(&query),
-                    crate::engine::QueryOptions {
+                    &crate::engine::QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..crate::engine::QueryOptions::EMPTY
@@ -6304,7 +6304,7 @@ mod tests {
                 .prepare_query_with_options(
                     query,
                     None,
-                    crate::engine::QueryOptions {
+                    &crate::engine::QueryOptions {
                         env: &env,
                         ..crate::engine::QueryOptions::EMPTY
                     },
@@ -6385,7 +6385,7 @@ mod tests {
                 .prepare_query_with_options(
                     query,
                     None,
-                    crate::engine::QueryOptions {
+                    &crate::engine::QueryOptions {
                         env: &env,
                         ..crate::engine::QueryOptions::EMPTY
                     },

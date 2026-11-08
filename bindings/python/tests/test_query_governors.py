@@ -448,16 +448,13 @@ def test_entailment_query_closes_over_the_import_table(kind) -> None:
 def test_entailment_query_takes_the_closures_evaluation_limits(kind) -> None:
     """A passed closure limit raises naming this method's keyword; the neighbour answers."""
     store = _rdfs_store(kind)
-    with pytest.raises(ValueError) as refused:
-        store.query_entailment_governed(RDFS_QUERY, "owl-rl", max_join_steps=1)
-    assert "evaluation exceeded the join-step limit: " in str(refused.value)
-    assert str(refused.value).endswith(
-        "raise it with query_entailment_governed(max_join_steps=...)"
-    )
-    answered = store.query_entailment_governed(
-        RDFS_QUERY, "owl-rl", max_stored_facts=4194304, max_join_steps=1048576
-    )
-    assert answered.outcome is not None and len(answered.outcome.result) == 1
+    for key, short, raised in [("max_join_steps", 1, 1048576),
+                                ("max_term_arena_bytes", 0, 16777216)]:
+        with pytest.raises(ValueError) as refused:
+            store.query_entailment_governed(RDFS_QUERY, "owl-rl", **{key: short})
+        assert str(refused.value).endswith(f"raise it with query_entailment_governed({key}=...)")
+        answered = store.query_entailment_governed(RDFS_QUERY, "owl-rl", **{key: raised})
+        assert answered.outcome is not None and len(answered.outcome.result) == 1
 
 
 # ── cancellation token admission and state ──────────────────────────────────────

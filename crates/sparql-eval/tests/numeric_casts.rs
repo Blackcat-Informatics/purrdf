@@ -37,7 +37,7 @@ fn select(expression: &str) -> Option<(String, String)> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("evaluate `{query}`: {e}"));
     let SparqlResult::Solutions { rows, .. } = result else {

@@ -42,7 +42,7 @@ def _store() -> purrdf.Store:
 
 def _rows(query: str) -> list[tuple]:
     prepared = _store().prepare(query, parameters=["this"])
-    solutions = prepared.run(this=purrdf.NamedNode(f"{EX}a"))
+    solutions = prepared.run({"this": purrdf.NamedNode(f"{EX}a")})
     width = len(solutions.variables)
     return sorted(
         (tuple(row[i] for i in range(width)) for row in solutions),
@@ -80,7 +80,7 @@ def test_a_group_keyed_by_the_parameter_is_unchanged() -> None:
 def _values(query: str) -> set:
     """The ``?value`` column of ``query`` run with ``$this`` bound to ``ex:a``."""
     prepared = _store().prepare(query, parameters=["this"])
-    solutions = prepared.run(this=purrdf.NamedNode(f"{EX}a"))
+    solutions = prepared.run({"this": purrdf.NamedNode(f"{EX}a")})
     column = [variable.value for variable in solutions.variables].index("value")
     return {row[column] for row in solutions if row[column] is not None}
 
@@ -131,7 +131,7 @@ def test_an_assignment_out_of_the_parameter_s_scope_answers_by_join() -> None:
         parameters=["this"],
     )
     # No row at all, not merely no bound ?value.
-    assert list(disjoint.run(this=purrdf.NamedNode(f"{EX}a"))) == []
+    assert list(disjoint.run({"this": purrdf.NamedNode(f"{EX}a")})) == []
     assert _values(
         f"SELECT (COUNT(*) AS ?value) WHERE {{ ?s <{EX}p> ?o BIND(<{EX}b> AS $this) }}"
     ) == {purrdf.Literal("0", datatype=purrdf.NamedNode("http://www.w3.org/2001/XMLSchema#integer"))}

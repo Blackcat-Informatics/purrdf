@@ -126,7 +126,7 @@ fn registry(who: &str) -> Arc<RdfDataset> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&format!(
         "<{EX}{who}> <{EX}status> \"banned\" .\n<{EX}carol> <{EX}status> \"cleared\" .\n"
     ))
-    .unwrap_or_else(|errors| panic!("registry fixture: {}", errors.join("\n")))
+    .unwrap_or_else(|errors| panic!("registry fixture: {errors}"))
 }
 
 /// Sources that answer `ENDPOINT` in process from `remote`.
@@ -374,8 +374,24 @@ ex:PersonRule a sh:NodeShape ;
     };
     assert_eq!(quiet.tripped(), None);
     assert_eq!(
-        purrdf_rdf::canonical_flat_nquads(entailed.as_ref()).expect("canonical"),
-        purrdf_rdf::canonical_flat_nquads(baseline.as_ref()).expect("canonical"),
+        purrdf_rdf::canonical_flat_nquads(
+            entailed.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical")
+        .nquads(),
+        purrdf_rdf::canonical_flat_nquads(
+            baseline.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical")
+        .nquads(),
         "a quiet signal changes nothing entailed"
     );
 

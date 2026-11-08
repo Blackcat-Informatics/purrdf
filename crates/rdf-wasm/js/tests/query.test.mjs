@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
 import { EVALUATION_STACK_REFUSAL_EXACT, HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 // One-time wasm instantiation before any test runs.
 await ready();
 
@@ -26,7 +26,7 @@ graph <https://example.org/g> { ex:c ex:knows ex:a . }
 test("SELECT returns SPARQL Results JSON bindings", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const json = JSON.parse(
-    ds.query("PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name"),
+    ds.query("PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name").body,
   );
   assert.deepEqual(json.head.vars, ["name"]);
   const names = json.results.bindings.map((b) => b.name.value);
@@ -36,7 +36,7 @@ test("SELECT returns SPARQL Results JSON bindings", () => {
 test("SELECT over the default graph does not see named-graph triples", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const json = JSON.parse(
-    ds.query("PREFIX ex: <https://example.org/> SELECT ?o WHERE { ?s ex:knows ?o }"),
+    ds.query("PREFIX ex: <https://example.org/> SELECT ?o WHERE { ?s ex:knows ?o }").body,
   );
   // Only ex:a ex:knows ex:b is in the default graph; ex:c ex:knows ex:a is in <g>.
   const objs = json.results.bindings.map((b) => b.o.value);
@@ -45,9 +45,9 @@ test("SELECT over the default graph does not see named-graph triples", () => {
 
 test("ASK returns a boolean result document", () => {
   const ds = Dataset.parse(TRIG, "trig");
-  const yes = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }"));
+  const yes = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }").body);
   assert.equal(yes.boolean, true);
-  const no = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:b ex:knows ex:a }"));
+  const no = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:b ex:knows ex:a }").body);
   assert.equal(no.boolean, false);
 });
 
@@ -105,7 +105,7 @@ test("QueryEngine query routes ASK and graph results into discriminated objects"
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
   const ask = engine.query(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }");
-  assert.deepEqual(ask, { kind: "ask", boolean: true });
+  assert.deepEqual({ kind: ask.kind, boolean: ask.boolean }, { kind: "ask", boolean: true }); assert.equal(ask.executionReceipt.state, "started");
 
   const graph = engine.query(
     ds,
@@ -120,14 +120,14 @@ test("QueryEngine raw serialization supports result and graph formats", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const xml = engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
     format: "xml",
-  });
+  }).body;
   assert.match(xml, /^<\?xml/);
 
   const nquads = engine.queryRaw(
     ds,
     "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
     { format: "nquads" },
-  );
+  ).body;
   // Exact: the whole N-Quads document, not a substring that a wrong IRI could contain.
   assert.equal(
     nquads,
@@ -138,7 +138,7 @@ test("QueryEngine raw serialization supports result and graph formats", () => {
   assert.throws(() =>
     engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
       format: "nquads",
-    }),
+    }).body,
   );
 });
 
@@ -146,7 +146,7 @@ test("CONSTRUCT returns Turtle", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const ttl = ds.query(
     "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
-  );
+  ).body;
   // The result is Turtle text (not JSON); re-parse it to prove it is well-formed.
   const back = Dataset.parse(ttl, "turtle");
   assert.equal(back.size, 2);
@@ -154,7 +154,7 @@ test("CONSTRUCT returns Turtle", () => {
 
 test("a malformed query throws, never a silent empty result", () => {
   const ds = Dataset.parse(TRIG, "trig");
-  assert.throws(() => ds.query("SELECT ?x WHERE { this is not sparql"));
+  assert.throws(() => ds.query("SELECT ?x WHERE { this is not sparql").body);
 });
 
 test("a SERVICE clause hard-fails offline (no resolver in the browser)", () => {
@@ -162,7 +162,7 @@ test("a SERVICE clause hard-fails offline (no resolver in the browser)", () => {
   assert.throws(() =>
     ds.query(
       "PREFIX ex: <https://example.org/> SELECT ?o WHERE { SERVICE <https://remote.example.org/sparql> { ?s ex:knows ?o } }",
-    ),
+    ).body,
   );
 });
 
@@ -172,26 +172,26 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
     "@prefix ex: <https://example.org/> . ex:a ex:p ex:b .",
     "turtle",
   );
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
 
   assert.equal(
     engine.update(
       ds,
       "INSERT DATA { <https://example.org/c> <https://example.org/p> <https://example.org/d> }",
-    ),
+    ).dataset,
     ds,
   );
   assert.equal(ds.size, 2);
 
-  const stable = ds.canonicalize();
+  const stable = canonicalValue(ds.canonicalize("unlimited"));
   assert.throws(() =>
     engine.update(
       ds,
       "INSERT DATA { <https://example.org/x> <https://example.org/p> <https://example.org/y> } ; LOAD <https://example.org/doc>",
-    ),
+    ).dataset,
   );
-  assert.equal(ds.canonicalize(), stable);
-  assert.notEqual(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), stable);
+  assert.notEqual(canonicalValue(ds.canonicalize("unlimited")), before);
 });
 
 test("queryRaw provenanceNamespace populates and round-trips through JSON", () => {
@@ -202,7 +202,7 @@ test("queryRaw provenanceNamespace populates and round-trips through JSON", () =
   const json = engine.queryRaw(ds, query, {
     format: "json",
     provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
-  });
+  }).body;
   assert.match(json, /"prov":\{/);
   assert.match(json, /"engine":"purrdf-sparql-eval"/);
   assert.match(json, /"queryHash":"sha256:/);
@@ -221,7 +221,7 @@ test("queryRaw provenanceNamespace populates and round-trips through XML", () =>
   const xml = engine.queryRaw(ds, query, {
     format: "xml",
     provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
-  });
+  }).body;
   assert.match(xml, /<prov:provenance/);
 
   const decoded = provenanceFromXml(xml, "prov", "https://example.org/ns/prov#");
@@ -236,7 +236,7 @@ test("omitting provenanceNamespace emits pure W3C output", () => {
     ds,
     "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name }",
     { format: "json" },
-  );
+  ).body;
   assert.ok(!json.includes('"prov"'));
 });
 
@@ -246,7 +246,7 @@ test("a lone provenanceNamespace half is refused", () => {
   assert.throws(() =>
     engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
       provenanceNamespace: { prefix: "prov" },
-    }),
+    }).body,
   );
 });
 
@@ -285,7 +285,7 @@ const PLAIN_CONSTRUCT =
 
 test("the default query() format never returns an empty string for a named-graph CONSTRUCT", () => {
   const ds = Dataset.parse(TRIG, "trig");
-  const out = ds.query(GRAPH_CONSTRUCT);
+  const out = ds.query(GRAPH_CONSTRUCT).body;
   assert.notEqual(out.trim(), "", "the documented default must never be a silent empty result");
   // TriG round-trips back into a dataset that still carries the graph and the statement;
   // every term is compared whole, never as a substring of the serialized text.
@@ -301,7 +301,7 @@ test("the default query() format never returns an empty string for a named-graph
 test("the default query() format is still Turtle for a default-graph CONSTRUCT", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const engine = new QueryEngine();
-  assert.equal(ds.query(PLAIN_CONSTRUCT), engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "turtle" }));
+  assert.equal(ds.query(PLAIN_CONSTRUCT).body, engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "turtle" }).body);
 });
 
 test("an explicit single-graph format throws for a named-graph CONSTRUCT", () => {
@@ -309,7 +309,7 @@ test("an explicit single-graph format throws for a named-graph CONSTRUCT", () =>
   for (const format of ["turtle", "ntriples", "rdfxml"]) {
     const ds = Dataset.parse(TRIG, "trig");
     assert.throws(
-      () => engine.queryRaw(ds, GRAPH_CONSTRUCT, { format }),
+      () => engine.queryRaw(ds, GRAPH_CONSTRUCT, { format }).body,
       (error) => {
         assert.ok(
           error.message.includes("carrying 1 named graph (<https://example.org/out>)"),
@@ -333,14 +333,14 @@ test("an explicit single-graph format throws for a named-graph CONSTRUCT", () =>
 test("an explicit quad-capable format carries a named-graph CONSTRUCT", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const nquads = engine.queryRaw(ds, GRAPH_CONSTRUCT, { format: "nquads" });
+  const nquads = engine.queryRaw(ds, GRAPH_CONSTRUCT, { format: "nquads" }).body;
   assert.ok(nquads.includes("<https://example.org/out> ."), nquads);
 });
 
 test("an explicit single-graph format still serializes a default-graph CONSTRUCT", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const ntriples = engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "ntriples" });
+  const ntriples = engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "ntriples" }).body;
   assert.equal(
     ntriples.trim(),
     "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .",
@@ -364,7 +364,7 @@ const GRAPH_DESCRIBE = "DESCRIBE <https://example.org/s>";
 
 test("the default query() format carries a named-graph DESCRIBE instead of emptying it", () => {
   const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
-  const out = ds.query(GRAPH_DESCRIBE);
+  const out = ds.query(GRAPH_DESCRIBE).body;
   assert.notEqual(out.trim(), "", "a description must never come back as a silent empty result");
   // Every described statement stays in the graph the source asserted it in, compared whole.
   assert.deepEqual(
@@ -373,7 +373,7 @@ test("the default query() format carries a named-graph DESCRIBE instead of empty
     `the graph the source asserted must survive: ${out}`,
   );
   const engine = new QueryEngine();
-  const nquads = engine.queryRaw(ds, GRAPH_DESCRIBE, { format: "nquads" });
+  const nquads = engine.queryRaw(ds, GRAPH_DESCRIBE, { format: "nquads" }).body;
   // Exactly these rows, each compared whole as a line — no more, no fewer.
   assert.deepEqual(
     nquads.split("\n").filter((line) => line !== "").sort(),
@@ -391,7 +391,7 @@ test("an explicit single-graph format throws for a named-graph DESCRIBE", () => 
   for (const format of ["turtle", "ntriples", "rdfxml"]) {
     const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
     assert.throws(
-      () => engine.queryRaw(ds, GRAPH_DESCRIBE, { format }),
+      () => engine.queryRaw(ds, GRAPH_DESCRIBE, { format }).body,
       (error) => {
         assert.ok(
           error.message.includes("carrying 1 named graph (<https://example.org/g>)"),
@@ -460,23 +460,23 @@ test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
 
   // Without SILENT: a hard failure, because no resolver is installed.
   assert.throws(() =>
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"),
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }").body,
   );
 
   // With SILENT: the surrounding pattern's own solutions come back, joined against
   // the identity — so the local row survives and nothing remote is bound.
   const json = JSON.parse(
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }").body,
   );
   assert.equal(json.results.bindings.length, 1);
   assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
   assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
 
   const engine = new QueryEngine();
-  const before = ds.canonicalize();
-  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
-  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
-  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+  const before = canonicalValue(ds.canonicalize("unlimited"));
+  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>").dataset);
+  engine.update(ds, "LOAD SILENT <https://example.org/doc>").dataset;
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before, "LOAD SILENT must leave the dataset untouched");
 });
 
 // How deep a request may nest is bounded by what it builds, not by how it is written.
@@ -600,7 +600,7 @@ const subjectsOf = (result) =>
 test("nested LATERAL answers on the synchronous lane as deep as the lane holds it, one level more is a typed refusal, and the engine answers afterwards", () => {
   const ds = Dataset.parse(NEST_DATA, "nquads");
   const engine = new QueryEngine();
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   /** `{ rows }` for an answer, `{ refused }` for a typed stack refusal; anything else fails. */
   const lateral = (depth) => {
     try {
@@ -640,7 +640,7 @@ test("nested LATERAL answers on the synchronous lane as deep as the lane holds i
   assert.ok(deepest >= 281, `${deepest} levels answer; 282 did on the build measured`);
   // No memory was overwritten: the dataset's canonical form is byte-identical, and
   // queries over it and over a freshly parsed one answer exactly.
-  assert.equal(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before);
   assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://example.org/q> ?o }")), ["s1"]);
   const names = engine
     .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
@@ -773,7 +773,7 @@ const tripleChain = (levels, core) =>
 test("a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches", () => {
   const ds = Dataset.parse("", "nquads");
   const engine = new QueryEngine();
-  engine.update(ds, `INSERT DATA { <${TT}a> <${TT}q> ${tripleChain(16, `<${TT}o>`)} }`);
+  engine.update(ds, `INSERT DATA { <${TT}a> <${TT}q> ${tripleChain(16, `<${TT}o>`)} }`).dataset;
   const select = (levels) =>
     engine
       .select(ds, `SELECT ?a ?o WHERE { ?a <${TT}q> ${tripleChain(levels, "?o")} }`)
@@ -781,20 +781,20 @@ test("a pattern nested past the dataset's triple terms answers nothing, and its 
       .map((row) => [row.a.value, row.o.value]);
   assert.deepEqual(select(16), [[`${TT}a`, `${TT}o`]], "the stored depth matches");
   assert.deepEqual(select(200), [], "200 levels match nothing");
-  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(200, "?o")} }`), false);
-  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(16, "?o")} }`), true);
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(200, "?o")} }`).boolean, false);
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(16, "?o")} }`).boolean, true);
 });
 
 test("inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert", () => {
   const ds = Dataset.parse("", "nquads");
   const engine = new QueryEngine();
   const insert = (levels) => `INSERT DATA { <${TT}b> <${TT}q> ${tripleChain(levels, `<${TT}o>`)} }`;
-  assert.throws(() => engine.update(ds, insert(17)), (error) => {
+  assert.throws(() => engine.update(ds, insert(17)).dataset, (error) => {
     assert.match(error.message, /^error rdf-ir-triple-nesting-limit: /);
     return true;
   });
-  assert.equal(ds.canonicalize(), "", "the refusal wrote nothing");
-  engine.update(ds, insert(16));
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), "", "the refusal wrote nothing");
+  engine.update(ds, insert(16)).dataset;
   const rows = engine
     .select(ds, `SELECT ?o WHERE { <${TT}b> <${TT}q> ${tripleChain(16, "?o")} }`)
     .rows.toArray()
@@ -826,7 +826,7 @@ test("a synchronous failure carries its code; the well-formed neighbour answers"
   assert.equal(unconfigured.code, "native-sparql-service-unconfigured");
   let update;
   try {
-    engine.update(ds, "INSERT DATA {");
+    engine.update(ds, "INSERT DATA {").dataset;
   } catch (error) {
     update = error;
   }
@@ -840,9 +840,9 @@ test("the synchronous and asynchronous lanes answer and refuse identically", asy
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
   const query = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
-  assert.equal(await engine.queryRawAsync(ds, query), engine.queryRaw(ds, query));
-  const explained = engine.explainQuery(ds, query);
-  assert.equal(await engine.explainQueryAsync(ds, query), explained);
+  assert.equal(await engine.queryRawAsync(ds, query).then(result => result.body), engine.queryRaw(ds, query).body);
+  const explained = engine.explainQuery(ds, query).body;
+  assert.equal(await engine.explainQueryAsync(ds, query).then(result => result.body), explained);
   let syncError;
   try {
     engine.query(ds, "ASK {");
@@ -862,7 +862,7 @@ test("a snapshot is an independent dataset with its own identity", () => {
   const copy = ds.snapshot();
   assert.notEqual(copy.id, ds.id);
   assert.equal(copy.generation, 0n);
-  assert.equal(copy.canonicalize(), ds.canonicalize());
+  assert.equal(canonicalValue(copy.canonicalize("unlimited")), canonicalValue(ds.canonicalize("unlimited")));
   copy.add(Dataset.parse("<https://example.org/x> <https://example.org/y> <https://example.org/z> .\n", "nquads").quads()[0]);
   assert.equal(copy.size, ds.size + 1, "the copy changed alone");
   assert.equal(ds.generation, 0n);

@@ -572,8 +572,8 @@ pub fn run(
             let env = query_eval_env(case)?;
             let options = query_eval_options(case, &env);
             let result = match remote {
-                Some(source) => engine.query_with_source(&dataset, request, source, options),
-                None => engine.query_with_options_view(&*dataset, request, options),
+                Some(source) => engine.query_with_source(&dataset, request, source, &options),
+                None => engine.query_with_options_view(&*dataset, request, &options),
             }
             .map_err(|e| format!("evaluate {}: {e}", case.iri))?;
             let ordered = query_eval_is_ordered(&query_text);
@@ -592,7 +592,7 @@ pub fn run(
             };
             let options = update_eval_options(&env);
             engine
-                .update_with_options(&mut dataset, request, options)
+                .update_with_options(&mut dataset, request, &options)
                 .map_err(|e| format!("apply update {}: {e}", case.iri))?;
             Ok(RunOutcome::Update(dataset))
         }
@@ -760,10 +760,9 @@ pub fn query_eval_env(
     purrdf_sparql_eval::ExtensionEnv::new(
         query_eval_parser_options(),
         harness_relations().clone(),
-        aggregates.as_ref().map_or_else(
-            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
-            Clone::clone,
-        ),
+        aggregates
+            .as_ref()
+            .map_or(purrdf_sparql_eval::AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))
 }

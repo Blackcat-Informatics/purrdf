@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// One immutable, structured runtime loss record.
-#[pyclass(name = "ProjectionLoss", frozen, skip_from_py_object)]
+#[pyclass(name = "ProjectionLoss", frozen)]
 #[derive(Debug, Clone)]
 pub struct PyProjectionLoss {
     code: String,
@@ -105,7 +105,7 @@ impl PyProjectionPackage {
 }
 
 /// Immutable progress snapshot from one scoped LPG projection.
-#[pyclass(name = "ProjectionProgress", frozen, skip_from_py_object)]
+#[pyclass(name = "ProjectionProgress", frozen)]
 #[derive(Debug, Clone)]
 pub struct PyProjectionProgress {
     phase: String,
@@ -494,6 +494,13 @@ fn loss_list(py: Python<'_>, losses: &[PyProjectionLoss]) -> PyResult<Vec<Py<PyP
         .cloned()
         .map(|loss| Py::new(py, loss))
         .collect()
+}
+
+pub(crate) fn ledger_losses(
+    py: Python<'_>,
+    ledger: &LossLedger,
+) -> PyResult<Vec<Py<PyProjectionLoss>>> {
+    loss_list(py, &losses(ledger))
 }
 
 fn losses(ledger: &LossLedger) -> Vec<PyProjectionLoss> {

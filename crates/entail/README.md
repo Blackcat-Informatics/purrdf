@@ -39,6 +39,29 @@ external reasoner, no `tokio`, and no string round-trip.
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
 | `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
 
+## Prepared explanations
+
+`prepare_explanations` evaluates one immutable regime and graph selection.
+`prepared.session()` borrows that owner; `prepared.into_session()` owns it and
+its reusable proof index. Both extract requested proof subtrees through the
+same index and independently check each returned `ChaseProof`. An owned session
+does not borrow the source dataset. Returned proofs retain their original
+program, seed and model until their last owner drops.
+
+The shared `ReasonerSession::explain_conclusion` method retains one active owned
+explanation session. Existing Python, C and JavaScript session methods use that
+same path. Consecutive calls for the same parsed regime and exact graph reuse
+the evaluation and index; a different selection replaces them only after its
+first requested explanation succeeds. Refused selections preserve the active
+entry. One entry bounds retention at rest: replacement temporarily holds the
+old and new contexts, and in-flight proofs retain any context they still need.
+The mutex is released before answer rendering and certificate rechecking.
+
+Preparation, proof arenas and index entries retain their resident allocation
+contracts. Per-query checking and independent backward confirmation retain
+their existing costs; reuse does not make all query work subtree-sized.
+Tableau caps and recording options retain their separate DL meaning.
+
 ## Prepared class cardinality bounds
 
 `Reasoner` prepares schema-invariant cardinality contradictions with its selected

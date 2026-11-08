@@ -179,6 +179,10 @@ pub enum XsdDatatype {
     Boolean,
     /// `xsd:string`.
     String,
+    /// `xsd:normalizedString`, the string subset without CR, LF or tab.
+    NormalizedString,
+    /// `xsd:token`, the normalized-string subset without stray ASCII spaces.
+    Token,
     /// `xsd:anyURI`, with fixed XML whitespace collapse.
     AnyUri,
     /// `xsd:date`.
@@ -265,6 +269,8 @@ impl XsdDatatype {
             "double" => Self::Double,
             "boolean" => Self::Boolean,
             "string" => Self::String,
+            "normalizedString" => Self::NormalizedString,
+            "token" => Self::Token,
             "anyURI" => Self::AnyUri,
             "date" => Self::Date,
             "time" => Self::Time,
@@ -306,6 +312,8 @@ impl XsdDatatype {
             Self::Double => XSD_DOUBLE,
             Self::Boolean => XSD_BOOLEAN,
             Self::String => XSD_STRING,
+            Self::NormalizedString => XSD_NORMALIZED_STRING,
+            Self::Token => XSD_TOKEN,
             Self::AnyUri => XSD_ANY_URI,
             Self::Date => XSD_DATE,
             Self::Time => XSD_TIME,

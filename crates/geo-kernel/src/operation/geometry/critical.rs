@@ -611,14 +611,12 @@ impl ImageWorker<'_, '_, '_, '_> {
                                     .into_iter()
                                     .all(|row| jac[row][column].is_exact_zero())
                             });
-                            let rank_lost = if matches!(goal, CellGoal::Exact) && affine {
-                                jac[0][0]
+                            let rank_lost = matches!(goal, CellGoal::Exact)
+                                && affine
+                                && jac[0][0]
                                     .mul(&jac[1][1], math)?
                                     .sub(&jac[0][1].mul(&jac[1][0], math)?, math)?
-                                    .is_exact_zero()
-                            } else {
-                                false
-                            };
+                                    .is_exact_zero();
                             if matches!(goal, CellGoal::Exact) && (annihilated || rank_lost) {
                                 return Ok(ImageCell::ClosedSupport);
                             }

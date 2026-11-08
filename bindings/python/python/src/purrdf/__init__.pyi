@@ -193,9 +193,15 @@ class CompiledJsonLdContext:
     def from_prefixes(prefixes: dict[str, str]) -> CompiledJsonLdContext: ...
     def canonical_context_json(self) -> str: ...
 
-class CanonicalizationAlgorithm:
-    RDFC_1_0: CanonicalizationAlgorithm
-    UNSTABLE: CanonicalizationAlgorithm
+class CanonicalCause:
+    @property
+    def json(self) -> str: ...
+
+class CanonicalResult:
+    @property
+    def value(self) -> Any: ...
+    @property
+    def canonicalization_json(self) -> str: ...
 
 # ── Term model ──────────────────────────────────────────────────────────────────
 
@@ -422,6 +428,8 @@ class _QuerySolutionIterator:
 
 class QuerySolutions:
     @property
+    def execution_receipt_json(self) -> str | None: ...
+    @property
     def variables(self) -> list[Variable]: ...
     def __iter__(self) -> QuerySolutions: ...
     def __next__(self) -> QuerySolution: ...
@@ -434,6 +442,8 @@ class QuerySolutions:
 # graph-scoped in the source (an SCBD keeps every layer — base quad, reifier declaration
 # and annotation — in the graph that asserted it).
 class QueryTriples:
+    @property
+    def execution_receipt_json(self) -> str | None: ...
     def __iter__(self) -> QueryTriples: ...
     def __next__(self) -> Triple: ...
     def __len__(self) -> int: ...
@@ -449,6 +459,8 @@ class QueryTriples:
 # `graph_name`. `serialize` raises `ValueError` for a single-graph syntax
 # (`RdfFormat.TURTLE` / `RdfFormat.N_TRIPLES`) rather than dropping the graphs.
 class QueryQuads:
+    @property
+    def execution_receipt_json(self) -> str | None: ...
     def __iter__(self) -> QueryQuads: ...
     def __next__(self) -> Quad: ...
     def __len__(self) -> int: ...
@@ -484,6 +496,8 @@ class SerializeLoss:
     def empty_named_graphs_dropped(self) -> int: ...
 
 class QueryBoolean:
+    @property
+    def execution_receipt_json(self) -> str | None: ...
     def __bool__(self) -> bool: ...
 
 # ── Execution governors ─────────────────────────────────────────────────────────
@@ -594,6 +608,8 @@ class RelationAttestations(TypedDict):
 
 class QueryOutcome:
     @property
+    def execution_receipt_json(self) -> str: ...
+    @property
     def is_complete(self) -> bool: ...
     # The COMPLETE result only; `None` when a governor tripped. The rows a trip
     # reached are on `partial`, behind the certificate that says what they bound.
@@ -637,13 +653,15 @@ class EntailmentQueryOutcome:
     def tripped(self) -> TrippedGovernor | None: ...
 
 class UpdateOutcome:
+    @property
+    def execution_receipt_json(self) -> str: ...
     # `False` means NOTHING applied, never "not all of it applied".
     @property
     def is_applied(self) -> bool: ...
     @property
     def tripped(self) -> TrippedGovernor | None: ...
     @property
-    def evidence(self) -> GovernorEvidence: ...
+    def evidence(self) -> GovernorEvidence | None: ...
 
 # A SPARQL query parsed and admitted once, run many times with different bindings.
 # Built by `Store.prepare`. What is prepared is the PLAN, not the data: the object
@@ -661,12 +679,16 @@ class PreparedQuery:
     @property
     def parameters(self) -> list[str]: ...
     # Bind every declared parameter and run, returning the results exactly as
-    # `Store.query` does. Each keyword names a declared parameter; an unknown keyword
+    # `Store.query` does. Each dictionary key names a declared parameter; an unknown key
     # raises, and so does a parameter left unbound — an unbound focus would answer
     # over every subject, which is a silently wider answer rather than a visible
     # mistake.
     def run(
-        self, **bindings: _Term
+        self,
+        bindings: dict[str, _Term] | None = ...,
+        *,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
 
 # ── Store / Dataset ─────────────────────────────────────────────────────────────
@@ -683,7 +705,9 @@ class _QuadStore:
     def __iter__(self) -> QuadIter: ...
     # CREATE semantics under the constructor's graph-existence mode; SILENT only
     # suppresses an existing remembered slot. Invalid graph names still fail.
-    def add_graph(self, graph: NamedNode | BlankNode, *, silent: bool = False) -> None: ...
+    def add_graph(
+        self, graph: NamedNode | BlankNode, *, silent: bool = False
+    ) -> None: ...
     # Effective named slots, including declared empty graphs; excludes the default.
     def named_graphs(self) -> list[NamedNode | BlankNode]: ...
     # Engine configuration kwargs (unset = engine defaults): `extension_namespaces`
@@ -765,6 +789,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     def query_rdflib(
         self,
@@ -781,6 +807,8 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         named_graphs: bool = ...,
         default_graph: NamedNode | BlankNode | None = ...,
         default_union: bool = ...,
@@ -805,12 +833,16 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> QueryOutcome: ...
@@ -838,6 +870,7 @@ class _QuadStore:
         premise_iris: Sequence[str] | None = ...,
         max_stored_facts: int | None = ...,
         max_join_steps: int | None = ...,
+        max_term_arena_bytes: int | None = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         property_fn_namespaces: list[str] | None = ...,
@@ -849,12 +882,16 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_answers: int | None = ...,
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> EntailmentQueryOutcome: ...
@@ -875,7 +912,9 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
-    ) -> None: ...
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
+    ) -> UpdateOutcome: ...
     # Governed sibling of `update`. No `max_answers`: it bounds an answer sequence
     # an UPDATE does not have.
     def update_governed(
@@ -892,11 +931,15 @@ class _QuadStore:
         xpath_regex: str | None = ...,
         geo: GeoConfiguration = ...,
         division: str | None = ...,
+        now: str | None = ...,
+        entropy_seed: int | None = ...,
         fuel: int | None = ...,
         deadline_ms: int | None = ...,
         max_intermediate_cells: int | None = ...,
         max_scratch_bytes: int | None = ...,
         max_remote_requests: int | None = ...,
+        max_udf_depth: int | None = ...,
+        unlimited_udf_depth: bool = ...,
         no_ceiling: bool = False,
         cancel: CancellationToken | None = ...,
     ) -> UpdateOutcome: ...
@@ -929,6 +972,7 @@ class Store(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def bulk_load(
         self,
@@ -937,6 +981,7 @@ class Store(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> None: ...
     def remove(self, quad: Quad) -> None: ...
@@ -1043,6 +1088,7 @@ class MutableDataset(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> bool: ...
     def remove(self, quad: Quad) -> bool: ...
@@ -1088,7 +1134,9 @@ class MutableDataset(_QuadStore):
 class Dataset:
     def __init__(self, quads: object | None = ...) -> None: ...
     def add(self, quad: Quad) -> None: ...
-    def canonicalize(self, algorithm: CanonicalizationAlgorithm) -> None: ...
+    def canonicalize(
+        self, *, canonical_search: str, cancel: CancellationToken | None = None
+    ) -> CanonicalResult: ...
     def __iter__(self) -> QuadIter: ...
     def __len__(self) -> int: ...
 
@@ -1105,7 +1153,8 @@ class Dataset:
 # HexTuples) emits absolute IRIs rather than raising; a base that is not an absolute
 # IRI raises on either leg.
 def parse(
-    input: bytes | str, format: RdfFormat, *, base: str | None = ...
+    input: bytes | str, format: RdfFormat, *, base: str | None = ...,
+    input_options: str | None = ...
 ) -> list[Quad]: ...
 @overload
 def serialize(
@@ -1330,6 +1379,22 @@ def to_json_ld(
     context: CompiledJsonLdContext | None = ...,
     base: str | None = ...,
 ) -> str: ...
+def expand_document(source: bytes, *, request_json: bytes) -> str:
+    """Expand original document bytes under a closed version-one request."""
+    ...
+
+def compact_document(source: bytes, *, request_json: bytes) -> str:
+    """Compact source bytes using the explicit request output context."""
+    ...
+
+def flatten_document(source: bytes, *, request_json: bytes) -> str:
+    """Flatten source bytes, optionally compacting under an output context."""
+    ...
+
+def frame_document(source: bytes, frame: bytes, *, request_json: bytes) -> str:
+    """Frame separate source and frame bytes under a closed version-one request."""
+    ...
+
 def serialize_jsonld(
     data: bytes,
     *,
@@ -1505,16 +1570,132 @@ class ColumnarRows(TypedDict):
     annotations: list[tuple[int | str | bytes | None, ...]]
     blobs: list[tuple[int | str | bytes | None, ...]]
 
-def gts_columnar_rows_from_bytes(data: bytes) -> ColumnarRows: ...
-def gts_columnar_parquet_from_bytes(data: bytes) -> dict[str, bytes]: ...
+class NativeErrorValue(TypedDict):
+    kind: str
+    value: (
+        int
+        | bool
+        | str
+        | bytes
+        | None
+        | NativeErrorRecord
+        | tuple[NativeErrorValue, ...]
+    )
+
+class NativeErrorRecord(TypedDict):
+    code: str
+    fields: dict[str, NativeErrorValue]
+    items: tuple[NativeErrorValue, ...]
+
+class GtsBlobLimits:
+    def __init__(
+        self,
+        *,
+        max_encoded_bytes: int | None,
+        max_decoded_bytes: int | None,
+        max_total_decoded_bytes: int | None,
+        max_metadata_bytes: int | None,
+        max_frame_decoded_bytes: int | None,
+    ) -> None: ...
+    @staticmethod
+    def unbounded() -> GtsBlobLimits: ...
+    @property
+    def max_encoded_bytes(self) -> int | None: ...
+    @property
+    def max_decoded_bytes(self) -> int | None: ...
+    @property
+    def max_total_decoded_bytes(self) -> int | None: ...
+    @property
+    def max_metadata_bytes(self) -> int | None: ...
+    @property
+    def max_frame_decoded_bytes(self) -> int | None: ...
+
+class GtsBlobUsage:
+    @property
+    def retained_payload_bytes(self) -> int: ...
+    @property
+    def retained_refusal_metadata_bytes(self) -> int: ...
+    @property
+    def peak_payload_bytes(self) -> int: ...
+    @property
+    def peak_retained_bytes(self) -> int: ...
+    @property
+    def peak_selected_digests(self) -> int: ...
+
+class GtsBlobOmission:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def digest(self) -> str | None: ...
+    @property
+    def digest_computed(self) -> bool: ...
+    @property
+    def encoded_bytes(self) -> int: ...
+    @property
+    def segment_index(self) -> int: ...
+    @property
+    def frame_index(self) -> int: ...
+    @property
+    def frame_range(self) -> tuple[int, int]: ...
+    @property
+    def frame_id(self) -> bytes: ...
+    @property
+    def segment_head(self) -> bytes: ...
+    @property
+    def limits(self) -> GtsBlobLimits: ...
+    @property
+    def usage(self) -> GtsBlobUsage: ...
+    @property
+    def native_cause(self) -> NativeErrorRecord | None: ...
+
+class GtsBlobExportReport:
+    @property
+    def losses(self) -> list[ProjectionLoss]: ...
+    @property
+    def omissions(self) -> list[GtsBlobOmission]: ...
+    @property
+    def usage(self) -> GtsBlobUsage: ...
+
+class GtsExportResult:
+    @property
+    def paths(self) -> tuple[str, ...]: ...
+    @property
+    def report(self) -> GtsBlobExportReport: ...
+
+_GtsBlobPolicy: TypeAlias = GtsBlobLimits | TypingLiteral["unbounded"]
+
+def gts_columnar_rows_from_bytes(
+    data: bytes, *, blob_limits: _GtsBlobPolicy
+) -> tuple[ColumnarRows, GtsBlobExportReport]: ...
+def gts_columnar_parquet_from_bytes(
+    data: bytes, *, blob_limits: _GtsBlobPolicy
+) -> tuple[dict[str, bytes], GtsBlobExportReport]: ...
 
 # Writers use the canonical native v1 schema, with its own dense value-order ids.
-# SQLite needs no extra, DuckDB needs [duckdb], and Parquet uses the native codec.
-def gts_to_sqlite(data: bytes, path: str) -> str: ...
-def gts_to_duckdb(data: bytes, path: str) -> str: ...
-def gts_to_parquet(data: bytes, out_dir: str) -> list[str]: ...
+def gts_to_sqlite(
+    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+) -> GtsExportResult: ...
+def gts_to_duckdb(
+    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+) -> GtsExportResult: ...
+def gts_to_parquet(
+    data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy
+) -> GtsExportResult: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
+class YamlSourceExport:
+    @property
+    def root(self) -> str: ...
+    @property
+    def dataset(self) -> RdfDataset: ...
+
+def yaml_source_export(
+    source: bytes, *, source_iri: str, profile_json: bytes
+) -> YamlSourceExport: ...
+def yaml_source_reconstruct(
+    dataset: RdfDataset, *, root: str, profile_json: bytes
+) -> bytes: ...
+
 class RdfDataset:
     # `base` is the document base relative IRI references resolve against, exactly
     # as on the module-level `parse` and `Store.load`.
@@ -1530,7 +1711,12 @@ class RdfDataset:
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is
     # deliberately no `to_ntriples` alias: one serializer, one name.
-    def to_nquads(self) -> str: ...
+    def to_nquads(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     def serialize_jsonld(
         self,
         output_format: str,
@@ -1582,7 +1768,9 @@ class shex:
     # schema and data. Typed engine errors raise ValueError. `xpath_regex` selects
     # the dated XPath law pattern facets match under (see `XPATH_REGEX_PROFILES`):
     # a pattern the law refuses makes its entry nonconformant, and a native resource
-    # refusal raises ValueError for the whole map.
+    # refusal raises ValueError for the whole map. `matcher_maximum_states` admits
+    # assignment-prefix states per ambiguous neighbourhood (default 200,000); refusal
+    # reports shex-matcher-work with exact unsigned attempted/maximum parameters.
     @staticmethod
     def validate(
         schema: str,
@@ -1593,6 +1781,7 @@ class shex:
         data_format: str = ...,
         base: str | None = ...,
         xpath_regex: str | None = ...,
+        matcher_maximum_states: int = ...,
     ) -> list[ShexResultEntry]: ...
     # Parse a ShEx schema ("shexc" or "shexj") and return its canonical ShExJ
     # JSON text, for schema tooling and cross-syntax round-trips.
@@ -1654,6 +1843,9 @@ class _Shapes:
     # validation and `prepare()` carry it. `shacl_profile` is the stable id of the exact
     # dated SHACL law the shapes graph is loaded and every validation answers under (see
     # `shapes.validate`); None is the compatibility law.
+    # `recursion` selects "lfp" or "gfp" with both explicit unsigned 64-bit
+    # limits. Prepared execution retains the request; products require it again
+    # on restore. Read `conforms` even when ordinary `results` is empty.
     def __init__(
         self,
         shapes_ttl: str,
@@ -1663,6 +1855,9 @@ class _Shapes:
         shapes_graph: str | None = None,
         subclass_of_in_shapes_graph: bool = False,
         shacl_profile: str | None = None,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
     ) -> None: ...
     # `xpath_regex` (here, on `validate_store`, on `PreparedShapes.validate_nt` and
     # `validate_store_changes`, and on `shapes.validate`) selects the dated XPath law sh:pattern and every SHACL-SPARQL
@@ -1740,13 +1935,20 @@ class _ShapesImportError(ValueError):
 
     kind: str
     iris: list[str]
+    native_cause: dict[str, object]
+    native_cause_json: str
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as
     a prepared product."""
 
     # Byte-deterministic: equal preparations produce identical bytes.
-    def to_product(self) -> bytes: ...
+    def to_product(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Where this preparation came from, as one deterministic token: `parsed`,
     # `restored-admitted <identity_digest>` or `restored-rebuilt <identity_digest>`.
     # Total — there is always an answer, and none of them means "unknown".
@@ -1823,15 +2025,46 @@ class _ShapesProduct:
     def identity_digest(self) -> str: ...
     # Ordered `(label, rendered_value)` pairs: the ORDER is the identity.
     def identity_components(self) -> list[tuple[str, str]]: ...
-    def admit(self) -> _PreparedShapes: ...
+    def admit(
+        self,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
     # Admit only the product whose `identity_digest()` is `expected_identity`; a
     # different binding raises with `.dimension == "shapes-graph"`.
-    def admit_expecting(self, expected_identity: str) -> _PreparedShapes: ...
-    def rebuild(self) -> _PreparedShapes: ...
+    def admit_expecting(
+        self,
+        expected_identity: str,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
+    def rebuild(
+        self,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
     # Rebuild only the product whose `identity_digest()` is `expected_identity`; a
     # different binding raises with `.dimension == "shapes-graph"`.
-    def rebuild_expecting(self, expected_identity: str) -> _PreparedShapes: ...
-    def certify(self) -> None: ...
+    def rebuild_expecting(
+        self,
+        expected_identity: str,
+        *,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+    ) -> _PreparedShapes: ...
+    def certify(
+        self,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
 
 class shapes:
     # Every re-export below is spelled with an explicit `TypeAlias` — as
@@ -1862,7 +2095,12 @@ class shapes:
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
-    ) -> bytes: ...
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Validate a data graph (N-Triples) against a shapes graph (Turtle).
     #
     # `shapes_base` is the base IRI the SHAPES document's relative IRI references
@@ -1937,6 +2175,9 @@ class shapes:
         subclass_of_in_shapes_graph: bool = False,
         xpath_regex: str | None = None,
         shacl_profile: str | None = None,
+        recursion: str | None = None,
+        recursion_max_pairs: int | None = None,
+        recursion_max_iterations: int | None = None,
     ) -> dict[str, builtins.object]: ...
     # Entail a data graph (N-Triples) under a shapes graph (Turtle): run the shapes
     # graph's default rule set as SHACL 1.2 Inference Rules executes it — layer by
@@ -1971,7 +2212,11 @@ class shapes:
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
         xpath_regex: str | None = None,
-    ) -> dict[str, builtins.object]: ...
+        now: str | None = None,
+        entropy_seed: int | None = None,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in
     # canonical order, "proof": the proof text when explain=True, else None,
@@ -2023,6 +2268,8 @@ class shapes:
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
         xpath_regex: str | None = None,
+        now: str | None = None,
+        entropy_seed: int | None = None,
     ) -> dict[str, builtins.object]: ...
     # Check a SPARQL 1.2 RL rule set WITHOUT evaluating it: the grammar, the IMPORTS
     # closure resolved from `imports`, well-formedness and stratification — every
@@ -2172,10 +2419,11 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[RdfDataset, str]: ...
     # The text-in/text-out twin of `materialize`: an N-Quads (or N-Triples)
     # document in, canonical flat N-Quads under the shipped profile plus the report out,
-    # under the same two evaluation limits.
+    # under the same three evaluation limits.
     @staticmethod
     def materialize_nt(
         data: str,
@@ -2186,7 +2434,10 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
-    ) -> tuple[str, str]: ...
+        max_term_arena_bytes: int | None = None,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The rule table the specification DEFINES the regime by, in table order
     # (78 rules for OWL-RL, 18 for RDFS, 5 for D, 3 for RDF; `simple`, `owl-direct`
     # and `rif` have no specification table of their own, so `[]`).
@@ -2251,29 +2502,41 @@ class entail:
         premise_iris: Sequence[str],
         step_cap: int = ...,
         work_cap: int = ...,
-    ) -> tuple[str, str]: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The entailed subsumption hierarchy over the named classes: `equivalent`,
     # `subclass` (the full transitive closure), `direct` (its reduction) and
     # `unsatisfiable` lines, in that block order. Raises ValueError for an
     # ontology with no model, where every class subsumes every other.
     @staticmethod
     def classify(
-        data: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The entailed types of the named individuals (`type` lines) and the most
     # specific of them (`direct-type` lines).
     @staticmethod
     def realize(
-        data: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The named individuals entailed to be instances of `class_`, as
     # `instance <term>` lines. `class_` is ONE N-Triples term, angle brackets
     # included. A class the ontology never mentions yields an empty answer, which
     # is a real answer rather than an error.
     @staticmethod
     def instances(
-        data: str, class_: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, class_: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Does the ontology entail `axiom`? `axiom` is ONE triple of the OWL 2 RDF
     # mapping: rdfs:subClassOf, owl:equivalentClass, owl:disjointWith, rdf:type,
     # owl:sameAs, owl:differentFrom and rdfs:subPropertyOf select the seven named
@@ -2281,8 +2544,11 @@ class entail:
     # answer is `entails true|false|unknown` followed by the axiom AS READ.
     @staticmethod
     def entails(
-        data: str, axiom: str, step_cap: int = ..., work_cap: int = ...
-    ) -> tuple[str, str]: ...
+        data: str, axiom: str, step_cap: int = ..., work_cap: int = ...,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # Which OWL 2 profiles the ontology is provably in (`certified <profile>`
     # lines, most restrictive first: EL, QL, RL, DL, Full) and what blocked the
     # others. Purely syntactic, so the certificate is an OWL profile certificate
@@ -2294,14 +2560,24 @@ class entail:
     # N-Quads; the certificate's `conservative` line says whether it is the
     # minimal module or a sound superset.
     @staticmethod
-    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]: ...
+    def extract_module(
+        data: str, signature: str, method: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # WHY a DL axiom is entailed: a minimal subset of the ontology that still
     # entails it, as canonical N-Quads. A tableau performs no derivation steps, so
     # this is a JUSTIFICATION and deliberately not called a proof. The
     # certificate's `sufficient` and `minimal` lines are RE-DECIDED here, so they
     # check the answer rather than restate it.
     @staticmethod
-    def justify(data: str, axiom: str) -> tuple[str, str]: ...
+    def justify(
+        data: str, axiom: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # WHY one triple of a chase closure holds: which rules, from which premises.
     # `conclusion` is ONE N-Quads statement. The certificate's `derived-*` lines
     # are what the CHECKER re-derived from the proof term and the clause program,
@@ -2332,7 +2608,10 @@ class entail:
         argument: str = ...,
         step_cap: int = ...,
         work_cap: int = ...,
-    ) -> tuple[str, str, str]: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # CHECK a proof against the CALLER's own ontology, question and answer.
     # Nothing in it trusts the producer: the ontology is parsed from `data`, the
     # question is re-derived from `service` and `argument`, the claims are read
@@ -2350,7 +2629,10 @@ class entail:
         answer: str,
         certificate: str,
         proof: str,
-    ) -> str: ...
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> CanonicalResult: ...
     # The seven services `prove` and `check_proof` accept, so a caller can
     # MEASURE the set rather than trust a docstring.
     @staticmethod
@@ -2410,6 +2692,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -2430,6 +2713,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
@@ -2448,6 +2732,7 @@ class entail:
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
+        max_term_arena_bytes: int | None = None,
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────
@@ -2485,15 +2770,55 @@ class entail:
         # Answer `service` about `argument`, with its proof — see
         # `purrdf.entail.prove`. Returns (answer, certificate, proof). Raises
         # ValueError on a session that records nothing.
-        def prove(self, service: str, argument: str = ...) -> tuple[str, str, str]: ...
-        def consistency(self) -> tuple[str, str]: ...
-        def classify(self) -> tuple[str, str]: ...
-        def realize(self) -> tuple[str, str]: ...
-        def instances(self, class_: str) -> tuple[str, str]: ...
-        def entails(self, axiom: str) -> tuple[str, str]: ...
+        def prove(
+            self, service: str, argument: str = ...,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def consistency(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def classify(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def realize(
+            self,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def instances(
+            self, class_: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def entails(
+            self, axiom: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
         def profile(self) -> tuple[str, str]: ...
-        def extract_module(self, signature: str, method: str) -> tuple[str, str]: ...
-        def justify(self, axiom: str) -> tuple[str, str]: ...
+        def extract_module(
+            self, signature: str, method: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
+        def justify(
+            self, axiom: str,
+            *,
+            canonical_search: str,
+            cancel: CancellationToken | None = None,
+        ) -> CanonicalResult: ...
         def explain_conclusion(
             self, regime: RegimeLike, conclusion: str
         ) -> tuple[str, str]: ...
@@ -2515,13 +2840,27 @@ _from_json_ld = from_json_ld
 _to_rdf_xml = to_rdf_xml
 _from_rdf_xml = from_rdf_xml
 _gts_relational_rows_from_bytes = gts_relational_rows_from_bytes
+_gts_columnar_rows_from_bytes = gts_columnar_rows_from_bytes
+_gts_columnar_parquet_from_bytes = gts_columnar_parquet_from_bytes
 _gts_to_sqlite = gts_to_sqlite
 _gts_to_duckdb = gts_to_duckdb
 _gts_to_parquet = gts_to_parquet
 _RdfDataset = RdfDataset
 _GtsFoldViewNative = GtsFoldViewNative
 
+_gts_GtsBlobLimits = GtsBlobLimits
+_gts_GtsBlobUsage = GtsBlobUsage
+_gts_GtsBlobOmission = GtsBlobOmission
+_gts_GtsBlobExportReport = GtsBlobExportReport
+_gts_GtsExportResult = GtsExportResult
+
 class gts:
+    GtsBlobLimits = _gts_GtsBlobLimits
+    GtsBlobUsage = _gts_GtsBlobUsage
+    GtsBlobOmission = _gts_GtsBlobOmission
+    GtsBlobExportReport = _gts_GtsBlobExportReport
+    GtsExportResult = _gts_GtsExportResult
+
     gts_from_quads = _gts_from_quads
     gts_from_rdf12_bytes = _gts_from_rdf12_bytes
     compile_gts_native = _compile_gts_native
@@ -2534,6 +2873,8 @@ class gts:
     to_rdf_xml = _to_rdf_xml
     from_rdf_xml = _from_rdf_xml
     gts_relational_rows_from_bytes = _gts_relational_rows_from_bytes
+    gts_columnar_rows_from_bytes = _gts_columnar_rows_from_bytes
+    gts_columnar_parquet_from_bytes = _gts_columnar_parquet_from_bytes
     gts_to_sqlite = _gts_to_sqlite
     gts_to_duckdb = _gts_to_duckdb
     gts_to_parquet = _gts_to_parquet
@@ -2614,8 +2955,15 @@ class _OwnershipReport:
     def ownership_errors(self) -> list[str]: ...
 
 class _SliceCatalog:
+    @property
+    def canonicalization_json(self) -> str: ...
     @staticmethod
-    def discover(root: str, namespace: str) -> _SliceCatalog: ...
+    def discover(
+        root: str, namespace: str,
+        *,
+        canonical_search: str,
+        cancel: CancellationToken | None = None,
+    ) -> _SliceCatalog: ...
     @property
     def records(self) -> list[_SliceRecord]: ...
     @property
@@ -2648,8 +2996,8 @@ class slice:
 # ordered answer. Producers, strata and weights are caller-supplied; nothing here
 # has a default, because PurRDF mints no vocabulary.
 #
-# Every weight crosses as an `int` of raw fixed-point units (`SCALE` is one whole
-# unit) and every score comes back as its exact decimal `str`, never a float.
+# Every weight crosses as an unsigned raw `int`, with `10**scale_digits` units
+# per whole value. Every score returns as `{raw, scale_digits}`, never a float.
 
 # One ranked text producer's declaration: `(stratum, predicate, graph)`, the same
 # three followed by the producer's candidate domains, or those four followed by
@@ -2820,9 +3168,12 @@ class _TextAnalyzerSpec(TypedDict, total=False):
     artifacts: list[bytes]
     entries: list[tuple[str, int]]
     max_token_scalars: int
-    accent: TypingLiteral[
-        "preserve", "latin-greek-cyrillic", "latin-greek-cyrillic-arabic-hebrew"
-    ] | list[TypingLiteral["latin", "greek", "cyrillic", "hebrew", "arabic"]]
+    accent: (
+        TypingLiteral[
+            "preserve", "latin-greek-cyrillic", "latin-greek-cyrillic-arabic-hebrew"
+        ]
+        | list[TypingLiteral["latin", "greek", "cyrillic", "hebrew", "arabic"]]
+    )
     stemming: TypingLiteral["none", "english"]
     input_mode: TypingLiteral["plain", "html-text", "html-attribute"]
     code_length: int
@@ -2926,11 +3277,17 @@ class _PlanDocumentError(ValueError):
 
     refusal: str
 
+class _RetrievalScore(TypedDict):
+    raw: int
+    scale_digits: int
+
+class _RetrievalOrdering(TypedDict):
+    semantics: str
+    leading: bool
+    keys: dict[str, tuple[bytes, bytes]]
+
 class retrieval:
-    # The decimal exponent of one whole fixed-point unit.
-    SCALE_DIGITS: int
-    # One whole fixed-point unit, in raw units: the weight `Fixed::ONE`.
-    SCALE: int
+    # Fusion precision is explicit on each law. Scores retain raw units and scale.
     # Spelled with an explicit `TypeAlias`, exactly as `purrdf.shapes` spells its
     # own re-exports and for the same reason: this is a type a caller ANNOTATES
     # with, and a plain `X = X` reads to a type checker as a variable.
@@ -2942,7 +3299,7 @@ class retrieval:
     # * "reciprocal_rank" truncates the reciprocal to the declared scale BEFORE
     #   the weight is applied. The inner truncation is a ceiling no weight can
     #   lift, so this rule stops separating adjacent ranks at the same depth —
-    #   just past a million — for every weight at or above one.
+    #   just past the square root of the scale — for every weight at or above one.
     # * "weighted_reciprocal_rank" folds the weight into the numerator as one
     #   exactly-rounded division. Its value is never below the other's, and its
     #   reachable depth grows with the weight, so a heavier stratum is readable
@@ -3040,6 +3397,7 @@ class retrieval:
         top_k: int,
         hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
         knn_producers: dict[str, _KnnProducerSpec] | None = None,
+        caller_ordered: bool = False,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
@@ -3161,16 +3519,16 @@ class retrieval:
     # the larger of the two. `"planned_resolution"` is not a fallback
     # source for it: that map is empty unless the call names a fusion law.
     #
-    # `weights`, `k` and `decay` are the fusion law the caller means to fuse
+    # `weights`, `k`, `decay` and `scale_digits` are the fusion law the caller means to fuse
     # under, and naming it is what makes `"planned_resolution"` answerable: per
     # weighted stratum, the `"separates_to"` depth this law still tells adjacent
     # ranks apart at (`None` when it never stops inside a depth a plan can
     # express), the `"requested_depth"` the plan recorded, and
     # `"fully_separated"`. That is what the plan will cost in rank resolution,
-    # known without executing a single unit. Omit all three and the map is empty
+    # known without executing a single unit. Omit all four and the map is empty
     # — no law is invented to measure against — and naming some of them and not
     # the rest raises `ValueError` saying which part is missing, because the
-    # three are one law between them. The rule matters most here: a stratum the
+    # four are one law between them. The rule matters most here: a stratum the
     # truncated rule reports as coarse may be fully separated under the folded
     # one at the same weight.
     #
@@ -3191,19 +3549,21 @@ class retrieval:
         weights: dict[str, int] | None = None,
         k: int | None = None,
         decay: str | None = None,
+        scale_digits: int | None = None,
+        ordering: _RetrievalOrdering | None = None,
         data_format: str = "turtle",
         base: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Run the whole ladder and return one fused answer.
     #
     # `weights` maps a stratum IRI to its weight in raw fixed-point units, where
-    # `SCALE` (that is, `10 ** SCALE_DIGITS`) is one whole unit. A weight of one
-    # is `SCALE`, never the literal `1`, which is one raw unit. Weights are read
+    # `10 ** scale_digits` is one whole unit. A weight of one
+    # is `10 ** scale_digits`; the literal `1` is one raw unit. Weights are read
     # only as ratios, so a dict mixing the two spellings is a silent
-    # factor-of-`SCALE` error: it runs, refuses nothing, and ranks as though the
+    # factor-of-`10 ** scale_digits` error: it runs, refuses nothing, and ranks as though the
     # smaller stratum were absent. Write every weight the same way.
     #
-    # `k`, `decay` and `top_k` are required: the fusion law is the caller's and
+    # `k`, `decay`, `scale_digits` and `top_k` are required: the fusion law is the caller's and
     # fused enumeration is top-k by construction. How many contributions a
     # candidate may receive is not a parameter — it is the number of weighted
     # strata, because a candidate surfaces at most once in each.
@@ -3261,7 +3621,7 @@ class retrieval:
     # argument, the depth already sat on that declaration, so the row past it could
     # not be asked for and whether one exists was NOT observable, which is why this
     # is not `"exhausted"`;
-    # `"ceiling_reached"` (with `"bound"`: an exact decimal `str`) is a
+    # `"ceiling_reached"` (with `"bound"`: `{raw, scale_digits}`) is a
     # contribution bound, every row at or above it read and the rows below not —
     # what a fusion the caller's `top_k` stopped writes over the streams it
     # stopped; `"supplied_query_ended"` (with `"rank"`: int) is a unit running a
@@ -3408,7 +3768,9 @@ class retrieval:
         statistics: dict[str, builtins.object],
         k: int,
         decay: str,
+        scale_digits: int,
         top_k: int,
+        ordering: _RetrievalOrdering | None = None,
         hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
         knn_producers: dict[str, _KnnProducerSpec] | None = None,
         data_format: str = "turtle",
@@ -3436,7 +3798,9 @@ class retrieval:
     # again under "weighted_reciprocal_rank". A `k` of zero is deliberately not
     # told that way, because switching rules does not make it usable.
     @staticmethod
-    def weight_for_depth(depth: int, k: int, *, decay: str) -> int: ...
+    def weight_for_depth(
+        depth: int, k: int, *, decay: str, scale_digits: int
+    ) -> _RetrievalScore: ...
     # How many consecutive ranks around `rank` a weight of `weight_raw` cannot
     # tell apart under the rule `decay` names.
     #
@@ -3457,14 +3821,15 @@ class retrieval:
     #
     # No stratum is taken, because a width is a property of the rule, its
     # smoothing constant, the weight and the rank and of nothing else.
-    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    # `weight_raw` is in raw units, where `10 ** scale_digits` is one whole unit.
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a width: a rank of zero, a smoothing constant of zero, an unknown
-    # `decay` spelling, or a weight that is not strictly positive.
+    # `decay` spelling, or a zero weight. Negative weights and weights outside
+    # the unsigned 128-bit range raise `OverflowError` during extraction.
     @staticmethod
     def class_width(
-        weight_raw: int, k: int, rank: int, *, decay: str
+        weight_raw: int, k: int, rank: int, *, decay: str, scale_digits: int
     ) -> int | None: ...
     # The deepest depth that can be read with every rank in it sitting in a
     # class no wider than `max_width`, for a weight of `weight_raw` under the
@@ -3497,13 +3862,14 @@ class retrieval:
     #
     # No stratum is taken, because the answer is a property of the rule, its
     # smoothing constant, the weight and the tolerance and of nothing else.
-    # `weight_raw` is in raw fixed-point units, where `SCALE` is one whole unit.
+    # `weight_raw` is in raw units, where `10 ** scale_digits` is one whole unit.
     #
     # An operand the law cannot evaluate raises `ValueError` rather than
     # returning a depth: a smoothing constant of zero, a `max_width` of zero —
     # a class always contains its own rank, so a tolerance of zero is not a
-    # tolerance — an unknown `decay` spelling, or a weight that is not strictly
-    # positive. The constant and the tolerance are both checked before anything
+    # tolerance — an unknown `decay` spelling, or a zero weight. Negative weights
+    # and weights outside the unsigned 128-bit range raise `OverflowError`
+    # during extraction. The constant and the tolerance are both checked before anything
     # is measured, so neither refusal depends on the other argument; a tolerance
     # of one does no walking, and letting it answer where a larger tolerance
     # refuses would make one unusable rule usable or not according to the
@@ -3522,7 +3888,7 @@ class retrieval:
     # a hot-loop one.
     @staticmethod
     def deepest_rank_within_width(
-        weight_raw: int, k: int, max_width: int, *, decay: str
+        weight_raw: int, k: int, max_width: int, *, decay: str, scale_digits: int
     ) -> int | None: ...
     # The head rank at which a candidate that has collected `naming_raw`'s
     # contributions, at rank `at_rank` in each of them, first beats the threshold
@@ -3546,8 +3912,10 @@ class retrieval:
     #
     # `None` when no rank a plan can express brings the threshold below the
     # bound, rendered as a wall and never as an enormous rank. Weights are raw
-    # fixed-point units (`SCALE` is one whole unit); a non-positive weight, a `k`
-    # of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    # fixed-point units (`10 ** scale_digits` is one whole unit); a zero weight,
+    # a `k` of zero, a rank of zero or an unknown `decay` raise `ValueError`.
+    # Negative weights and weights outside the unsigned 128-bit range raise
+    # `OverflowError` during extraction.
     @staticmethod
     def crossing_rank_at(
         naming_raw: list[int],
@@ -3556,4 +3924,5 @@ class retrieval:
         k: int,
         *,
         decay: str,
+        scale_digits: int,
     ) -> int | None: ...

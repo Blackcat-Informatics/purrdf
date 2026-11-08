@@ -1602,7 +1602,8 @@ mod tests {
         assert_eq!(context.remaining_workspace(), 0);
         context.release_workspace(remaining).unwrap();
         let text = crate::wkt::write_exact_in_context(output.literal(), &mut context).unwrap();
-        let restored = crate::wkt::parse(&text, &crs).unwrap();
+        // This trusted 240-place output exceeds the default parsing work budget.
+        let restored = crate::wkt::parse_unbounded(&text, &crs).unwrap();
         assert_eq!(
             restored.geometry().coords().next(),
             literal.geometry().coords().next()

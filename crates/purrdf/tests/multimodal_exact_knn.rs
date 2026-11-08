@@ -35,14 +35,15 @@
 //! Every IRI below is this test's own, in the host's role. PurRDF mints no vocabulary.
 
 use purrdf_core::purremb_fixture::Identities;
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf::retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, Fixed, FusionProfile, Iri,
-    RECIP_K, RankFidelity, RequestTerm, RetrievalRequest, Statistics, Term, TopK, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, ExclusionBasis, FusionProfile, Iri, RECIP_K,
+    RankFidelity, RequestTerm, RetrievalRequest, Score, Statistics, Term, TopK, plan, search,
 };
 use purrdf::sparql::{
     EmbeddingKnnRelation, EmbeddingSpace, ExtensionEnv, InternedOutcome, KnnGuard, KnnObservations,
@@ -50,7 +51,7 @@ use purrdf::sparql::{
 };
 use purrdf::text::{SearchObservations, TextSearchRelation};
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
     PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfTermTarget, TargetSet,
     TermValue, VectorDtype,
@@ -125,7 +126,11 @@ fn knn_space() -> EmbeddingSpace {
     let rows = vectors();
     let dimension = u32::try_from(DIMS).expect("small");
     let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&empty).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &empty,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut targets = Vec::with_capacity(CORPUS);
     let mut bindings = Vec::with_capacity(CORPUS);
@@ -288,9 +293,9 @@ fn fixture_statistics() -> FixtureStatistics {
 fn fixture_profile() -> FusionProfile {
     let weights = [iri(TEXT_STRATUM), iri(KNN_STRATUM)]
         .into_iter()
-        .map(|stratum| (stratum, Fixed::ONE))
+        .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -300,7 +305,7 @@ fn fixture_profile() -> FusionProfile {
 
 /// One row of a fused answer: the candidate, its fused score, and which stratum
 /// contributed what at which rank.
-type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+type AnswerRow = (Term, Score, Vec<(Iri, u64, Score)>);
 
 /// What one run cost and what it answered, every figure read off either the answer's
 /// trailer or a relation's own counter.
@@ -493,12 +498,12 @@ fn bound_candidate(
         vector_term(0)
     );
     let mut execution = engine
-        .prepare_execution(&text, None, &["n"], options)
+        .prepare_execution(&text, None, &["n"], &options)
         .expect("the bound-candidate call prepares");
     let slot = execution.slot("n").expect("the declared parameter");
     execution.bind(slot, term.clone()).expect("the term binds");
     engine
-        .execute(&mut execution, dataset, options, |outcome| match outcome {
+        .execute(&mut execution, dataset, &options, |outcome| match outcome {
             InternedOutcome::Solutions(solutions) => {
                 let column = solutions.column("d").expect("?d is projected");
                 solutions
@@ -527,14 +532,14 @@ fn ranked_reading(
         vector_term(0)
     );
     let prepared = engine
-        .prepare_query_with_options(&text, None, options)
+        .prepare_query_with_options(&text, None, &options)
         .expect("the ranked call prepares");
     match engine
         .query_prepared_governed_view(
             dataset,
             &prepared,
             &[],
-            options,
+            &options,
             &purrdf::sparql::QueryGovernors::UNBOUNDED,
         )
         .expect("the ranked call runs")

@@ -15,7 +15,7 @@
 //!   condition of the same shape, such as an IRI refusal's `iri-*` cause.
 //!
 //! A host reads the condition and its typed arguments without parsing English.
-//! Native storage refusals additionally retain `code` and `diagnostic_json` (the
+//! Native diagnostics additionally retain `code` and `diagnostic_json` (the
 //! original `purrdf-diagnostic-v1` record). Its capacity counts are decimal strings,
 //! preserving the exact attempted count and limit without a floating-point conversion.
 //!
@@ -40,29 +40,93 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+/// Preserve the original error class and attach the actual native execution receipt.
+pub(crate) fn with_execution_receipt(py: Python<'_>, error: PyErr, receipt: String) -> PyErr {
+    match error.value(py).setattr("execution_receipt_json", receipt) {
+        Ok(()) => error,
+        Err(failure) => failure,
+    }
+}
+
+/// Preserve the native failure and attach the context captured before it.
+pub(crate) fn observed_result<T>(
+    py: Python<'_>,
+    capture: purrdf_validate::query::ExecutionReceiptCapture,
+    outcome: PyResult<T>,
+) -> PyResult<(T, purrdf_sparql_eval::QueryCoordinates)> {
+    let coordinates = capture
+        .into_coordinates()
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let outcome = outcome.map_err(|error| {
+        with_execution_receipt(
+            py,
+            error,
+            purrdf_validate::query::execution_receipt_json(&coordinates),
+        )
+    })?;
+    Ok((outcome, coordinates))
+}
+
 /// The `ValueError` reading `message` for `diagnostic`, carrying its typed
 /// presentation as `message_id` and `presentation` (both `None` without one).
-/// Storage refusal also carries `code` and the lossless `diagnostic_json` record.
+/// Every diagnostic also carries `code` and the lossless `diagnostic_json` record.
 ///
 /// Callable with or without the GIL held: the attributes are set under
 /// [`Python::attach`], which the detached engine calls reach only on this error path.
 pub(crate) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr {
-    if diagnostic.storage_error().is_some() {
-        let error = presented_value_error(message, diagnostic.presentation());
-        return Python::attach(|py| {
-            error
-                .value(py)
-                .setattr("diagnostic_json", diagnostic.to_json().to_string())
-                .and_then(|()| error.value(py).setattr("code", &diagnostic.code))
-                .map_or_else(|failure| failure, |()| error)
-        });
-    }
-    match (
+    let error = match (
         diagnostic.presentation(),
         purrdf_validate::xpath_regex::diagnostic_refusal_code(&diagnostic.code),
     ) {
         (None, Some(code)) => refusal_value_error(message, code),
         (presentation, _) => presented_value_error(message, presentation),
+    };
+    Python::attach(|py| {
+        error
+            .value(py)
+            .setattr("diagnostic_json", diagnostic.to_json().to_string())
+            .and_then(|()| error.value(py).setattr("code", &diagnostic.code))
+            .map_or_else(|failure| failure, |()| error)
+    })
+}
+
+/// Preserve the existing diagnostic presentation and original native cause fields.
+pub(crate) fn native_error(py: Python<'_>, diagnostic: &RdfDiagnostic) -> PyErr {
+    native_error_with_message(py, diagnostic.to_string(), diagnostic)
+}
+
+/// Retain native fields while preserving a boundary's existing plain message.
+pub(crate) fn native_error_with_message(
+    py: Python<'_>,
+    message: String,
+    diagnostic: &RdfDiagnostic,
+) -> PyErr {
+    let refused = value_error(message, diagnostic);
+    with_native_cause(py, refused, diagnostic)
+}
+
+/// Attach the shared native fields to an existing specialized exception.
+pub(crate) fn with_native_cause(
+    py: Python<'_>,
+    refused: PyErr,
+    diagnostic: &RdfDiagnostic,
+) -> PyErr {
+    let attach = || -> PyResult<()> {
+        if let Some(cause) = diagnostic.native_cause() {
+            let fields = crate::py_native_fields::inspect(py, cause)?;
+            let json = purrdf_validate::native_error::to_json(cause).map_err(|failure| {
+                pyo3::exceptions::PyRuntimeError::new_err(failure.to_string())
+            })?;
+            refused.value(py).setattr("native_cause", fields)?;
+            refused
+                .value(py)
+                .setattr("native_cause_json", json.to_string())?;
+        }
+        Ok(())
+    };
+    match attach() {
+        Ok(()) => refused,
+        Err(failure) => failure,
     }
 }
 

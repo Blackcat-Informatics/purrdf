@@ -154,7 +154,7 @@ impl fmt::Display for PlanId {
 /// A profile's encoded form begins with this value. As with a plan, a decoder
 /// that reads any other version refuses rather than reinterpret the bytes under
 /// a layout they were not written for.
-pub const FUSION_PROFILE_VERSION: u16 = 1;
+pub const FUSION_PROFILE_VERSION: u16 = 2;
 
 /// The domain-separation prefix mixed into every [`FusionProfileId`].
 ///

@@ -32,18 +32,25 @@ The design record behind this surface is
 ## Producing a product
 
 ```bash
-purrdf shacl pack \
+purrdf --canonical-search unlimited \
+  --canonicalization-receipts canonicalization.json shacl pack \
   --shapes shapes.ttl \
   --base https://example.org/shapes \
   --out shapes.purrshp
 ```
 
 `--shapes` and `--out` are required; `--out -` writes the raw bytes to stdout.
-A receipt goes to stderr *after* the artifact, so it never contaminates a piped
-product:
+Both canonical-search flags are required too. These examples explicitly select
+unlimited search and write the ordered run receipts to `canonicalization.json`
+before publishing the artifact. A canonical unsigned decimal `u64` selects a
+finite per-run ceiling; no policy is selected by omission. Use receipt destination
+`-` to write JSON to stderr instead of a file.
+
+The byte-count status line goes to stderr after the artifact, so it never
+contaminates a piped product:
 
 ```console
-$ purrdf shacl pack --shapes shapes.ttl --out shapes.purrshp
+$ purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json shacl pack --shapes shapes.ttl --out shapes.purrshp
 shacl product bytes 4213
 ```
 
@@ -70,7 +77,8 @@ for the closure semantics, which are shared code, not a parallel
 re-implementation:
 
 ```bash
-purrdf shacl pack \
+purrdf --canonical-search unlimited \
+  --canonicalization-receipts canonicalization.json shacl pack \
   --shapes root.ttl \
   --import https://example.org/lib=lib.ttl \
   --out shapes.purrshp
@@ -112,7 +120,8 @@ body may read `GRAPH $shapesGraph { … }` — and `--shapes-graph IRI` names wh
 that graph is called, overriding a `sh:shapesGraph` the document declares:
 
 ```bash
-purrdf shacl pack \
+purrdf --canonical-search unlimited \
+  --canonicalization-receipts canonicalization.json shacl pack \
   --shapes shapes.ttl \
   --shapes-graph https://example.org/shapes \
   --out shapes.purrshp
@@ -134,8 +143,9 @@ Omitting `--shapes-graph` packs exactly as it always has: the product records
 whatever `sh:shapesGraph` the shapes graph itself declares, or none at all.
 
 Every other host records it the same way: Python's `pack_product(...,
-shapes_graph=IRI)` and `Shapes(..., shapes_graph=IRI).prepare().to_product()`,
-WebAssembly's `shaclPackProduct(..., shapesGraph)`, and C's
+shapes_graph=IRI, canonical_search="unlimited")` and
+`Shapes(..., shapes_graph=IRI).prepare().to_product(canonical_search="unlimited")`,
+WebAssembly's `shaclPackProduct(..., shapesGraph, "unlimited")`, and C's
 `purrdf_shapes_product_encode(..., shapes_graph_iri, ...)`. Each resolves a relative
 value against the shapes document's base, as the command line does.
 
@@ -147,7 +157,8 @@ vocabulary IRIs of its own, so there is no default: without `--box-role-vocab`
 the feature is simply **inactive**, exactly as it always has been.
 
 ```bash
-purrdf shacl pack \
+purrdf --canonical-search unlimited \
+  --canonicalization-receipts canonicalization.json shacl pack \
   --shapes shapes.ttl \
   --box-role-vocab https://example.org/meta/ \
   --out shapes.purrshp
@@ -177,7 +188,10 @@ use std::sync::Arc;
 
 let shapes = parse_shapes(shapes_ttl, Some("https://example.org/shapes"))?;
 let prepared = PreparedShapes::new(Arc::new(shapes));
-let product: Vec<u8> = prepared.to_product(&ShapesProfile::CORE)?;
+let mut control = purrdf_core::CanonicalizationControl::new(
+    purrdf_core::SearchPolicy::Unlimited, None,
+);
+let product: Vec<u8> = prepared.to_product(&ShapesProfile::CORE, &mut control)?;
 ```
 
 `ShapesProfile::CORE` is named explicitly and there is no default. It is the one
@@ -550,7 +564,10 @@ use purrdf::validate::{
 const BUILD: &[u8] = b"example.org/host@1";
 
 // `prepared` carries the host's natives in `Shapes::functions`.
-let product = prepared_to_product_with_implementations(&prepared, BUILD)?;
+let mut control = purrdf_core::CanonicalizationControl::new(
+    purrdf_core::SearchPolicy::Unlimited, None,
+);
+let product = prepared_to_product_with_implementations(&prepared, BUILD, &mut control)?;
 
 // ...and the restore names the same build, beside the registries it wires.
 let restored = admit_shapes_product_with_implementations(
@@ -577,7 +594,7 @@ identities would produce.
 ## Corroborating a product
 
 ```console
-$ purrdf shacl verify shapes.purrshp
+$ purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json shacl verify shapes.purrshp
 9f2c…64 lowercase hex…1b
 ```
 
@@ -798,7 +815,9 @@ stderr — including when the shapes came from a product.
 from purrdf import shapes
 
 prepared = shapes.Shapes(shapes_ttl, base="https://example.org/shapes").prepare()
-product = prepared.to_product()           # bytes, byte-deterministic
+packed = prepared.to_product(canonical_search="unlimited")
+product = packed.value                   # bytes, byte-deterministic
+print(packed.canonicalization_json)       # ordered per-run execution evidence
 
 view = shapes.ShapesProduct.open(product) # framing and integrity only
 print(view.format_version())             # 1
@@ -830,7 +849,8 @@ the value `identity_digest()` reports, so it can be handed straight back to
 `parsed`, because it was never restored from an artifact and none may be invented
 for it.
 
-`ShapesProduct.certify()` is the cold path; call it from a build step or a test.
+`ShapesProduct.certify(canonical_search="unlimited")` is the cold path; call it
+from a build step or a test. Its result envelope contains the execution receipts.
 Refusals raise `shapes.ShapesProductError`, whose `.dimension` carries the label
 string (or `None` when no product was ever inspected).
 
@@ -870,7 +890,15 @@ import {
 
 await ready(); // one-time async wasm instantiation
 
-const product = shaclPackProduct(shapesTtl, "https://example.org/shapes");
+const packed = shaclPackProduct(
+  shapesTtl,
+  "https://example.org/shapes",
+  undefined, undefined, undefined,
+  "unlimited",
+);
+const product = packed.value;
+console.log(packed.canonicalizationJson);
+packed.free();
 console.log(shaclProductExplain(product));
 
 try {
@@ -927,6 +955,11 @@ The C ABI exposes `purrdf_shapes_product_encode`, `purrdf_shapes_product_open`,
 `purrdf_shapes_product_certify`, with `purrdf_shapes_product_error_dimension`
 returning the refusal's stable label (or `NULL` when the shapes document simply
 did not parse).
+
+Encoding and certification require explicit `canonical_search` policy text and
+a separate `out_canonicalization_json` buffer. Read and free that buffer on success
+or refusal; `cancellation` supplies the optional caller-owned stop token. Raw
+product bytes and the existing diagnostics keep their separate outputs.
 
 `purrdf_shapes_product_rebuild` is the forward-compatibility twin of
 `purrdf_shapes_product_admit`: it re-derives the preparation from the shapes

@@ -40,9 +40,6 @@ purrdf-testkit = { workspace = true }
 [lints]
 workspace = true
 
-[[test]]
-name = "structured_errors"
-harness = false
 
 # Complete native reassociated-index behavior. `make wasm-test` selects the
 # actual WASM build shape, arithmetic-path identity and foreign-path refusal.
@@ -64,13 +61,3 @@ harness = false
 # the code. A harness that times one build per scale and prints it is the honest
 # instrument for this quantity. The recall harness needs p50/p99 percentiles, an
 # exact-rank distribution and visited-work counts — none of which is a sampling harness's output.
-[[bench]]
-name = "build"
-harness = false
-
-[[bench]]
-# Sweeps every corpus twice -- the `Exact` index (`HnswIndex::build`) and the
-# `Reassociated` one (`build::<Reassociated>`) -- each graded against the same
-# exact oracle and printed side by side, never divided into each other.
-name = "recall"
-harness = false

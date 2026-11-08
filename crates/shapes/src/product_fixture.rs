@@ -20,11 +20,14 @@ use crate::product::ShapesProfile;
 ///
 /// # Panics
 ///
-/// If the document does not parse or the product format cannot carry it.
-#[must_use]
-pub fn core_product(shapes_ttl: &str) -> Vec<u8> {
+/// If the fixture document does not parse.
+///
+/// # Errors
+/// Returns the original product or canonicalization refusal under the selected policy.
+pub fn core_product(
+    shapes_ttl: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, crate::product::ShapesProductError> {
     let shapes = parse_shapes(shapes_ttl, None).expect("the fixture shapes parse");
-    PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
-        .expect("the fixture packs as a product under this build")
+    PreparedShapes::new(Arc::new(shapes)).to_product(&ShapesProfile::CORE, control)
 }

@@ -18,8 +18,9 @@
 //! A `$ref` or `$dynamicRef` that re-enters a subschema it is already
 //! evaluating at the same instance location would never terminate, and fails
 //! with an error naming the cycle instead. A chain of more than
-//! [`MAX_REF_CHAIN`] distinct references followed in a row at one instance
-//! location stops the evaluation with [`EvaluationCause::ReferenceChain`].
+//! the selected [`EvaluationPolicy::reference_chain_limit`] distinct references
+//! followed in a row at one instance location stops the evaluation with
+//! [`EvaluationCause::ReferenceChain`].
 //!
 //! The evaluator keeps its subschemas in progress on a heap-allocated work
 //! stack, never on the machine stack: an instance nested thousands of levels
@@ -44,8 +45,8 @@ use purrdf_iri::percent;
 /// An object's members, in document order, as an evaluation walks them.
 type Members<'v> = core::slice::Iter<'v, (String, Value)>;
 
-/// The longest chain of `$ref`, `$dynamicRef` and `$recursiveRef`
-/// resolutions an evaluation follows in a row at one instance location.
+/// The default longest chain of `$ref`, `$dynamicRef` and `$recursiveRef`
+/// resolutions followed in a row at one instance location.
 ///
 /// Every link of such a chain re-applies a schema to the same value without
 /// consuming any of it, so the chain's length is bounded by the schema, not
@@ -55,20 +56,83 @@ type Members<'v> = core::slice::Iter<'v, (String, Value)>;
 /// the bound never limits how deep an instance may be.
 pub const MAX_REF_CHAIN: usize = 250;
 
+/// Caller-selected resource policy for one instance evaluation.
+///
+/// The regex budget is shared by all pattern checks in that evaluation. The
+/// reference limit counts consecutive links at one instance location; descent
+/// starts a fresh chain. A zero reference limit refuses the first reference.
+/// Private fields permit additional policy dimensions without changing callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvaluationPolicy {
+    pattern_limits: MatchLimits,
+    reference_chain_limit: usize,
+}
+
+impl Default for EvaluationPolicy {
+    fn default() -> Self {
+        Self {
+            pattern_limits: MatchLimits::default(),
+            reference_chain_limit: MAX_REF_CHAIN,
+        }
+    }
+}
+
+impl EvaluationPolicy {
+    /// Select the regular-expression budget shared by this evaluation.
+    #[must_use]
+    pub const fn with_pattern_limits(mut self, limits: MatchLimits) -> Self {
+        self.pattern_limits = limits;
+        self
+    }
+
+    /// Select the maximum consecutive references at one instance location.
+    #[must_use]
+    pub const fn with_reference_chain_limit(mut self, maximum: usize) -> Self {
+        self.reference_chain_limit = maximum;
+        self
+    }
+
+    /// The selected shared regular-expression budget.
+    #[must_use]
+    pub const fn pattern_limits(&self) -> MatchLimits {
+        self.pattern_limits
+    }
+
+    /// The selected consecutive-reference maximum.
+    #[must_use]
+    pub const fn reference_chain_limit(&self) -> usize {
+        self.reference_chain_limit
+    }
+}
+
 impl Schema {
     /// Whether `instance` is valid — the `flag` output, computed with every
     /// short cut the verdict allows.
     pub fn is_valid(&self, instance: &Value) -> Result<bool, EvaluationError> {
-        self.is_valid_with_limits(instance, MatchLimits::default())
+        self.is_valid_with_policy(instance, EvaluationPolicy::default())
     }
 
-    /// Validate with a caller-selected shared regular-expression budget.
+    /// Validate with a caller-selected shared regular-expression budget and
+    /// the default [`MAX_REF_CHAIN`] reference maximum.
     pub fn is_valid_with_limits(
         &self,
         instance: &Value,
         limits: MatchLimits,
     ) -> Result<bool, EvaluationError> {
-        let mut evaluator = Evaluator::new(self, false, limits);
+        self.is_valid_with_policy(
+            instance,
+            EvaluationPolicy::default().with_pattern_limits(limits),
+        )
+    }
+
+    /// Validate under the caller's regex and consecutive-reference policy.
+    /// Resource exhaustion is an error, never a guessed Boolean verdict.
+    pub fn is_valid_with_policy(
+        &self,
+        instance: &Value,
+        policy: EvaluationPolicy,
+    ) -> Result<bool, EvaluationError> {
+        let mut evaluator = Evaluator::new(self, false, policy);
         let valid = evaluator.run(self.root, instance).valid;
         evaluator.error.map_or(Ok(valid), Err)
     }
@@ -76,16 +140,30 @@ impl Schema {
     /// Evaluate `instance` and record the full output unit tree, from which
     /// [`Output::to_json`] writes any of the standard formats.
     pub fn evaluate(&self, instance: &Value) -> Result<Output, EvaluationError> {
-        self.evaluate_with_limits(instance, MatchLimits::default())
+        self.evaluate_with_policy(instance, EvaluationPolicy::default())
     }
 
-    /// Produce output with a caller-selected shared regular-expression budget.
+    /// Produce output with a caller-selected shared regular-expression budget
+    /// and the default [`MAX_REF_CHAIN`] reference maximum.
     pub fn evaluate_with_limits(
         &self,
         instance: &Value,
         limits: MatchLimits,
     ) -> Result<Output, EvaluationError> {
-        let mut evaluator = Evaluator::new(self, true, limits);
+        self.evaluate_with_policy(
+            instance,
+            EvaluationPolicy::default().with_pattern_limits(limits),
+        )
+    }
+
+    /// Produce every output format under the caller's evaluation policy.
+    /// A resource refusal returns its actual counts and source locations.
+    pub fn evaluate_with_policy(
+        &self,
+        instance: &Value,
+        policy: EvaluationPolicy,
+    ) -> Result<Output, EvaluationError> {
+        let mut evaluator = Evaluator::new(self, true, policy);
         let outcome = evaluator.run(self.root, instance);
         if let Some(error) = evaluator.error {
             return Err(error);
@@ -442,6 +520,7 @@ struct Evaluator<'s> {
     instance_path: String,
     active_keyword: Active<'s>,
     limits: MatchLimits,
+    reference_chain_limit: usize,
     error: Option<EvaluationError>,
 }
 
@@ -480,7 +559,7 @@ fn has_type(value: &Value, wanted: JsonType) -> bool {
 }
 
 impl<'s> Evaluator<'s> {
-    const fn new(schema: &'s Schema, output: bool, limits: MatchLimits) -> Self {
+    const fn new(schema: &'s Schema, output: bool, policy: EvaluationPolicy) -> Self {
         Self {
             schema,
             output,
@@ -489,7 +568,8 @@ impl<'s> Evaluator<'s> {
             keyword_path: String::new(),
             instance_path: String::new(),
             active_keyword: None,
-            limits,
+            limits: policy.pattern_limits,
+            reference_chain_limit: policy.reference_chain_limit,
             error: None,
         }
     }
@@ -1664,7 +1744,7 @@ impl<'s> Evaluator<'s> {
 
     /// Follow a reference to `target`, refusing to re-enter a subschema at an
     /// instance location it is already evaluating, and stopping a chain of
-    /// more than [`MAX_REF_CHAIN`] references at one instance location.
+    /// more than the caller-selected maximum at one instance location.
     fn follow<'v>(
         &mut self,
         target: NodeId,
@@ -1687,10 +1767,14 @@ impl<'s> Evaluator<'s> {
             Some(link) if link.address == address => link.chain + 1,
             _ => 1,
         };
-        if chain > MAX_REF_CHAIN {
-            self.stop(EvaluationCause::ReferenceChain);
+        if chain > self.reference_chain_limit {
+            self.stop(EvaluationCause::ReferenceChain {
+                attempted: chain,
+                maximum: self.reference_chain_limit,
+            });
             return Resume::Done(Err(ValidationRefusal::ReferenceChain {
-                maximum: MAX_REF_CHAIN,
+                attempted: chain,
+                maximum: self.reference_chain_limit,
             }));
         }
         self.following.push(Link {

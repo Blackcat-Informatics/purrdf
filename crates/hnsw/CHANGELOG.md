@@ -13,9 +13,19 @@ release set; the release set is defined once in `scripts/release-crates.sh`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking for version 4:** `HnswError::NonFiniteComponent` includes a `value`
+  field of type `error::ComponentValue`. Exhaustive struct-variant matches must
+  bind it or use `..`. `Binary32Bits(u32)` and `Binary64Bits(u64)` preserve the
+  original component width, sign and NaN payload inline after the input buffer
+  is destroyed. Borrowed inspection exposes the value as a record containing
+  the root `Float32Bits` or `Float64Bits` value. The error code, human message
+  and first-refusal order remain unchanged.
+
 ### Added
 
-- The deterministic HNSW index: splitmix64 levels over the stable row index, a
+- The deterministic HNSW index: `splitmix64` levels over the stable row index, a
   round-structured build (entry point fixed before any link exists and excluded
   from every batch; batches doubling from one row and capped at 2048;
   frozen-snapshot proposals; canonical `(distance, row)` merge), neighbour

@@ -16,8 +16,86 @@ use crate::{
     RdfDataset, classify, parse_dataset, serialize_dataset_to_format_with_jsonld_options,
 };
 
+/// Expand immutable original JSON-LD/YAML-LD bytes to JSON document text.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn expand_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Expand,
+    )
+}
+
+/// Compact immutable source bytes under the request's explicit output context.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn compact_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Compact,
+    )
+}
+
+/// Flatten immutable source bytes, optionally compacting under an output context.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn flatten_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Flatten,
+    )
+}
+
+/// Frame two immutable original documents under an independent framing request.
+#[pyfunction]
+#[pyo3(signature = (source, frame, *, request_json))]
+fn frame_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    frame: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    let source = source.as_bytes();
+    let frame = frame.as_bytes();
+    let request = request_json.as_bytes();
+    py.detach(|| purrdf_validate::document::frame(source, frame, request))
+        .map_err(|diagnostic| crate::py_store::presentation::native_error(py, &diagnostic))
+}
+
+fn document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+    operation: purrdf_validate::document::Operation,
+) -> PyResult<String> {
+    // Both immutable Python owners remain borrowed throughout detach. The shared
+    // request decoder runs before native source parsing, without a bridge copy.
+    let source = source.as_bytes();
+    let request = request_json.as_bytes();
+    py.detach(|| purrdf_validate::document::execute(source, request, operation))
+        .map_err(|diagnostic| crate::py_store::presentation::native_error(py, &diagnostic))
+}
+
 /// An immutable compiled JSON-LD 1.1 context reusable across datasets.
-#[pyclass(name = "CompiledJsonLdContext", frozen, skip_from_py_object)]
+#[pyclass(name = "CompiledJsonLdContext", frozen)]
 #[derive(Debug, Clone)]
 pub(crate) struct PyCompiledJsonLdContext {
     pub(crate) inner: Arc<EngineContext>,
@@ -126,8 +204,14 @@ pub(crate) fn serialize_frozen(
     })
 }
 
+/// Register the compiled context, dataset serializer and structural document exports.
+/// YAML source export and reconstruction have their own public registrar.
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompiledJsonLdContext>()?;
     module.add_function(wrap_pyfunction!(serialize_jsonld, module)?)?;
+    module.add_function(wrap_pyfunction!(expand_document, module)?)?;
+    module.add_function(wrap_pyfunction!(compact_document, module)?)?;
+    module.add_function(wrap_pyfunction!(flatten_document, module)?)?;
+    module.add_function(wrap_pyfunction!(frame_document, module)?)?;
     Ok(())
 }

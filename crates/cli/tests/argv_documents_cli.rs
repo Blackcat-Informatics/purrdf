@@ -233,6 +233,9 @@ fn rules_runs_with_one_stdin_import_and_refuses_it_beside_another_reader() {
 /// mutually exclusive at the clap layer, so that pair never reaches the shared check.)
 #[test]
 fn validate_runs_with_a_product_file_and_refuses_a_product_on_stdin_beside_input() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
@@ -242,7 +245,20 @@ fn validate_runs_with_a_product_file_and_refuses_a_product_on_stdin_beside_input
     let product = dir.path().join("shapes.purrshp");
     let product = product.to_str().expect("utf-8 path");
     let packed = purrdf()
-        .args(["shacl", "pack", "--shapes", &shapes, "--out", product])
+        .args([
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--out",
+            product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
         .output()
         .expect("spawn the built CLI");
     assert_eq!(packed.status.code(), Some(0), "{}", stderr(&packed));
@@ -289,6 +305,10 @@ fn validate_runs_with_a_product_file_and_refuses_a_product_on_stdin_beside_input
 /// imported by the premise, are accepted and both documents are used.
 #[test]
 fn a_repeated_import_iri_is_refused_and_two_distinct_iris_are_accepted() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let premise = write_file(dir.path(), "premise.ttl", TWO_IMPORTS_PREMISE);
     let one = write_file(dir.path(), "one.ttl", SCHEMA_ONE);
@@ -345,6 +365,12 @@ fn a_repeated_import_iri_is_refused_and_two_distinct_iris_are_accepted() {
         &pair_one,
         "--import",
         &pair_two,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(ok.status.code(), Some(0), "{}", stderr(&ok));
     let refused = run(&[
@@ -354,6 +380,12 @@ fn a_repeated_import_iri_is_refused_and_two_distinct_iris_are_accepted() {
         &pair_one,
         "--import",
         &repeated,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
     assert!(

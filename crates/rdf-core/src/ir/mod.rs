@@ -40,7 +40,8 @@ pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
 mod frozen_terms;
-mod statistics;
+mod source_directory;
+pub(crate) mod statistics;
 // The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl.
 pub mod mutable;
 pub mod view_accounting;
@@ -72,6 +73,7 @@ pub mod skolem;
 pub mod term;
 mod term_walk;
 pub mod triple;
+pub mod union;
 pub mod validate;
 
 pub use builder::{
@@ -82,14 +84,19 @@ pub use canon::{
     BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
     CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonPresentation, CanonicalRelabeling, Canonicalized, DatasetStateDigest,
-    DatasetStateError, RDFC_CALL_LIMIT, RESERVED_NAMESPACE, ReservedVocabulary, TermPosition,
-    ViewCanonError, blank_count_view, canonical_relabel, canonical_relabel_with_mapping,
-    canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
-    check_admissible_flat_view, check_admissible_view, graph_digest_view, try_blank_count_view,
-    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_view_with_stop,
-    try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+    CanonHash, CanonOutput, CanonPhase, CanonPresentation, CanonSelection, CanonicalRelabeling,
+    CanonicalizationControl, Canonicalized, DatasetStateDigest, DatasetStateError,
+    RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfcActiveGroup, RdfcActivePath,
+    RdfcCandidateProgress, RdfcGroupLabels, RdfcGroupObservation, RdfcGroupObservations,
+    RdfcGroupStats, RdfcRefusalObservation, RdfcRootProgress, RdfcSearchContext,
+    ReservedVocabulary, SearchConfiguration, SearchEvent, SearchPolicy, SearchPosition,
+    SearchReceipt, SearchRefusal, SearchWork, TermPosition, ViewCanonError, blank_count_view,
+    canonical_relabel, canonical_relabel_with_mapping, check_admissible,
+    check_admissible_flat_view, check_admissible_view, try_blank_count_view,
+    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_sha256_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_digest_view, try_graph_digest_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{
@@ -106,7 +113,8 @@ pub use mutable::{
 };
 pub use pack::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
-    PackView, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    PackView, VerifiedPack, dataset_from_view, pack_digest, restore_pack, verify_pack,
+    verify_pack_bytes,
 };
 pub use paged::{
     CanonicalPagedError, CountingDemandProvider, InMemoryPageProvider, PageFault, PageFaultKind,
@@ -132,12 +140,12 @@ pub use segmented::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
-pub(crate) use term_walk::try_owned_text;
 pub use term_walk::{
     Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
     try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
     try_fold_term_with_storage, visit_nested,
 };
+pub(crate) use term_walk::{try_fold_term_with_memory_inner, try_owned_text};
 pub use triple::{
     TripleDataset, TripleIds, TripleOrder, TripleRead, TripleReadError, TripleReifierRow,
     TripleReservation, TripleRows, TripleStorageLayout,
@@ -146,6 +154,7 @@ pub use triple::{
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
 };
+pub use union::{UnionDatasetView, UnionError, UnionSource, UnionTermGuard, UnionTermId};
 pub use view_accounting::{
     OwnerKey, OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
     ViewAccountingReport, ViewLimits, ViewStats, ViewWork,

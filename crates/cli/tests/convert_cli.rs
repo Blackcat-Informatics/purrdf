@@ -58,6 +58,482 @@ use support::{
 
 use purrdf_rdf::JsonLdContextLimits;
 
+#[test]
+fn document_operations_cli_decode_requests_before_source_and_publish_bytes() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let config = write_file(
+        dir.path(),
+        "expand.json",
+        r#"{"version":1,"format":"jsonld"}"#,
+    );
+    let input = write_file(dir.path(), "input.jsonld", r#"{"urn:p":"cli"}"#);
+    let output = path(dir.path(), "expanded.json");
+    let expected = br#"[{"urn:p":[{"@value":"cli"}]}]"#;
+    let result = run(&["document-expand", "--request", &config, &input, &output]);
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+    let stdin = run_with_stdin(
+        &["document-expand", "--request", &config, "-", "-"],
+        br#"{"urn:p":"cli"}"#,
+    );
+    assert!(stdin.status.success(), "{}", stderr(&stdin));
+    assert_eq!(stdin.stdout, expected);
+    let shared = run(&["document-expand", "--request", "-", "-", "-"]);
+    assert_eq!(shared.status.code(), Some(2));
+    assert!(stderr(&shared).contains("single stdin"));
+    std::fs::write(&config, r#"{"version":1,"format":"jsonld","unknown":true}"#).unwrap();
+    let missing = path(dir.path(), "never-acquired.jsonld");
+    let refused = run(&["document-expand", "--request", &config, &missing, &output]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("unknown"));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+    std::fs::write(
+        &config,
+        r#"{"version":1,"format":"jsonld","output":{"max_bytes":0}}"#,
+    )
+    .unwrap();
+    let refused = run(&["document-expand", "--request", &config, &input, &output]);
+    assert!(!refused.status.success());
+    assert_eq!(refused.stdout, Vec::<u8>::new());
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+    std::fs::write(&input, r#"{"@id":"urn:s","urn:p":"cli"}"#).unwrap();
+    for command in ["document-compact", "document-flatten"] {
+        std::fs::write(
+            &config,
+            r#"{"version":1,"format":"jsonld","output_context":{}}"#,
+        )
+        .unwrap();
+        let result = run(&[command, "--request", &config, &input, "-"]);
+        assert!(result.status.success(), "{}", stderr(&result));
+        assert_eq!(
+            result.stdout,
+            br#"{"@context":{},"@id":"urn:s","urn:p":"cli"}"#
+        );
+        let shared = run(&[command, "--request", "-", "-", "-"]);
+        assert_eq!(shared.status.code(), Some(2));
+        assert!(stderr(&shared).contains("single stdin"));
+        std::fs::write(
+            &config,
+            r#"{"version":1,"format":"jsonld","output_context":false}"#,
+        )
+        .unwrap();
+        let refused = run(&[command, "--request", &config, &missing, &output]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains("output_context"));
+        assert_eq!(std::fs::read(&output).unwrap(), expected);
+    }
+    let frame = write_file(dir.path(), "frame.jsonld", r#"{"@id":"urn:s"}"#);
+    std::fs::write(&config, r#"{"version":1,"format":"jsonld"}"#).unwrap();
+    let framed = run(&["document-frame", "--request", &config, &input, &frame, "-"]);
+    assert!(framed.status.success(), "{}", stderr(&framed));
+    assert_eq!(
+        framed.stdout,
+        br#"{"@context":{},"@id":"urn:s","urn:p":"cli"}"#
+    );
+    let piped = run_with_stdin(
+        &["document-frame", "--request", &config, &input, "-", "-"],
+        br#"{"@id":"urn:s"}"#,
+    );
+    assert!(piped.status.success(), "{}", stderr(&piped));
+    assert_eq!(piped.stdout, framed.stdout);
+    for (request, source, frame) in [
+        ("-", "-", frame.as_str()),
+        ("-", input.as_str(), "-"),
+        (config.as_str(), "-", "-"),
+    ] {
+        let refused = run(&["document-frame", "--request", request, source, frame, "-"]);
+        assert_eq!(refused.status.code(), Some(2));
+        assert!(stderr(&refused).contains("single stdin"));
+    }
+    std::fs::write(
+        &config,
+        r#"{"version":1,"format":"jsonld","frame_context":false}"#,
+    )
+    .unwrap();
+    let refused = run(&[
+        "document-frame",
+        "--request",
+        &config,
+        &missing,
+        &missing,
+        &output,
+    ]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("frame_context"));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+}
+
+#[test]
+// This named-file case requires the inherited Unix file-identity capability.
+#[cfg(unix)]
+fn yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let config_text = r#"{"version":1,"name":"cli-source","profile_version":1,"vocabulary":"https://example.org/yaml#"}"#;
+    let config = write_file(dir.path(), "profile.json", config_text);
+    let original = "\u{feff}# exact CRLF presentation\r\n---\r\na: &a [one, 'two']\r\nb: *a\r\n...\r\n---\r\n? [complex, key]\r\n: value\r\n";
+    let input = write_file(dir.path(), "authored.yaml.gz", original);
+    let metadata = path(dir.path(), "metadata.nq");
+    let root_file = path(dir.path(), "root.txt");
+    let restored = path(dir.path(), "restored.yaml");
+    let export_args = [
+        "yaml-source",
+        "export",
+        "--source-iri",
+        "https://example.org/authored",
+        "--profile",
+        &config,
+        "--root-output",
+        &root_file,
+        &input,
+        &metadata,
+    ];
+    let exported = run(&export_args);
+    assert!(exported.status.success(), "{}", stderr(&exported));
+    assert_eq!(exported.stdout, Vec::<u8>::new());
+    let root_text = std::fs::read_to_string(&root_file).unwrap();
+    assert!(root_text.ends_with('\n') && root_text.lines().count() == 1);
+    let root = root_text.trim_end_matches('\n');
+    let graph = std::fs::read(&metadata).unwrap();
+    assert!(std::str::from_utf8(&graph).unwrap().contains(root));
+    let repeated = run_with_stdin(
+        &[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        original.as_bytes(),
+    );
+    assert!(repeated.status.success(), "{}", stderr(&repeated));
+    assert_eq!(repeated.stdout, graph);
+    let reconstructed = run(&[
+        "yaml-source",
+        "reconstruct",
+        "--root",
+        root,
+        "--profile",
+        &config,
+        "--max-rdf-bytes",
+        &graph.len().to_string(),
+        &metadata,
+        &restored,
+    ]);
+    assert!(reconstructed.status.success(), "{}", stderr(&reconstructed));
+    assert_eq!(std::fs::read(&restored).unwrap(), original.as_bytes());
+    let piped = run_with_stdin(
+        &[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        &graph,
+    );
+    assert!(piped.status.success(), "{}", stderr(&piped));
+    assert_eq!(piped.stdout, original.as_bytes());
+    for cap in ["0".to_owned(), (graph.len() - 1).to_string()] {
+        let refused = run(&[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            &cap,
+            &metadata,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains("raw input exceeds"));
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    for (selected_root, profile) in [
+        ("https://example.org/missing", config.clone()),
+        (
+            root,
+            write_file(
+                dir.path(),
+                "wrong-profile.json",
+                &config_text.replace("cli-source", "other"),
+            ),
+        ),
+    ] {
+        let refused = run(&[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            selected_root,
+            "--profile",
+            &profile,
+            &metadata,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    let forged = format!(
+        "{}<{root}> <https://example.org/yaml#forged> \"extra\" .\n",
+        std::str::from_utf8(&graph).unwrap()
+    );
+    let refused = run_with_stdin(
+        &[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        forged.as_bytes(),
+    );
+    assert!(!refused.status.success());
+    assert_eq!(refused.stdout, Vec::<u8>::new());
+    for limits in [
+        r#""syntax":{"max_input_bytes":0}"#,
+        r#""max_projection_bytes":0"#,
+    ] {
+        let bounded = format!(
+            "{},\"bounds\":{{{limits}}}}}",
+            &config_text[..config_text.len() - 1]
+        );
+        let bounded = write_file(dir.path(), "bounded.json", &bounded);
+        let refused = run(&[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &bounded,
+            &input,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat((16 << 10) + 1));
+    let refused = run(&[
+        "yaml-source",
+        "export",
+        "--source-iri",
+        "https://example.org/authored",
+        "--profile",
+        &oversized,
+        &input,
+        "-",
+    ]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("raw input exceeds 16384 bytes"));
+    for (profile, root_output, output) in [
+        (config.as_str(), "-", metadata.as_str()),
+        (&config, metadata.as_str(), metadata.as_str()),
+        (config.as_str(), input.as_str(), metadata.as_str()),
+        (config.as_str(), root_file.as_str(), config.as_str()),
+        (config.as_str(), root_file.as_str(), input.as_str()),
+        ("-", root_file.as_str(), metadata.as_str()),
+    ] {
+        let refused = run(&[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            profile,
+            "--root-output",
+            root_output,
+            &input,
+            output,
+        ]);
+        assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), original.as_bytes());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), config_text);
+    for args in [
+        vec![
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            "4294967296",
+            &metadata,
+            "-",
+        ],
+        vec![
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            "1",
+            &input,
+            "-",
+        ],
+    ] {
+        assert_eq!(run(&args).status.code(), Some(2));
+    }
+}
+
+#[test]
+fn configured_yamlld_context_options_reach_retrieval_and_caller_bases() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@context': contexts/main.yamlld\n'@id': subject\np: object\n",
+    );
+    let retrieval = retrieval_iri(&yaml);
+    let context_iri = retrieval.replace("/input.yamlld", "/contexts/main.yamlld");
+    let config_text = format!(
+        r#"{{"version":1,"yaml_ld":{{"registry":[
+          {{"iri":"{context_iri}","format":"yaml","document":"'@context': {{p: {{'@id': 'https://example.org/p', '@type': '@id'}}}}","yaml_ld":{{}}}},
+          {{"iri":"https://caller.example/docs/contexts/main.yamlld","format":"yaml","document":"'@context': {{p: {{'@id': 'https://example.org/p', '@type': '@id'}}}}","yaml_ld":{{}}}}
+        ]}}}}"#
+    );
+    let config = write_file(dir.path(), "context-options.json", &config_text);
+    let output = path(dir.path(), "configured.nq");
+    for (base, subject, object) in [
+        (
+            None,
+            retrieval.replace("/input.yamlld", "/subject"),
+            retrieval.replace("/input.yamlld", "/object"),
+        ),
+        (
+            Some("https://caller.example/docs/source.yamlld"),
+            "https://caller.example/docs/subject".to_owned(),
+            "https://caller.example/docs/object".to_owned(),
+        ),
+    ] {
+        let mut args = vec!["convert", "--yamlld-input-options", config.as_str()];
+        if let Some(base) = base {
+            args.extend(["--base", base]);
+        }
+        args.extend([yaml.as_str(), output.as_str()]);
+        let converted = run(&args);
+        assert!(converted.status.success(), "{}", stderr(&converted));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            format!("<{subject}> <https://example.org/p> <{object}> .\n")
+        );
+    }
+    let refused_config = write_file(
+        dir.path(),
+        "context-refused.json",
+        &config_text.replace(
+            "\"yaml_ld\":{}",
+            "\"yaml_ld\":{\"syntax\":{\"max_input_bytes\":0}}",
+        ),
+    );
+    std::fs::write(&output, "preserve existing output\n").unwrap();
+    let refused = run(&[
+        "convert",
+        "--yamlld-input-options",
+        &refused_config,
+        &yaml,
+        &output,
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "preserve existing output\n"
+    );
+}
+
+#[test]
+fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "input.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let output = path(dir.path(), "output.nq");
+    let first = run(&["convert", "--base", "https://example.org/", &yaml, &output]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert_eq!(std::fs::read_to_string(&output).unwrap().lines().count(), 1);
+    for transform in [None, Some("--canonical")] {
+        let mut args = vec![
+            "convert",
+            "--base",
+            "https://example.org/",
+            "--yamlld-input-options",
+            &config,
+        ];
+        if transform.is_some() {
+            args.extend([
+                "--canonical-search",
+                "unlimited",
+                "--canonicalization-receipts",
+                "-",
+            ]);
+        }
+        args.extend(transform);
+        args.extend([yaml.as_str(), output.as_str()]);
+        let all = run(&args);
+        assert!(all.status.success(), "{}", stderr(&all));
+        let text = std::fs::read_to_string(&output).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("https://example.org/first"));
+        assert!(text.contains("https://example.org/second"));
+    }
+    for format in ["turtle", "jsonld", "pack", "gts"] {
+        let refused = run(&[
+            "convert",
+            "--from",
+            format,
+            "--yamlld-input-options",
+            &config,
+            "missing-input",
+            &output,
+        ]);
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains("requires every input to be YAML-LD"),
+            "{}",
+            stderr(&refused)
+        );
+    }
+    let other = run(&["lift", "--yamlld-input-options", &config]);
+    assert!(!other.status.success());
+    assert!(stderr(&other).contains("unexpected argument"));
+    let limit = write_file(
+        dir.path(),
+        "limit.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&["convert", "--yamlld-input-options", &limit, &yaml, &output]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
 /// The nine native RDF syntaxes, by their `--from`/`--to` token. Every format appears
 /// as BOTH a source and a destination in the matrix.
 const FORMATS: [&str; 9] = [
@@ -113,8 +589,24 @@ const SEED_C: &str = concat!(
 /// THE BINARY via `--canonical`. Byte-equality of two such documents is an isomorphism
 /// test (canonical N-Quads are order- and blank-label-independent).
 fn canonical(dir: &Path, from: &str, input: &str) -> Vec<u8> {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let out = path(dir, "canonical.scratch.nq");
-    let o = run(&["convert", "--from", from, "--canonical", input, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        from,
+        "--canonical",
+        input,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "canonicalizing {input} as {from} failed: {}",
@@ -820,6 +1312,10 @@ fn stdin_to_stdout_with_explicit_formats() {
 /// identically).
 #[test]
 fn text_via_pack_equals_direct_text() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -829,13 +1325,39 @@ fn text_via_pack_equals_direct_text() {
     let direct = path(dir, "direct.nt");
 
     assert!(
-        run(&["convert", "--from", "nquads", "--to", "pack", &seed, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
         run(&[
-            "convert", "--from", "pack", "--to", "ntriples", &pack, &via_pack
+            "convert",
+            "--from",
+            "pack",
+            "--to",
+            "ntriples",
+            &pack,
+            &via_pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -860,6 +1382,10 @@ fn text_via_pack_equals_direct_text() {
 /// serialization path.
 #[test]
 fn pack_to_trig_equals_direct_dataset_to_trig() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedB.nq", SEED_B);
@@ -869,13 +1395,39 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
     let direct = path(dir, "direct.trig");
 
     assert!(
-        run(&["convert", "--from", "nquads", "--to", "pack", &seed, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
         run(&[
-            "convert", "--from", "pack", "--to", "trig", &pack, &via_pack
+            "convert",
+            "--from",
+            "pack",
+            "--to",
+            "trig",
+            &pack,
+            &via_pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -901,6 +1453,10 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
 /// `crates/cli/src/source.rs::verified_pack_mmap`).
 #[test]
 fn disk_pack_to_pack_is_byte_identical_passthrough() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
@@ -910,14 +1466,36 @@ fn disk_pack_to_pack_is_byte_identical_passthrough() {
 
     assert!(
         run(&[
-            "convert", "--from", "nquads", "--to", "pack", &seed, &pack_in
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack_in,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success(),
         "seeding the source pack must succeed"
     );
 
-    let o = run(&["convert", &pack_in, &pack_out]);
+    let o = run(&[
+        "convert",
+        &pack_in,
+        &pack_out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "pack -> pack passthrough must exit 0: {}",
@@ -936,12 +1514,25 @@ fn disk_pack_to_pack_is_byte_identical_passthrough() {
 /// bytes are written to the output.
 #[test]
 fn disk_pack_to_pack_corrupt_input_fails_closed() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
     let out = path(dir, "out.purrpck");
 
-    let o = run(&["convert", &bad, &out]);
+    let o = run(&[
+        "convert",
+        &bad,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         !o.status.success(),
         "a corrupt pack must fail closed (exit non-zero)"
@@ -995,6 +1586,10 @@ fn large_ntriples_ingress_preserves_every_triple() {
 /// different serializations of the same data canonicalize to the same bytes).
 #[test]
 fn canonical_output_is_stable_and_serialization_independent() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_nq = write_file(dir, "seedA.nq", SEED_A);
@@ -1003,14 +1598,40 @@ fn canonical_output_is_stable_and_serialization_independent() {
     let c1 = path(dir, "c1.nq");
     let c2 = path(dir, "c2.nq");
     assert!(
-        run(&["convert", "--from", "nquads", "--canonical", &seed_nq, &c1])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--canonical",
+            &seed_nq,
+            &c1,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
-        run(&["convert", "--from", "nquads", "--canonical", &seed_nq, &c2])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--canonical",
+            &seed_nq,
+            &c2,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert_eq!(
         std::fs::read(&c1).expect("c1"),
@@ -1246,13 +1867,29 @@ fn rules_without_entailment_is_refused_by_name() {
 /// the base they are handed. Refused by name instead of accepted and ignored.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
     let pack = path(dir, "seedA.purrpck");
     assert!(
         run(&[
-            "convert", "--from", "ntriples", "--to", "pack", &seed, &pack
+            "convert",
+            "--from",
+            "ntriples",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success(),
@@ -1269,6 +1906,12 @@ fn base_with_pack_from_is_refused_by_name() {
         "http://example.org/base/",
         &pack,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -1286,6 +1929,9 @@ fn base_with_pack_from_is_refused_by_name() {
 /// N-Triples source, so neither leg can spend the base either way round.
 #[test]
 fn base_with_pack_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
@@ -1300,6 +1946,12 @@ fn base_with_pack_to_is_refused_by_name() {
         "http://example.org/base/",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -1379,6 +2031,10 @@ fn entailment_rdfs_infers_type_from_text_input() {
 /// same inferred triple (the reconstruct-then-entail path).
 #[test]
 fn entailment_rdfs_infers_type_from_pack_input() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -1396,9 +2052,23 @@ fn entailment_rdfs_infers_type_from_pack_input() {
     // Build a pack, then entail from the pack.
     let pack = path(dir, "sub.purrpck");
     assert!(
-        run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "turtle",
+            "--to",
+            "pack",
+            &ttl,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     let entailed = path(dir, "entailed_from_pack.nt");
     let o = run(&[
@@ -1411,6 +2081,12 @@ fn entailment_rdfs_infers_type_from_pack_input() {
         "rdfs",
         &pack,
         &entailed,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1429,6 +2105,10 @@ fn entailment_rdfs_infers_type_from_pack_input() {
 /// containing the inferred triple.
 #[test]
 fn entailment_then_canonical_composes() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -1451,6 +2131,12 @@ fn entailment_then_canonical_composes() {
         "--canonical",
         &ttl,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1476,6 +2162,12 @@ fn entailment_then_canonical_composes() {
             "--canonical",
             &ttl,
             &out2,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -1594,6 +2286,9 @@ fn stdout_broken_pipe_exits_clean() {
 /// `--canonical`).
 #[test]
 fn canonical_with_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -1607,6 +2302,12 @@ fn canonical_with_to_is_refused_by_name() {
         "--canonical",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(!o.status.success(), "--canonical with --to must be refused");
     assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
@@ -1621,11 +2322,27 @@ fn canonical_with_to_is_refused_by_name() {
 /// omitted, since canonical output is always N-Quads.
 #[test]
 fn canonical_without_to_emits_canonical_nquads() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.canon");
-    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "nquads",
+        "--canonical",
+        &seed,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "--canonical without --to failed: {}",
@@ -1657,6 +2374,9 @@ fn canonical_without_to_emits_canonical_nquads() {
 /// would take the whole process down over a caller-supplied document.
 #[test]
 fn canonical_refuses_reserved_vocabulary_without_aborting() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     const RESERVED_VOCAB_NQUADS: &str = concat!(
@@ -1665,7 +2385,20 @@ fn canonical_refuses_reserved_vocabulary_without_aborting() {
     );
     let seed = write_file(dir, "reserved.nq", RESERVED_VOCAB_NQUADS);
     let out = path(dir, "out.canon");
-    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "nquads",
+        "--canonical",
+        &seed,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         o.status.code(),
         Some(1),
@@ -2093,6 +2826,10 @@ fn base_is_refused_exactly_when_neither_leg_can_consume_it() {
 /// nowhere to go on that lane either.
 #[test]
 fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -2107,6 +2844,12 @@ fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
         "http://example.org/",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(
@@ -2127,6 +2870,12 @@ fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
         "http://example.org/",
         &ttl,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(o.status.success(), "{}", stderr(&o));
     let text = std::fs::read_to_string(&out).expect("read canonical output");

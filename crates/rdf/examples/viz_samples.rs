@@ -12,13 +12,17 @@ use std::path::PathBuf;
 use purrdf_rdf::viz::{
     VizGraphInput, VizInputAnnotation, VizInputQuad, VizInputReifier, VizInputStatement,
     VizLayoutOptions, VizMode, VizRenderOptions, VizSpec, VizSvgOptions, VizTableField,
-    VizVocabularyMapping, export_json, render_graph_input_svg, stable_hash_hex,
+    VizVocabularyMapping, build_presented_export, export_json, presented_export_json,
+    project_graph_input, render_graph_input_svg, render_presented_export_svg, stable_hash_hex,
 };
 use purrdf_rdf::{RdfTextDirection, TermValue};
 
 #[path = "../tests/support/viz_terms.rs"]
 mod viz_terms;
 use viz_terms::{EX, iri};
+
+#[path = "../tests/support/viz_presentation.rs"]
+mod viz_presentation;
 
 const PROV: &str = "http://www.w3.org/ns/prov#";
 
@@ -133,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
     }
+    write_presented_samples(&output, svg_only, &mut html)?;
     if !svg_only {
         fs::write(output.join("purrdf-viz2-summary.txt"), summary)?;
         fs::write(output.join("purrdf-viz2-index.html"), html)?;
@@ -141,6 +146,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "wrote RDF 1.2 visualization artifacts to {}",
         output.display()
     );
+    Ok(())
+}
+
+fn write_presented_samples(
+    output: &std::path::Path,
+    svg_only: bool,
+    html: &mut String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spec = VizSpec::default();
+    let model = project_graph_input(&viz_presentation::input(), &spec)?;
+    let architecture = viz_presentation::architecture(&model);
+    let mut scenario = architecture.clone();
+    scenario.scenario = Some(viz_presentation::scenario(&model));
+    for (name, presentation) in [("components", architecture), ("scenario", scenario)] {
+        let export =
+            build_presented_export(&model, &spec, &presentation, &VizLayoutOptions::default())?;
+        let svg = render_presented_export_svg(
+            &export,
+            &VizSvgOptions {
+                title: format!("Caller-declared {name}"),
+                ..VizSvgOptions::default()
+            },
+        )?;
+        let stem = format!("purrdf-presented-{name}");
+        fs::write(
+            output.join(format!("{stem}.svg")),
+            format!(
+                "<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->\n<!-- SPDX-License-Identifier: CC-BY-4.0 -->\n{svg}"
+            ),
+        )?;
+        if !svg_only {
+            fs::write(
+                output.join(format!("{stem}.json")),
+                presented_export_json(&export)?,
+            )?;
+        }
+        write!(
+            html,
+            "<section><h2>Caller-declared {name}</h2><object data=\"{stem}.svg\" type=\"image/svg+xml\"></object></section>"
+        )?;
+    }
     Ok(())
 }
 

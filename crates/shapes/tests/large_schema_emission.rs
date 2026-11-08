@@ -79,12 +79,15 @@ fn a_schema_past_sixteen_mebibytes_emits_in_every_language_deterministically() {
     let shapes = from_dataset(&turtle::data(PREFIXES, "")).expect("shapes");
     let ontology = turtle::data(PREFIXES, &ontology(1_100));
     let ns = namespaces();
-    let compiled = compile_schema(&SchemaCompileRequest::new(
-        &shapes,
-        &ns,
-        ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))
+    let compiled = compile_schema(
+        &SchemaCompileRequest::new(
+            &shapes,
+            &ns,
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
     .expect("the ontology compiles")
     .compiled;
     assert!(
@@ -251,12 +254,15 @@ fn ontology_width_and_coverage_past_the_old_caps_emit_in_all_three_languages() {
     let shapes = from_dataset(&shape_data).expect("empty shapes");
     let ontology = turtle::data(PREFIXES, &source);
     let ns = namespaces();
-    let compilation = compile_schema(&SchemaCompileRequest::new(
-        &shapes,
-        &ns,
-        ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))
+    let compilation = compile_schema(
+        &SchemaCompileRequest::new(
+            &shapes,
+            &ns,
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
     .expect("65,537 actual ontology classes compile");
     let cells: usize = compilation
         .coverage

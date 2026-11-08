@@ -17,6 +17,12 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Raw supplied time, decoded before UPDATE source I/O.
+    pub(crate) now: Option<&'a str>,
+    /// Raw supplied initial request seed.
+    pub(crate) entropy_seed: Option<&'a str>,
     /// The immutable geographic profile selected by `--geo-profile`.
     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     pub(crate) data: &'a str,
@@ -51,10 +57,33 @@ pub(crate) struct UpdateOptions<'a> {
 pub(crate) fn run(
     options: &UpdateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
+    let coordinates =
+        purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
+            .map_err(|error| {
+                let flag = match &error {
+                    purrdf_validate::query::CoordinateInputError::Now(_) => "--now",
+                    purrdf_validate::query::CoordinateInputError::EntropySeed(_) => {
+                        "--entropy-seed"
+                    }
+                    _ => "update coordinates",
+                };
+                CliError::Usage(format!("{flag}: {error}"))
+            })?;
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
-    let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
+    let mut dataset = source::load_dataset(
+        options.data,
+        source_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     // The same engine `query` builds: one law for the whole request, and a native
     // resource refusal is an `Err` that applies nothing and writes no dataset.
     let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
@@ -80,25 +109,34 @@ pub(crate) fn run(
     // outlives this statement, so the environment is a named local rather than a
     // temporary: it owns the derived parse configuration the options borrow.
     let env = purrdf_sparql_eval::ExtensionEnv::over(
-        relations.as_ref().map_or_else(
-            || purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY,
+        relations.as_ref().map_or(
+            purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY,
             Clone::clone,
         ),
-        aggregates.as_ref().map_or_else(
-            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
-            Clone::clone,
-        ),
+        aggregates
+            .as_ref()
+            .map_or(purrdf_sparql_eval::AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
-    let query_options = QueryOptions::new()
-        .with_geo(options.geo)
-        .with_env(&env)
-        .with_division(options.division)
-        .with_graph_existence(options.graph_existence);
+    let query_options = coordinates.apply(
+        QueryOptions::new()
+            .with_geo(options.geo)
+            .with_env(&env)
+            .with_division(options.division)
+            .with_graph_existence(options.graph_existence),
+    );
 
     if options.governors.is_engaged() {
         let governors = options.governors.to_governors()?;
-        match engine.update_governed(&mut dataset, request, query_options, &governors)? {
+        let outcome = crate::query::with_execution_receipt(|capture| {
+            Ok(engine.update_governed(
+                &mut dataset,
+                request,
+                &query_options.with_coordinate_observer(capture),
+                &governors,
+            )?)
+        })?;
+        match outcome {
             // A governed request names the F&O errors its expressions absorbed into
             // unbound values on stderr, as a governed query does.
             GovernedUpdateOutcome::Applied { evidence, .. } => {
@@ -117,7 +155,13 @@ pub(crate) fn run(
         // `SparqlEngine::update` this call replaces, byte-for-byte (see
         // `NativeSparqlEngine`'s `SparqlEngine` impl) — switching to it unconditionally
         // does not change behaviour when `aggregates` is `None`.
-        engine.update_with_options(&mut dataset, request, query_options)?;
+        crate::query::with_execution_receipt(|capture| {
+            Ok(engine.update_with_options(
+                &mut dataset,
+                request,
+                &query_options.with_coordinate_observer(capture),
+            )?)
+        })?;
     }
 
     let loss = sink::write_rdf(
@@ -127,6 +171,7 @@ pub(crate) fn run(
         options.base,
         source_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &loss)?;
     Ok(CliOutcome::Complete)

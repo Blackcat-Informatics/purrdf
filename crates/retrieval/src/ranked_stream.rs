@@ -5,20 +5,20 @@
 //!
 //! A stratum's producer emits its rows in rank order, one row at a time, and
 //! declares when it is done. Fusion is only sound if those declarations are
-//! true, so the boundary is validated: the fusion engine checks rank contiguity
+//! true, so the boundary is validated: the fusion engine checks the declared rank law
 //! and re-derives every contribution as rows arrive, and compares each
 //! producer's terminal receipt against what it actually emitted. A producer that
 //! cannot describe its own completeness cleanly reports it through this channel;
 //! it never gets to return a plausible-looking answer that quietly omitted a
 //! row.
 //!
-//! # One fixed rank law, and three declared promises
+//! # A declared rank law and independent producer promises
 //!
-//! The rank check is absolute. Ranks are 1-based, contiguous and ascending for
-//! every ranked stream there is, with no registration able to soften it, and the
-//! fusion engine measures every row against the next rank it expects from that
-//! stream ([`ProtocolError::OutOfOrderRanks`],
-//! [`ProtocolError::NonContiguousRanks`]).
+//! Ordinal streams emit ranks 1, 2, 3 without gaps. Shared-rank streams retain
+//! positive nondecreasing producer ranks, so different subjects may receive the
+//! same rank. Zero and descending ranks are refused under both laws; a repeated
+//! or gapped rank is also refused under the ordinal law. Repeated candidate
+//! identities remain the independent duplicate policy's responsibility.
 //!
 //! The other checks are not absolute, because the registry does not state them
 //! absolutely. A ranked producer declares its duplicate handling, the blocks of
@@ -39,7 +39,7 @@
 //! [`StreamContract::fidelity`] has no refusal and can have none, because what
 //! would falsify it is precisely what never arrives. A stream that ran out of
 //! rows and a stream whose search merely stopped finding them are
-//! indistinguishable from here: both stop yielding, both leave contiguous ranks
+//! indistinguishable from here: both stop yielding, both leave conforming ranks
 //! behind. So an undeclared approximation is invisible to this layer by
 //! construction, and silence about it reads as completeness — which is the
 //! reading the term exists to stop being automatic. It is carried into the
@@ -79,11 +79,11 @@
 //! violation among rows nobody pulled is not detected, and this layer does not
 //! claim otherwise.
 
+use crate::Score;
 use purrdf_sparql_eval::{
     CandidateDomains, DomainTag, DuplicatePolicy, ExclusionBasis, PfAttestation, RankFidelity,
     RankedDeclaration,
 };
-use purrdf_text::Fixed;
 
 use crate::iri::{Iri, Term};
 
@@ -96,22 +96,12 @@ use crate::iri::{Iri, Term};
 /// differs, so there is no honest "unstated" answer the way there is for a
 /// stream that descends from no plan ([`RankedStream::plan_id`]).
 ///
-/// # Why rank order is not a term of the contract
+/// # Rank progression is declared and checked
 ///
-/// Rank order is a law, not a promise a producer gets to phrase. Every ranked
-/// stream owes its consumer the same one: ranks are 1-based, contiguous and
-/// ascending, so rows arrive numbered 1, 2, 3 with no gap, no repeat and no step
-/// backwards, and rows a producer scores equally still take distinct
-/// consecutive ranks under whatever total tie-break it applies. Because the law
-/// is identical for every stream, there is nothing for a contract to carry and
-/// no variant a consumer could branch on.
-///
-/// It is enforced rather than believed, and enforced on the rank itself:
-/// [`FusionStream`](crate::FusionStream) holds the next rank it expects from
-/// each stream and checks every row against it, raising
-/// [`ProtocolError::OutOfOrderRanks`] below that rank and
-/// [`ProtocolError::NonContiguousRanks`] above it. The only other quantity
-/// fusion can observe is the *contribution*, which it computes itself from
+/// [`Self::rank_law`] distinguishes contiguous distinct ordinal ranks from
+/// positive nondecreasing shared ranks. Fusion and union use the same validator
+/// and retain row count separately from the last rank observed. Fusion also
+/// checks the *contribution*, which it computes itself from
 /// `(decay rule, K, weight, rank)` and refuses if the producer's copy disagrees
 /// ([`ProtocolError::ContributionMismatch`]); the producer supplies no term of
 /// that either. Reading a rank claim in contribution space instead refused
@@ -135,6 +125,8 @@ use crate::iri::{Iri, Term};
 /// stream that is actually being read.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StreamContract {
+    /// The producer's declared rank progression, independent of duplicate identities.
+    pub rank_law: purrdf_sparql_eval::RankLaw,
     /// The duplicate handling the producer declared. A
     /// [`DuplicatePolicy::Unique`] stream is believed and a repeat is a protocol
     /// violation; a [`DuplicatePolicy::Allowed`] stream is de-duplicated by the
@@ -154,7 +146,7 @@ pub struct StreamContract {
     ///
     /// Because a consumer cannot tell the difference. A stream that ran out of
     /// rows and a stream whose search merely stopped finding them both simply
-    /// stop yielding, and the ranks are contiguous either way. Nothing in the
+    /// stop yielding with ranks conforming to their declared law. Nothing in the
     /// input protocol distinguishes them, so an undeclared approximation is
     /// invisible here by construction and is read as completeness — which is
     /// the reading this term exists to stop being automatic.
@@ -268,6 +260,7 @@ impl StreamContract {
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
     ) -> Result<Self, purrdf_sparql_eval::EvalError> {
         Ok(Self {
+            rank_law: self.rank_law,
             duplicates: self.duplicates,
             exclusion: self.exclusion,
             fidelity: self.fidelity.clone(),
@@ -279,6 +272,7 @@ impl StreamContract {
     #[must_use]
     pub fn declared(declaration: &RankedDeclaration) -> Self {
         Self {
+            rank_law: declaration.rank_source.law(),
             duplicates: declaration.duplicates,
             exclusion: declaration.exclusion,
             // Cloned, never rebuilt. The evidence inside is an `Arc<str>` the
@@ -301,7 +295,7 @@ impl StreamContract {
     /// # use purrdf_retrieval::{StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity};
     /// // The arity before the exclusion term existed. There is no overload and
     /// // no default to fall back to.
-    /// let _ = StreamContract::new(
+    /// let _ = StreamContract::new(purrdf_sparql_eval::RankLaw::Ordinal,
     ///     DuplicatePolicy::Unique,
     ///     RankFidelity::EXACT,
     ///     CandidateDomains::Unrestricted,
@@ -312,7 +306,7 @@ impl StreamContract {
     /// # use purrdf_retrieval::{
     /// #     StreamContract, DuplicatePolicy, CandidateDomains, RankFidelity, ExclusionBasis,
     /// # };
-    /// let contract = StreamContract::new(
+    /// let contract = StreamContract::new(purrdf_sparql_eval::RankLaw::Ordinal,
     ///     DuplicatePolicy::Unique,
     ///     RankFidelity::EXACT,
     ///     CandidateDomains::Unrestricted,
@@ -335,12 +329,14 @@ impl StreamContract {
     /// that reads its own from a loaded artifact.
     #[must_use]
     pub fn new(
+        rank_law: purrdf_sparql_eval::RankLaw,
         duplicates: DuplicatePolicy,
         fidelity: RankFidelity,
         domains: CandidateDomains,
         exclusion: ExclusionBasis,
     ) -> Self {
         Self {
+            rank_law,
             duplicates,
             fidelity,
             domains,
@@ -441,7 +437,8 @@ impl purrdf_hash::error::StructuredError for RowBlock {
 
 impl purrdf_hash::error::StructuredError for StreamContract {
     purrdf_hash::error_visit! {
-        @record self { duplicates, fidelity, domains, exclusion } => "retrieval-stream-contract" {
+        @record self { rank_law, duplicates, fidelity, domains, exclusion } => "retrieval-stream-contract" {
+            "rank_law" => Text(self.rank_law.as_str()),
             "duplicates" => Record(&self.duplicates),
             "fidelity" => Record(&self.fidelity),
             "domains" => Record(&self.domains),
@@ -461,13 +458,12 @@ impl purrdf_hash::error::StructuredError for StreamContract {
 /// the same item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RankedRow<I> {
-    /// The row's 1-based rank within this stream. Contiguous and ascending; see
-    /// [`RankedDeclaration`]'s note on the single rank law.
+    /// The row's positive rank, progressing under [`StreamContract::rank_law`].
     pub rank: u64,
     /// The profile's reciprocal-rank contribution for this rank, which fusion
     /// re-derives and refuses on a mismatch
     /// ([`ProtocolError::ContributionMismatch`]).
-    pub contribution: Fixed,
+    pub contribution: Score,
     /// The candidate this row names.
     pub item: I,
     /// The block of the candidate universe this row was drawn from.
@@ -476,18 +472,29 @@ pub struct RankedRow<I> {
     /// no other — see this module's header, and [`RowBlock`] for why the absence
     /// is a value rather than an `Option`.
     pub block: RowBlock,
+    /// Immutable caller keys under a caller-key fusion law; absent under the
+    /// built-in stratum-rank policy.
+    pub order_keys: Option<crate::CandidateKeys>,
 }
 
 impl<I> RankedRow<I> {
     /// A row that names `block`.
     #[must_use]
-    pub const fn new(rank: u64, contribution: Fixed, item: I, block: RowBlock) -> Self {
+    pub const fn new(rank: u64, contribution: Score, item: I, block: RowBlock) -> Self {
         Self {
             rank,
             contribution,
             item,
             block,
+            order_keys: None,
         }
+    }
+
+    /// Attach the caller's normalized candidate keys without changing rank or score.
+    #[must_use]
+    pub fn with_order_keys(mut self, keys: crate::CandidateKeys) -> Self {
+        self.order_keys = Some(keys);
+        self
     }
 }
 
@@ -516,9 +523,8 @@ pub enum ProducerReceipt {
     },
     /// The producer stopped at the depth it was given, and more rows existed.
     ///
-    /// A read ending authored by the producer, stated in **rank** space: ranks
-    /// one through `rank` were read and emitted, and the producer looked at
-    /// nothing below `rank`. The rows did not run out — the depth did. A
+    /// A read ending authored by the producer, recording the last emitted rank.
+    /// The rows did not run out — the requested row depth did. A
     /// producer handed a depth of fifty that still had a fifty-first row says
     /// this; a producer handed a depth of fifty whose index held forty rows says
     /// [`Self::Exhausted`], because the depth is not what stopped it -- its own
@@ -532,8 +538,7 @@ pub enum ProducerReceipt {
     /// stopping point is written:
     ///
     /// * this one is the **producer's** ending, and its stopping point is a
-    ///   rank — a number the producer was handed as its depth and can act on
-    ///   directly;
+    ///   rank, with the requested row depth retained by the plan;
     /// * [`Self::CeilingReached`] as fusion writes it
     ///   ([`FusionStream::trailer`](crate::FusionStream::trailer)) is
     ///   **fusion's** ending, and its stopping point is a contribution — a
@@ -552,14 +557,12 @@ pub enum ProducerReceipt {
     /// have to guess, and half its guesses would be wrong.
     ///
     /// A producer may stop at its depth; it may not miscount what it emitted.
-    /// Fusion checks `rank` against the rows it actually pulled and refuses a
+    /// Fusion checks `rank` against the last rank it actually pulled and refuses a
     /// disagreement as [`ProtocolError::ForgedReceipt`], exactly as it checks
     /// [`Self::Exhausted`]'s count — the depth is a licence to stop reading,
     /// never a licence to misreport.
     DepthReached {
-        /// The last 1-based rank the producer emitted. Because ranks are
-        /// contiguous from one, this is also the number of rows it emitted,
-        /// which is what fusion measures it against.
+        /// The last emitted positive rank, measured independently of row count.
         rank: u64,
     },
     /// The producer stopped at the row bound it had itself declared, so whether
@@ -571,14 +574,14 @@ pub enum ProducerReceipt {
     /// raised past the row count the relation registered — asking for more asks the
     /// relation to contradict its own registration, which a conforming relation
     /// refuses. So at a depth that already sits on the declaration the read is asked
-    /// for exactly `rank` rows, returns exactly `rank` rows, and no row past them
+    /// for exactly its declared number of rows, and no row past them
     /// could have been requested.
     ///
     /// # Why this is neither of the two endings beside it
     ///
     /// * [`Self::Exhausted`] would claim the rows ran out. Nobody looked: the read
     ///   stopped where it was told to, and an index holding a thousand rows and one
-    ///   holding exactly `rank` are indistinguishable from here. That is the
+    ///   holding exactly that row count are indistinguishable from here. That is the
     ///   completeness claim minted from a declaration that this whole vocabulary
     ///   exists to prevent.
     /// * [`Self::DepthReached`] would name the planned depth as the stopper and
@@ -597,9 +600,7 @@ pub enum ProducerReceipt {
     /// bound it declared, and it may not miscount what it emitted
     /// ([`ProtocolError::ForgedReceipt`]).
     RowBoundReached {
-        /// The last 1-based rank the producer emitted, which is the declared row
-        /// bound it read to. Because ranks are contiguous from one, it is also the
-        /// number of rows it emitted, which is what fusion measures it against.
+        /// The last emitted positive rank, measured independently of row count.
         rank: u64,
     },
     /// The read ran a query text this layer did not write, and that text is the
@@ -634,9 +635,8 @@ pub enum ProducerReceipt {
     /// query, and the stream may not miscount what it emitted
     /// ([`ProtocolError::ForgedReceipt`]).
     SuppliedQueryEnded {
-        /// The last 1-based rank the stream emitted, which — ranks being contiguous
-        /// from one — is also the number of rows it emitted, and is what fusion
-        /// measures it against. Zero for a read that emitted nothing, which is not a
+        /// The last emitted positive rank, measured independently of row count.
+        /// Zero for a read that emitted nothing, which is not a
         /// claim that there was nothing to emit.
         rank: u64,
     },
@@ -644,7 +644,7 @@ pub enum ProducerReceipt {
     /// exhaustion.
     CeilingReached {
         /// The inclusive bound at which it stopped.
-        bound: Fixed,
+        bound: Score,
     },
     /// The producer could not run. It emits no rows.
     ExecutionFailed {
@@ -665,6 +665,8 @@ pub enum ProducerReceipt {
 pub enum ProtocolError {
     /// A native query or ownership refusal, retaining its original typed cause.
     NativeFailure(purrdf_sparql_eval::EvalError),
+    /// Original typed caller-key source refusal.
+    Ordering(crate::OrderingError),
     /// A rank arrived below the next expected rank — a producer that went
     /// backwards.
     OutOfOrderRanks {
@@ -922,8 +924,9 @@ pub enum ProtocolError {
     /// monotonically non-increasing with rank: the threshold summed over the
     /// stream heads is an upper bound only while they are. That law has no
     /// separate check, because after this one there is nothing left to check.
-    /// Ranks reach the comparison already held contiguous and ascending
-    /// ([`Self::OutOfOrderRanks`], [`Self::NonContiguousRanks`]), the stratum's
+    /// Ranks reach the comparison already held positive and nondecreasing,
+    /// and ordinal ranks are additionally contiguous and distinct
+    /// ([`Self::OutOfOrderRanks`], [`Self::NonContiguousRanks`]). The stratum's
     /// weight is fixed for the whole stream, and
     /// `reciprocal_rank::contribution_under(decay, weight, rank)` is
     /// non-increasing in the rank for every rule and every weight a
@@ -937,18 +940,18 @@ pub enum ProtocolError {
     /// shape for a wrong number, and nothing — conforming or hostile — could
     /// ever reach it.
     ///
-    /// Equality between adjacent ranks is **not** a violation. The contribution
-    /// is the consumer's own function of the rank, so two adjacent ranks carry
-    /// one value exactly when the profile's fixed-point decay has stopped
-    /// separating them at that depth. The answer stays correct and
+    /// Equal contributions are **not** a violation. Shared-rank rows receive
+    /// the same contribution intentionally; distinct observed ranks may also
+    /// collide when fixed-point decay stops separating them at that depth.
+    /// Those two observations are reported separately. The answer stays correct and
     /// deterministic there — the declared tie-break is total — at a lower rank
     /// resolution, which the fused trailer reports per stratum rather than
     /// refusing.
     ContributionMismatch {
         /// The value the profile computes for the stratum and rank.
-        expected: Fixed,
+        expected: Score,
         /// The value the producer supplied.
-        got: Fixed,
+        got: Score,
     },
 
     /// A producer supplied a terminal receipt that contradicts what it emitted
@@ -1144,6 +1147,7 @@ pub enum ProtocolError {
 impl purrdf_hash::error::StructuredError for ProtocolError {
     purrdf_hash::error_visit! {
         NativeFailure(cause) => "ranked-stream-native-failure" { "cause" => Cause(cause) },
+        Ordering(cause) => "ranked-stream-ordering" { "cause" => Cause(cause) },
         OutOfOrderRanks { expected, got } => "ranked-stream-out-of-order-ranks" { "expected" => Unsigned(u128::from(*expected)), "got" => Unsigned(u128::from(*got)) },
         NonContiguousRanks { gap } => "ranked-stream-non-contiguous-ranks" { "gap" => Unsigned(u128::from(*gap)) },
         DuplicateItem { item, stratum } => "ranked-stream-duplicate-item" { "item" => Text(item), "stratum" => Iri(stratum) },
@@ -1169,6 +1173,7 @@ impl std::fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NativeFailure(error) => error.fmt(f),
+            Self::Ordering(error) => error.fmt(f),
             Self::OutOfOrderRanks { expected, got } => write!(
                 f,
                 "stream rank went backwards: expected {expected}, got {got}"
@@ -1272,6 +1277,7 @@ impl std::error::Error for ProtocolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NativeFailure(error) => Some(error),
+            Self::Ordering(error) => Some(error),
             _ => None,
         }
     }
@@ -1303,8 +1309,8 @@ pub struct ReadSettlement {
 /// A producer's ranked rows, pulled one at a time.
 ///
 /// `next` yields a [`RankedRow`] in rank order and `Ok(None)` once the stream is
-/// exhausted; `receipt` then reports how it ended. Ranks are 1-based and
-/// contiguous. Contributions are the profile's reciprocal-rank values — a
+/// exhausted; `receipt` then reports how it ended. Positive ranks follow the
+/// declared progression law. Contributions are the profile's reciprocal-rank values — a
 /// conforming producer computes them with [`contribution`](crate::contribution).
 /// Fusion re-derives every one of them from `(decay rule, K, weight, rank)` and
 /// refuses a stream that supplies a different number
@@ -1324,6 +1330,33 @@ pub struct ReadSettlement {
 // would instead exclude legitimate single-threaded producers.
 #[allow(async_fn_in_trait)]
 pub trait RankedStream {
+    /// Whether a compiled score-first plan truncated this source's read depth.
+    /// External streams have no compiled score-prefix license to report.
+    fn score_prefix_bounded(&self) -> bool {
+        false
+    }
+    /// Pinned identity and full-domain key bound for a caller-key law.
+    /// Absent means this source implements no caller ordering contract.
+    fn ordering_evidence(&self) -> Option<crate::OrderingEvidence> {
+        None
+    }
+
+    /// Best leading key among rows not yet yielded by `next`. This excludes a
+    /// row just returned; fusion includes its buffered head separately. Bounds
+    /// may tighten, never widen, and must cover every future returned row.
+    /// Missing-domain rows are covered by `ordering_evidence().domain` instead.
+    fn unread_key_bound(&self) -> crate::LeadingBound {
+        crate::LeadingBound::Unbounded
+    }
+
+    /// Resolve a key from the same pinned source for native scoped observations.
+    /// Ordinary ranked rows carry their own keys and are checked against them.
+    fn candidate_keys(
+        &self,
+        _candidate: &Term,
+    ) -> Result<Option<crate::CandidateKeys>, ProtocolError> {
+        Ok(None)
+    }
     /// Native execution authority retained by this producer, when its rows
     /// originated in an admitted execution. Caller-owned streams need no native
     /// account; fusion still uses the same fallible storage implementation.
@@ -1607,15 +1640,23 @@ pub trait RankedStream {
     }
 }
 
-/// The native contiguous rank law, shared by scored and unscored consumers.
-pub(crate) fn validate_rank(expected: u64, rank: u64) -> Result<(), ProtocolError> {
-    if rank < expected {
+/// The declared progression law, shared by scored and unscored consumers.
+pub(crate) fn validate_rank(
+    law: purrdf_sparql_eval::RankLaw,
+    previous: u64,
+    rank: u64,
+) -> Result<(), ProtocolError> {
+    let expected = match law {
+        purrdf_sparql_eval::RankLaw::Ordinal => previous.saturating_add(1),
+        purrdf_sparql_eval::RankLaw::Shared => previous.max(1),
+    };
+    if rank < expected || (law == purrdf_sparql_eval::RankLaw::Ordinal && previous == u64::MAX) {
         return Err(ProtocolError::OutOfOrderRanks {
             expected,
             got: rank,
         });
     }
-    if rank > expected {
+    if law == purrdf_sparql_eval::RankLaw::Ordinal && rank > expected {
         return Err(ProtocolError::NonContiguousRanks {
             gap: rank - expected,
         });
@@ -1626,15 +1667,16 @@ pub(crate) fn validate_rank(expected: u64, rank: u64) -> Result<(), ProtocolErro
 /// Hold a producer's terminal claim against the rows actually consumed.
 pub(crate) fn validate_receipt(
     receipt: &ProducerReceipt,
-    actual: u64,
+    rows: u64,
+    last_rank: u64,
 ) -> Result<(), ProtocolError> {
-    let declared = match receipt {
-        ProducerReceipt::Exhausted { rows_emitted } => Some(*rows_emitted),
+    let (declared, actual) = match receipt {
+        ProducerReceipt::Exhausted { rows_emitted } => (Some(*rows_emitted), rows),
         ProducerReceipt::DepthReached { rank }
         | ProducerReceipt::RowBoundReached { rank }
-        | ProducerReceipt::SuppliedQueryEnded { rank } => Some(*rank),
-        ProducerReceipt::TermsRejected | ProducerReceipt::ExecutionFailed { .. } => Some(0),
-        ProducerReceipt::CeilingReached { .. } => None,
+        | ProducerReceipt::SuppliedQueryEnded { rank } => (Some(*rank), last_rank),
+        ProducerReceipt::TermsRejected | ProducerReceipt::ExecutionFailed { .. } => (Some(0), rows),
+        ProducerReceipt::CeilingReached { .. } => (None, rows),
     };
     if let Some(declared) = declared
         && declared != actual

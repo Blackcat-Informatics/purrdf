@@ -29,6 +29,7 @@
 //! not by the bench.
 
 use purrdf_iri::Position;
+use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 /// Sink for per-statement source positions, gated by an associated const so the
 /// disabled ([`NoSpans`]) implementation is compiled out entirely — the enabled
@@ -40,7 +41,19 @@ pub(crate) trait SpanCollector {
     const ENABLED: bool;
     /// Record that a statement whose subject has lexical key `subject_key` was
     /// asserted at `position`.
-    fn record(&mut self, subject_key: &str, position: Position);
+    /// Record through the parser's original account.
+    fn record_with_memory<A: Admission + ?Sized>(
+        &mut self,
+        subject_key: &str,
+        position: Position,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError>;
+    /// Transfer the native grammar's exact occurrence table without copying it.
+    fn finish_sources(&mut self, _source: super::source_occurrence::SourceOccurrences) {}
+    /// Borrow the native source associations during the same original lowering.
+    fn sources_mut(&mut self) -> Option<&mut super::source_occurrence::SourceOccurrences> {
+        None
+    }
 }
 
 /// Zero-sized no-op collector: the default, and what every pre-existing parse path
@@ -50,8 +63,15 @@ pub(crate) struct NoSpans;
 
 impl SpanCollector for NoSpans {
     const ENABLED: bool = false;
-    #[inline(always)]
-    fn record(&mut self, _subject_key: &str, _position: Position) {}
+    #[inline]
+    fn record_with_memory<A: Admission + ?Sized>(
+        &mut self,
+        _subject_key: &str,
+        _position: Position,
+        _memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        Ok(())
+    }
 }
 
 /// Opt-in mapping from a data-graph subject to the source [`Position`] where it was
@@ -68,28 +88,107 @@ impl SpanCollector for NoSpans {
 /// * a quoted triple subject is NOT recorded (it has no single lexical key).
 #[derive(Debug, Default, Clone)]
 pub struct SpanTable {
+    source: super::source_occurrence::SourceOccurrences,
     ordered: Vec<(String, Position)>,
-    by_subject: purrdf_core::FastMap<String, Position>,
+    by_subject: purrdf_core::hash::table::HashTable<usize>,
 }
 
 impl SpanCollector for SpanTable {
     const ENABLED: bool = true;
-    fn record(&mut self, subject_key: &str, position: Position) {
-        // `entry` needs an owned key and so allocated on every repeat subject; a
-        // borrowed probe first keeps the first-assertion-wins rule and allocates only
-        // when the subject is new.
-        if !self.by_subject.contains_key(subject_key) {
-            self.by_subject.insert(subject_key.to_owned(), position);
+    fn sources_mut(&mut self) -> Option<&mut super::source_occurrence::SourceOccurrences> {
+        Some(&mut self.source)
+    }
+    fn finish_sources(&mut self, source: super::source_occurrence::SourceOccurrences) {
+        self.source = source;
+    }
+    fn record_with_memory<A: Admission + ?Sized>(
+        &mut self,
+        subject_key: &str,
+        position: Position,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        let hash = purrdf_hash::fixed::FixedHasher::try_hash_terminal(
+            0,
+            subject_key.as_bytes(),
+            &mut |units| memory.admission_mut().checkpoint(units),
+        )?;
+        let found = self
+            .by_subject
+            .find_with_control(
+                hash,
+                |&index, memory| {
+                    purrdf_lex::control::compare_bytes(
+                        self.ordered[index].0.as_bytes(),
+                        subject_key.as_bytes(),
+                        &mut |units| memory.admission_mut().checkpoint(units),
+                    )
+                    .map(core::cmp::Ordering::is_eq)
+                },
+                memory,
+            )?
+            .is_some();
+        if !found {
+            let required = self
+                .by_subject
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            purrdf_core::hash::try_reserve_table_with_memory(
+                &mut self.by_subject,
+                required,
+                |&index, memory| {
+                    purrdf_hash::fixed::FixedHasher::try_hash_terminal(
+                        0,
+                        self.ordered[index].0.as_bytes(),
+                        &mut |units| memory.admission_mut().checkpoint(units),
+                    )
+                },
+                memory,
+            )?;
         }
-        self.ordered.push((subject_key.to_owned(), position));
+        memory.reserve_for_push(&mut self.ordered)?;
+        let key = memory.string_with_progress(subject_key)?;
+        let index = self.ordered.len();
+        self.ordered.push((key, position));
+        if !found {
+            self.by_subject
+                .try_insert_unique_with_control(
+                    hash,
+                    index,
+                    |&index, memory| {
+                        purrdf_hash::fixed::FixedHasher::try_hash_terminal(
+                            0,
+                            self.ordered[index].0.as_bytes(),
+                            &mut |units| memory.admission_mut().checkpoint(units),
+                        )
+                    },
+                    memory,
+                )
+                .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
+        }
+        Ok(())
     }
 }
 
 impl SpanTable {
+    /// Exact native Turtle/TriG occurrences, before diversion/deduplication.
+    /// Other syntax families currently leave this table empty.
+    pub fn source_occurrences(&self) -> &super::source_occurrence::SourceOccurrences {
+        &self.source
+    }
+    pub(crate) fn source_occurrences_mut(
+        &mut self,
+    ) -> &mut super::source_occurrence::SourceOccurrences {
+        &mut self.source
+    }
+
     /// The source position where `subject_key` was FIRST asserted, if tracked.
     #[must_use]
     pub fn position_for_subject(&self, subject_key: &str) -> Option<Position> {
-        self.by_subject.get(subject_key).copied()
+        let hash = purrdf_hash::fixed::FixedHasher::hash_terminal(0, subject_key.as_bytes());
+        self.by_subject
+            .find(hash, |&index| self.ordered[index].0 == subject_key)
+            .map(|&index| self.ordered[index].1)
     }
 
     /// The number of recorded `(subject, position)` entries (document order).
@@ -112,9 +211,15 @@ impl SpanTable {
 
 /// Runtime options for [`parse_dataset_with`](crate::parse_dataset_with).
 #[derive(Debug, Default, Clone, Copy)]
-pub struct ParseOptions {
+pub struct ParseOptions<'a> {
     /// When true, `parse_dataset_with` returns a populated [`SpanTable`]. Opt-in
     /// because it costs memory and pins the sequential line pipeline; off by default
     /// so the hot path is untouched.
     pub track_source_spans: bool,
+    /// Explicit YAML-LD Basic controls. Refused for every other input format.
+    pub yaml_ld: Option<super::jsonld::YamlLdOptions>,
+    /// Initial YAML-LD context and offline registry. Its original compilation
+    /// document IRI must match the caller base; explicit context `@base` may differ.
+    /// Refused for other formats. Without Basic controls, native defaults apply.
+    pub yaml_ld_context: Option<&'a super::jsonld::CompiledJsonLdContext>,
 }

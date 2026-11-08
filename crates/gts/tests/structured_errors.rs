@@ -338,19 +338,64 @@ fn native_transport_framing_and_decoder_fields_survive() {
         error.message(),
         "2 byte(s) after the last zstd frame do not begin another frame"
     );
+
+    // Reset refuses the declared window before allocating it. Block decoding
+    // refuses a reserved block after accepting the neighboring valid header.
+    let window = vec![0x28, 0xb5, 0x2f, 0xfd, 0, 0x90];
+    let mut block = vec![0x28, 0xb5, 0x2f, 0xfd, 0x20, 1, 9, 0, 0, b'x'];
     assert_eq!(
-        error,
-        decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+        decode_transport(&block, TransportEncoding::Zstd).unwrap(),
+        b"x"
     );
+    block[6] = 7;
+    for (bytes, code) in [
+        (window, "zstd-frame-decoder-window-size-too-big"),
+        (block, "zstd-frame-decoder-failed-to-read-block-header"),
+    ] {
+        let error = decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err();
+        let retained = error.clone();
+        assert_eq!(retained, error);
+        assert_ne!(
+            retained,
+            decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+        );
+        drop((bytes, error));
+        assert_eq!(retained.cause.kind(), std::io::ErrorKind::InvalidData);
+        let fields = Capture::read(&retained)
+            .child("cause")
+            .child("cause")
+            .child("cause");
+        assert_eq!(fields.code, code);
+        if code == "zstd-frame-decoder-window-size-too-big" {
+            assert!(matches!(
+                fields.field("requested"),
+                ErrorValue::ByteCount(value) if value == 1_u128 << 28
+            ));
+        } else {
+            assert_eq!(
+                fields.child("cause").code,
+                "zstd-block-header-read-found-reserved-block"
+            );
+        }
+        let mut source = std::error::Error::source(retained.cause.original());
+        while let Some(cause) = source {
+            if cause.is::<purrdf_zstd::decoding::errors::FrameDecoderError>() {
+                break;
+            }
+            source = cause.source();
+        }
+        assert!(
+            source.is_some(),
+            "original decoder remains in the source chain"
+        );
+    }
 }
 
 fn dictionary_and_key_envelope_errors_keep_native_fields() {
-    use purrdf_gts::dict::{DictSeed, dictionary_id, raw_content_dict, trained_dict};
+    use purrdf_gts::dict::{dictionary_id, raw_content_dict, trained_dict};
     let samples: &[&[u8]] = &[b"", b""];
     let raw = raw_content_dict(samples, 1024).unwrap_err();
-    let trained = trained_dict(samples, 1024, DictSeed::FromCorpus).unwrap_err();
-    assert_ne!(raw, trained, "the native authoring operations differ");
-    assert_eq!(raw.detail(), trained.detail());
+    let trained = trained_dict(samples, 1024).unwrap_err();
     for (error, operation) in [(raw, "raw-content"), (trained, "train")] {
         let fields = Capture::read(&error);
         assert_eq!(fields.code, "gts-dictionary-empty-corpus");
@@ -367,7 +412,7 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     }
     let error = dictionary_id(&[]).unwrap_err();
     let fields = Capture::read(&error);
-    assert_eq!(fields.code, "gts-dictionary-external");
+    assert_eq!(fields.code, "gts-dictionary-decode");
     assert!(matches!(
         fields.field("operation"),
         ErrorValue::Code("decode")
@@ -377,7 +422,133 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
         ErrorValue::ByteCount(0)
     ));
     assert!(matches!(fields.field("target_len"), ErrorValue::Absent));
-    assert!(matches!(fields.field("message"), ErrorValue::Message(value) if !value.is_empty()));
+    let native = fields.child("cause");
+    assert_eq!(native.code, "zstd-dictionary-decode-dictionary-too-small");
+    assert!(matches!(native.field("got"), ErrorValue::ByteCount(0)));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_zstd::decoding::errors::DictionaryDecodeError>()
+    );
+
+    let accepted = raw_content_dict(&[b"ab"], 4096).unwrap();
+    let error = raw_content_dict(&[b"ab"], 1).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-dictionary-authoring");
+    assert!(matches!(
+        fields.field("input_bytes"),
+        ErrorValue::ByteCount(2)
+    ));
+    assert!(matches!(
+        fields.field("target_len"),
+        ErrorValue::ByteCount(1)
+    ));
+    let native = fields.child("cause");
+    assert_eq!(native.code, "zstd-dictionary-size-too-small");
+    assert!(
+        matches!(native.field("header_len"), ErrorValue::ByteCount(n) if n == (accepted.len() - 8) as u128)
+    );
+    assert!(matches!(
+        native.field("min_content_size"),
+        ErrorValue::ByteCount(8)
+    ));
+    assert_eq!(
+        error.to_string(),
+        "dictionary construction failed: dictionary size too small to fit header and offset history"
+    );
+
+    use purrdf_zstd::dictionary::{
+        FastCoverOptions, FinalizeOptions, finalize_raw_dict, train_fastcover_raw_from_slice,
+    };
+    let options = FastCoverOptions {
+        optimize: false,
+        k: 1,
+        d: 1,
+        f: 1,
+        accel: 0,
+        ..FastCoverOptions::default()
+    };
+    let error = train_fastcover_raw_from_slice(b"abc", 128, &options).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "zstd-dictionary-training-sample-too-small");
+    assert!(matches!(
+        fields.field("sample_bytes"),
+        ErrorValue::ByteCount(3)
+    ));
+    assert!(matches!(
+        fields.field("dict_size"),
+        ErrorValue::ByteCount(128)
+    ));
+    assert!(matches!(
+        fields.field("produced_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    let tuned = fields.child("tuned");
+    assert!(matches!(tuned.field("k"), ErrorValue::ByteCount(16)));
+    assert!(matches!(tuned.field("d"), ErrorValue::ByteCount(4)));
+    assert!(matches!(tuned.field("f"), ErrorValue::Unsigned(8)));
+    assert!(matches!(tuned.field("accel"), ErrorValue::Unsigned(1)));
+    assert!(matches!(tuned.field("score"), ErrorValue::Unsigned(0)));
+    for (error, code) in [
+        (
+            finalize_raw_dict(&[], b"ab", usize::MAX, FinalizeOptions { dict_id: Some(0) })
+                .unwrap_err(),
+            "zstd-dictionary-empty-raw-content",
+        ),
+        (
+            train_fastcover_raw_from_slice(&[], usize::MAX, &options).unwrap_err(),
+            "zstd-dictionary-empty-training-sample",
+        ),
+    ] {
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, code);
+        assert!(
+            matches!(fields.field("dict_size"), ErrorValue::ByteCount(n) if n == usize::MAX as u128)
+        );
+    }
+    let error =
+        finalize_raw_dict(b"ab", b"ab", 128, FinalizeOptions { dict_id: Some(0) }).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "zstd-dictionary-zero-id");
+    assert!(matches!(fields.field("dict_id"), ErrorValue::Unsigned(0)));
+    let error = finalize_raw_dict(b"B", b"A", 4096, FinalizeOptions::default()).unwrap_err();
+    let events = Vec::with_capacity(64);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(
+        fields.code,
+        "zstd-dictionary-insufficient-symbol-statistics"
+    );
+    assert!(matches!(
+        fields.field("source"),
+        ErrorValue::Code("raw-content")
+    ));
+    assert!(matches!(fields.field("total"), ErrorValue::Unsigned(1)));
+    use purrdf_testkit::error_capture::Event;
+    assert!(fields.events.windows(4).any(|events| matches!(
+        events,
+        [
+            Event::BeginList(Some("counts"), 32),
+            Event::Value(None, ErrorValue::Unsigned(0)),
+            Event::Value(None, ErrorValue::Unsigned(0)),
+            Event::Value(None, ErrorValue::Unsigned(1)),
+        ]
+    )));
+    // The neighbouring two-observation corpus passes FSE admission after the
+    // formerly unwritable full-alphabet Huffman fallback is rebalanced.
+    for (raw, sample) in [
+        (b"BB".to_vec(), b"A".to_vec()),
+        ((0u8..=255).collect::<Vec<_>>().repeat(256), Vec::new()),
+    ] {
+        let accepted = finalize_raw_dict(&raw, &sample, 70_000, FinalizeOptions::default())
+            .expect("balanced Huffman weights must not panic or over-refuse");
+        purrdf_zstd::decoding::Dictionary::decode_dict(&accepted).unwrap();
+        assert_eq!(
+            accepted,
+            finalize_raw_dict(&raw, &sample, 70_000, FinalizeOptions::default()).unwrap()
+        );
+    }
     let error = {
         let input = String::from("not an armored key");
         purrdf_gts::openpgp::parse_transport_key(&input).unwrap_err()
@@ -386,6 +557,128 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     assert_eq!(fields.code, "gts-openpgp-rule");
     assert_eq!(fields.child("rule").code, "gts-openpgp-missing-begin");
     assert_eq!(error.to_string(), "missing armor BEGIN line");
+}
+
+fn dictionary_io_retains_original_owners_without_rendering() {
+    use purrdf_testkit::error_capture::CallerRefusal;
+    use purrdf_zstd::dictionary::{
+        FastCoverOptions, FinalizeOptions, create_fastcover_dict_from_source,
+        create_fastcover_raw_dict_from_source,
+    };
+    let options = FastCoverOptions {
+        optimize: false,
+        k: 16,
+        d: 4,
+        f: 8,
+        ..FastCoverOptions::default()
+    };
+    for bridged in [false, true] {
+        let cause = if bridged {
+            purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                CallerRefusal { limit: u128::MAX },
+            )
+        } else {
+            std::io::Error::other(CallerRefusal { limit: u128::MAX })
+        };
+        let identity = core::ptr::from_ref(cause.get_ref().unwrap());
+        let error = create_fastcover_raw_dict_from_source(
+            HeaderFault {
+                prefix: std::io::Cursor::new(vec![1, 2, 3]),
+                error: Some(cause),
+            },
+            &mut Vec::new(),
+            0,
+            &options,
+        )
+        .unwrap_err();
+        let original = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert!(core::ptr::eq(
+            core::ptr::from_ref(original.get_ref().unwrap()),
+            identity
+        ));
+        let events = Vec::with_capacity(32);
+        let io_events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(&error, events);
+        let io = Capture::read_with_buffer(original, io_events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, "zstd-dictionary-source-read");
+        assert!(matches!(
+            fields.field("bytes_read"),
+            ErrorValue::ByteCount(3)
+        ));
+        assert!(matches!(io.field("message"), ErrorValue::Absent));
+        if bridged {
+            assert!(matches!(
+                io.child("cause").child("cause").field("limit"),
+                ErrorValue::Unsigned(u128::MAX)
+            ));
+        } else {
+            assert!(matches!(io.field("cause"), ErrorValue::Absent));
+        }
+    }
+    // A healthy source with the same zero raw-output budget is still admitted.
+    create_fastcover_raw_dict_from_source(b"abc".as_slice(), &mut Vec::new(), 0, &options).unwrap();
+
+    let sample = b"abcdefghijklmnopqrstuvwxyz".repeat(4);
+    let mut accepted = Vec::new();
+    create_fastcover_dict_from_source(
+        sample.as_slice(),
+        &mut accepted,
+        512,
+        &options,
+        FinalizeOptions::default(),
+    )
+    .unwrap();
+    purrdf_zstd::decoding::Dictionary::decode_dict(&accepted).unwrap();
+    let cause = purrdf_hash::error::io_error(
+        std::io::ErrorKind::BrokenPipe,
+        CallerRefusal { limit: u128::MAX },
+    );
+    let identity = core::ptr::from_ref(cause.get_ref().unwrap());
+    let mut output = HeaderFault {
+        prefix: std::io::Cursor::new(Vec::new()),
+        error: Some(cause),
+    };
+    let error = create_fastcover_dict_from_source(
+        sample.as_slice(),
+        &mut output,
+        512,
+        &options,
+        FinalizeOptions::default(),
+    )
+    .unwrap_err();
+    drop((sample, output));
+    let original = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert!(core::ptr::eq(
+        core::ptr::from_ref(original.get_ref().unwrap()),
+        identity
+    ));
+    let events = Vec::with_capacity(32);
+    let io_events = Vec::with_capacity(32);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    let io = Capture::read_with_buffer(original, io_events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "zstd-dictionary-output-write");
+    assert!(
+        matches!(fields.field("output_bytes"), ErrorValue::ByteCount(n) if n == accepted.len() as u128)
+    );
+    assert!(matches!(
+        io.child("kind").field("name"),
+        ErrorValue::Code("broken-pipe")
+    ));
+    assert!(matches!(
+        io.child("cause").child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
 }
 
 fn refused_frame(
@@ -1177,6 +1470,117 @@ fn reader_file_and_chain_diagnostics_retain_native_inputs() {
     }
 }
 
+fn snapshot_id_overflow_reports_the_wire_operand_and_base() {
+    use purrdf_gts::{
+        model::Term,
+        reader::{read, read_to_sink},
+        writer::Writer,
+    };
+    use purrdf_lex::cbor::Value;
+
+    for field in ["dt", "rf", "tt", "quads", "reifies", "annot"] {
+        for overflow in [false, true] {
+            let operand = if overflow { usize::MAX } else { 0 };
+            let mut terms: Vec<_> = ["s", "p", "o"]
+                .map(|name| {
+                    Value::Map(vec![
+                        ("k".into(), 0.into()),
+                        ("v".into(), format!("https://example.org/{name}").into()),
+                    ])
+                })
+                .into();
+            let object = match field {
+                "dt" => {
+                    terms.push(Value::Map(vec![
+                        ("k".into(), 1.into()),
+                        ("v".into(), "literal".into()),
+                        ("dt".into(), operand.into()),
+                    ]));
+                    3
+                }
+                "rf" | "tt" => {
+                    let mut term = vec![
+                        ("k".into(), 3.into()),
+                        (
+                            "tt".into(),
+                            Value::Array(vec![0.into(), 1.into(), 2.into()]),
+                        ),
+                    ];
+                    if field == "rf" {
+                        term.push(("rf".into(), operand.into()));
+                    } else {
+                        term[1].1 = Value::Array(vec![0.into(), 1.into(), operand.into()]);
+                    }
+                    terms.push(Value::Map(term));
+                    3
+                }
+                "quads" => operand,
+                _ => 2,
+            };
+            let mut payload = vec![
+                ("terms".into(), Value::Array(terms)),
+                (
+                    "quads".into(),
+                    Value::Array(vec![Value::Array(vec![0.into(), 1.into(), object.into()])]),
+                ),
+            ];
+            if field == "reifies" {
+                payload.push((
+                    field.into(),
+                    Value::Array(vec![Value::Array(vec![
+                        0.into(),
+                        0.into(),
+                        1.into(),
+                        operand.into(),
+                    ])]),
+                ));
+            } else if field == "annot" {
+                payload.push((
+                    field.into(),
+                    Value::Array(vec![Value::Array(vec![0.into(), 1.into(), operand.into()])]),
+                ));
+            }
+            let mut writer = Writer::new("generic");
+            writer.add_terms(&[Term::iri("https://example.org/prefix")]);
+            writer.add_frame("snapshot", Some(Value::Map(payload)), None, None, None);
+            let bytes = writer.into_bytes();
+            let graph = read(&bytes, true, None);
+            let mut sink = DiagnosticSink::default();
+            let streamed = read_to_sink(&bytes, true, None, &mut sink);
+            assert_eq!(graph.diagnostics, streamed.diagnostics);
+            assert_eq!(graph.diagnostics, sink.diagnostics);
+            if !overflow {
+                assert!(
+                    graph.diagnostics.is_empty(),
+                    "valid {field}: {:?}",
+                    graph.diagnostics
+                );
+                assert_eq!(graph.quads.len(), 1);
+                continue;
+            }
+            let diagnostic = sink
+                .diagnostics
+                .into_iter()
+                .find(|diagnostic| {
+                    diagnostic.native_cause().is_some_and(|cause| {
+                        Capture::read(cause).code == "gts-term-id-base-overflow"
+                    })
+                })
+                .unwrap_or_else(|| panic!("missing overflow for {field}: {:?}", graph.diagnostics));
+            assert_eq!(diagnostic.code, "DamagedFrame");
+            assert_eq!(diagnostic.frame_index, Some(2));
+            drop(bytes);
+            drop(graph);
+            drop(streamed);
+            let fields = Capture::read(&diagnostic).child("cause");
+            assert!(
+                matches!(fields.field("value"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+            );
+            assert!(matches!(fields.field("base"), ErrorValue::Unsigned(1)));
+        }
+    }
+}
+
 fn reader_row_diagnostics_keep_native_widths_ids_and_term_kinds() {
     use purrdf_gts::{
         model::Term,
@@ -1678,6 +2082,41 @@ fn codec_native_corruption_and_budget_remain_distinct() {
         std::error::Error::source(source)
             .unwrap()
             .is::<purrdf_deflate::Error>()
+    );
+
+    let encoded = encode_chain(&["zstd".into()], raw).unwrap();
+    let codec = Codec::new("zstd", "compress");
+    assert_eq!(
+        decode_chain_bounded(std::slice::from_ref(&codec), &encoded, raw.len()).unwrap(),
+        raw
+    );
+    assert!(matches!(
+        decode_chain_bounded(std::slice::from_ref(&codec), &encoded, 3),
+        Err(purrdf_gts::codec::CodecError::Limit { limit: 3 })
+    ));
+    let error = {
+        let damaged = b"bad!".to_vec();
+        decode_chain(&[codec], &damaged).unwrap_err()
+    };
+    let fields = Capture::read(&error).child("detail");
+    assert_eq!(fields.code, "gts-codec-zstd-decode");
+    let header = fields.child("cause").child("cause");
+    assert_eq!(header.code, "zstd-read-frame-header-bad-magic-number");
+    assert!(matches!(
+        header.field("magic_number"),
+        ErrorValue::Unsigned(value) if value == u128::from(u32::from_le_bytes(*b"bad!"))
+    ));
+    assert_eq!(
+        error.to_string(),
+        "zstd decode failed: BadMagicNumber(560226658)"
+    );
+    let failure = std::error::Error::source(&error).unwrap();
+    let decoder = std::error::Error::source(failure).unwrap();
+    assert!(decoder.is::<purrdf_zstd::decoding::errors::FrameDecoderError>());
+    assert!(
+        std::error::Error::source(decoder)
+            .unwrap()
+            .is::<purrdf_zstd::decoding::errors::ReadFrameHeaderError>()
     );
 }
 
@@ -2539,6 +2978,7 @@ fn policy_findings_keep_native_counts_identifiers_and_vocabulary() {
 }
 
 purrdf_testkit::harness_main!(
+    snapshot_id_overflow_reports_the_wire_operand_and_base,
     nested_discovery_keeps_original_limits_and_child_failures,
     policy_findings_keep_native_counts_identifiers_and_vocabulary,
     reader_preserves_terminal_io_and_sequence_causes,
@@ -2563,6 +3003,7 @@ purrdf_testkit::harness_main!(
     transport_retains_native_source_errors_before_foreign_formatting,
     native_transport_framing_and_decoder_fields_survive,
     dictionary_and_key_envelope_errors_keep_native_fields,
+    dictionary_io_retains_original_owners_without_rendering,
     reader_causes_survive_input_graph_and_streaming_owners,
     reader_missing_catalog_keeps_ordered_native_cbor_fields,
     reader_blob_budget_keeps_original_counts_and_priority,

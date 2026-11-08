@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use purrdf_core::{ContentDigest, cover::ByteCover};
+use purrdf_core::{ContentDigest, content_store::ContentHasher, cover::ByteCover};
 
 use crate::{MimeError, transfer};
 
@@ -245,23 +245,58 @@ pub struct DecodedAttachment {
 #[derive(Debug)]
 pub struct Document<'a> {
     /// Exact caller source descriptor.
-    pub source: SourceDocument<'a>,
+    pub(crate) source: SourceDocument<'a>,
     /// Complete byte partition emitted under the shared cover law.
-    pub cover: ByteCover<'a>,
+    pub(crate) cover: ByteCover<'a>,
     /// Part occurrences in canonical source traversal order.
-    pub parts: Vec<Part>,
+    pub(crate) parts: Vec<Part>,
     /// Header occurrences including identical repeats and malformed lines.
-    pub headers: Vec<Header>,
+    pub(crate) headers: Vec<Header>,
     /// Preamble/delimiter/epilogue occurrences.
-    pub structures: Vec<Structure>,
+    pub(crate) structures: Vec<Structure>,
     /// Typed original defects, without normalization or repair.
-    pub problems: Vec<Problem>,
+    pub(crate) problems: Vec<Problem>,
     pub(crate) id: String,
     pub(crate) profile_id: ContentDigest,
-    pub(crate) profile: crate::Profile,
 }
 
-impl Document<'_> {
+impl<'a> Document<'a> {
+    /// Exact original source bound to this analyzed document.
+    #[must_use]
+    pub const fn source(&self) -> SourceDocument<'a> {
+        self.source
+    }
+
+    /// Verified original-byte partition established during analysis.
+    #[must_use]
+    pub const fn cover(&self) -> &ByteCover<'a> {
+        &self.cover
+    }
+
+    /// Part occurrences in canonical source traversal order.
+    #[must_use]
+    pub fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+
+    /// Ordered original header occurrences, including repeats and defects.
+    #[must_use]
+    pub fn headers(&self) -> &[Header] {
+        &self.headers
+    }
+
+    /// Original preamble, delimiter and epilogue occurrences.
+    #[must_use]
+    pub fn structures(&self) -> &[Structure] {
+        &self.structures
+    }
+
+    /// Typed observations of defects in the unchanged source.
+    #[must_use]
+    pub fn problems(&self) -> &[Problem] {
+        &self.problems
+    }
+
     /// Deterministic document identity bound to source/profile/content.
     pub fn id(&self) -> &str {
         &self.id
@@ -275,36 +310,6 @@ impl Document<'_> {
     /// Refuses unknown parts, unknown/conflicting encodings or broken
     /// transfer syntax. No partial decoded payload is returned.
     pub fn decoded_attachment(&self, part: usize) -> Result<DecodedAttachment, MimeError> {
-        self.checked_part(part)?;
-        self.decode_original_part(part)
-    }
-
-    /// Cover a nested part's exact original octets under the shared identity
-    /// emitter. Its model coordinates remain absolute in the containing source;
-    /// this independent cover uses coordinates relative to the nested bytes.
-    ///
-    /// # Errors
-    /// Refuses an unknown part or changed source/part declaration.
-    pub fn part_cover(&self, part: usize) -> Result<ByteCover<'_>, MimeError> {
-        let entry = self.checked_part(part)?;
-        Ok(ByteCover::identity(&self.source.bytes[entry.span.clone()]))
-    }
-
-    fn checked_part(&self, part: usize) -> Result<&Part, MimeError> {
-        let entry = self.parts.get(part).ok_or(MimeError::UnknownPart(part))?;
-        let original = crate::analyze(self.source, &self.profile)?;
-        if original.id != self.id
-            || original.cover != self.cover
-            || original.parts.get(part) != Some(entry)
-        {
-            return Err(crate::error::metadata(self.id(), "source part"));
-        }
-        Ok(entry)
-    }
-
-    // Projection already verified every model occurrence against source. It
-    // calls this exact decoder without repeating whole-message parsing per part.
-    pub(crate) fn decode_original_part(&self, part: usize) -> Result<DecodedAttachment, MimeError> {
         let entry = self.parts.get(part).ok_or(MimeError::UnknownPart(part))?;
         let bytes = transfer::decode(
             &self.source.bytes[entry.body.clone()],
@@ -317,5 +322,33 @@ impl Document<'_> {
         })?;
         let digest = ContentDigest::of(&bytes);
         Ok(DecodedAttachment { bytes, digest })
+    }
+
+    /// Compute the attachment identity without retaining its decoded payload.
+    pub(crate) fn decoded_digest(&self, part: usize) -> Result<ContentDigest, MimeError> {
+        let entry = self.parts.get(part).ok_or(MimeError::UnknownPart(part))?;
+        let mut hasher = ContentHasher::default();
+        transfer::visit(
+            &self.source.bytes[entry.body.clone()],
+            &entry.transfer_encoding,
+            |bytes| hasher.update(bytes),
+        )
+        .map_err(|error| MimeError::Transfer {
+            part,
+            at: entry.body.start + error.at,
+            reason: error.reason,
+        })?;
+        Ok(hasher.finish())
+    }
+
+    /// Cover a nested part's exact original octets under the shared identity
+    /// emitter. Its model coordinates remain absolute in the containing source;
+    /// this independent cover uses coordinates relative to the nested bytes.
+    ///
+    /// # Errors
+    /// Refuses an unknown part.
+    pub fn part_cover(&self, part: usize) -> Result<ByteCover<'_>, MimeError> {
+        let entry = self.parts.get(part).ok_or(MimeError::UnknownPart(part))?;
+        Ok(ByteCover::identity(&self.source.bytes[entry.span.clone()]))
     }
 }

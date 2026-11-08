@@ -5,97 +5,97 @@
 //! with and the writer quotes by, so a string the writer leaves plain is a
 //! string the reader reads back.
 //!
-//! The rules are the YAML 1.2 core schema (§10.3.2) as `serde_yaml` applies
-//! them: `null`, `~` and the empty scalar are null; `true`/`false` in three
-//! casings are booleans; an integer is decimal, `0x` hexadecimal, `0o` octal or
-//! `0b` binary, optionally signed; a float is the core schema's decimal float
-//! or `.inf`/`.nan`. A decimal with a redundant leading zero (`007`) is a
-//! string, as `serde_yaml` reads it, and a radix integer beyond 128 bits is a
-//! string too.
+//! YAML 1.2.2 Core Schema (§10.3.2): signed decimal integers, unsigned octal
+//! and hexadecimal integers, decimal floats, booleans and null. Classification
+//! borrows source text and never narrows a number to a machine integer.
 
 /// What a plain scalar denotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Plain {
+pub(crate) enum Plain<'a> {
     /// `null`.
     Null,
     /// A boolean.
     Bool(bool),
-    /// A finite number, as a JSON number lexeme.
-    Number(String),
+    /// A finite number, with a borrowed JSON-normalization plan.
+    Number(NumberText<'a>),
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
     /// Text.
     String,
 }
 
-/// `0123`, `-007`: digits with a redundant leading zero, which `serde_yaml`
-/// reads (and quotes) as a string although the core schema reads an integer.
-pub(crate) fn digits_but_not_number(scalar: &str) -> bool {
-    let digits = scalar.strip_prefix(['-', '+']).unwrap_or(scalar);
-    digits.len() > 1 && digits.starts_with('0') && digits.bytes().all(|b| b.is_ascii_digit())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Radix {
+    Octal,
+    Hexadecimal,
 }
-
-/// The value of `digits` in `radix`, when every byte is a digit of it, there is
-/// at least one, and the value fits `u128`.
-fn radix_value(digits: &str, radix: u32) -> Option<u128> {
-    if digits.is_empty() {
-        return None;
-    }
-    let mut value = 0_u128;
-    for byte in digits.bytes() {
-        let digit = u128::from(match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'a'..=b'f' => byte - b'a' + 10,
-            b'A'..=b'F' => byte - b'A' + 10,
-            _ => return None,
-        });
-        if digit >= u128::from(radix) {
-            return None;
+impl Radix {
+    pub(super) const fn bits(self) -> usize {
+        match self {
+            Self::Octal => 3,
+            Self::Hexadecimal => 4,
         }
-        value = value.checked_mul(u128::from(radix))?.checked_add(digit)?;
     }
-    Some(value)
+    pub(super) fn digit(self, byte: u8) -> Option<u8> {
+        purrdf_hash::hex::nibble(byte).filter(|digit| usize::from(*digit) < (1 << self.bits()))
+    }
 }
 
+/// A recognized number's borrowed spelling plan. Classification allocates
+/// nothing; native materialization uses the caller's admitted account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NumberText<'a> {
+    Decimal {
+        negative: bool,
+        digits: &'a str,
+    },
+    Radix {
+        radix: Radix,
+        digits: &'a str,
+    },
+    Float {
+        negative: bool,
+        integer: &'a str,
+        fraction: Option<&'a str>,
+        exponent: &'a str,
+    },
+}
+impl NumberText<'_> {
+    pub(crate) fn is_integer(&self) -> bool {
+        match self {
+            Self::Decimal { .. } | Self::Radix { .. } => true,
+            Self::Float {
+                fraction, exponent, ..
+            } => fraction.is_none() && exponent.is_empty(),
+        }
+    }
+}
 /// An integer spelling's JSON lexeme.
-fn integer(scalar: &str) -> Option<String> {
+fn integer(scalar: &str) -> Option<NumberText<'_>> {
+    for (prefix, radix) in [("0x", Radix::Hexadecimal), ("0o", Radix::Octal)] {
+        if let Some(digits) = scalar.strip_prefix(prefix) {
+            return (!digits.is_empty() && digits.bytes().all(|byte| radix.digit(byte).is_some()))
+                .then_some(NumberText::Radix { radix, digits });
+        }
+    }
     let (negative, unsigned) = match scalar.as_bytes().first() {
         Some(b'-') => (true, &scalar[1..]),
         Some(b'+') => (false, &scalar[1..]),
         _ => (false, scalar),
     };
-    let radix = [("0x", 16), ("0o", 8), ("0b", 2)]
-        .into_iter()
-        .find_map(|(prefix, radix)| unsigned.strip_prefix(prefix).map(|rest| (rest, radix)));
-    let magnitude = match radix {
-        Some((rest, radix)) => radix_value(rest, radix)?,
-        None => {
-            if unsigned.is_empty()
-                || digits_but_not_number(scalar)
-                || !unsigned.bytes().all(|b| b.is_ascii_digit())
-            {
-                return None;
-            }
-            if negative {
-                // A JSON-grammatical negative decimal keeps its spelling.
-                return Some(scalar.to_owned());
-            }
-            if !scalar.starts_with('+') {
-                return Some(scalar.to_owned());
-            }
-            radix_value(unsigned, 10)?
-        }
-    };
-    if negative {
-        (magnitude <= 1_u128 << 127).then(|| format!("-{magnitude}"))
-    } else {
-        Some(magnitude.to_string())
+    if unsigned.is_empty() || !unsigned.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
     }
+    let digits = unsigned.trim_start_matches('0');
+    Some(NumberText::Decimal {
+        negative,
+        digits: if digits.is_empty() { "0" } else { digits },
+    })
 }
 
 /// A core-schema decimal float spelling's JSON lexeme:
 /// `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?`.
-fn float(scalar: &str) -> Option<String> {
+fn float(scalar: &str) -> Option<NumberText<'_>> {
     let bytes = scalar.as_bytes();
     let mut at = 0;
     let negative = match bytes.first() {
@@ -144,26 +144,16 @@ fn float(scalar: &str) -> Option<String> {
     if end != bytes.len() {
         return None;
     }
-    let integer_part = integer_part.trim_start_matches('0');
-    let mut lexeme = String::with_capacity(scalar.len() + 2);
-    if negative {
-        lexeme.push('-');
-    }
-    lexeme.push_str(if integer_part.is_empty() {
-        "0"
-    } else {
-        integer_part
-    });
-    if bytes[int_end..].first() == Some(&b'.') {
-        lexeme.push('.');
-        lexeme.push_str(if fraction.is_empty() { "0" } else { fraction });
-    }
-    lexeme.push_str(exponent);
-    Some(lexeme)
+    Some(NumberText::Float {
+        negative,
+        integer: integer_part.trim_start_matches('0'),
+        fraction: (bytes[int_end..].first() == Some(&b'.')).then_some(fraction),
+        exponent,
+    })
 }
 
 /// What the untagged plain scalar `scalar` denotes.
-pub(crate) fn resolve(scalar: &str) -> Plain {
+pub(crate) fn resolve(scalar: &str) -> Plain<'_> {
     match scalar {
         "" | "~" | "null" | "Null" | "NULL" => return Plain::Null,
         "true" | "True" | "TRUE" => return Plain::Bool(true),
@@ -175,9 +165,7 @@ pub(crate) fn resolve(scalar: &str) -> Plain {
     if let Some(lexeme) = integer(scalar) {
         return Plain::Number(lexeme);
     }
-    if !digits_but_not_number(scalar)
-        && let Some(lexeme) = float(scalar)
-    {
+    if let Some(lexeme) = float(scalar) {
         return Plain::Number(lexeme);
     }
     Plain::String
@@ -185,5 +173,5 @@ pub(crate) fn resolve(scalar: &str) -> Plain {
 
 /// Whether a string must be quoted to read back as a string.
 pub(crate) fn needs_quotes(text: &str) -> bool {
-    resolve(text) != Plain::String || digits_but_not_number(text)
+    !matches!(resolve(text), Plain::String)
 }

@@ -55,7 +55,7 @@ use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 pub(crate) use compile::ExprProgram;
 use compile::{Cmp, Op, StrPred};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, EvaluatorInvariant, StackExpectation};
 use crate::eval::EvalCtx;
 use crate::expr as helpers;
 use crate::scratch::SolutionTerm;
@@ -313,11 +313,10 @@ impl ExistsSites<'_> {
         site: u32,
         expression: Option<&Expression>,
     ) -> Result<&'a GraphPattern, EvalError> {
-        let site = self.sites.get(site as usize).ok_or_else(|| {
-            EvalError::internal(
-                "an EXISTS instruction was run by a link that holds no pattern for it",
-            )
-        })?;
+        let site = self
+            .sites
+            .get(site as usize)
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
         let mut node = self.owner.expression(expression)?;
         for &index in &site.steps {
             let mut child = None;
@@ -328,13 +327,12 @@ impl ExistsSites<'_> {
                 }
                 at += 1;
             });
-            node = child.ok_or_else(|| {
-                EvalError::internal("an EXISTS site no longer names its linked expression")
-            })?;
+            node = child
+                .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsExpressionMissing))?;
         }
         let Expression::Exists(pattern) = node else {
-            return Err(EvalError::internal(
-                "an EXISTS site no longer names its linked expression",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionMissing,
             ));
         };
         Ok(pattern)
@@ -360,11 +358,11 @@ impl ExpressionOwner<'_> {
             Self::Borrowed(expression) => *expression,
             Self::Copied { pattern, steps, .. } => {
                 let node = NodeRef::Pattern(pattern).at_path(steps).ok_or_else(|| {
-                    EvalError::internal("copied expression path no longer names a child")
+                    EvalError::Invariant(EvaluatorInvariant::CopiedExpressionChildMissing)
                 })?;
                 let NodeRef::Expr(expression) = node else {
-                    return Err(EvalError::internal(
-                        "copied expression path no longer names an expression",
+                    return Err(EvalError::Invariant(
+                        EvaluatorInvariant::CopiedExpressionMissing,
                     ));
                 };
                 expression
@@ -373,13 +371,13 @@ impl ExpressionOwner<'_> {
         if let Some(supplied) = supplied
             && !std::ptr::eq(supplied, expression)
         {
-            return Err(EvalError::internal(
-                "an EXISTS link was run with a different expression owner",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionOwnerChanged,
             ));
         }
         if supplied.is_none() && matches!(self, Self::Borrowed(_)) {
-            return Err(EvalError::internal(
-                "an EXISTS link was run without its expression owner",
+            return Err(EvalError::Invariant(
+                EvaluatorInvariant::ExistsExpressionOwnerMissing,
             ));
         }
         Ok(expression)
@@ -461,20 +459,129 @@ pub(crate) struct TermCursor {
     pc: usize,
 }
 
-/// One FILTER row's VM continuation. Its program counter survives every
-/// `EXISTS` suspension; the linked owner retains the value stack and evidence.
-pub(crate) struct FilterRowState {
+/// Move one admitted slot out while retaining its original backing grant.
+pub(crate) fn take_slot<T>(
+    values: &mut crate::AdmittedVec<T>,
+    index: usize,
+) -> Result<T, EvalError> {
+    let last = values
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| EvalError::internal("continuation owner slot missing"))?;
+    if index > last {
+        return Err(EvalError::internal("continuation owner index missing"));
+    }
+    values.as_mut_slice().swap(index, last);
+    Ok(values.pop().expect("checked continuation owner slot"))
+}
+pub(crate) fn restore_slot<T>(values: &mut crate::AdmittedVec<T>, index: usize, value: T) {
+    let last = values.len();
+    values.push_reserved(value);
+    values.as_mut_slice().swap(index, last);
+}
+
+/// One forwarding home for operators retaining the actual suspended VM row.
+pub(crate) trait RowContinuation<'e, I: purrdf_core::ViewTermId> {
+    fn row_frame<'s>(&'s self) -> &'s RowExpressionFrame<'e, I>
+    where
+        'e: 's;
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut RowExpressionFrame<'e, I>
+    where
+        'e: 's;
+    fn schema(&self) -> &VarSchema;
+
+    fn suspended_row<'s>(&'s self) -> &'s crate::solution::RetainedRow<I>
+    where
+        'e: 's,
+    {
+        self.row_frame().row()
+    }
+
+    fn custom_iri<'s>(&'s self, call: u32) -> Result<&'s str, EvalError>
+    where
+        'e: 's,
+    {
+        self.row_frame().custom_iri(call)
+    }
+
+    fn prepare_exists<'s, D: DatasetView<Id = I> + Sync>(
+        &'s self,
+        site: u32,
+        expression: &Expression,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<
+        (
+            crate::expr::ExistsDecision<I>,
+            Option<crate::evidence_exec::RowEvidence>,
+        ),
+        EvalError,
+    >
+    where
+        'e: 's,
+    {
+        self.row_frame()
+            .prepare_exists(site, expression, self.schema(), ctx)
+    }
+
+    fn resume<'s, D: DatasetView<Id = I> + Sync>(
+        &'s mut self,
+        value: Option<SolutionTerm<I>>,
+        record: Option<crate::evidence_exec::RowEvidence>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError>
+    where
+        'e: 's,
+    {
+        self.row_frame_mut().resume(value, record, ctx)
+    }
+}
+
+macro_rules! row_continuation {
+    ($state:ident, $schema:ident) => {
+        impl<'e, I: purrdf_core::ViewTermId> $crate::vm::RowContinuation<'e, I> for $state<'e, I> {
+            fn row_frame<'s>(&'s self) -> &'s $crate::vm::RowExpressionFrame<'e, I>
+            where
+                'e: 's,
+            {
+                self.active.as_ref().expect("one suspended expression row")
+            }
+            fn row_frame_mut<'s>(&'s mut self) -> &'s mut $crate::vm::RowExpressionFrame<'e, I>
+            where
+                'e: 's,
+            {
+                self.active.as_mut().expect("one suspended expression row")
+            }
+            fn schema(&self) -> &$crate::solution::VarSchema {
+                &self.$schema
+            }
+        }
+    };
+}
+pub(crate) use row_continuation;
+
+/// One row's VM continuation. Its program counter survives every graph or
+/// function suspension; the linked owner retains the value stack and evidence.
+pub(crate) struct RowExpressionState {
     cursor: TermCursor,
 }
 
-/// The actual sequential FILTER row suspended while its EXISTS child runs.
+/// An expression row suspended while its graph or function child runs.
 /// The link retains the copied pattern owner and the row retains its grants;
 /// neither is borrowed from this movable frame.
-pub(crate) struct FilterRowFrame<'e, I: purrdf_core::ViewTermId> {
+pub(crate) struct RowExpressionFrame<'e, I: purrdf_core::ViewTermId> {
     linked: Linked<'e, I>,
     row: crate::solution::RetainedRow<I>,
-    state: FilterRowState,
+    state: RowExpressionState,
 }
+
+pub(crate) type FilterRowFrame<'e, I> = RowExpressionFrame<'e, I>;
+
+pub(crate) type CompletedExpressionRow<'e, I> = (
+    Linked<'e, I>,
+    crate::solution::RetainedRow<I>,
+    Option<SolutionTerm<I>>,
+    Option<crate::evidence_exec::RowEvidence>,
+);
 
 pub(crate) type CompletedFilterRow<'e, I> = (
     Linked<'e, I>,
@@ -483,17 +590,7 @@ pub(crate) type CompletedFilterRow<'e, I> = (
     Option<crate::evidence_exec::RowEvidence>,
 );
 
-pub(crate) enum FilterRowStep<'e, I: purrdf_core::ViewTermId> {
-    Complete(CompletedFilterRow<'e, I>),
-    Exists(FilterRowFrame<'e, I>, u32),
-}
-
-pub(crate) enum FilterPoll<I> {
-    Complete(Option<SolutionTerm<I>>),
-    Exists(u32),
-}
-
-impl FilterRowState {
+impl RowExpressionState {
     pub(crate) fn begin<D: DatasetView + Sync>(
         linked: &mut Linked<'_, D::Id>,
         ctx: &EvalCtx<'_, D>,
@@ -504,34 +601,15 @@ impl FilterRowState {
         })
     }
 
-    /// Stop before entering an EXISTS child. The caller may retain this
-    /// cursor and the linked value stack in its admitted worklist frame.
-    pub(crate) fn poll<D: DatasetView + Sync>(
+    /// Yield each child request before entering it. No evaluator call or
+    /// context borrow is retained in this movable continuation.
+    pub(crate) fn poll<'d, D: DatasetView + Sync>(
         &mut self,
         linked: &mut Linked<'_, D::Id>,
-        expression: &Expression,
         row: &crate::solution::RetainedRow<D::Id>,
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<FilterPoll<D::Id>, EvalError> {
-        loop {
-            match linked.advance_term(&mut self.cursor, row, ctx)? {
-                VmStep::Value(value) => return Ok(FilterPoll::Complete(value)),
-                VmStep::Suspend(Suspend::Exists(site)) => return Ok(FilterPoll::Exists(site)),
-                VmStep::Suspend(suspend @ Suspend::SparqlUdf { .. }) => {
-                    let (value, record) = resolve(
-                        suspend,
-                        linked.exists.as_deref(),
-                        Some(expression),
-                        &linked.program,
-                        row,
-                        schema,
-                        ctx,
-                    )?;
-                    self.resume(linked, value, record, ctx)?;
-                }
-            }
-        }
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<VmStep<'d, D::Id>, EvalError> {
+        linked.advance_term(&mut self.cursor, row, ctx)
     }
 
     pub(crate) fn resume<D: DatasetView + Sync>(
@@ -561,7 +639,7 @@ impl FilterRowState {
     }
 }
 
-impl<'e, I: purrdf_core::ViewTermId> FilterRowFrame<'e, I> {
+impl<'e, I: purrdf_core::ViewTermId> RowExpressionFrame<'e, I> {
     pub(crate) fn row(&self) -> &crate::solution::RetainedRow<I> {
         &self.row
     }
@@ -571,8 +649,48 @@ impl<'e, I: purrdf_core::ViewTermId> FilterRowFrame<'e, I> {
         row: crate::solution::RetainedRow<I>,
         ctx: &EvalCtx<'_, D>,
     ) -> Result<Self, EvalError> {
-        let state = FilterRowState::begin(&mut linked, ctx)?;
+        let state = RowExpressionState::begin(&mut linked, ctx)?;
         Ok(Self { linked, row, state })
+    }
+
+    pub(crate) fn poll<'d, D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<VmStep<'d, I>, EvalError> {
+        self.state.poll(&mut self.linked, &self.row, ctx)
+    }
+
+    /// Borrow the original compiled call identity without allocating or
+    /// retaining a borrow into this movable frame in a child query.
+    pub(crate) fn custom_iri(&self, call: u32) -> Result<&str, EvalError> {
+        match self.linked.program.calls.get(call as usize) {
+            Some(Function::Custom(iri)) => Ok(iri.as_str()),
+            _ => Err(EvalError::Invariant(
+                EvaluatorInvariant::SuspendedCallBuiltinFunction,
+            )),
+        }
+    }
+
+    /// Return the completed value and its original evidence from this run.
+    pub(crate) fn finish_term(
+        self,
+        value: Option<SolutionTerm<I>>,
+    ) -> Result<CompletedExpressionRow<'e, I>, EvalError> {
+        let evidence = self.linked.result_evidence()?;
+        Ok((self.linked, self.row, value, evidence))
+    }
+
+    pub(crate) fn finish_filter<D: DatasetView<Id = I> + Sync>(
+        self,
+        expression: &Expression,
+        schema: &VarSchema,
+        value: Option<SolutionTerm<I>>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<CompletedFilterRow<'e, I>, EvalError> {
+        let (keep, evidence) =
+            self.state
+                .finish(&self.linked, expression, &self.row, schema, value, ctx)?;
+        Ok((self.linked, self.row, keep, evidence))
     }
 
     /// Prepare the exact compiled EXISTS site while this row and link remain
@@ -591,43 +709,36 @@ impl<'e, I: purrdf_core::ViewTermId> FilterRowFrame<'e, I> {
         ),
         EvalError,
     > {
-        let sites = self.linked.exists.as_deref().ok_or_else(|| {
-            EvalError::internal(
-                "an EXISTS instruction was run by a link that holds no pattern for it",
-            )
-        })?;
-        let pattern = sites.pattern(site, Some(expression))?;
+        self.prepare_exists_at(site, Some(expression), schema, ctx)
+    }
+
+    /// A copied expression resolves its site through the retained link owner;
+    /// a borrowed expression supplies its original identity for validation.
+    pub(crate) fn prepare_exists_at<D: DatasetView<Id = I> + Sync>(
+        &self,
+        site: u32,
+        expression: Option<&Expression>,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<
+        (
+            crate::expr::ExistsDecision<I>,
+            Option<crate::evidence_exec::RowEvidence>,
+        ),
+        EvalError,
+    > {
+        let sites = self
+            .linked
+            .exists
+            .as_deref()
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
+        let pattern = sites.pattern(site, expression)?;
         let mut record = ctx
             .may_have_evidence()
             .then(crate::evidence_exec::RowEvidence::default);
         let decision =
             crate::expr::exists_recorded_decide(pattern, &self.row, schema, ctx, record.as_mut())?;
         Ok((decision, record))
-    }
-
-    pub(crate) fn step<D: DatasetView<Id = I> + Sync>(
-        mut self,
-        expression: &Expression,
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<FilterRowStep<'e, I>, EvalError> {
-        match self
-            .state
-            .poll(&mut self.linked, expression, &self.row, schema, ctx)?
-        {
-            FilterPoll::Exists(site) => Ok(FilterRowStep::Exists(self, site)),
-            FilterPoll::Complete(value) => {
-                let (keep, evidence) =
-                    self.state
-                        .finish(&self.linked, expression, &self.row, schema, value, ctx)?;
-                Ok(FilterRowStep::Complete((
-                    self.linked,
-                    self.row,
-                    keep,
-                    evidence,
-                )))
-            }
-        }
     }
 
     pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
@@ -724,7 +835,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     ) -> Result<Linked<'static, I>, EvalError> {
         let (steps, allocation) = if program.has_exists() {
             copied_expression_path(&pattern, expr, &ctx.growth)?.ok_or_else(|| {
-                EvalError::internal("a copied FILTER expression is absent from its owner")
+                EvalError::Invariant(EvaluatorInvariant::CopiedFilterExpressionMissing)
             })?
         } else {
             (Vec::new(), None)
@@ -1203,7 +1314,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                     let mut value = Some(!or);
                     for entry in stack.drain(start..) {
                         let Val::Ebv(operand) = entry else {
-                            return Err(mistyped("an effective boolean value"));
+                            return Err(mistyped(StackExpectation::Boolean));
                         };
                         value = if or {
                             helpers::kleene_or(value, operand)
@@ -1290,7 +1401,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                         saw_error,
                     }) = stack.last_mut()
                     else {
-                        return Err(mistyped("an open IN"));
+                        return Err(mistyped(StackExpectation::OpenIn));
                     };
                     let matched = match candidate {
                         None => {
@@ -1316,7 +1427,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 }
                 Op::InEnd => {
                     let Some(Val::In { saw_error, .. }) = stack.pop() else {
-                        return Err(mistyped("an open IN"));
+                        return Err(mistyped(StackExpectation::OpenIn));
                     };
                     stack.push(Val::Term(if saw_error {
                         None
@@ -1353,10 +1464,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                         .as_ref()
                         .and_then(|sites| sites.sites.get(site as usize))
                         .ok_or_else(|| {
-                            EvalError::internal(
-                                "an EXISTS instruction was run by a link that holds no pattern \
-                             for it",
-                            )
+                            EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing)
                         })?;
                     if let Some(records) = &mut records {
                         records.suspend(record);
@@ -1391,7 +1499,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                             term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?
                         }
                         Some(Val::Value(value)) => value,
-                        Some(_) => return Err(mistyped("a term or a triple term value")),
+                        Some(_) => return Err(mistyped(StackExpectation::TermOrTriple)),
                         None => return Err(underflow()),
                     };
                     let predicate = pop_term(stack)?
@@ -1529,9 +1637,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         drop(records);
         let value = pop_term(stack)?;
         if !stack.is_empty() {
-            return Err(EvalError::internal(
-                "an expression program left more than its value on the stack",
-            ));
+            return Err(EvalError::Invariant(EvaluatorInvariant::VmExtraStackValues));
         }
         Ok(VmStep::Value(value))
     }
@@ -1572,8 +1678,8 @@ fn call_custom<'d, D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'d, D>,
 ) -> Result<VmStep<'d, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
-        return Err(EvalError::internal(
-            "a custom-call instruction names a built-in function",
+        return Err(EvalError::Invariant(
+            EvaluatorInvariant::CustomInstructionBuiltinFunction,
         ));
     };
     let registry: &'d crate::user_fn::BoundFunctionRegistry = ctx.user_functions;
@@ -1594,22 +1700,19 @@ type Resolved<I> = (
     Option<crate::evidence_exec::RowEvidence>,
 );
 
-fn resolve<D: DatasetView + Sync>(
-    suspend: Suspend<'_>,
+fn resolve<'d, D: DatasetView + Sync>(
+    suspend: Suspend<'d>,
     exists: Option<&ExistsSites<'_>>,
     expression: Option<&Expression>,
     program: &ExprProgram,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
+    ctx: &mut EvalCtx<'d, D>,
 ) -> Result<Resolved<D::Id>, EvalError> {
     match suspend {
         Suspend::Exists(site) => {
-            let sites = exists.ok_or_else(|| {
-                EvalError::internal(
-                    "an EXISTS instruction was run by a link that holds no pattern for it",
-                )
-            })?;
+            let sites = exists
+                .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
             let pattern = sites.pattern(site, expression)?;
             if ctx.may_have_evidence() {
                 let (found, record) = helpers::exists_evidence(pattern, row, schema, ctx)?;
@@ -1626,8 +1729,8 @@ fn resolve<D: DatasetView + Sync>(
             vals,
         } => {
             let Function::Custom(iri) = &program.calls[call as usize] else {
-                return Err(EvalError::internal(
-                    "a suspended function call names a built-in function",
+                return Err(EvalError::Invariant(
+                    EvaluatorInvariant::SuspendedCallBuiltinFunction,
                 ));
             };
             let mut evidence = None;
@@ -1651,7 +1754,7 @@ fn resolve<D: DatasetView + Sync>(
 }
 
 fn evidence_poisoned() -> EvalError {
-    EvalError::internal("poisoned original VM evidence records")
+    EvalError::Invariant(EvaluatorInvariant::VmEvidencePoisoned)
 }
 
 /// Pop `argc` terms and materialize their values into `vals`, in argument order,
@@ -1669,7 +1772,7 @@ fn pop_values<D: DatasetView + Sync>(
     vals.clear();
     for entry in stack.drain(start..) {
         let Val::Term(term) = entry else {
-            return Err(mistyped("a term"));
+            return Err(mistyped(StackExpectation::Term));
         };
         vals.push(term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?)?;
     }
@@ -1679,7 +1782,7 @@ fn pop_values<D: DatasetView + Sync>(
 fn pop_term<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<SolutionTerm<I>>, EvalError> {
     match stack.pop() {
         Some(Val::Term(term)) => Ok(term),
-        Some(_) => Err(mistyped("a term")),
+        Some(_) => Err(mistyped(StackExpectation::Term)),
         None => Err(underflow()),
     }
 }
@@ -1687,7 +1790,7 @@ fn pop_term<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<SolutionTerm<I>>,
 fn pop_ebv<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<bool>, EvalError> {
     match stack.pop() {
         Some(Val::Ebv(value)) => Ok(value),
-        Some(_) => Err(mistyped("an effective boolean value")),
+        Some(_) => Err(mistyped(StackExpectation::Boolean)),
         None => Err(underflow()),
     }
 }
@@ -1718,19 +1821,17 @@ fn pop_str<'p, I: Copy>(
     match stack.pop() {
         Some(Val::Str(value)) => Ok(value.map(StrArg::Owned)),
         Some(Val::StrConst(k)) => Ok(Some(StrArg::Borrowed(&strs[k as usize]))),
-        Some(_) => Err(mistyped("a string argument")),
+        Some(_) => Err(mistyped(StackExpectation::String)),
         None => Err(underflow()),
     }
 }
 
 fn underflow() -> EvalError {
-    EvalError::internal("an expression program popped an empty stack")
+    EvalError::Invariant(EvaluatorInvariant::VmStackUnderflow)
 }
 
-fn mistyped(expected: &str) -> EvalError {
-    EvalError::internal(format!(
-        "an expression program found a stack entry that is not {expected}"
-    ))
+fn mistyped(expected: StackExpectation) -> EvalError {
+    EvalError::Invariant(EvaluatorInvariant::UnexpectedStackValue { expected })
 }
 
 /// A recorder of every charge call, in order, for tests that compare two evaluations'

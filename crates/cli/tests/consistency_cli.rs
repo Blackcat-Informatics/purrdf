@@ -39,6 +39,76 @@ use std::process::Output;
 mod support;
 use support::{code, purrdf, run, stderr, stdout, write_file};
 
+/// Only primary document selection changes the ontology reaching the decision seam.
+#[test]
+fn configured_yamlld_input_reaches_consistency_primary() {
+    use support::path;
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Thing\n---\n'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Nothing\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, verdict) in [(None, true), (Some(config.as_str()), false)] {
+        let receipt = path(
+            dir.path(),
+            if verdict {
+                "first-receipt.json"
+            } else {
+                "all-receipt.json"
+            },
+        );
+        let mut args = vec![
+            "consistency",
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            &receipt,
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&input);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).starts_with(&format!("consistency {verdict}\n")));
+        assert!(stdout(&selected).contains("\ncompleteness decided\n"));
+    }
+
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&["consistency", "--yamlld-input-options", &limited, &input]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let proof = path(dir.path(), "missing.proof");
+    let imports = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "consistency",
+        "--yamlld-input-options",
+        &malformed,
+        "--import",
+        &imports,
+        "--check-proof",
+        &proof,
+        &missing,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+}
+
 /// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
 /// `crates/validate/tests/dl_consistency_search_budget.rs`.
 const ORDINARY_ONTOLOGY: &str = r"
@@ -104,10 +174,22 @@ const RELATIVE_INCONSISTENT_ONTOLOGY: &str = concat!(
 /// one-command reproduction the subcommand exists to give an operator.
 #[test]
 fn a_consistent_ontology_decides_true_and_is_fully_decided() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["consistency", &input]);
+    let out = run(&[
+        "consistency",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(out.status.success(), "consistency failed: {}", stderr(&out));
     assert_eq!(code(&out), 0, "a decided `true` exits 0");
 
@@ -149,10 +231,22 @@ fn a_consistent_ontology_decides_true_and_is_fully_decided() {
 /// `query`.
 #[test]
 fn an_inconsistent_ontology_decides_false_and_still_exits_zero() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "inconsistent.ttl", INCONSISTENT_ONTOLOGY);
 
-    let out = run(&["consistency", &input]);
+    let out = run(&[
+        "consistency",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         out.status.success(),
         "a decided `false` must exit 0, not fail: {}",
@@ -182,10 +276,24 @@ fn an_inconsistent_ontology_decides_false_and_still_exits_zero() {
 /// `query` a caller-set ceiling cut short.
 #[test]
 fn a_narrow_step_cap_reports_unknown_and_exits_three() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["consistency", "--step-cap", "1", &input]);
+    let out = run(&[
+        "consistency",
+        "--step-cap",
+        "1",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         !out.status.success(),
         "exit 3 is not process success, and this run trips the round cap"
@@ -217,10 +325,24 @@ fn a_narrow_step_cap_reports_unknown_and_exits_three() {
 /// four rendered budget lines are what distinguish them.
 #[test]
 fn a_narrow_work_cap_reports_unknown_and_exits_three() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["consistency", "--work-cap", "1", &input]);
+    let out = run(&[
+        "consistency",
+        "--work-cap",
+        "1",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         code(&out),
         3,
@@ -251,10 +373,26 @@ fn a_narrow_work_cap_reports_unknown_and_exits_three() {
 /// answer above rather than an ontology that was always undecidable.
 #[test]
 fn the_same_ontology_decides_true_without_narrowing() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["consistency", "--step-cap", "0", "--work-cap", "0", &input]);
+    let out = run(&[
+        "consistency",
+        "--step-cap",
+        "0",
+        "--work-cap",
+        "0",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(out.status.success(), "unnarrowed: {}", stderr(&out));
     assert_eq!(code(&out), 0);
     let text = stdout(&out);
@@ -269,8 +407,20 @@ fn the_same_ontology_decides_true_without_narrowing() {
 /// extension needs no override, and `-` (stdin) requires one.
 #[test]
 fn stdin_requires_an_explicit_from_format() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let out = support::run_with_stdin(
-        purrdf().args(["consistency", "-"]),
+        purrdf().args([
+            "consistency",
+            "-",
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ]),
         INCONSISTENT_ONTOLOGY.as_bytes(),
     );
 
@@ -285,8 +435,22 @@ fn stdin_requires_an_explicit_from_format() {
 /// `--from` alone resolves stdin: an ABSOLUTE-IRI document needs no `--base` to decide.
 #[test]
 fn from_resolves_stdin_turtle() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let out = support::run_with_stdin(
-        purrdf().args(["consistency", "--from", "turtle", "-"]),
+        purrdf().args([
+            "consistency",
+            "--from",
+            "turtle",
+            "-",
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ]),
         ORDINARY_ONTOLOGY.as_bytes(),
     );
 
@@ -302,6 +466,10 @@ fn from_resolves_stdin_turtle() {
 /// term for an unresolved relative reference.
 #[test]
 fn base_resolves_relative_iris_piped_via_stdin() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let pipe = |args: &[&str]| -> Output {
         support::run_with_stdin(
             purrdf().args(args),
@@ -312,7 +480,18 @@ fn base_resolves_relative_iris_piped_via_stdin() {
     // Without `--base`, a relative IRI has no base to resolve against — the negative
     // control that keeps the assertion below from passing by accident. stdin carries no
     // retrieval IRI, so no base can be derived for it and the refusal is the whole point.
-    let unbased = pipe(&["consistency", "--from", "turtle", "-"]);
+    let unbased = pipe(&[
+        "consistency",
+        "--from",
+        "turtle",
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         code(&unbased),
         1,
@@ -337,6 +516,12 @@ fn base_resolves_relative_iris_piped_via_stdin() {
         "--base",
         "https://example.org/",
         "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(based.status.success(), "{}", stderr(&based));
     assert!(
@@ -351,6 +536,9 @@ fn base_resolves_relative_iris_piped_via_stdin() {
 /// coverage, over the same ontology re-expressed as one graph.
 #[test]
 fn ntriples_input_is_inferred_from_the_extension() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
@@ -361,7 +549,16 @@ fn ntriples_input_is_inferred_from_the_extension() {
         ),
     );
 
-    let out = run(&["consistency", &input]);
+    let out = run(&[
+        "consistency",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).starts_with("consistency true\n"));
 }
@@ -374,13 +571,29 @@ fn ntriples_input_is_inferred_from_the_extension() {
 /// refused for below.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
     let pack = dir.path().join("ontology.purrpck");
     let pack_path = pack.to_str().expect("pack path");
 
     let packed = run(&[
-        "convert", "--from", "turtle", "--to", "pack", &input, pack_path,
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &input,
+        pack_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         packed.status.success(),
@@ -395,6 +608,12 @@ fn base_with_pack_from_is_refused_by_name() {
         "--base",
         "http://example.org/base/",
         pack_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 2, "a usage error");
     assert!(
@@ -410,6 +629,9 @@ fn base_with_pack_from_is_refused_by_name() {
 /// on that leg would ever resolve against it.
 #[test]
 fn base_with_a_relative_incapable_input_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(
         dir.path(),
@@ -420,7 +642,18 @@ fn base_with_a_relative_incapable_input_is_refused_by_name() {
         ),
     );
 
-    let out = run(&["consistency", "--base", "http://example.org/base/", &input]);
+    let out = run(&[
+        "consistency",
+        "--base",
+        "http://example.org/base/",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 2, "a usage error: {}", stderr(&out));
     assert!(
         stderr(&out).contains("--base has no effect"),
@@ -439,10 +672,23 @@ fn base_with_a_relative_incapable_input_is_refused_by_name() {
 /// refuses everywhere else.
 #[test]
 fn loss_ledger_is_refused_rather_than_silently_ignored() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let out = run(&["--loss-ledger", "consistency", &input]);
+    let out = run(&[
+        "--loss-ledger",
+        "consistency",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 2, "a usage error");
     assert!(
         stderr(&out).contains("--loss-ledger"),
@@ -454,6 +700,9 @@ fn loss_ledger_is_refused_rather_than_silently_ignored() {
 /// `--jsonld-options` is refused for the same reason: this subcommand runs no serializer.
 #[test]
 fn jsonld_options_is_refused_rather_than_silently_ignored() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write_file(dir.path(), "ontology.ttl", ORDINARY_ONTOLOGY);
     let options = write_file(
@@ -462,7 +711,18 @@ fn jsonld_options_is_refused_rather_than_silently_ignored() {
         r#"{"version":1,"mode":"context","prefixes":{"ex":"http://example.org/"}}"#,
     );
 
-    let out = run(&["--jsonld-options", &options, "consistency", &input]);
+    let out = run(&[
+        "--jsonld-options",
+        &options,
+        "consistency",
+        &input,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 2, "a usage error");
     assert!(
         stderr(&out).contains("--jsonld-options"),
@@ -481,12 +741,39 @@ fn jsonld_options_is_refused_rather_than_silently_ignored() {
 /// block, and a caller who does not pass it records nothing and pays nothing.
 #[test]
 fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
 
-    let bare = run(&["consistency", "--from", "turtle", &path]);
+    let bare = run(&[
+        "consistency",
+        "--from",
+        "turtle",
+        &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&bare), 0, "{}", stderr(&bare));
-    let proved = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    let proved = run(&[
+        "consistency",
+        "--proof",
+        "--from",
+        "turtle",
+        &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&proved), 0, "{}", stderr(&proved));
 
     let bare_text = stdout(&bare);
@@ -510,10 +797,38 @@ fn the_proof_is_opt_in_and_changes_nothing_the_command_decides() {
 /// A proof this command produced CHECKS through this command, against the same ontology.
 #[test]
 fn a_proof_this_command_produced_checks_through_this_command() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
-    let bare = stdout(&run(&["consistency", "--from", "turtle", &path]));
-    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &path]));
+    let bare = stdout(&run(&[
+        "consistency",
+        "--from",
+        "turtle",
+        &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]));
+    let proved = stdout(&run(&[
+        "consistency",
+        "--proof",
+        "--from",
+        "turtle",
+        &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]));
     let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
 
     let checked = run(&[
@@ -523,6 +838,12 @@ fn a_proof_this_command_produced_checks_through_this_command() {
         "--from",
         "turtle",
         &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&checked), 0, "{}", stderr(&checked));
     let text = stdout(&checked);
@@ -536,13 +857,29 @@ fn a_proof_this_command_produced_checks_through_this_command() {
 /// A closed tableau proves the negative verdict and round-trips through the CLI.
 #[test]
 fn an_inconsistency_proof_checks_through_the_command() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(
         &dir.path().join(""),
         "inconsistent.ttl",
         "@prefix ex: <http://example.org/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . ex:Cat owl:disjointWith ex:Dog . ex:tom a ex:Cat, ex:Dog .",
     );
-    let produced = run(&["consistency", "--proof", "--from", "turtle", &path]);
+    let produced = run(&[
+        "consistency",
+        "--proof",
+        "--from",
+        "turtle",
+        &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&produced), 0, "{}", stderr(&produced));
     let text = stdout(&produced);
     assert!(text.starts_with("consistency false\n"), "{text}");
@@ -555,6 +892,12 @@ fn an_inconsistency_proof_checks_through_the_command() {
         "--from",
         "turtle",
         &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&checked), 0, "{}", stderr(&checked));
     assert!(stdout(&checked).contains("\nanswer checked 0\n"));
@@ -563,11 +906,39 @@ fn an_inconsistency_proof_checks_through_the_command() {
 /// A proof for a DIFFERENT ontology is refused, and the refusal is a non-zero exit.
 #[test]
 fn a_proof_for_another_ontology_is_refused_by_the_command() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let mine = write_file(&dir.path().join(""), "mine.ttl", ORDINARY_ONTOLOGY);
     let theirs = write_file(&dir.path().join(""), "theirs.nt", OTHER_ONTOLOGY);
-    let bare = stdout(&run(&["consistency", "--from", "turtle", &mine]));
-    let proved = stdout(&run(&["consistency", "--proof", "--from", "turtle", &mine]));
+    let bare = stdout(&run(&[
+        "consistency",
+        "--from",
+        "turtle",
+        &mine,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]));
+    let proved = stdout(&run(&[
+        "consistency",
+        "--proof",
+        "--from",
+        "turtle",
+        &mine,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]));
     let proof_path = write_file(&dir.path().join(""), "proof.txt", &proved[bare.len()..]);
 
     let refused = run(&[
@@ -577,6 +948,12 @@ fn a_proof_for_another_ontology_is_refused_by_the_command() {
         "--from",
         "nt",
         &theirs,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_ne!(code(&refused), 0, "{}", stdout(&refused));
     assert!(
@@ -593,6 +970,9 @@ fn a_proof_for_another_ontology_is_refused_by_the_command() {
 /// the opposite.
 #[test]
 fn an_absent_proof_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let path = write_file(&dir.path().join(""), "ontology.ttl", ORDINARY_ONTOLOGY);
     let absent = write_file(
@@ -607,6 +987,12 @@ fn an_absent_proof_is_refused_by_name() {
         "--from",
         "turtle",
         &path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_ne!(code(&refused), 0, "{}", stdout(&refused));
     assert!(

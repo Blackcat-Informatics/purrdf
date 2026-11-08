@@ -96,37 +96,67 @@
 
 use purrdf_cdt::{CdtContents, CdtValue};
 use purrdf_core::{DatasetView, TermValue, TrippedGovernor};
-use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
+use purrdf_sparql_algebra::{Expression, GraphPattern};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
-use crate::governor::lift::{Evaluated, Lift, Truncation};
+use crate::eval::EvalCtx;
+use crate::governor::lift::{Evaluated, Truncation};
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
-use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::solution::{Solution, SolutionSeq};
 
-/// Evaluate `UNFOLD(expression AS ?element[, ?companion])` over `inner`.
-///
-/// # Errors
-///
-/// Any error `expression` raises — including
-/// [`EvalError::CompositeBound`](crate::error::EvalError::CompositeBound), which
-/// is a hard failure of the query rather than an empty expansion (see the module
-/// docs).
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_unfold<D: DatasetView + Sync>(
+/// One original UNFOLD input row remains suspended until its expression completes.
+pub(crate) struct UnfoldSequence<'e, I: purrdf_core::ViewTermId> {
+    input_schema: crate::solution::SharedSchema,
+    out_schema: crate::solution::SharedSchema,
+    input: Option<crate::solution::RowBagIntoIter<I>>,
+    output: crate::solution::RowsBuilder<I>,
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    ingest: GovernedRowIngest,
+    linked: Option<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    lift: crate::governor::lift::DetachedLift,
+    element_col: usize,
+    companion_col: Option<usize>,
+    next_row: u64,
+    tripped: Option<TrippedGovernor>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum UnfoldStart<'e, I: purrdf_core::ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(UnfoldSequence<'e, I>),
+}
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum UnfoldStep<'e, 'd, I: purrdf_core::ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(UnfoldSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+pub(crate) fn begin_unfold_child_with_owner<'e, D: DatasetView + Sync>(
     node: &GraphPattern,
-    inner: &GraphPattern,
     expression: &Expression,
-    element: &Variable,
-    companion: Option<&Variable>,
+    owner: crate::expr::FilterLink<'e>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        // No rows cross, but the COLUMNS still do — this node's output schema is
-        // syntactic (the inner's columns plus its own targets), exactly as
-        // `Extend`'s is.
+) -> Result<UnfoldStart<'e, D::Id>, EvalError> {
+    let GraphPattern::Unfold {
+        inner,
+        element,
+        companion,
+        ..
+    } = node
+    else {
+        return Err(EvalError::internal("UNFOLD continuation lost its node"));
+    };
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
         let mut schema = match lift.absorbed_schema() {
             Some(schema) => (*schema).clone(),
             None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
@@ -135,88 +165,142 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
         if let Some(companion) = companion {
             schema.push_admitted(companion.clone(), &ctx.growth)?;
         }
-        return Ok(lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)));
+        return Ok(UnfoldStart::Complete(
+            lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)),
+        ));
     };
-    // The `row-expression-evaluation` charge point, paid per INPUT row: one
-    // expression evaluation per input row is what this operator spends before it
-    // knows how far that row expands. See `crate::expr::eval_filter` for why the
-    // refused rows are cut before the expression runs rather than after.
-    //
-    // The canonical order is admission(i), then the ingest of every row input row `i`
-    // expands to, then admission(i + 1): each input row passes the row checkpoint
-    // immediately before its own work, so a ceiling trips at the admission or the
-    // ingest of the row the budget ran out on. This loop is never forked.
-    let mut checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
+    let checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
         ctx,
         crate::governor::ChargePoint::RowExpressionEvaluation,
         false,
         seq.rows.len(),
     );
-
-    let in_width = seq.schema.len();
     let mut schema = (*seq.schema).clone();
     let element_col = schema.push_admitted(element.clone(), &ctx.growth)?;
     let companion_col = companion
+        .as_ref()
         .map(|companion| schema.push_admitted(companion.clone(), &ctx.growth))
         .transpose()?;
-    let width = schema.len();
     let schema = schema.shared_admitted(&ctx.growth)?;
-
-    // No dedicated per-row charge point: the rows this operator emits come from a
-    // composite literal the dataset or the query text already carried, not from an
-    // outside party the way `SERVICE`'s and a property function's do. They are
-    // metered by the generic per-node accounting every algebra node pays, plus the
-    // intermediate-CELL ceiling this ingest enforces — which is the dimension that
-    // actually bounds the expansion, since one literal can hold up to
-    // `purrdf_cdt::MAX_ELEMENTS` elements.
-    let ingest = GovernedRowIngest::new(ctx, width, None);
+    let ingest = GovernedRowIngest::new(ctx, schema.len(), None);
     let program = crate::vm::program_at(ctx, node, expression)?;
-    let mut linked = crate::vm::Linked::link_admitted(program, expression, &seq.schema, ctx)?;
-    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
-    let mut tripped: Option<TrippedGovernor> = None;
-
-    'input: for (idx, mu) in seq.rows.iter().enumerate() {
-        // Admission(i): a refusal ends the loop before this row's expression runs.
-        if let Err(governor) = checkpoint.pass(ctx) {
-            tripped = Some(governor);
-            break 'input;
+    let linked = match owner {
+        crate::expr::FilterLink::Borrowed(original) => {
+            crate::vm::Linked::link_admitted(program, original, &seq.schema, ctx)?
         }
-        // §17.4.2.2: `BNODE(strExpr)` memoizes per solution — see `ctx.current_row`'s
-        // doc. The position here is the INPUT row's, which is the solution the
-        // expression is evaluated against, and it advances once per input row
-        // however many output rows that row expands to.
-        ctx.current_row = idx as u64;
-        let Some(value) = composite_of(&mut linked, expression, mu, &seq.schema, ctx)? else {
-            // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
-            // expr(μ) is an error or an RDF term that is neither a well-formed
-            // cdt:List literal nor a well-formed cdt:Map literal, then
-            // Unfold1(μ, var, expr) = { μ }" — and `Unfold2` says the same for
-            // its pair. The row PASSES THROUGH with both targets left unbound.
-            // It is not dropped.
-            //
-            // This is the one place the operator is not "one row per element",
-            // and the distinction is load-bearing: the EMPTY multiset is
-            // reserved for a composite that is well-formed and EMPTY (the Notes
-            // under both definitions), which is a different condition reached
-            // below by `expansion` yielding nothing. Collapsing the two would
-            // silently drop rows from `OPTIONAL`/`MINUS`/`FILTER NOT EXISTS`
-            // over a column that is only sometimes a composite.
-            if let Some(governor) = ctx.stop_check() {
-                tripped = Some(governor);
-                break 'input;
-            }
-            match ingest.admit(ctx, rows.len()) {
-                IngestVerdict::Abandoned(governor) => {
-                    tripped = governor;
-                    break 'input;
+        crate::expr::FilterLink::Copied(pattern) => {
+            crate::vm::Linked::link_copied_filter_owner_admitted(
+                program,
+                expression,
+                pattern,
+                &seq.schema,
+                ctx,
+            )?
+        }
+    };
+    Ok(UnfoldStart::Sequence(UnfoldSequence {
+        input_schema: seq.schema,
+        out_schema: schema,
+        input: Some(seq.rows.into_iter()),
+        output: crate::solution::RowsBuilder::new(&ctx.growth),
+        checkpoint,
+        ingest,
+        linked: Some(linked),
+        active: None,
+        lift: lift.detach(),
+        element_col,
+        companion_col,
+        next_row: 0,
+        tripped: None,
+    }))
+}
+
+impl<'e, I: purrdf_core::ViewTermId> UnfoldSequence<'e, I> {
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<UnfoldStep<'e, 'd, I>, EvalError> {
+        loop {
+            let mut frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                let Some(row) = self.input.as_mut().and_then(Iterator::next) else {
+                    break;
+                };
+                if let Err(tripped) = self.checkpoint.pass(ctx) {
+                    self.tripped = Some(tripped);
+                    break;
                 }
-                IngestVerdict::Admitted => {}
+                ctx.current_row = self.next_row;
+                self.next_row = self
+                    .next_row
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                crate::vm::RowExpressionFrame::begin(
+                    self.linked.take().expect("one UNFOLD link"),
+                    row,
+                    ctx,
+                )?
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(UnfoldStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, row, value, _evidence) = frame.finish_term(value)?;
+                    self.linked = Some(linked);
+                    if !self.commit(&row, value, ctx)? {
+                        break;
+                    }
+                }
             }
-            rows.push_cells(
+        }
+        drop(self.input.take());
+        let width = self.out_schema.len();
+        if self.tripped.is_none() {
+            self.tripped = ctx.observe_cells(self.output.len(), width).err();
+        }
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(UnfoldStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.out_schema),
+            )));
+        }
+        let seq = SolutionSeq {
+            schema: self.out_schema,
+            rows: self.output.finish()?,
+        };
+        let lift = self.lift.attach(node);
+        Ok(UnfoldStep::Complete(match self.tripped {
+            Some(tripped) if !lift.is_truncated() => {
+                Evaluated::Truncated(Truncation::origin(seq, tripped))
+            }
+            _ => lift.finish(seq),
+        }))
+    }
+    fn commit<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        mu: &crate::solution::RetainedRow<I>,
+        term: Option<crate::scratch::SolutionTerm<I>>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        let width = self.out_schema.len();
+        let value = composite_term(term, ctx)?;
+        let Some(value) = value else {
+            if let Some(governor) = ctx.stop_check() {
+                self.tripped = Some(governor);
+                return Ok(false);
+            }
+            if let IngestVerdict::Abandoned(governor) = self.ingest.admit(ctx, self.output.len()) {
+                self.tripped = governor;
+                return Ok(false);
+            }
+            self.output.push_cells(
                 width,
                 (0..width).map(|column| mu.get(column).copied().flatten()),
             )?;
-            continue;
+            return Ok(true);
         };
         let count = match value.contents() {
             CdtContents::List(items) => items.len(),
@@ -224,85 +308,35 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
         };
         for position in 0..count {
             if let Some(governor) = ctx.stop_check() {
-                tripped = Some(governor);
-                break 'input;
+                self.tripped = Some(governor);
+                return Ok(false);
             }
-            match ingest.admit(ctx, rows.len()) {
-                IngestVerdict::Abandoned(governor) => {
-                    tripped = governor;
-                    break 'input;
-                }
-                IngestVerdict::Admitted => {}
+            if let IngestVerdict::Abandoned(governor) = self.ingest.admit(ctx, self.output.len()) {
+                self.tripped = governor;
+                return Ok(false);
             }
             let growth = ctx.growth.clone();
             let (element_term, companion_term) = expansion_at(&value, position, &growth)?;
             let mut compatible = true;
             let row = crate::solution::RetainedRow::try_build(width, &growth, |row| {
-                row[..in_width].copy_from_slice(mu);
-                compatible = bind_admitted(row, Some(element_col), element_term, ctx)?
-                    && bind_admitted(row, companion_col, companion_term, ctx)?;
+                row[..self.input_schema.len()].copy_from_slice(mu);
+                compatible = bind_admitted(row, Some(self.element_col), element_term, ctx)?
+                    && bind_admitted(row, self.companion_col, companion_term, ctx)?;
                 Ok(())
             })?;
-            if !compatible {
-                // A target this row already bound incompatibly — see the module
-                // docs' note on a pre-bound target. Not reachable from query text,
-                // which the parser refuses, and an ordinary non-match when it is.
-                continue;
+            if compatible {
+                self.output.push_row(row)?;
             }
-            rows.push_row(row)?;
         }
+        Ok(true)
     }
-
-    // This node's materialized bag, measured against the intermediate-cell ceiling
-    // exactly as every other producer measures its output.
-    if tripped.is_none() {
-        tripped = ctx.observe_cells(rows.len(), width).err();
-    }
-    // An `EXISTS` inside the expanded expression is an opaque edge; see
-    // `crate::binop::eval_left_join`.
-    if let Some(tripped) = ctx.expression_barrier.observed() {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            node, tripped, schema,
-        )));
-    }
-    let seq = SolutionSeq {
-        schema,
-        rows: rows.finish()?,
-    };
-    Ok(match tripped {
-        // This node stopped its own expansion, and nothing below it had already
-        // truncated: the bag is exactly the prefix it committed before the
-        // governor tripped, so the truncation ORIGINATES here.
-        Some(tripped) if !lift.is_truncated() => {
-            Evaluated::Truncated(Truncation::origin(seq, tripped))
-        }
-        // Either nothing tripped at all, or a CHILD had already truncated and this
-        // node then stopped too. In the second case the child's certificate — the
-        // one `lift.finish` composes, already ascended through this node's monotone
-        // edge — is the report that must survive: it names the node the truncation
-        // actually originated at, and its claim ("a positional prefix") is exactly
-        // what stopping this expansion early also leaves. Overwriting it with a
-        // fresh origin here would re-attribute a child's trip to this node. The
-        // governor this node saw is not lost either way — a governor state latches
-        // its first trip, and the query-level report reads it from there.
-        _ => lift.finish(seq),
-    })
 }
 
-/// The composite value the linked `expression` denotes for `mu`, or `None` when it
-/// denotes none (unbound, raised, not `cdt:`-typed, or an ill-formed composite literal).
-///
-/// # Errors
-///
-/// Any hard failure `expression` itself raises.
-fn composite_of<D: DatasetView + Sync>(
-    linked: &mut crate::vm::Linked<'_, D::Id>,
-    expression: &Expression,
-    mu: &Solution<D::Id>,
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
+fn composite_term<D: DatasetView + Sync>(
+    term: Option<crate::scratch::SolutionTerm<D::Id>>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Option<crate::composite_value::CompositeValue>, EvalError> {
-    let Some(term) = linked.term(Some(expression), mu, schema, ctx)? else {
+    let Some(term) = term else {
         return Ok(None);
     };
     let value = crate::expr::owned_value_of(ctx, term)?;
@@ -517,3 +551,5 @@ mod tests {
         );
     }
 }
+
+crate::vm::row_continuation!(UnfoldSequence, input_schema);

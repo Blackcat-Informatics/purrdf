@@ -125,6 +125,12 @@ pub(crate) struct DecodeTable {
 }
 
 impl DecodeTable {
+    /// Includes old/new buffer overlap during growth; code lengths are at most 15.
+    pub(crate) const fn max_live_heap_bytes(primary_bits: u32) -> usize {
+        let primary = 1_usize << primary_bits;
+        2 * ((primary + (1 << 15) + primary) * size_of::<u32>() + primary)
+    }
+
     pub(crate) fn new(primary_bits: u32) -> Self {
         Self {
             entries: Vec::new(),
@@ -186,6 +192,16 @@ impl DecodeTable {
         }
 
         self.entries.clear();
+        // Reserve the complete table once, keeping its capacity bounded by the
+        // primary table plus at most one full 15-bit secondary code space.
+        let table_len = primary_size
+            + self
+                .sub_len
+                .iter()
+                .filter(|&&width| width != 0)
+                .map(|&width| 1_usize << width)
+                .sum::<usize>();
+        self.entries.reserve_exact(table_len);
         self.entries
             .resize(primary_size, entry(primary, TAG_INVALID, 0, 0));
         // Subtable links, in prefix order.

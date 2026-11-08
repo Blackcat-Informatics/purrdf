@@ -42,7 +42,6 @@
 use std::sync::Arc;
 
 use purrdf_hash::hex::Digest32;
-use sha2::{Digest, Sha256};
 
 use crate::dataset_view::DatasetView;
 use crate::ir::import::{DatasetImportError, DatasetImporter};
@@ -127,6 +126,51 @@ purrdf_lex::variant_from!(impl<E> DatasetMaterializationError<E> {
 /// one [`verify_pack`] has independently certified.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PackDigest(Digest32);
+
+/// Independent pack verification bound to one immutable exact byte range.
+/// Construction always runs the native pack verifier; callers cannot supply
+/// digest claims or substitute another source's bytes for this evidence.
+#[derive(Clone, Copy)]
+pub struct VerifiedPack<'a> {
+    bytes: &'a [u8],
+    exact_digest: crate::ContentDigest,
+    rdf_digest: PackDigest,
+}
+
+purrdf_hash::debug_non_exhaustive!(VerifiedPack<'_> {});
+
+impl<'a> VerifiedPack<'a> {
+    /// The exact original immutable source range.
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// SHA-256 of the exact original bytes.
+    #[must_use]
+    pub const fn exact_digest(self) -> crate::ContentDigest {
+        self.exact_digest
+    }
+
+    /// Independently verified canonical RDF identity.
+    #[must_use]
+    pub const fn rdf_digest(self) -> PackDigest {
+        self.rdf_digest
+    }
+}
+
+/// Independently verify a pack and retain byte-bound evidence of that result.
+pub fn verify_pack_bytes<'a>(
+    bytes: &'a [u8],
+    control: &mut crate::CanonicalizationControl<'_>,
+) -> Result<VerifiedPack<'a>, PackError> {
+    let rdf_digest = verify_pack(bytes, control)?;
+    Ok(VerifiedPack {
+        bytes,
+        exact_digest: crate::ContentDigest::of(bytes),
+        rdf_digest,
+    })
+}
 
 impl PackDigest {
     /// The raw 32 digest bytes.
@@ -299,14 +343,18 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 /// - [`PackError::RdfcDigestMismatch`] if the independently recomputed digest
 ///   disagrees with the pack's stored `rdfc_digest` header field — the pack's
 ///   contents do not actually canonicalize to the identity it claims.
-pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
+pub fn verify_pack(
+    bytes: &[u8],
+    control: &mut crate::CanonicalizationControl<'_>,
+) -> Result<PackDigest, PackError> {
     let view = PackView::from_bytes(bytes)?;
 
     let reconstructed = dataset_from_view(&view).map_err(PackError::Materialization)?;
 
-    let canonicalized = crate::try_canonicalize_with(&reconstructed, CanonHash::Sha256)
-        .map_err(PackError::CanonRefused)?;
-    let computed: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
+    let canonicalized =
+        crate::try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
+            .map_err(PackError::CanonRefused)?;
+    let computed = *canonicalized.as_bytes();
 
     let expected = view.rdfc_digest();
     if computed != expected {

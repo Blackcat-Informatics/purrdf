@@ -121,11 +121,35 @@ enum CmpJob<'a> {
 /// `map-less-than-17.rq` (`xsd:integer` before `xsd:string`) pin the other two
 /// components.
 fn literal_cmp(a: &CdtLiteral, b: &CdtLiteral) -> Ordering {
-    a.datatype
-        .cmp(&b.datatype)
-        .then_with(|| a.lexical.cmp(&b.lexical))
-        .then_with(|| a.language.cmp(&b.language))
-        .then_with(|| a.direction.cmp(&b.direction))
+    match literal_cmp_with_control(a, b, &mut purrdf_lex::control::Unmetered) {
+        Ok(order) => order,
+        Err(impossible) => match impossible {},
+    }
+}
+
+fn literal_cmp_with_control<C: purrdf_lex::control::Progress + ?Sized>(
+    a: &CdtLiteral,
+    b: &CdtLiteral,
+    progress: &mut C,
+) -> Result<Ordering, C::Error> {
+    use purrdf_lex::control::compare_bytes;
+    for (left, right) in [(&a.datatype, &b.datatype), (&a.lexical, &b.lexical)] {
+        let order = compare_bytes(left.as_bytes(), right.as_bytes(), progress)?;
+        if !order.is_eq() {
+            return Ok(order);
+        }
+    }
+    let order = match (&a.language, &b.language) {
+        (Some(left), Some(right)) => compare_bytes(left.as_bytes(), right.as_bytes(), progress)?,
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+    };
+    if !order.is_eq() {
+        return Ok(order);
+    }
+    progress.charge(1)?;
+    Ok(a.direction.cmp(&b.direction))
 }
 
 /// The crate's syntactic total order over two map keys.
@@ -152,14 +176,34 @@ fn literal_cmp(a: &CdtLiteral, b: &CdtLiteral) -> Ordering {
 /// ```
 #[must_use]
 pub fn total_key_cmp(a: &CdtKey, b: &CdtKey) -> Ordering {
-    a.rank().cmp(&b.rank()).then_with(|| match (a, b) {
-        (CdtKey::Iri(x), CdtKey::Iri(y)) => x.cmp(y),
-        (CdtKey::Literal(x), CdtKey::Literal(y)) => literal_cmp(x, y),
-        // Equal ranks imply the same variant, so this arm is unreachable; answering
-        // `Equal` keeps the function total rather than panicking on an impossible
-        // input.
-        _ => Ordering::Equal,
-    })
+    match total_key_cmp_with_control(a, b, &mut purrdf_lex::control::Unmetered) {
+        Ok(order) => order,
+        Err(impossible) => match impossible {},
+    }
+}
+
+/// Compare native map keys through the same syntactic order and original progress.
+/// # Errors
+/// Returns the unchanged caller failure before the next bounded comparison.
+pub fn total_key_cmp_with_control<C: purrdf_lex::control::Progress + ?Sized>(
+    a: &CdtKey,
+    b: &CdtKey,
+    progress: &mut C,
+) -> Result<Ordering, C::Error> {
+    progress.charge(1)?;
+    let rank = a.rank().cmp(&b.rank());
+    if !rank.is_eq() {
+        return Ok(rank);
+    }
+    match (a, b) {
+        (CdtKey::Iri(left), CdtKey::Iri(right)) => {
+            purrdf_lex::control::compare_bytes(left.as_bytes(), right.as_bytes(), progress)
+        }
+        (CdtKey::Literal(left), CdtKey::Literal(right)) => {
+            literal_cmp_with_control(left, right, progress)
+        }
+        _ => Ok(Ordering::Equal),
+    }
 }
 
 /// The crate's syntactic total order over two elements.

@@ -129,7 +129,9 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 
 /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
 /// so the ledger can print it beside the row count that actually materialised.
+/// These estimates are predictions, not guaranteed output bounds.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanEstimate {
     /// The estimated size of the BGP's final output, in rows.
     pub rows: u64,
@@ -145,6 +147,16 @@ pub struct PlanEstimate {
 }
 
 impl PlanEstimate {
+    /// Construct the planner's row, peak-row and working-width predictions.
+    #[must_use]
+    pub const fn new(rows: u64, peak_rows: u64, columns: u64) -> Self {
+        Self {
+            rows,
+            peak_rows,
+            columns,
+        }
+    }
+
     /// The estimated peak intermediate bag, in cells — the estimate compared against the
     /// caller's intermediate-cardinality ceiling at admission.
     ///
@@ -759,7 +771,7 @@ impl QueryExplanation {
             }
         }
         let _ = writeln!(out, "consumed");
-        for dimension in purrdf_core::ResourceDimension::ALL {
+        for &dimension in purrdf_core::ResourceDimension::ALL {
             let _ = writeln!(
                 out,
                 "  {}\t{}",

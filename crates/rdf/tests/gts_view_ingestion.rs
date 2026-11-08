@@ -33,13 +33,31 @@
 //!   composed view — freezing nothing, and shipping the bytes the materialized
 //!   flat path ships.
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn inspect(error: &dyn StructuredError) -> Capture<'_> {
+    let buffer = Vec::with_capacity(128);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(error, buffer);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    fields
+}
+
 use purrdf_core::TermBox;
 use purrdf_core::term_fixture::{ProbeFault, RowBudget};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_rdf::dataset_view::ViewOperationStatus;
 use purrdf_rdf::gts_compose::{
-    DEFAULT_RSYNCABLE_THRESHOLD, GtsIngestError, MediumPlan, RDF_REIFIES, SnapshotBuilder, emit_gts,
+    DEFAULT_RSYNCABLE_THRESHOLD, GtsEmitError, GtsIngestError, IngestCheckpoint, MediumPlan,
+    OffendingTerm, RDF_REIFIES, SnapshotBuilder, emit_gts,
 };
 // The keystone shape itself lives in the library, so this suite and
 // `benches/gts_ingest.rs` measure ONE fixture rather than two drifting copies.
@@ -50,8 +68,8 @@ use purrdf_rdf::gts_fixtures::{
 use purrdf_rdf::{
     BlankScope, DatasetMut, DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch,
     MutableDataset, PipelineViewBundle, QuadIds, QuadValues, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, TermId, TermRef,
-    TermValue, ViewLimits, parse_dataset,
+    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, SerializeGraph, TermId,
+    TermRef, TermValue, ViewLimits, import_gts_events, parse_dataset, serialize_dataset,
 };
 
 #[path = "support/blank_identity.rs"]
@@ -539,31 +557,275 @@ fn colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not() {
     let flat_err = flat
         .add_dataset_scoped(&blank_subject("c"), None, Some("a-b"))
         .expect_err("the flat surface refuses the same collision");
-    assert!(flat_err.contains("a-b-c"), "{flat_err}");
+    assert!(flat_err.to_string().contains("a-b-c"), "{flat_err}");
 }
 
 // ---------------------------------------------------------------------------
 // Terminal poison
 // ---------------------------------------------------------------------------
 
-/// A dataset carrying a quoted triple in ORDINARY object position — the shape the
-/// plain-slot guard exists for.
-fn quoted_triple_in_a_plain_slot() -> Arc<RdfDataset> {
-    use purrdf_rdf::{RdfDatasetBuilder, TermFactory, TermValue as Value};
+/// Quoted objects on every admitted surface, with shared scoped blank leaves.
+fn quoted_object_source() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri("https://example.org/s").unwrap();
     let p = builder.intern_iri("https://example.org/p").unwrap();
-    let o = builder.intern_iri("https://example.org/o").unwrap();
-    let quoted = builder
-        .intern_value(&Value::Triple {
-            s: TermBox::new(Value::iri("https://example.org/qs")),
-            p: TermBox::new(Value::iri("https://example.org/qp")),
-            o: TermBox::new(Value::iri("https://example.org/qo")),
-        })
+    let blank = builder.intern_blank("b0", BlankScope(7)).unwrap();
+    let claim = builder.intern_iri("https://example.org/claim").unwrap();
+    let mut quoted = Vec::new();
+    for direction in [RdfTextDirection::Ltr, RdfTextDirection::Rtl] {
+        let literal = builder
+            .intern_literal(RdfLiteral {
+                direction: Some(direction),
+                ..RdfLiteral::language_tagged("same", "en")
+            })
+            .unwrap();
+        let inner = builder.intern_triple(blank, p, literal).unwrap();
+        let outer = builder.intern_triple(s, p, inner).unwrap();
+        builder.push_quad(s, p, outer, None).unwrap();
+        quoted.push(outer);
+    }
+    let literal = builder
+        .intern_literal(RdfLiteral::typed("007", "https://example.org/type"))
         .unwrap();
-    builder.push_quad(s, p, quoted, None).unwrap();
-    builder.push_quad(s, p, o, None).unwrap();
-    builder.freeze().expect("the dataset freezes")
+    let typed = builder.intern_triple(blank, p, literal).unwrap();
+    builder.push_quad(s, p, typed, None).unwrap();
+    let binding = builder.intern_triple(s, p, quoted[0]).unwrap();
+    builder.push_reifier_in_graph(claim, binding, None).unwrap();
+    builder.push_annotation(claim, p, quoted[1]).unwrap();
+    builder.freeze().expect("the quoted-object dataset freezes")
+}
+
+#[test]
+fn native_snapshot_quoted_objects_preserve_structure_identity_and_scopes() {
+    let source = quoted_object_source();
+    let mut forward = SnapshotBuilder::new();
+    for scope in ["a", "b"] {
+        forward
+            .add_dataset_scoped(&source, None, Some(scope))
+            .expect("native quoted objects ingest");
+    }
+    let mut reversed = SnapshotBuilder::new();
+    for scope in ["b", "a", "a"] {
+        let _ = reversed
+            .add_view_scoped(&composite_over(&source), None, Some(scope))
+            .expect("quoted objects ingest through the composed view");
+    }
+    assert_eq!(forward.snapshot_payload(), reversed.snapshot_payload());
+    assert_eq!(
+        forward.ingest_totals().terms_interned,
+        reversed.ingest_totals().terms_interned,
+        "equal quoted structures are interned once per scoped identity"
+    );
+    let restored = import_gts_events(&emitted(&forward)).expect("strict native snapshot import");
+    assert_eq!(restored.dataset.quads().count(), 6);
+    assert_eq!(restored.dataset.reifier_quads().count(), 2);
+    assert_eq!(restored.dataset.annotation_quads().count(), 2);
+    let text = String::from_utf8(
+        serialize_dataset(
+            &restored.dataset,
+            "application/n-quads",
+            SerializeGraph::Dataset,
+        )
+        .expect("render the restored native terms"),
+    )
+    .unwrap();
+    for scope in ["a", "b"] {
+        let wire = format!("{scope}-{}", BlankScope(7).qualify_label("b0"));
+        // The single imported segment places the preserved wire label in scope one.
+        let blank = format!("_:{}", BlankScope(1).qualify_label(&wire));
+        assert!(
+            text.contains(&format!(
+                "<<( <https://example.org/s> <https://example.org/p> \
+                 <<( {blank} <https://example.org/p> \"same\"@en--ltr )>> )>>"
+            )),
+            "nested quoted structure and its blank identity survive: {text}"
+        );
+        assert!(text.contains(&format!(
+            "<<( {blank} <https://example.org/p> \"same\"@en--rtl )>>"
+        )));
+        assert!(text.contains(&format!(
+            "<<( {blank} <https://example.org/p> \"007\"^^<https://example.org/type> )>>"
+        )));
+    }
+}
+
+/// An external view can expose malformed cycles or excessive nesting even
+/// though the native dataset validator refuses to freeze those structures.
+fn quoted_chain_view(levels: usize, cyclic: bool) -> ProbeView {
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let leaf = builder.intern_iri("https://example.org/leaf").unwrap();
+    let ids: Vec<_> = (0..levels)
+        .map(|index| {
+            builder
+                .intern_iri(&format!("https://example.org/quote/{index}"))
+                .unwrap()
+        })
+        .collect();
+    builder.push_quad(s, p, ids[0], None).unwrap();
+    let mut view = ProbeView::honest(builder.freeze().unwrap());
+    for (index, &id) in ids.iter().enumerate() {
+        let o = ids
+            .get(index + 1)
+            .copied()
+            .unwrap_or(if cyclic { ids[0] } else { leaf });
+        view.term_overrides.insert(id, TermRef::Triple { s, p, o });
+    }
+    view
+}
+
+#[test]
+fn quoted_term_cycles_and_excessive_nesting_refuse_but_the_boundary_ingests() {
+    let limit = purrdf_events::MAX_TERM_NESTING_DEPTH;
+    let mut valid = SnapshotBuilder::new();
+    let _ = valid
+        .add_view(&quoted_chain_view(limit, false))
+        .expect("the native maximum nesting remains admitted");
+    import_gts_events(&emitted(&valid)).expect("the boundary snapshot imports");
+    for (levels, cyclic, reason) in [(2, true, "cyclic"), (limit + 1, false, "nesting limit")] {
+        let mut refused = SnapshotBuilder::new();
+        let accepted = refused.snapshot_payload();
+        let error = refused
+            .add_view(&quoted_chain_view(levels, cyclic))
+            .expect_err("malformed quoted structure must fail closed");
+        let GtsIngestError::UnrepresentableTerm { term, .. } = &error else {
+            panic!("expected native term evidence")
+        };
+        let mut leaf = term;
+        let mut depth = 0;
+        while let OffendingTerm::Triple { o, .. } = leaf {
+            depth += 1;
+            leaf = o;
+        }
+        assert!(depth <= 8);
+        if cyclic {
+            assert!(matches!(leaf, OffendingTerm::Cutoff));
+        }
+        let message = error.to_string();
+        assert!(message.contains(reason), "{message}");
+        assert_eq!(refused.snapshot_payload(), accepted);
+        assert!(refused.poison().is_some());
+    }
+}
+
+#[test]
+fn quoted_terms_remain_forbidden_in_non_object_positions() {
+    for position in [
+        "quad subject",
+        "quad graph name",
+        "quoted triple subject",
+        "quoted predicate",
+        "literal datatype",
+    ] {
+        let mut view = quoted_chain_view(1, false);
+        let quad = view.inner.quads().next().unwrap();
+        match position {
+            "quad subject" => view.quad_override = Some(QuadIds { s: quad.o, ..quad }),
+            "quad graph name" => {
+                view.quad_override = Some(QuadIds {
+                    g: Some(quad.o),
+                    ..quad
+                });
+            }
+            "quoted triple subject" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Triple {
+                        s: quad.o,
+                        p: quad.p,
+                        o: quad.s,
+                    },
+                );
+            }
+            "quoted predicate" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Triple {
+                        s: quad.s,
+                        p: quad.o,
+                        o: quad.s,
+                    },
+                );
+            }
+            "literal datatype" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Literal {
+                        lexical: "malformed",
+                        datatype: quad.o,
+                        language: None,
+                        direction: Some(RdfTextDirection::Rtl),
+                    },
+                );
+            }
+            _ => unreachable!(),
+        }
+        let error = SnapshotBuilder::new()
+            .add_view(&view)
+            .expect_err("quoted terms and malformed datatypes must fail closed");
+        drop(view);
+        if position == "literal datatype" {
+            let fields = inspect(&error);
+            let term = fields.child("term");
+            assert_eq!(term.code, "gts-term-literal");
+            assert!(matches!(
+                term.field("lexical"),
+                ErrorValue::Text("malformed")
+            ));
+            assert!(matches!(term.field("direction"), ErrorValue::Code("rtl")));
+            assert_eq!(term.child("datatype").code, "gts-term-literal");
+        }
+        let message = error.to_string();
+        assert!(message.contains(position), "{message}");
+    }
+}
+
+#[test]
+fn emission_retains_native_writer_failure_and_dictionary_transform_operands() {
+    let builder = SnapshotBuilder::new();
+    let emit = |plan: &MediumPlan| {
+        emit_gts(
+            &builder,
+            "dist",
+            Some(vec!["not-a-codec".to_owned()]),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            plan,
+        )
+    };
+    let error = emit(&MediumPlan::undicted(None)).unwrap_err();
+    let GtsEmitError::Writer(purrdf_gts::writer::WriterError::MissingCatalogEntry(name)) = &error
+    else {
+        panic!("expected native writer cause: {error:?}")
+    };
+    assert_eq!(name, "not-a-codec");
+    let fields = inspect(&error);
+    assert_eq!(fields.code, "gts-emit-writer");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_gts::writer::WriterError>()
+    );
+    let plan = MediumPlan {
+        dicts: vec![("dictionary".to_owned(), vec![1])],
+        assignment: BTreeMap::new(),
+        zstd_level: None,
+    };
+    let error = emit(&plan).unwrap_err();
+    let fields = inspect(&error);
+    assert_eq!(fields.code, "gts-emit-dictionaries-transform");
+    assert!(matches!(
+        fields.field("dictionaries"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(
+        matches!(error, GtsEmitError::DictionariesTransform { dictionaries: 1, transform } if transform == ["not-a-codec"])
+    );
 }
 
 #[test]
@@ -571,20 +833,24 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
     for flat_first in [false, true] {
         let mut builder = SnapshotBuilder::new();
         let _ = builder
-            .add_view(&source_a())
+            .add_view_scoped(&blank_subject("b-c"), None, Some("a"))
             .expect("a healthy ingestion precedes the failure");
-        let poisoned = quoted_triple_in_a_plain_slot();
+        let poisoned = blank_subject("c");
         let first = if flat_first {
             builder
-                .add_dataset(&poisoned)
-                .expect_err("a quoted triple in a plain slot must fail closed")
+                .add_dataset_scoped(&poisoned, None, Some("a-b"))
+                .expect_err("distinct blank identities must not share wire bytes")
         } else {
             builder
-                .add_view(&poisoned)
-                .expect_err("a quoted triple in a plain slot must fail closed")
-                .to_string()
+                .add_view_scoped(&poisoned, None, Some("a-b"))
+                .expect_err("distinct blank identities must not share wire bytes")
         };
-        assert!(first.contains("not directly representable"), "{first}");
+        assert!(
+            first
+                .to_string()
+                .contains("two distinct blank-node intern keys"),
+            "{first}"
+        );
         assert!(builder.poison().is_some(), "the failure is terminal");
 
         // Every later ingestion refuses, on BOTH surfaces, naming the earlier failure.
@@ -595,11 +861,26 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
             matches!(again, GtsIngestError::Poisoned { .. }),
             "{again:?}"
         );
-        assert!(again.to_string().contains("not directly representable"));
+        assert!(
+            again
+                .to_string()
+                .contains("two distinct blank-node intern keys")
+        );
+        let copied = again.clone();
+        drop(again);
+        let fields = inspect(&copied);
+        assert_eq!(
+            fields.child("cause").code,
+            "gts-ingest-blank-wire-collision"
+        );
+        assert!(matches!(
+            fields.child("cause").field("incoming_label"),
+            ErrorValue::Text("c")
+        ));
         let flat_again = builder
             .add_dataset(&source_b())
             .expect_err("a poisoned builder refuses the flat surface");
-        assert!(flat_again.contains("poisoned"), "{flat_again}");
+        assert!(flat_again.to_string().contains("poisoned"), "{flat_again}");
 
         // …and publication refuses rather than shipping the partial ingestion.
         let err = emit_gts(
@@ -615,8 +896,12 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
             &MediumPlan::undicted(None),
         )
         .expect_err("a poisoned builder must not publish");
-        assert!(err.contains("poisoned"), "{err}");
-        assert!(err.contains("not directly representable"), "{err}");
+        assert!(err.to_string().contains("poisoned"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("two distinct blank-node intern keys"),
+            "{err}"
+        );
     }
 
     // THE NEIGHBOURING CASE: the same two sources with no failure between them
@@ -662,7 +947,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     let accepted_payload = builder.snapshot_payload();
     let accepted_totals = builder.ingest_totals();
 
-    // A source that ingests a great many rows and THEN hits the plain-slot guard.
+    // A source that includes quoted terms and faults after many ordinary rows.
     let mut poisoning = RdfDatasetBuilder::new();
     let s = poisoning
         .intern_iri("https://example.org/poison/s")
@@ -670,6 +955,9 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     let p = poisoning
         .intern_iri("https://example.org/poison/p")
         .unwrap();
+    // Its object id precedes the noise rows, so it is consumed before the fault.
+    let quoted = poisoning.intern_triple(s, p, s).unwrap();
+    poisoning.push_quad(s, p, quoted, None).unwrap();
     for index in 0..64 {
         let o = poisoning
             .intern_iri(&format!("https://example.org/poison/o{index}"))
@@ -680,14 +968,13 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
         poisoning.push_quad(s, p, o, None).unwrap();
         poisoning.push_quad(blank, p, o, None).unwrap();
     }
-    let quoted = poisoning.intern_triple(s, p, s).unwrap();
-    poisoning.push_quad(s, p, quoted, None).unwrap();
     let poisoning = poisoning.freeze().expect("the poisoning source freezes");
 
+    let budget = poisoning.quads().count() - 1;
     let err = builder
-        .add_view(&poisoning)
-        .expect_err("a quoted triple in a plain slot must fail closed");
-    assert!(matches!(err, GtsIngestError::UnrepresentableTerm { .. }));
+        .add_view(&ProbeView::budgeted(poisoning, budget))
+        .expect_err("a truncated source must fail closed");
+    assert!(matches!(err, GtsIngestError::SourceRead { .. }));
     assert!(builder.poison().is_some(), "the failure is terminal");
 
     // THE ROLLBACK: not one row, term or index entry of the refused ingestion
@@ -709,7 +996,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     );
 
     // NON-VACUITY: the refused source really would have moved the content id had
-    // any of it been kept. The same rows, minus the one unrepresentable term,
+    // any of it been kept. The same ordinary rows, without the source fault,
     // ingest into a fresh builder and mint something different.
     let mut without_the_trap = RdfDatasetBuilder::new();
     let s = without_the_trap
@@ -753,16 +1040,14 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
         &MediumPlan::undicted(None),
     )
     .expect_err("a poisoned builder must not publish, rolled back or not");
-    assert!(refused.contains("poisoned"), "{refused}");
+    assert!(refused.to_string().contains("poisoned"), "{refused}");
 }
 
 /// An unrepresentable-term refusal names the term in RDF TEXT, never in the
 /// view's own ids.
 ///
-/// A quoted triple used to fall through to `Debug`, so the message read
-/// `Triple { s: Id(..), p: Id(..), o: Id(..) }` — the offending term named in a
-/// vocabulary only the view speaks, leaving the reader unable to find the row it
-/// came from. Every constituent is now resolved.
+/// A quoted triple in a predicate slot remains invalid. Every constituent of
+/// that offending term is resolved, including the directional literal leaf.
 #[test]
 fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     let mut b = RdfDatasetBuilder::new();
@@ -780,13 +1065,41 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     let plain_s = b.intern_iri("https://example.org/s").unwrap();
     let plain_p = b.intern_iri("https://example.org/p").unwrap();
     b.push_quad(plain_s, plain_p, quoted, None).unwrap();
-    let source = b.freeze().expect("the plain-slot trap freezes");
+    let source = b.freeze().expect("the valid quoted object freezes");
+    let mut invalid = ProbeView::honest(source);
+    invalid.quad_override = Some(QuadIds {
+        s: plain_s,
+        p: quoted,
+        o: quoted,
+        g: None,
+    });
 
     let mut builder = SnapshotBuilder::new();
-    let message = builder
-        .add_view(&source)
-        .expect_err("a quoted triple in a plain slot must fail closed")
-        .to_string();
+    let error = builder
+        .add_view(&invalid)
+        .expect_err("a quoted triple predicate must fail closed");
+    drop(invalid);
+    let copy = error.clone();
+    drop(error);
+    let fields = inspect(&copy);
+    let triple = fields.child("term");
+    assert_eq!(triple.code, "gts-term-triple");
+    assert!(matches!(
+        triple.child("subject").field("iri"),
+        ErrorValue::Iri("https://example.org/quoted-subject")
+    ));
+    let literal = triple.child("object");
+    assert!(matches!(
+        literal.field("lexical"),
+        ErrorValue::Text("مرحبا")
+    ));
+    assert!(matches!(literal.field("language"), ErrorValue::Text("ar")));
+    assert!(matches!(
+        literal.field("direction"),
+        ErrorValue::Code("rtl")
+    ));
+    assert!(matches!(literal.field("datatype"), ErrorValue::Absent));
+    let message = copy.to_string();
 
     for text in [
         "https://example.org/quoted-subject",
@@ -809,6 +1122,12 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
 // A purpose-built probe view: budgeted faulting + capability claims
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
+enum ProbeFailureChannel {
+    ReadsAndReadiness,
+    Readiness,
+}
+
 /// A view that delegates to a frozen dataset but can (a) fault after a fixed
 /// number of ordinary rows, exactly as a lazy operational backend does, and (b)
 /// claim a statement-layer capability its accessors do not answer for.
@@ -817,11 +1136,16 @@ struct ProbeView {
     inner: Arc<RdfDataset>,
     /// Ordinary rows still yieldable before the view faults.
     budget: RowBudget,
+    /// Publish a readiness refusal without a simultaneous dictionary refusal.
+    failure_channel: ProbeFailureChannel,
     /// Capability claims asserted ON TOP of the inner dataset's own.
     claim_reifiers: bool,
     claim_annotations: bool,
     /// Whether the statement-layer accessors answer at all.
     enumerate_statements: bool,
+    /// Malformed external terms/rows that cannot pass native freeze.
+    term_overrides: BTreeMap<TermId, TermRef<'static, TermId>>,
+    quad_override: Option<QuadIds>,
 }
 
 impl ProbeView {
@@ -830,9 +1154,12 @@ impl ProbeView {
         Self {
             inner,
             budget: RowBudget::new(usize::MAX),
+            failure_channel: ProbeFailureChannel::ReadsAndReadiness,
             claim_reifiers: false,
             claim_annotations: false,
             enumerate_statements: true,
+            term_overrides: BTreeMap::new(),
+            quad_override: None,
         }
     }
 
@@ -893,15 +1220,24 @@ impl DatasetView for ProbeView {
     type ProbePlan = ();
 
     fn read_error(&self) -> Option<Self::ReadError> {
-        self.budget.read_error()
+        if matches!(self.failure_channel, ProbeFailureChannel::Readiness) {
+            None
+        } else {
+            self.budget.read_error()
+        }
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.budget.take(self.inner.quads())
+        self.budget
+            .take(self.inner.quads())
+            .map(|quad| self.quad_override.unwrap_or(quad))
     }
 
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
-        self.checked_read(|_| self.inner.as_ref().resolve(id))
+        self.checked_read(|_| match self.term_overrides.get(&id) {
+            Some(term) => *term,
+            None => self.inner.as_ref().resolve(id),
+        })
     }
 
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
@@ -978,11 +1314,17 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
         .add_view(&truncating)
         .expect_err("a truncated read must never publish as a snapshot");
     assert_eq!(
-        err,
-        GtsIngestError::SourceRead {
-            cause: "the probe view exhausted its row budget".to_owned(),
-        }
+        std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<ProbeFault>(),
+        Some(&ProbeFault("the probe view exhausted its row budget")),
     );
+    drop(truncating);
+    let source_copy = err.clone();
+    drop(err);
+    let source_fields = inspect(&source_copy);
+    assert_eq!(source_fields.code, "gts-ingest-source-read");
+    assert_eq!(source_fields.child("cause").code, "probe-fault");
     assert!(builder.poison().is_some(), "and the builder is poisoned");
 
     // (ii) The BEFORE checkpoint: a view that has already failed is refused
@@ -994,12 +1336,44 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
         .add_view(&pre_faulted)
         .expect_err("an already-failed view is refused at entry");
     assert_eq!(
-        err,
-        GtsIngestError::SourceRead {
-            cause: "the probe view exhausted its row budget".to_owned(),
-        }
+        std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<ProbeFault>(),
+        Some(&ProbeFault("the probe view exhausted its row budget")),
     );
     assert_eq!(pre_faulted.operation_status(), before_status);
+
+    // Readiness-only sources exercise the two original drain checkpoints.
+    for (budget, checkpoint) in [
+        (RowBudget::faulted(), IngestCheckpoint::BeforeRows),
+        (RowBudget::new(0), IngestCheckpoint::AfterRows),
+    ] {
+        let view = ProbeView {
+            budget,
+            failure_channel: ProbeFailureChannel::Readiness,
+            ..ProbeView::honest(Arc::clone(&a))
+        };
+        let mut refused = SnapshotBuilder::new();
+        let error = refused.add_view(&view).unwrap_err();
+        drop(view);
+        let copy = error.clone();
+        drop(error);
+        let GtsIngestError::ViewNotReady {
+            checkpoint: actual, ..
+        } = &copy
+        else {
+            panic!("expected readiness refusal: {copy:?}")
+        };
+        assert_eq!(*actual, checkpoint);
+        let fields = inspect(&copy);
+        assert_eq!(fields.code, "gts-ingest-view-not-ready");
+        assert_eq!(fields.child("cause").code, "probe-fault");
+        assert!(matches!(
+            fields.child("cause").field("message"),
+            ErrorValue::Text("the probe view exhausted its row budget")
+        ));
+        assert!(std::error::Error::source(&copy).unwrap().is::<ProbeFault>());
+    }
 
     // THE NEIGHBOURING CASE: the same probe view with budget for every row
     // ingests, and mints exactly the flat carrier's snapshot.
@@ -1224,6 +1598,7 @@ fn keystone_carrier(
     base: &Arc<RdfDataset>,
     contribution: &Arc<RdfDataset>,
     ledger: &Arc<RetentionLedger>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> PipelineViewBundle<Note> {
     let (lookaside, blobs, provenance) = keystone_loadout();
     let mut carrier = PipelineViewBundle::from_dataset(
@@ -1236,7 +1611,7 @@ fn keystone_carrier(
     )
     .expect("the base is within the default ceilings");
     carrier
-        .accumulate_named_graph(KEY_G3, contribution, Note("g3"))
+        .accumulate_named_graph(KEY_G3, contribution, Note("g3"), control)
         .expect("a contained contribution folds in");
     carrier
 }
@@ -1260,6 +1635,8 @@ fn keystone_delta_carrier(
 
 #[test]
 fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
+    let mut canonical =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
     let base = base_dataset();
     let contribution = contribution_dataset();
     let delta = keystone_delta(&base);
@@ -1289,11 +1666,15 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     )
     .expect("the base composes within the default ceilings");
 
-    let g1 = carrier.graph_digest(KEY_G1).expect("<g1> canonicalizes");
-    let g2 = carrier.graph_digest(KEY_G2).expect("<g2> canonicalizes");
+    let g1 = carrier
+        .graph_digest(KEY_G1, &mut canonical)
+        .expect("<g1> canonicalizes");
+    let g2 = carrier
+        .graph_digest(KEY_G2, &mut canonical)
+        .expect("<g2> canonicalizes");
     assert_ne!(g1, g2, "the two graphs differ, or the leaves prove nothing");
     carrier
-        .pin_handle(KEY_G1, Note("g1"), g1)
+        .pin_handle(KEY_G1, Note("g1"), g1, &mut canonical)
         .expect("a handle pinned to its own graph's digest attaches");
 
     let before_accumulate = carrier.digest_work();
@@ -1303,7 +1684,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     );
 
     carrier
-        .accumulate_named_graph(KEY_G3, &contribution, Note("g3"))
+        .accumulate_named_graph(KEY_G3, &contribution, Note("g3"), &mut canonical)
         .expect("a contained contribution appends");
 
     // EXACT INVALIDATION: the accumulation canonicalized the graph it touched and
@@ -1314,8 +1695,14 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
         before_accumulate.graph_canonicalizations + 1,
         "exactly the accumulated graph is canonicalized again"
     );
-    assert_eq!(carrier.graph_digest(KEY_G1).expect("<g1>"), g1);
-    assert_eq!(carrier.graph_digest(KEY_G2).expect("<g2>"), g2);
+    assert_eq!(
+        carrier.graph_digest(KEY_G1, &mut canonical).expect("<g1>"),
+        g1
+    );
+    assert_eq!(
+        carrier.graph_digest(KEY_G2, &mut canonical).expect("<g2>"),
+        g2
+    );
     let served = carrier.digest_work();
     assert_eq!(
         served.graph_canonicalizations, after_accumulate.graph_canonicalizations,
@@ -1340,7 +1727,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
         g1
     );
     assert_eq!(
-        carrier.graph_digest(KEY_G1).expect("<g1>"),
+        carrier.graph_digest(KEY_G1, &mut canonical).expect("<g1>"),
         carrier
             .handle(KEY_G1)
             .expect("the pin survives")
@@ -1355,12 +1742,12 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     // A SECOND READER of the same base is answered from the SHARED ledger memo
     // rather than paying for the analysis twice. Its own memo is empty, so nothing
     // but the ledger can be answering.
-    let second_reader = keystone_carrier(&base, &contribution, &ledger);
+    let second_reader = keystone_carrier(&base, &contribution, &ledger, &mut canonical);
     assert_eq!(second_reader.digest_work().graph_cache_hits, 0);
     let hits_before = ledger.snapshot().memo_hits;
     assert_eq!(
         second_reader
-            .graph_digest(KEY_G1)
+            .graph_digest(KEY_G1, &mut canonical)
             .expect("<g1> on the second reader"),
         g1
     );
@@ -1461,7 +1848,7 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     // ---- The reference: the SAME carriers, materialized, ingested flat -------
     // A second, identically-constructed pair — so the measured carriers' own work
     // counters stay untouched by the freeze this reference path deliberately pays.
-    let reference_main = keystone_carrier(&base, &contribution, &ledger);
+    let reference_main = keystone_carrier(&base, &contribution, &ledger, &mut canonical);
     let reference_delta = keystone_delta_carrier(&delta, &ledger);
     let flat_main = reference_main.materialize().expect("the reference freezes");
     let flat_delta = reference_delta

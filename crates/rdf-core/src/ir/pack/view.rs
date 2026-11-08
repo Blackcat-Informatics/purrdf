@@ -154,6 +154,17 @@ impl DatasetView for PackView<'_> {
         Self: 'a;
     type ProbePlan = ();
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
+
     /// A pack's dictionary is admitted only when no triple term in it nests past
     /// the decoder's fixed triple-term depth limit of 128, so that limit is the bound.
     fn triple_term_nesting_bound(&self) -> Option<usize> {

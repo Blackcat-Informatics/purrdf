@@ -6,41 +6,54 @@
 #![allow(missing_docs)]
 
 //! The arbitrary-precision tower (`purrdf_xsd::exact`): its small-value fast
-//! path against the bounded 3.x arithmetic it will replace, and how its cost
+//! path beside the public value operators, and how its cost
 //! grows with operand size.
 //!
 //! Report-only, `cargo bench -p purrdf-xsd --bench exact`. Nothing here asserts
 //! a threshold.
 //!
-//! - `xsd_exact_small/*/{exact,bounded}` — the same 1024 operations over values
+//! - `xsd_exact_small/*/{exact,value}` — the same 1024 operations over values
 //!   inside `i128`, through the tower (`Integer`, `Decimal`) and the current
-//!   hybrid `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`).
-//!   Division on this hybrid path already uses the exact tower; historical 3.x
-//!   bounded instruction counts require a separate baseline checkout.
+//!   `XsdValue` operators (`numeric_add`, `numeric_mul`, `numeric_div`). Both
+//!   routes use the exact tower. Historical bounded instruction counts require
+//!   a separate baseline checkout; these rows cannot establish bounded parity.
+//!   `decimal_div` uses the exact-first half-even default; the separate
+//!   `decimal_div_scale18_toward_zero` row selects eighteen digits toward zero.
 //! - `xsd_exact_growth/*/<digits>` — one operation on operands of 40 to 40 000
 //!   decimal digits: binary addition stays linear; decimal parsing and rendering
-//!   include base conversion, products grow as Karatsuba's `n^1.585`, and
-//!   division as quotient × divisor length.
+//!   include base conversion. Products and division select the current native
+//!   algorithms according to operand shape; these four sizes alone do not
+//!   establish their asymptotic growth or qualify their dispatch thresholds.
 //!   `gcd_wide_gap` uses a constructed exact multiple whose left operand has
 //!   about three times the decimal width of the right operand.
 //! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
 //!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
 //!   it sits.
-//! - `xsd_exact_fine_products/{bounded,tower}` — products of two bounded decimals
-//!   whose scales sum to eighteen (machine words) and to twenty (the tower).
+//! - `xsd_exact_fine_products/{scale18,scale20}` — exact products with scales
+//!   summing to eighteen or twenty. Both retain inline coefficients here.
 //!
 //! Each routine in `--test` mode runs its body once, so
 //! `perf stat -e instructions:u <bench binary> --test --exact <id>` minus the
-//! same for `--list` is a load-independent instruction count for the body.
+//! same for `--list` is a setup-subtracted estimate. It includes differences in
+//! harness work and does not replace an acknowledged in-workload counter window.
 
 use std::str::FromStr;
 
-use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, black_box};
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::bigint::BigInt;
-use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer};
+use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rational, Rounding};
 use purrdf_xsd::numeric::parse_decimal;
 use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_mul};
+
+#[path = "../tests/support/rational_float_factory.rs"]
+mod rational_float_factory;
+
+#[path = "../tests/support/rational_reciprocal.rs"]
+mod rational_reciprocal;
+
+#[path = "../tests/support/rational_float_rounding.rs"]
+mod rational_float_rounding;
 
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
@@ -49,6 +62,7 @@ const SMALL_OPS: usize = 1024;
 const GROWTH_DIGITS: [usize; 4] = [40, 400, 4_000, 40_000];
 
 /// A seeded digit string of exactly `len` digits (no leading zero).
+/// Draw a deterministic decimal coefficient of the requested width.
 fn digit_string(state: &mut u64, len: usize) -> String {
     let mut text = String::with_capacity(len);
     while text.len() < len {
@@ -62,6 +76,7 @@ fn digit_string(state: &mut u64, len: usize) -> String {
 }
 
 /// Small signed integer pairs (inside `i64`, so every product fits `i128`).
+/// Prepare the shared inline integer operands outside measured loops.
 fn small_integers() -> Vec<(i128, i128)> {
     let mut state = 0x5EED_E8AC_u64;
     (0..SMALL_OPS)
@@ -74,6 +89,7 @@ fn small_integers() -> Vec<(i128, i128)> {
 }
 
 /// Small decimal lexical pairs: up to twelve digits, scales 0 to 6.
+/// Prepare decimal spellings for matching exact and public-value operations.
 fn small_decimals() -> Vec<(String, String)> {
     let mut state = 0xDEC1_3A15_u64;
     let one = |state: &mut u64| {
@@ -93,13 +109,14 @@ fn small_decimals() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Compare inline exact operations with public dispatch over the same tower.
 fn bench_small(c: &mut Bench) {
     let integers = small_integers();
     let exact_integers: Vec<(Integer, Integer)> = integers
         .iter()
         .map(|&(a, b)| (Integer::from(a), Integer::from(b)))
         .collect();
-    let bounded_integers: Vec<(XsdValue, XsdValue)> = integers
+    let value_integers: Vec<(XsdValue, XsdValue)> = integers
         .iter()
         .map(|&(a, b)| {
             let value = |value: i128| XsdValue::Integer {
@@ -119,7 +136,7 @@ fn bench_small(c: &mut Bench) {
             )
         })
         .collect();
-    let bounded_decimals: Vec<(XsdValue, XsdValue)> = decimals
+    let value_decimals: Vec<(XsdValue, XsdValue)> = decimals
         .iter()
         .map(|(a, b)| {
             (
@@ -138,9 +155,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("integer_add/bounded", |b| {
+    group.bench_function("integer_add/value", |b| {
         b.iter(|| {
-            for (x, y) in &bounded_integers {
+            for (x, y) in &value_integers {
                 black_box(numeric_add(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -152,9 +169,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("integer_mul/bounded", |b| {
+    group.bench_function("integer_mul/value", |b| {
         b.iter(|| {
-            for (x, y) in &bounded_integers {
+            for (x, y) in &value_integers {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -166,9 +183,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_add/bounded", |b| {
+    group.bench_function("decimal_add/value", |b| {
         b.iter(|| {
-            for (x, y) in &bounded_decimals {
+            for (x, y) in &value_decimals {
                 black_box(numeric_add(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -180,9 +197,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_mul/bounded", |b| {
+    group.bench_function("decimal_mul/value", |b| {
         b.iter(|| {
-            for (x, y) in &bounded_decimals {
+            for (x, y) in &value_decimals {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("in range"));
             }
         });
@@ -200,10 +217,26 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_div/bounded", |b| {
+    group.bench_function("decimal_div_scale18_toward_zero/exact", |b| {
         b.iter(|| {
-            for (x, y) in &bounded_decimals {
-                black_box(numeric_div(black_box(x), black_box(y)).ok());
+            for (x, y) in &exact_decimals {
+                if !y.is_zero() {
+                    black_box(
+                        black_box(x)
+                            .div(
+                                black_box(y),
+                                DivisionPolicy::scale(18, Rounding::TowardZero),
+                            )
+                            .expect("nonzero"),
+                    );
+                }
+            }
+        });
+    });
+    group.bench_function("decimal_div/value", |b| {
+        b.iter(|| {
+            for (x, y) in &value_decimals {
+                black_box(numeric_div(black_box(x), black_box(y)).expect("nonzero divisor"));
             }
         });
     });
@@ -238,9 +271,9 @@ fn bench_small(c: &mut Bench) {
             }
         });
     });
-    group.bench_function("decimal_to_f64/bounded", |b| {
+    group.bench_function("decimal_to_f64/value", |b| {
         b.iter(|| {
-            for (x, _) in &bounded_decimals {
+            for (x, _) in &value_decimals {
                 if let XsdValue::Decimal(decimal) = black_box(x) {
                     black_box(decimal.to_f64());
                 }
@@ -350,8 +383,9 @@ fn bench_karatsuba(c: &mut Bench) {
     group.finish();
 }
 
-/// Bounded decimal pairs of `scale` fractional digits each, coefficients of up to
-/// twelve digits.
+/// Exact decimal pairs whose canonical product has twice `scale` fractional
+/// digits, with twelve-digit input coefficients. Validate the actual product:
+/// nonzero operand suffixes can still multiply to a trailing zero.
 fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
     let mut state = 0xF1E5_CA1E_u64 ^ scale as u64;
     let one = |state: &mut u64| {
@@ -361,29 +395,40 @@ fn scaled_decimals(scale: usize) -> Vec<(XsdValue, XsdValue)> {
         let text = format!("{}.{fraction}", if whole.is_empty() { "0" } else { whole });
         XsdValue::from_exact_decimal(parse_decimal(&text).expect("an exact decimal"))
     };
-    (0..SMALL_OPS)
-        .map(|_| (one(&mut state), one(&mut state)))
-        .collect()
+    let target_scale = u32::try_from(scale)
+        .expect("fixture scale fits u32")
+        .checked_mul(2)
+        .expect("fixture product scale fits u32");
+    let mut pairs = Vec::with_capacity(SMALL_OPS);
+    while pairs.len() < SMALL_OPS {
+        let x = one(&mut state);
+        let y = one(&mut state);
+        let XsdValue::Decimal(product) = numeric_mul(&x, &y).expect("exact fixture product") else {
+            panic!("decimal fixture operands must produce a decimal");
+        };
+        if product.scale() == target_scale {
+            pairs.push((x, y));
+        }
+    }
+    pairs
 }
 
-/// `xsd_exact_fine_products/{bounded,tower}`: 1024 `numeric_mul` products of two
-/// bounded decimals. Nine fractional digits each keep the product at eighteen, inside
-/// the bounded decimal; ten each make it twenty, which only the tower holds exactly,
-/// so every product allocates its coefficient there. The pair is the cost of an exact
-/// product past eighteen fractional digits against the machine-word one beside it.
+/// 1024 `numeric_mul` products at each of two fractional scales. The twelve-digit
+/// coefficients and their products fit inline at both scales; neither row is a
+/// bounded-arithmetic baseline or evidence of a heap spill.
 fn bench_fine_products(c: &mut Bench) {
     let at_eighteen = scaled_decimals(9);
     let at_twenty = scaled_decimals(10);
     let mut group = c.benchmark_group("xsd_exact_fine_products");
     group.throughput(Throughput::Elements(SMALL_OPS as u64));
-    group.bench_function("bounded", |b| {
+    group.bench_function("scale18", |b| {
         b.iter(|| {
             for (x, y) in &at_eighteen {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("exact"));
             }
         });
     });
-    group.bench_function("tower", |b| {
+    group.bench_function("scale20", |b| {
         b.iter(|| {
             for (x, y) in &at_twenty {
                 black_box(numeric_mul(black_box(x), black_box(y)).expect("exact"));
@@ -393,11 +438,219 @@ fn bench_fine_products(c: &mut Bench) {
     group.finish();
 }
 
+enum OperationFixture {
+    Float(rational_float_factory::Fixture),
+    Reciprocal(rational_reciprocal::Fixture),
+    Rounding(rational_float_rounding::Fixture),
+}
+
+struct OperationOutputs {
+    rationals: Vec<Rational>,
+    bits: Vec<u64>,
+}
+
+impl OperationOutputs {
+    fn new(operation: &str) -> Self {
+        let capacity = rational_float_factory::OPERATIONS;
+        if operation == "rounding" {
+            Self {
+                rationals: Vec::new(),
+                bits: Vec::with_capacity(capacity),
+            }
+        } else {
+            Self {
+                rationals: Vec::with_capacity(capacity),
+                bits: Vec::new(),
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.rationals.clear();
+        self.bits.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.rationals.len() + self.bits.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.rationals.is_empty() && self.bits.is_empty()
+    }
+}
+
+impl OperationFixture {
+    fn new(operation: &str, category: &str) -> Self {
+        match operation {
+            "float" => Self::Float(rational_float_factory::Fixture::new(category)),
+            "reciprocal" => Self::Reciprocal(rational_reciprocal::Fixture::new(
+                category,
+                rational_float_factory::OPERATIONS,
+            )),
+            "rounding" => Self::Rounding(rational_float_rounding::Fixture::new(
+                category,
+                rational_float_factory::OPERATIONS,
+            )),
+            _ => panic!("unknown exact operation: {operation}"),
+        }
+    }
+
+    fn run(&self, outputs: &mut OperationOutputs) {
+        match self {
+            Self::Float(fixture) => fixture.run(&mut outputs.rationals),
+            Self::Reciprocal(fixture) => fixture.run(&mut outputs.rationals),
+            Self::Rounding(fixture) => fixture.run(&mut outputs.bits),
+        }
+    }
+
+    fn validate(&self, outputs: &OperationOutputs) {
+        match self {
+            Self::Float(fixture) => fixture.validate(&outputs.rationals),
+            Self::Reciprocal(fixture) => fixture.validate(&outputs.rationals),
+            Self::Rounding(fixture) => fixture.validate(&outputs.bits),
+        }
+    }
+}
+
+fn operation_categories(operation: &str) -> [&'static str; 3] {
+    match operation {
+        "float" => rational_float_factory::CATEGORIES,
+        "reciprocal" => rational_reciprocal::CATEGORIES,
+        "rounding" => rational_float_rounding::CATEGORIES,
+        _ => panic!("unknown exact operation: {operation}"),
+    }
+}
+
+fn bench_exact_operations(c: &mut Bench) {
+    for (operation, group_name) in [
+        ("float", "xsd_exact_float_factory"),
+        ("reciprocal", "xsd_exact_reciprocal"),
+        ("rounding", "xsd_exact_rational_rounding"),
+    ] {
+        let mut group = c.benchmark_group(group_name);
+        group.throughput(Throughput::Elements(
+            rational_float_factory::OPERATIONS as u64,
+        ));
+        for category in operation_categories(operation) {
+            let fixture = OperationFixture::new(operation, category);
+            let mut outputs = OperationOutputs::new(operation);
+            group.bench_function(category, |b| {
+                b.iter(|| {
+                    outputs.clear();
+                    fixture.run(&mut outputs);
+                });
+            });
+            // Filtering can leave this row unexecuted.
+            if !outputs.is_empty() {
+                fixture.validate(&outputs);
+            }
+        }
+        group.finish();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn operation_sample(operation: &str, category: &str) {
+    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+    let empty = category == "empty";
+    let empty_fixture = match operation {
+        "float" => "integral",
+        "reciprocal" => "positive_compact",
+        "rounding" => "compact",
+        _ => panic!("unknown exact operation: {operation}"),
+    };
+    let fixture = OperationFixture::new(operation, if empty { empty_fixture } else { category });
+    let mut outputs = OperationOutputs::new(operation);
+    for _ in 0..3 {
+        fixture.run(&mut outputs);
+        fixture.validate(&outputs);
+        outputs.clear();
+    }
+    let mut counter = CounterControl::required().expect("acknowledged instruction counter");
+    counter
+        .command(CounterCommand::Enable)
+        .expect("enable counter");
+    if !empty {
+        fixture.run(&mut outputs);
+    }
+    counter
+        .command(CounterCommand::Disable)
+        .expect("disable counter");
+    if !empty {
+        fixture.validate(&outputs);
+    }
+    // Every result survives counter close and is saved in the raw sample log.
+    for (index, value) in outputs.rationals.iter().enumerate() {
+        println!("{index} {value}");
+    }
+    for (index, bits) in outputs.bits.iter().enumerate() {
+        println!("{index} {bits:016x}");
+    }
+    println!("validated category={category} outputs={}", outputs.len());
+}
+
+#[cfg(target_os = "linux")]
+fn collect_operation(operation: &str, directory: &std::path::Path) {
+    use purrdf_testkit::bench::counter::collect_instructions;
+    std::fs::create_dir(directory).expect("new instruction report directory");
+    let executable = std::env::current_exe().expect("benchmark executable");
+    for category in std::iter::once("empty").chain(operation_categories(operation)) {
+        for sample in 0..10 {
+            let raw = directory.join(format!("{category}-{sample}"));
+            let count = collect_instructions(
+                &executable,
+                &[
+                    "--operation-sample".into(),
+                    operation.into(),
+                    category.into(),
+                ],
+                &raw,
+            )
+            .expect("complete instruction sample; inspect retained raw receipts on failure");
+            println!("{category} {sample} {}", count.instructions);
+        }
+    }
+}
+
 bench_group!(
     benches,
     bench_small,
     bench_growth,
     bench_karatsuba,
-    bench_fine_products
+    bench_fine_products,
+    bench_exact_operations
 );
-bench_main!(benches);
+
+fn main() -> std::process::ExitCode {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<_> = std::env::args()
+            .skip(1)
+            .filter(|arg| arg != "--bench")
+            .collect();
+        match args.first().map(String::as_str) {
+            Some("--operation-sample") => {
+                assert_eq!(args.len(), 3, "sample requires an operation and category");
+                operation_sample(&args[1], &args[2]);
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--float-factory-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("float", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--reciprocal-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("reciprocal", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--rounding-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("rounding", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            _ => {}
+        }
+    }
+    purrdf_testkit::bench::main(option_env!("CARGO_TARGET_TMPDIR"), &[benches])
+}

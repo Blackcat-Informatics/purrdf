@@ -475,15 +475,15 @@ fn prepared(row: &Row) -> Answer {
     let engine = NativeSparqlEngine::new();
     let bindings = engine_bindings(row);
     let names: Vec<&str> = bindings.iter().map(|(name, _)| name.as_str()).collect();
-    let mut execution = match engine.prepare_execution(row.query, None, &names, QueryOptions::EMPTY)
-    {
-        Ok(execution) => execution,
-        Err(error) => return refused(&error),
-    };
+    let mut execution =
+        match engine.prepare_execution(row.query, None, &names, &QueryOptions::EMPTY) {
+            Ok(execution) => execution,
+            Err(error) => return refused(&error),
+        };
     for (slot, (_, value)) in bindings.into_iter().enumerate() {
         execution.bind(slot, value).expect("bind");
     }
-    let answer = engine.execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+    let answer = engine.execute(&mut execution, &*dataset, &QueryOptions::EMPTY, |outcome| {
         let InternedOutcome::Solutions(solutions) = outcome else {
             panic!("{}: expected solutions", row.name);
         };
@@ -514,7 +514,7 @@ fn substituted(row: &Row) -> Answer {
             base_iri: None,
             substitutions: &bindings,
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     ) {
         Ok(result) => result,
         Err(error) => return refused(&error),
@@ -660,14 +660,14 @@ fn a_prepared_execution_answers_alike_across_runs_and_its_memo() {
     let query =
         "SELECT (STR($this) AS ?value) (COUNT(*) AS ?n) WHERE { $this <http://example.org/p> ?o }";
     let mut execution = engine
-        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)
         .expect("prepare");
     for (subject, count) in [("a", 2), ("b", 1), ("a", 2), ("b", 1), ("a", 2)] {
         execution
             .bind(0, TermValue::Iri(format!("{EX}{subject}")))
             .expect("bind");
         let row = engine
-            .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+            .execute(&mut execution, &*dataset, &QueryOptions::EMPTY, |outcome| {
                 let InternedOutcome::Solutions(solutions) = outcome else {
                     panic!("expected solutions");
                 };

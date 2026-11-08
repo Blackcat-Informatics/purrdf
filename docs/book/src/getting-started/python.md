@@ -59,7 +59,9 @@ from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
 closure, report = entail.materialize(dataset, "rdfs", "", [], [])
-print(closure.to_nquads())
+canonical = closure.to_nquads(canonical_search="unlimited")
+print(canonical.value)
+print(canonical.canonicalization_json)
 print(report)          # what fired, what did not, boundaries, budget, contract hash
 ```
 
@@ -67,9 +69,16 @@ The report is the second return value and is never optional — the same
 discipline the Rust, WebAssembly, and C surfaces enforce. The two `[]` arguments are
 the dataset's `owl:imports` table — `(ontology_iri, nquads)` pairs — and the IRIs it was
 read from: a dataset that imports a document is closed over the merge, and an import the
-table does not resolve raises `ValueError` naming it. `entail.materialize_nt(text, regime,
-program, imports, premise_iris)` is the text-in/text-out twin for callers holding an
-N-Triples/N-Quads document.
+table does not resolve raises `ValueError` naming it.
+
+`entail.materialize_nt(text, regime, program, imports, premise_iris,
+canonical_search="unlimited")` is the text-in/text-out twin for callers holding an
+N-Triples/N-Quads document. Its `CanonicalResult.value` contains the canonical
+closure text and report tuple. Canonicalizing calls require `canonical_search`: use
+`"unlimited"` or a canonical unsigned decimal `u64` string for a finite per-run
+search limit. They accept an optional `cancel` token and return immutable receipt
+JSON in `canonicalization_json`. The in-memory `entail.materialize` call does not
+canonicalize and takes no search policy.
 
 Coverage is measurable rather than asserted: `entail.rules(regime)` is the rule
 table the specification defines the regime by, and
@@ -120,12 +129,22 @@ from purrdf import gts_relational_rows_from_bytes
 rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-`gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
-`gts_to_parquet(data, out_dir)` write those same five tables out, in the
-projection's own row order — so exporting a container twice produces the same
-content. SQLite needs nothing beyond the standard library; the other two raise
-`ModuleNotFoundError` naming the extra to install (`purrdf[duckdb]`,
-`purrdf[parquet]`).
+Canonical exports use `gts_columnar_rows_from_bytes(data, blob_limits=...)` or
+`gts_columnar_parquet_from_bytes(data, blob_limits=...)`, returning `(output, report)`.
+`gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` require the same policy and
+return a frozen result with `paths` and an always-present `report`:
+
+```python
+result = purrdf.gts_to_parquet(gts_bytes, "tables", blob_limits="unbounded")
+print(result.paths, result.report.losses, result.report.omissions)
+```
+
+Use `GtsBlobLimits` with all five explicit fields for caller-chosen byte ceilings;
+`None` makes an individual ceiling unbounded. Typed omissions retain native
+causes and source locations. Corruption, authentication, storage, RDF and non-blob
+frame failures remain hard errors. The export remains eager; bounded end-to-end
+streaming is unfinished. SQLite uses the standard library, DuckDB requires
+`purrdf[duckdb]`, and native Parquet writing needs no extra encoder.
 
 ## Graph, tabular, and research-object archives
 

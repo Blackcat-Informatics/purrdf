@@ -18,6 +18,7 @@
 //! repository-hygiene check that keeps tooling and tests in Rust, run by the
 //! pre-commit hook, `make check` and CI.
 
+mod asm_reports;
 mod capacity;
 mod census;
 mod glossary;
@@ -30,6 +31,7 @@ mod rules;
 mod source;
 mod structure;
 mod toml;
+mod wasm_package;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -42,6 +44,7 @@ const USAGE: &str = "\
 Usage: helper-census [--root DIR] [--ledger FILE] <mode>
        helper-census --glossary-gate [--root DIR] [--po FILE]
                      [--glossary FILE] [--self-test] [--inventory FILE]
+       helper-census --wasm-package-hosts
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
                      --target (index | worktree | rev:REV)
@@ -56,6 +59,8 @@ Modes:
   --check            fail on any unsanctioned isomorphic group and on any
                      forbidden match outside its home
   --index            print the JSON index scripts/check-shared-helpers.py reads
+  --merge-asm-reports validate reports against source/manifest/producer receipts
+                     using a JSON request read from stdin
   --dump-ledger      print the parsed ledger as JSON
   --self-test        run the seeded fixtures and exit
   --no-features      refuse Cargo features except the empty cargo-c marker,
@@ -89,6 +94,7 @@ enum Mode {
     Count(String),
     Check,
     Index,
+    AsmReports,
     DumpLedger,
     SelfTest,
     NoFeatures,
@@ -145,6 +151,7 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
             )?,
             "--check" => set(Mode::Check, &mut mode)?,
             "--index" => set(Mode::Index, &mut mode)?,
+            "--merge-asm-reports" => set(Mode::AsmReports, &mut mode)?,
             "--dump-ledger" => set(Mode::DumpLedger, &mut mode)?,
             "--self-test" => set(Mode::SelfTest, &mut mode)?,
             "--no-features" => set(Mode::NoFeatures, &mut mode)?,
@@ -197,11 +204,18 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--glossary-gate") {
-        return match glossary::run(args) {
+    let specialized = if args.iter().any(|arg| arg == "--wasm-package-hosts") {
+        Some(("wasm-package", wasm_package::run(&args)))
+    } else if args.iter().any(|arg| arg == "--glossary-gate") {
+        Some(("glossary", glossary::run(args)))
+    } else {
+        None
+    };
+    if let Some((mode, result)) = specialized {
+        return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("helper-census glossary: {error}");
+                eprintln!("helper-census {mode}: {error}");
                 ExitCode::FAILURE
             }
         };
@@ -229,6 +243,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Mode::SelfTest => return Ok(self_test()),
+        Mode::AsmReports => return asm_reports::run(),
         Mode::NoFeatures => return policy::no_features(&arguments.root),
         Mode::PythonBindingTests => return policy::python_binding_tests(&arguments.root),
         Mode::NonRustRatchet => {
@@ -317,6 +332,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         }
         Mode::Index => println!("{}", census::index(&workspace, &ledger)),
         Mode::DumpLedger
+        | Mode::AsmReports
         | Mode::SelfTest
         | Mode::NonRustRatchet
         | Mode::Help
@@ -852,6 +868,7 @@ fn self_test_cases() -> Vec<(&'static str, bool)> {
     cases.extend(distinct_cases());
     cases.extend(near_miss_cases());
     cases.extend(policy::self_test_cases());
+    cases.extend(asm_reports::self_test_cases());
     cases
 }
 

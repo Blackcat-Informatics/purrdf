@@ -6,26 +6,12 @@ from __future__ import annotations
 
 import json
 from types import ModuleType
-
 import pytest
-
 import purrdf
-
-
 SOURCE = b'<https://example.org/alice> <https://schema.org/name> "Alice" .\n'
-PREFIX_OPTIONS = json.dumps(
-    {
-        "version": 1,
-        "mode": "context",
-        "prefixes": {
-            "ex": "https://example.org/",
-            "schema": "https://schema.org/",
-        },
-    },
-    sort_keys=True,
-    separators=(",", ":"),
-)
-
+PREFIX_OPTIONS = json.dumps({"version": 1, "mode": "context", "prefixes": {
+    "ex": "https://example.org/", "schema": "https://schema.org/",
+}}, sort_keys=True, separators=(",", ":"))
 
 def _assert_compacted(text: str) -> None:
     document = json.loads(text)
@@ -34,28 +20,22 @@ def _assert_compacted(text: str) -> None:
         "schema": {"@id": "https://schema.org/", "@prefix": True},
     }
     assert document["@graph"][0]["@id"] == "ex:alice"
-    assert document["@graph"][0]["schema:name"] == {"@value": "Alice"}
-
+    assert document["@graph"][0]["schema:name"] == "Alice"
 
 def test_direct_serializer_options_and_compiled_context_are_byte_identical() -> None:
     """The versioned decoder and reusable handle reach one deterministic engine."""
     direct = purrdf.serialize_jsonld(
-        SOURCE,
-        format=purrdf.RdfFormat.N_QUADS,
-        output_format="jsonld",
+        SOURCE, format=purrdf.RdfFormat.N_QUADS, output_format="jsonld",
         options_json=PREFIX_OPTIONS,
     )
     context = purrdf.CompiledJsonLdContext(PREFIX_OPTIONS)
     reused = purrdf.serialize_jsonld(
-        SOURCE,
-        format=purrdf.RdfFormat.N_QUADS,
-        output_format="application/ld+json",
+        SOURCE, format=purrdf.RdfFormat.N_QUADS, output_format="application/ld+json",
         context=context,
     )
     assert direct == reused
     _assert_compacted(direct)
     assert json.loads(context.canonical_context_json()) == json.loads(direct)["@context"]
-
 
 def test_yaml_schema_and_immutable_dataset_surface() -> None:
     """YAML-LD keeps the configured schema header and compiled-context bytes."""
@@ -68,12 +48,9 @@ def test_yaml_schema_and_immutable_dataset_surface() -> None:
         context=context,
         yaml_schema_url="https://example.org/purrdf.schema.json",
     )
-    assert rendered.startswith(
-        "# yaml-language-server: $schema=https://example.org/purrdf.schema.json\n"
-    )
+    assert rendered.startswith("# yaml-language-server: $schema=https://example.org/purrdf.schema.json\n")
     assert "ex:alice" in rendered
     assert "schema:name" in rendered
-
 
 @pytest.mark.parametrize("store_type", [purrdf.Store, purrdf.MutableDataset])
 def test_store_surfaces_accept_reusable_context(store_type: type[object]) -> None:
@@ -81,13 +58,9 @@ def test_store_surfaces_accept_reusable_context(store_type: type[object]) -> Non
     store = store_type()
     store.load(SOURCE, format=purrdf.RdfFormat.N_QUADS)
     context = purrdf.CompiledJsonLdContext(PREFIX_OPTIONS)
-    rendered = store.dump(
-        format=purrdf.RdfFormat.JSON_LD,
-        jsonld_context=context,
-    )
+    rendered = store.dump(format=purrdf.RdfFormat.JSON_LD, jsonld_context=context)
     assert isinstance(rendered, bytes)
     _assert_compacted(rendered.decode())
-
 
 def test_rdflib_graph_bound_prefixes_are_an_explicit_context(
     compat: ModuleType,
@@ -99,24 +72,51 @@ def test_rdflib_graph_bound_prefixes_are_an_explicit_context(
     graph.bind("schema", compat.Namespace("https://schema.org/"))
     _assert_compacted(graph.serialize(format="json-ld"))
 
-
 def test_configured_inputs_are_closed_and_mutually_exclusive() -> None:
     """Malformed, unknown, and conflicting inputs hard-fail before output."""
     context = purrdf.CompiledJsonLdContext(PREFIX_OPTIONS)
     with pytest.raises(ValueError, match="exactly one"):
         purrdf.serialize_jsonld(
-            SOURCE,
-            format=purrdf.RdfFormat.N_QUADS,
-            output_format="jsonld",
+            SOURCE, format=purrdf.RdfFormat.N_QUADS, output_format="jsonld",
             options_json=PREFIX_OPTIONS,
             context=context,
         )
     with pytest.raises(ValueError, match="unknown"):
         purrdf.serialize_jsonld(
-            SOURCE,
-            format=purrdf.RdfFormat.N_QUADS,
-            output_format="jsonld",
+            SOURCE, format=purrdf.RdfFormat.N_QUADS, output_format="jsonld",
             options_json='{"version":1,"mode":"expanded","unknown":true}',
         )
     with pytest.raises(ValueError, match="requires JSON-LD options"):
         purrdf.CompiledJsonLdContext('{"version":1,"mode":"derived"}')
+
+
+def test_configured_yaml_input_reaches_every_public_loader() -> None:
+    source = b"'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n"
+    all_docs = '{"version":1,"yaml_ld":{"extract_all_scripts":true}}'
+    base = "https://example.org/"
+    assert len(purrdf.parse(source, purrdf.RdfFormat.YAML_LD, base=base)) == 1
+    assert len(purrdf.parse(source, purrdf.RdfFormat.YAML_LD, base=base, input_options=all_docs)) == 2
+    for cls, method in [(purrdf.Store, "load"), (purrdf.Store, "bulk_load"), (purrdf.MutableDataset, "load")]:
+        store = cls()
+        loader = getattr(store, method)
+        loader(source, format=purrdf.RdfFormat.YAML_LD, base=base)
+        assert len(store) == 1
+        loader(source, format=purrdf.RdfFormat.YAML_LD, base=base, input_options=all_docs)
+        assert len(store) == 2
+        blanks = b"'@id': _:b\nhttps://example.org/p: value\n"
+        loader(blanks, format=purrdf.RdfFormat.YAML_LD, input_options=all_docs)
+        loader(blanks, format=purrdf.RdfFormat.YAML_LD, input_options=all_docs)
+        assert len(store) == 4
+        for doc, fmt, opts, code in [
+            (source, purrdf.RdfFormat.YAML_LD, '{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}', "native-yaml-input-limit"),
+            (b"42: value\n", purrdf.RdfFormat.YAML_LD, all_docs, "mapping-key-error"),
+            (b"", purrdf.RdfFormat.TURTLE, all_docs, "yamlld-input-options-format"),
+        ]:
+            for call in [lambda: loader(doc, format=fmt, input_options=opts), lambda: purrdf.parse(doc, fmt, input_options=opts)]:
+                with pytest.raises(ValueError) as caught:
+                    call()
+                assert caught.value.code == code
+                record = json.loads(caught.value.diagnostic_json)
+                assert record["code"] == code
+                if fmt == purrdf.RdfFormat.YAML_LD:
+                    assert record["location"]["line"] == "1" and record["location"]["column"] == 1

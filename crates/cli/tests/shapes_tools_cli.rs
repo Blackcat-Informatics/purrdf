@@ -50,6 +50,172 @@ const PREFIXES: &str = r"
 @prefix ex: <http://example.org/ns#> .
 ";
 
+/// Both rule frontends carry exact coordinates through the real executable,
+/// independently of the XPath law and without conflating time with entropy.
+#[test]
+fn supplied_rule_coordinates_replay_through_both_frontends() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "empty.nt", "");
+    let shapes = write_file(
+        dir.path(),
+        "coordinates.ttl",
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:S a sh:NodeShape ; sh:targetNode ex:s ; sh:rule ex:r .
+ex:r a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
+ PREFIX ex: <http://example.org/>
+ CONSTRUCT { $this ex:time ?time ; ex:random ?random ; ex:uuid ?uuid ; ex:str ?str }
+ WHERE {
+   BIND(NOW() AS ?time) BIND(RAND() AS ?random)
+   BIND(UUID() AS ?uuid) BIND(STRUUID() AS ?str)
+   FILTER(REGEX("ok", "^ok$"))
+ } """ .
+"#,
+    );
+    let srl = write_file(
+        dir.path(),
+        "coordinates.srl",
+        r#"
+PREFIX ex: <http://example.org/>
+RULE { ex:s ex:time ?time ; ex:uuid ?uuid ; ex:str ?str }
+WHERE {
+ SET(?time := NOW()) SET(?uuid := UUID()) SET(?str := STRUUID())
+ FILTER(REGEX("ok", "^ok$"))
+}
+"#,
+    );
+    let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+    let other_time = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    for (flag, source, predicates) in [
+        ("--shapes", &shapes, &["time", "random", "uuid", "str"][..]),
+        ("--srl", &srl, &["time", "uuid", "str"][..]),
+    ] {
+        let answer = |now: Option<&str>, seed: Option<&str>, law: Option<&str>| {
+            let mut args = vec!["rules", flag, source, "--to", "ntriples", "--explain"];
+            if let Some(now) = now {
+                args.extend(["--now", now]);
+            }
+            if let Some(seed) = seed {
+                args.extend(["--entropy-seed", seed]);
+            }
+            if let Some(law) = law {
+                args.extend(["--xpath-regex", law]);
+            }
+            args.push(&data);
+            let out = run(&args);
+            assert_eq!(code(&out), 0, "{flag}: {}", stderr(&out));
+            let body = stdout(&out);
+            assert_eq!(body.lines().count(), predicates.len(), "{body}");
+            assert!(stderr(&out).contains("derived "), "{}", stderr(&out));
+            predicates
+                .iter()
+                .map(|predicate| {
+                    body.lines()
+                        .find(|line| line.contains(&format!("<http://example.org/{predicate}>")))
+                        .expect("inferred predicate")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = answer(Some(time), Some("0"), None);
+        assert!(first[0].contains(time), "exact time: {first:?}");
+        assert_eq!(first, answer(Some(time), Some("0"), None));
+        for law in ["xpath-2.0-2010-12-14", "xpath-3.1-2017-03-21"] {
+            assert_eq!(first, answer(Some(time), Some("0"), Some(law)));
+        }
+        let changed_time = answer(Some(other_time), Some("0"), None);
+        assert!(changed_time[0].contains(other_time));
+        assert_eq!(changed_time[1..], first[1..]);
+        let changed_seed = answer(Some(time), Some("1"), None);
+        assert_eq!(changed_seed[0], first[0]);
+        for index in 1..predicates.len() {
+            assert_ne!(changed_seed[index], first[index]);
+        }
+        assert_eq!(answer(Some(time), None, None)[0], first[0]);
+        assert_eq!(answer(None, Some("0"), None)[1..], first[1..]);
+        assert_eq!(answer(None, None, None).len(), predicates.len());
+    }
+}
+
+/// Coordinates fail before source reads, cannot configure a check-only run,
+/// and never suppress a native rule limit or extend the SRL grammar.
+#[test]
+fn supplied_rule_coordinates_preserve_usage_and_runtime_refusals() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(dir.path(), "empty.nt", "");
+    let missing = dir.path().join("missing.nt");
+    let missing = missing.to_str().expect("utf8 path");
+    for source_flag in ["--shapes", "--srl"] {
+        for (flag, value) in [
+            ("--now", "not-a-date"),
+            ("--entropy-seed", "-1"),
+            ("--entropy-seed", "18446744073709551616"),
+        ] {
+            let out = run(&["rules", source_flag, missing, flag, value, missing]);
+            assert_eq!(code(&out), 2, "{}", stderr(&out));
+            assert!(stderr(&out).contains(flag));
+            assert!(!stderr(&out).contains("missing.nt"));
+            assert_eq!(out.stdout, [] as [u8; 0]);
+        }
+    }
+    let srl = write_file(
+        dir.path(),
+        "time.srl",
+        "PREFIX ex: <http://example.org/> RULE { ex:s ex:time ?time } WHERE { SET(?time := NOW()) }",
+    );
+    let time = "2020-01-02T03:04:05Z";
+    for extra in [["--now", time], ["--entropy-seed", "0"]] {
+        let out = run(&["rules", "--srl", &srl, "--check", extra[0], extra[1]]);
+        assert_eq!(code(&out), 2, "{}", stderr(&out));
+        assert!(stderr(&out).contains("--check"));
+    }
+    assert_eq!(code(&run(&["rules", "--srl", &srl, "--check"])), 0);
+    for law in [None, Some("xpath-3.1-2017-03-21")] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            &srl,
+            "--now",
+            time,
+            "--entropy-seed",
+            "0",
+            "--to",
+            "ntriples",
+            "--max-stored-facts",
+            "0",
+        ];
+        if let Some(law) = law {
+            args.extend(["--xpath-regex", law]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 1, "{}", stderr(&out));
+        assert!(stderr(&out).contains("--max-stored-facts"));
+        assert_eq!(out.stdout, [] as [u8; 0]);
+    }
+    let refused = write_file(
+        dir.path(),
+        "random.srl",
+        "PREFIX ex: <http://example.org/> RULE { ex:s ex:random ?r } WHERE { SET(?r := RAND()) }",
+    );
+    let out = run(&[
+        "rules",
+        "--srl",
+        &refused,
+        "--now",
+        time,
+        "--entropy-seed",
+        "0",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    assert!(stderr(&out).contains("RAND"));
+    assert_eq!(out.stdout, [] as [u8; 0]);
+}
+
 /// A `sh:sparqlExpr` expression node naming `ex:yes` through `sh:prefixes` (`ex:Tag`), a
 /// labelled `shnex:var` expression (`_:suffix`), a rule tagging every `ex:Item` through
 /// the same expression, and a counter rule that steps `ex:n` to 5 — exactly four
@@ -994,6 +1160,9 @@ const PERSON: &str = "<http://example.org/alice> \
 /// expression reads its scope, the lint certifies, and the product carries the shape.
 #[test]
 fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "importer.ttl", IMPORTER);
     let lib = write_file(dir.path(), "lib.ttl", IMPORTED);
@@ -1037,7 +1206,20 @@ fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
         run(&args)
     };
     let pack = |import: Option<&str>| {
-        let mut args = vec!["shacl", "pack", "--shapes", &shapes, "--out", &product];
+        let mut args = vec![
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--out",
+            &product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ];
         args.extend(import.map(|pair| ["--import", pair]).into_iter().flatten());
         run(&args)
     };
@@ -1102,6 +1284,165 @@ fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
         "the product carries the imported shape: {}",
         stdout(&restored)
     );
+
+    // Mixed imports prove that controls belong to one ontology IRI, not the closure.
+    let mixed_root = write_file(
+        dir.path(),
+        "mixed.ttl",
+        "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n<http://example.org/mixed> a owl:Ontology ; owl:imports <http://example.org/yaml>, <http://example.org/first>, <http://example.org/default>, <http://example.org/turtle> .\n",
+    );
+    let yaml = write_file(
+        dir.path(),
+        "later.yamlld",
+        r"
+'@id': http://example.org/placeholder
+http://www.w3.org/2000/01/rdf-schema#label: first
+---
+'@graph':
+  - '@id': http://example.org/NameShape
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#targetClass:
+      '@id': http://example.org/Person
+    http://www.w3.org/ns/shacl#property:
+      http://www.w3.org/ns/shacl#path:
+        '@id': http://example.org/name
+      http://www.w3.org/ns/shacl#minCount: 1
+    http://www.w3.org/ns/shacl#rule:
+      '@type': http://www.w3.org/ns/shacl#TripleRule
+      http://www.w3.org/ns/shacl#subject:
+        '@id': http://www.w3.org/ns/shacl#this
+      http://www.w3.org/ns/shacl#predicate:
+        '@id': http://example.org/checked
+      http://www.w3.org/ns/shacl#object:
+        '@id': http://example.org/yes
+  - '@id': http://example.org/Who
+    http://www.w3.org/ns/shacl-node-expr#var: who
+  - '@id': http://example.org/LegacyKind
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#nodeKind:
+      '@list':
+        - '@id': http://www.w3.org/ns/shacl#IRI
+        - '@id': http://www.w3.org/ns/shacl#Literal
+",
+    );
+    let defaults = write_file(
+        dir.path(),
+        "defaults.yamlld",
+        "'@id': http://example.org/unused\nhttp://www.w3.org/2000/01/rdf-schema#label: first\n---\n'@id': http://example.org/Invalid\n'@type': http://www.w3.org/ns/shacl#PropertyShape\nhttp://www.w3.org/ns/shacl#path:\n  '@id': http://example.org/p\nhttp://www.w3.org/ns/shacl#minCount: invalid\n",
+    );
+    let turtle = write_file(
+        dir.path(),
+        "ordinary.ttl",
+        "<http://example.org/Other> a <http://www.w3.org/ns/shacl#NodeShape> .\n",
+    );
+    let imports = [
+        format!("http://example.org/yaml={yaml}"),
+        format!("http://example.org/first={defaults}"),
+        format!("http://example.org/default={defaults}"),
+        format!("http://example.org/turtle={turtle}"),
+    ];
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = write_file(dir.path(), "first.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let first_control = format!("http://example.org/first={first}");
+    for selected in [false, true] {
+        let selected_control = format!(
+            "http://example.org/yaml={}",
+            if selected { &all } else { &first }
+        );
+        for lane in ["validate", "rules", "node-expr", "lint", "pack"] {
+            let mut args = match lane {
+                "lint" => vec!["shapes", "lint"],
+                "pack" => vec![
+                    "shacl",
+                    "pack",
+                    "--shapes",
+                    &mixed_root,
+                    "--out",
+                    &product,
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_receipt_1.to_str().unwrap(),
+                ],
+                _ => vec![lane, "--shapes", &mixed_root],
+            };
+            for import in &imports {
+                args.extend(["--import", import]);
+            }
+            args.extend([
+                "--import-yamlld-input-options",
+                &selected_control,
+                "--import-yamlld-input-options",
+                &first_control,
+            ]);
+            match lane {
+                "validate" => args.push(&data),
+                "rules" => args.extend(["--to", "ntriples", &data]),
+                "node-expr" => args.extend([
+                    "--expr",
+                    "http://example.org/Who",
+                    "--focus",
+                    "http://example.org/alice",
+                    "--scope",
+                    "who=http://example.org/bob",
+                    &data,
+                ]),
+                "lint" => args.push(&mixed_root),
+                _ => (),
+            }
+            let out = run(&args);
+            assert_eq!(code(&out), 0, "{lane}: {}", stderr(&out));
+            match lane {
+                "validate" => {
+                    assert!(
+                        stderr(&out).contains(&format!("shacl conforms {}\n", !selected)),
+                        "{}",
+                        stderr(&out)
+                    );
+                    assert_eq!(
+                        stdout(&out).contains("MinCountConstraintComponent"),
+                        selected
+                    );
+                }
+                "rules" => assert_eq!(
+                    stdout(&out),
+                    if selected {
+                        "<http://example.org/alice> <http://example.org/checked> <http://example.org/yes> .\n"
+                    } else {
+                        ""
+                    }
+                ),
+                "node-expr" => assert_eq!(
+                    stdout(&out),
+                    if selected {
+                        "<http://example.org/bob>\n"
+                    } else {
+                        "<http://example.org/Who>\n"
+                    }
+                ),
+                "lint" => {
+                    assert!(stdout(&out).ends_with("clean true\n"), "{}", stdout(&out));
+                    assert_eq!(
+                        stdout(&out).contains("superseded list-valued-node-kind"),
+                        selected
+                    );
+                }
+                "pack" => {
+                    let restored = run(&["validate", "--shapes-product", &product, &data]);
+                    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+                    assert_eq!(
+                        stdout(&restored).contains("MinCountConstraintComponent"),
+                        selected
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
 }
 
 /// SHACL's prefix idiom (the W3C `sparql/node/prefixes-001` shape on `example.org`): the
@@ -1278,16 +1619,14 @@ fn cli_rules_capacity_limits() {
     assert_eq!(stdout(&roomy), expected_inference());
 }
 
-/// The NON-linear transitive closure of a 181-edge chain enumerates 1,056,743 join
-/// steps, just past the default limit of 2^20: `rules` refuses it naming
-/// `--max-join-steps` and writes no graph, and completes with every one of its 16,471
-/// triples when the limit is raised to 2^21. One edge fewer (1,039,835 steps) fits the
-/// default, so the refusal is the limit's and not the rule shape's. The linear closure
-/// of the same chain fits the default and yields the identical graph.
+/// Nonlinear recursive closure refuses an explicit small work budget without writing
+/// a partial graph. Raising the budget completes the same closure as the default
+/// and the linear rule. The test does not depend on an optimizer's historical step
+/// count or require the default budget to reject a workload it can now complete.
 #[test]
 fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     use std::fmt::Write as _;
-    const EDGES: usize = 181;
+    const EDGES: usize = 32;
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let chain_of = |edges: usize| {
         let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
@@ -1297,7 +1636,6 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         chain
     };
     let data = write_file(dir.path(), "chain.ttl", &chain_of(EDGES));
-    let shorter = write_file(dir.path(), "shorter.ttl", &chain_of(EDGES - 1));
     let rules = |recursive_atom: &str| {
         format!(
             "PREFIX ex: <http://example.org/ns#>\n\
@@ -1308,11 +1646,20 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     let nonlinear = write_file(dir.path(), "nonlinear.srl", &rules("ex:connected"));
     let linear = write_file(dir.path(), "linear.srl", &rules("ex:link"));
 
-    let refused = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
+    let refused = run(&[
+        "rules",
+        "--srl",
+        &nonlinear,
+        "--max-join-steps",
+        "64",
+        "--to",
+        "ntriples",
+        &data,
+    ]);
     assert_eq!(code(&refused), 1, "{}", stderr(&refused));
     assert!(
         stderr(&refused).contains("the rules exceeded the join-step limit: ")
-            && stderr(&refused).contains("1048576 permitted (the default for this target)")
+            && stderr(&refused).contains("64 permitted (the caller's limit)")
             && stderr(&refused)
                 .trim_end()
                 .ends_with("raise it with --max-join-steps"),
@@ -1321,9 +1668,9 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     );
     assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
-    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &shorter]);
+    let fits = run(&["rules", "--srl", &nonlinear, "--to", "ntriples", &data]);
     assert_eq!(code(&fits), 0, "{}", stderr(&fits));
-    assert_eq!(stdout(&fits).lines().count(), 16_290);
+    assert_eq!(stdout(&fits).lines().count(), EDGES * (EDGES + 1) / 2);
 
     let raised = run(&[
         "rules",
@@ -1336,7 +1683,7 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
         &data,
     ]);
     assert_eq!(code(&raised), 0, "{}", stderr(&raised));
-    assert_eq!(stdout(&raised).lines().count(), 16_471);
+    assert_eq!(stdout(&raised), stdout(&fits));
 
     let linear_run = run(&["rules", "--srl", &linear, "--to", "ntriples", &data]);
     assert_eq!(code(&linear_run), 0, "{}", stderr(&linear_run));
@@ -1417,8 +1764,7 @@ fn every_run_reports_an_empty_in_list() {
 /// node each time — is refused by `rules` naming the TERM-GENERATING ROUND limit, with
 /// `--max-join-steps` at its default and raised 256-fold out of the way, and writes no
 /// graph. The corpus's rule minting a one-character-longer IRI every iteration is refused
-/// by the fixed term-arena ceiling, which its quadratically growing term surfaces reach
-/// before the round limit, again with the join-step limit at its default and raised. The
+/// by an explicit term-generating round ceiling, with join capacity unstated and raised. The
 /// counter's neighbour bounded at 1,000 counters completes under the defaults.
 #[test]
 fn cli_rules_per_focus_divergence_is_refused_by_a_term_limit() {
@@ -1469,15 +1815,20 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
         );
         assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
 
-        let ceiling = rules(&longer, extra);
+        let mut round_options = extra.to_vec();
+        round_options.extend(["--max-term-generating-rounds", "8"]);
+        let ceiling = rules(&longer, &round_options);
         assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
         assert!(
-            stderr(&ceiling).contains(
-                "evaluation exceeded the fixed term arena bytes ceiling: 16782539 observed, \
-                 16777216 permitted"
-            ),
+            stderr(&ceiling)
+                .contains("the rules exceeded the term-generating round limit: 9 rounds"),
             "{}",
             stderr(&ceiling)
+        );
+        assert!(
+            stderr(&ceiling)
+                .trim_end()
+                .ends_with("raise the limit with --max-term-generating-rounds")
         );
         assert!(
             !stderr(&ceiling).contains("join-step"),
@@ -1489,4 +1840,610 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
     let completes = rules(&bounded, &[]);
     assert_eq!(code(&completes), 0, "{}", stderr(&completes));
     assert_eq!(stdout(&completes).lines().count(), 3 * 999);
+}
+
+/// Both rule frontends consume the selected primary YAML documents and preflight controls.
+#[test]
+fn configured_yamlld_input_reaches_rule_data() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/ns#first\nhttp://example.org/ns#p: one\n---\n'@id': http://example.org/ns#second\nhttp://example.org/ns#p: two\n",
+    );
+    let shapes = shapes_file(
+        dir.path(),
+        "ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ; sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:derived ; sh:object ex:seen ] .\n",
+    );
+    let srl = write_file(
+        dir.path(),
+        "rules.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?s ex:derived ex:seen } WHERE { ?s ex:p ?o }\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (flag, source) in [("--shapes", &shapes), ("--srl", &srl)] {
+        for (controls, count) in [(None, 1), (Some(all.as_str()), 2)] {
+            let mut args = vec!["rules", flag, source, "--to", "ntriples"];
+            if let Some(controls) = controls {
+                args.extend(["--yamlld-input-options", controls]);
+            }
+            args.push(&data);
+            let out = run(&args);
+            assert_eq!(code(&out), 0, "{}", stderr(&out));
+            let body = stdout(&out);
+            assert_eq!(body.lines().count(), count, "{body}");
+            assert!(body.contains("<http://example.org/ns#first> <http://example.org/ns#derived> <http://example.org/ns#seen> ."), "{body}");
+            assert_eq!(body.contains("<http://example.org/ns#second>"), count == 2);
+        }
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let missing_srl = dir.path().join("missing.srl");
+    let missing_srl = missing_srl.to_str().unwrap();
+    let check = run(&[
+        "rules",
+        "--srl",
+        missing_srl,
+        "--check",
+        "--yamlld-input-options",
+        &all,
+    ]);
+    assert_eq!(code(&check), 2, "{}", stderr(&check));
+    assert!(stderr(&check).contains("--yamlld-input-options"));
+    let output = write_file(dir.path(), "inference.nt", "unchanged inference");
+    let report = write_file(dir.path(), "proof.txt", "unchanged proof");
+    let explain = format!("--explain={report}");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let import = format!("https://example.org/import={missing_srl}");
+    for (controls, data, source, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            data.as_str(),
+            srl.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing_srl,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            source,
+            "--to",
+            "ntriples",
+            "--yamlld-input-options",
+            controls,
+            &explain,
+        ];
+        if imports {
+            args.extend(["--import", &import]);
+        }
+        args.extend([data, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged inference"
+        );
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), "unchanged proof");
+    }
+}
+
+/// A path expression observes both selected values for one focus, before auxiliary reads.
+#[test]
+fn configured_yamlld_input_reaches_node_expression_data() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/ns#focus\nhttp://example.org/ns#p: one\n---\n'@id': http://example.org/ns#focus\nhttp://example.org/ns#p: two\n",
+    );
+    let shapes = shapes_file(dir.path(), "ex:Path sh:path ex:p .\n");
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, count) in [(None, 1), (Some(all.as_str()), 2)] {
+        let mut args = vec![
+            "node-expr",
+            "--shapes",
+            &shapes,
+            "--expr",
+            "http://example.org/ns#Path",
+            "--focus",
+            "http://example.org/ns#focus",
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let body = stdout(&out);
+        assert_eq!(body.lines().count(), count, "{body}");
+        assert!(body.lines().any(|line| line == "\"one\""), "{body}");
+        assert_eq!(body.lines().any(|line| line == "\"two\""), count == 2);
+    }
+    let output = write_file(dir.path(), "values.txt", "unchanged values");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing_data = dir.path().join("missing.yamlld");
+    let missing_data = missing_data.to_str().unwrap();
+    let missing_shapes = dir.path().join("missing.ttl");
+    let missing_shapes = missing_shapes.to_str().unwrap();
+    let missing_expr = dir.path().join("expression.ttl");
+    let missing_expr = missing_expr.to_str().unwrap();
+    let import = format!("https://example.org/import={missing_shapes}");
+    for (controls, data, shapes, expression_file, diagnostic) in [
+        (
+            limited.as_str(),
+            data.as_str(),
+            shapes.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing_data,
+            missing_shapes,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "node-expr",
+            "--shapes",
+            shapes,
+            "--focus",
+            "http://example.org/ns#focus",
+            "--yamlld-input-options",
+            controls,
+        ];
+        if expression_file {
+            args.extend(["--expr-turtle-file", missing_expr, "--import", &import]);
+        } else {
+            args.extend(["--expr", "http://example.org/ns#Path"]);
+        }
+        args.extend([data, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged values"
+        );
+    }
+}
+
+/// All three tools admit root controls before acquisition and retain native final-base metadata.
+#[test]
+fn configured_yamlld_controls_reach_shapes_documents() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "tools.yamlld",
+        r"
+'@graph':
+  - '@id': https://example.org/Shape
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#targetNode:
+      '@id': https://example.org/first
+    http://www.w3.org/ns/shacl#rule:
+      '@id': https://example.org/Rule
+  - '@id': https://example.org/Rule
+    '@type': http://www.w3.org/ns/shacl#TripleRule
+    http://www.w3.org/ns/shacl#subject:
+      '@id': http://www.w3.org/ns/shacl#this
+    http://www.w3.org/ns/shacl#predicate:
+      '@id': https://example.org/derived
+    http://www.w3.org/ns/shacl#object:
+      '@id': https://example.org/seen
+---
+'@context':
+  '@base': https://example.org/final-base
+'@graph':
+  - '@id': https://example.org/header
+    '@type': http://www.w3.org/2002/07/owl#Ontology
+    http://www.w3.org/2002/07/owl#imports:
+      '@id': https://example.org/final-base
+  - '@id': https://example.org/Shape
+    http://www.w3.org/ns/shacl#targetNode:
+      '@id': https://example.org/second
+  - '@id': https://example.org/Expression
+    http://www.w3.org/ns/shacl#path:
+      '@id': https://example.org/p
+  - '@id': https://example.org/Lint
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#xone:
+      '@list': []
+",
+    );
+    let data = write_file(
+        dir.path(),
+        "data.nq",
+        "<https://example.org/first> <https://example.org/p> \"value\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for configured in [false, true] {
+        let mut rules = vec!["rules", "--shapes", &shapes, "--to", "ntriples"];
+        let mut expr = vec![
+            "node-expr",
+            "--shapes",
+            &shapes,
+            "--expr",
+            "https://example.org/Expression",
+            "--focus",
+            "https://example.org/first",
+        ];
+        let mut lint = vec!["shapes", "lint"];
+        if configured {
+            rules.extend(["--shapes-yamlld-input-options", &all]);
+            expr.extend(["--shapes-yamlld-input-options", &all]);
+            lint.extend(["--yamlld-input-options", &all]);
+        }
+        rules.push(&data);
+        expr.push(&data);
+        lint.push(&shapes);
+        let ruled = run(&rules);
+        assert_eq!(code(&ruled), 0, "{}", stderr(&ruled));
+        assert_eq!(
+            stdout(&ruled).lines().count(),
+            if configured { 2 } else { 1 }
+        );
+        assert_eq!(
+            stdout(&ruled).contains("<https://example.org/second>"),
+            configured
+        );
+        let evaluated = run(&expr);
+        assert_eq!(code(&evaluated), 0, "{}", stderr(&evaluated));
+        assert_eq!(
+            stdout(&evaluated),
+            if configured {
+                "\"value\"\n"
+            } else {
+                "<https://example.org/Expression>\n"
+            }
+        );
+        let linted = run(&lint);
+        assert_eq!(code(&linted), i32::from(configured), "{}", stderr(&linted));
+        assert!(
+            stdout(&linted).starts_with("load accepted\n"),
+            "{}",
+            stdout(&linted)
+        );
+        assert_eq!(
+            stdout(&linted).contains("diagnostic xone-minListLength <https://example.org/Lint>"),
+            configured
+        );
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let missing_srl = dir.path().join("missing.srl");
+    let missing_srl = missing_srl.to_str().unwrap();
+    for check in [false, true] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            missing_srl,
+            "--shapes-yamlld-input-options",
+            &all,
+        ];
+        if check {
+            args.push("--check");
+        }
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    }
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let output = write_file(dir.path(), "output.txt", "unchanged output");
+    let proof = write_file(dir.path(), "proof.txt", "unchanged proof");
+    let explain = format!("--explain={proof}");
+    let import = format!("https://example.org/import={missing}");
+    for (controls, root, input, auxiliary, diagnostic) in [
+        (
+            limited.as_str(),
+            shapes.as_str(),
+            data.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut rules = vec![
+            "rules",
+            "--shapes",
+            root,
+            "--to",
+            "ntriples",
+            "--shapes-yamlld-input-options",
+            controls,
+            &explain,
+        ];
+        let mut expr = vec![
+            "node-expr",
+            "--shapes",
+            root,
+            "--focus",
+            "https://example.org/first",
+            "--shapes-yamlld-input-options",
+            controls,
+        ];
+        let mut lint = vec!["shapes", "lint", "--yamlld-input-options", controls];
+        if auxiliary {
+            rules.extend(["--yamlld-input-options", &all, "--import", &import]);
+            expr.extend([
+                "--yamlld-input-options",
+                &all,
+                "--import",
+                &import,
+                "--expr-turtle-file",
+                missing,
+            ]);
+            lint.extend(["--import", &import]);
+        } else {
+            expr.extend(["--expr", "https://example.org/Expression"]);
+        }
+        rules.extend([input, &output]);
+        expr.extend([input, &output]);
+        lint.extend([root, &output]);
+        for args in [rules, expr, lint] {
+            let refused = run(&args);
+            assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+            assert!(
+                stderr(&refused).contains(diagnostic),
+                "{}",
+                stderr(&refused)
+            );
+            assert_eq!(stdout(&refused), "");
+            assert_eq!(
+                std::fs::read_to_string(&output).unwrap(),
+                "unchanged output"
+            );
+            assert_eq!(std::fs::read_to_string(&proof).unwrap(), "unchanged proof");
+        }
+    }
+}
+
+/// Mapping admission and options decoding precede RDF; native limits apply at import parse.
+#[test]
+fn configured_shapes_import_options_are_admitted_before_rdf() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing_root = dir.path().join("missing.ttl");
+    let missing_root = missing_root.to_str().unwrap();
+    let missing_data = dir.path().join("missing.nq");
+    let missing_data = missing_data.to_str().unwrap();
+    let missing_yaml = dir.path().join("missing.yamlld");
+    let missing_yaml = missing_yaml.to_str().unwrap();
+    let missing_options = dir.path().join("missing.json");
+    let missing_options = missing_options.to_str().unwrap();
+    let imports = [
+        format!("https://example.org/a={missing_yaml}"),
+        format!("https://example.org/b={missing_yaml}"),
+        format!("https://example.org/turtle={missing_root}"),
+    ];
+    let first_mapping = format!("https://example.org/a={missing_options}");
+    for (mappings, diagnostic) in [
+        (vec!["bad".to_owned()], "no `=`"),
+        (vec![format!("={missing_options}")], "both halves"),
+        (vec!["https://example.org/a=".to_owned()], "both halves"),
+        (vec![format!("relative={missing_options}")], "relative IRI"),
+        (
+            vec![first_mapping.clone(), first_mapping.clone()],
+            "named twice",
+        ),
+        (
+            vec![
+                first_mapping.clone(),
+                format!("https://example.org/unknown={missing_options}"),
+            ],
+            "no --import pair",
+        ),
+        (
+            vec![
+                first_mapping,
+                format!("https://example.org/turtle={missing_options}"),
+            ],
+            "must be YAML-LD",
+        ),
+    ] {
+        let mut args = vec!["shapes", "lint"];
+        for import in &imports {
+            args.extend(["--import", import]);
+        }
+        for mapping in &mappings {
+            args.extend(["--import-yamlld-input-options", mapping]);
+        }
+        args.push(missing_root);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("--import-yamlld-input-options"));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+    }
+    let valid = write_file(dir.path(), "valid.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat(16_385));
+    let valid_mapping = format!("https://example.org/a={valid}");
+    let malformed_mapping = format!("https://example.org/b={malformed}");
+    let oversized_mapping = format!("https://example.org/b={oversized}");
+    let output = write_file(dir.path(), "output.txt", "unchanged output");
+    let proof = write_file(dir.path(), "proof.txt", "unchanged proof");
+    let explain = format!("--explain={proof}");
+    for lane in ["validate", "rules", "node-expr", "lint", "pack"] {
+        let mut args = match lane {
+            "lint" => vec!["shapes", "lint"],
+            "pack" => vec!["shacl", "pack", "--shapes", missing_root, "--out", &output],
+            _ => vec![lane, "--shapes", missing_root],
+        };
+        for import in &imports {
+            args.extend(["--import", import]);
+        }
+        args.extend([
+            "--import-yamlld-input-options",
+            &valid_mapping,
+            "--import-yamlld-input-options",
+            &malformed_mapping,
+        ]);
+        match lane {
+            "validate" => args.extend(["--changes", missing_data, missing_data, &output]),
+            "rules" => args.extend(["--to", "ntriples", &explain, missing_data, &output]),
+            "node-expr" => args.extend([
+                "--expr-turtle-file",
+                missing_root,
+                "--focus",
+                "https://example.org/focus",
+                missing_data,
+                &output,
+            ]),
+            "lint" => args.extend([missing_root, &output]),
+            _ => (),
+        }
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{lane}: {}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("rdf-input-options"),
+            "{lane}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged output"
+        );
+        assert_eq!(std::fs::read_to_string(&proof).unwrap(), "unchanged proof");
+    }
+    let oversized_run = run(&[
+        "shapes",
+        "lint",
+        "--import",
+        &imports[0],
+        "--import",
+        &imports[1],
+        "--import-yamlld-input-options",
+        &valid_mapping,
+        "--import-yamlld-input-options",
+        &oversized_mapping,
+        missing_root,
+        &output,
+    ]);
+    assert_eq!(code(&oversized_run), 1, "{}", stderr(&oversized_run));
+    assert!(stderr(&oversized_run).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+
+    let root = write_file(
+        dir.path(),
+        "root.ttl",
+        "<https://example.org/root> a <http://www.w3.org/2002/07/owl#Ontology> ; <http://www.w3.org/2002/07/owl#imports> <https://example.org/a> .\n",
+    );
+    let yaml = write_file(
+        dir.path(),
+        "import.yamlld",
+        "'@id': https://example.org/shape\n'@type': http://www.w3.org/ns/shacl#NodeShape\n",
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let import = format!("https://example.org/a={yaml}");
+    let limited_mapping = format!("https://example.org/a={limited}");
+    let limited_run = run(&[
+        "shapes",
+        "lint",
+        "--import",
+        &import,
+        "--import-yamlld-input-options",
+        &limited_mapping,
+        &root,
+        &output,
+    ]);
+    assert_eq!(code(&limited_run), 1, "{}", stderr(&limited_run));
+    assert!(
+        stderr(&limited_run).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&limited_run)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+    let product_refusal = run(&[
+        "validate",
+        "--shapes-product",
+        missing_root,
+        "--import",
+        &imports[0],
+        "--import-yamlld-input-options",
+        &valid_mapping,
+        missing_data,
+    ]);
+    assert_eq!(code(&product_refusal), 2, "{}", stderr(&product_refusal));
+    for check in [false, true] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            missing_root,
+            "--import",
+            &imports[0],
+            "--import-yamlld-input-options",
+            &valid_mapping,
+        ];
+        if check {
+            args.push("--check");
+        }
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    }
 }

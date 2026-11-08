@@ -107,6 +107,115 @@ fn conforms_triple(value: bool) -> String {
     )
 }
 
+/// Primary YAML selection feeds both validation routes and refuses before publication.
+#[test]
+fn configured_yamlld_primary_reaches_whole_and_incremental_validation() {
+    use support::path;
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/bob\n'@type': http://example.org/Person\nhttp://example.org/age:\n  '@value': '42'\n  '@type': http://www.w3.org/2001/XMLSchema#integer\n---\n'@id': http://example.org/alice\n'@type': http://example.org/Person\nhttp://example.org/age: nope\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = run(&["validate", "--shapes", &shapes, &input]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(stdout(&first).contains(&conforms_triple(true)));
+    assert!(stderr(&first).contains("shacl conforms true\n"));
+
+    let added = write_file(
+        dir.path(),
+        "added.ttl",
+        "<http://example.org/alice> <http://example.org/age> 42 .\n",
+    );
+    for changes in [None, Some(added.as_str())] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--yamlld-input-options",
+            &config,
+        ];
+        if let Some(changes) = changes {
+            args.extend(["--changes", changes]);
+        }
+        args.push(&input);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).contains(&conforms_triple(false)));
+        assert!(stdout(&selected).contains("http://example.org/alice"));
+        assert!(stderr(&selected).contains("shacl conforms false\n"));
+        assert!(stderr(&selected).contains("shacl results 1\n"));
+    }
+
+    let output = write_file(dir.path(), "output.nt", "unchanged destination");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--yamlld-input-options",
+        &limited,
+        &input,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let missing_shapes = path(dir.path(), "missing-shapes.ttl");
+    let missing_changes = path(dir.path(), "missing-changes.nt");
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &missing_shapes,
+        "--changes",
+        &missing_changes,
+        "--yamlld-input-options",
+        &malformed,
+        &missing,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let other = path(dir.path(), "missing.ttl");
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--yamlld-input-options",
+        &config,
+        &other,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
 /// A non-conforming data graph produces the SHACL results graph on stdout, the verdict on
 /// stderr, and exit **0**.
 ///
@@ -183,6 +292,14 @@ fn a_conforming_graph_reports_conforms_true() {
 /// lost the type assertion or the offending literal would change the result count.
 #[test]
 fn every_native_source_format_reaches_the_same_verdict() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_conditional_2 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let seed = write_file(dir.path(), "seed.ttl", DATA);
@@ -205,7 +322,20 @@ fn every_native_source_format_reaches_the_same_verdict() {
             .to_str()
             .expect("temp path is valid UTF-8")
             .to_owned();
-        let converted = run(&["convert", "--from", "turtle", "--to", token, &seed, &target]);
+        let converted = {
+            let mut arguments = vec!["convert", "--from", "turtle", "--to", token, &seed, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert!(
             converted.status.success(),
             "seeding the `{token}` source failed: {}",
@@ -214,7 +344,20 @@ fn every_native_source_format_reaches_the_same_verdict() {
 
         // The extension alone resolves the format — no `--from` needed, exactly as for
         // `convert`/`reason`.
-        let out = run(&["validate", "--shapes", &shapes, &target]);
+        let out = {
+            let mut arguments = vec!["validate", "--shapes", &shapes, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_2
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert_eq!(code(&out), 0, "`{token}`: {}", stderr(&out));
         assert!(
             stdout(&out).contains(&conforms_triple(false)),
@@ -315,6 +458,10 @@ fn rdf12_statement_metadata_is_validated() {
 /// is the one carrier that stores the star layer losslessly.
 #[test]
 fn rdf12_statement_metadata_survives_a_pack_source() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "star-shapes.ttl", STAR_SHAPES);
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
@@ -324,10 +471,35 @@ fn rdf12_statement_metadata_survives_a_pack_source() {
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &data,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
-    let out = run(&["validate", "--shapes", &shapes, &pack]);
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
         stdout(&out).contains("\"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
@@ -706,6 +878,10 @@ fn base_resolves_relative_iris_in_the_data_graph() {
 /// has no relative-IRI syntax, so the base would be accepted and silently unread.
 #[test]
 fn base_with_a_pack_data_source_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
@@ -715,7 +891,21 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &data,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
     let out = run(&[
@@ -725,6 +915,12 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
         "--base",
         "http://example.org/",
         &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 2, "a usage error");
     assert!(
@@ -1326,7 +1522,7 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 // ── owl:imports in the shapes graph ──────────────────────────────────────────
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
-// and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
+// and must build for `wasm32-unknown-unknown`, so the closure is caller-supplied — the same answer `entails
 // --import` and `shex --import` give. Only an `owl:imports` on the shapes document's own IRI,
 // on an `owl:Ontology` header, or on a node versioning either is an import; any other is data.
 // An import whose ontology is already IN the shapes graph needs no pair; any other unresolved
@@ -1555,6 +1751,9 @@ fn assert_prefixes_001_verdict(out: &Output) {
 /// import in place and reaches the W3C verdict again.
 #[test]
 fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     assert_prefixes_001_verdict(&run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]));
     assert_prefixes_001_verdict(&run(&[
         "validate",
@@ -1617,6 +1816,12 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
         PREFIXES_001,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     assert_prefixes_001_verdict(&run(&[
@@ -1634,6 +1839,9 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
 /// which recorded its base when it was packed.
 #[test]
 fn shapes_base_is_the_shapes_documents_parse_base() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const RELATIVE_SHAPES: &str = concat!(
         "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n",
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
@@ -1709,7 +1917,20 @@ fn shapes_base_is_the_shapes_documents_parse_base() {
 
     let product = dir.path().join("relative.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let refused = run(&[
         "validate",
@@ -2611,6 +2832,9 @@ fn cli_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration() {
 /// set, and a value that is not an IRI is a usage error rather than a silently default run.
 #[test]
 fn cli_validate_conformance_disallows() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const WARNING_SHAPES: &str = concat!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
         "@prefix ex: <http://example.org/> .\n",
@@ -2653,7 +2877,20 @@ fn cli_validate_conformance_disallows() {
 
     let product = dir.path().join("warning.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let restored = run(&[
         "validate",
@@ -2685,6 +2922,9 @@ fn cli_validate_conformance_disallows() {
 /// control — a direct instance of the target class — fires both ways.
 #[test]
 fn cli_validate_subclass_of_in_shapes_graph() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const SHAPES: &str = concat!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
@@ -2726,7 +2966,20 @@ fn cli_validate_subclass_of_in_shapes_graph() {
 
     let product = dir.path().join("subclass.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let restored = run(&[
         "validate",
@@ -2846,6 +3099,9 @@ fn verdict_lines(out: &Output) -> String {
 /// Validate `data` against the same shapes graph written as Turtle, TriG and RDF/XML, on
 /// `validate --shapes` and through a `shacl pack` product, and return the Turtle run.
 fn validate_in_three_syntaxes(dir: &Path, stem: &str, data: &str, spellings: [&str; 3]) -> Output {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let data = write_file(dir, &format!("{stem}-data.ttl"), data);
     let mut runs: Vec<(String, Output)> = Vec::new();
     for (extension, shapes) in ["ttl", "trig", "rdf"].into_iter().zip(spellings) {
@@ -2870,6 +3126,12 @@ fn validate_in_three_syntaxes(dir: &Path, stem: &str, data: &str, spellings: [&s
             from,
             "--out",
             product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ]);
         assert_eq!(code(&packed), 0, "pack {extension}: {}", stderr(&packed));
         runs.push((
@@ -3208,6 +3470,10 @@ fn a_change_that_adds_a_link_validates_in_full() {
 /// name, and a link to a shapes graph it declares validates.
 #[test]
 fn a_product_must_hold_every_link() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
@@ -3216,7 +3482,20 @@ fn a_product_must_hold_every_link() {
     );
     let product = dir.path().join("shapes.purrshp");
     let product = product.to_str().expect("utf-8");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
     let unheld = write_file(
@@ -3266,6 +3545,12 @@ fn a_product_must_hold_every_link() {
         &format!("http://example.org/graph-shapes1={linked}"),
         "--out",
         with_lib,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let holds = run(&["validate", "--shapes-product", with_lib, &unheld]);
@@ -3276,5 +3561,402 @@ fn a_product_must_hold_every_link() {
         stdout(&holds).contains("MinCountConstraintComponent"),
         "{}",
         stdout(&holds)
+    );
+}
+
+/// Independent data and shapes controls precede acquisition and preserve native shapes metadata.
+#[test]
+fn configured_yamlld_controls_reach_validation_shapes() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.yamlld", support::YAML_SHAPES_DOCUMENTS);
+    let data = write_file(
+        dir.path(),
+        "data.nq",
+        "<https://example.org/alice> <https://example.org/p> \"value\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, conforms) in [(None, true), (Some(all.as_str()), false)] {
+        let mut args = vec!["validate", "--shapes", &shapes, "--format", "ntriples"];
+        if let Some(controls) = controls {
+            args.extend(["--shapes-yamlld-input-options", controls]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {conforms}\n")),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let yaml_data = write_file(
+        dir.path(),
+        "data.yamlld",
+        "'@id': https://example.org/alice\nhttps://example.org/p: value\n---\n'@id': https://example.org/alice\nhttps://example.org/required: present\n",
+    );
+    for (controls, conforms) in [(None, false), (Some(all.as_str()), true)] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--shapes-yamlld-input-options",
+            &all,
+            "--format",
+            "ntriples",
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&yaml_data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {conforms}\n")),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let product = dir.path().join("missing.purrshp");
+    let refused = run(&[
+        "validate",
+        "--shapes-product",
+        product.to_str().unwrap(),
+        "--shapes-yamlld-input-options",
+        &all,
+        missing,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    let output = write_file(dir.path(), "report.nt", "unchanged report");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let import = format!("https://example.org/import={missing}");
+    for (controls, root, input, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            shapes.as_str(),
+            data.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            root,
+            "--shapes-yamlld-input-options",
+            controls,
+            "--format",
+            "ntriples",
+        ];
+        if imports {
+            args.extend(["--import", &import, "--changes", missing]);
+        }
+        args.extend([input, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged report"
+        );
+    }
+}
+
+/// Added and removed documents carry independent controls through real affected-node validation.
+#[test]
+fn configured_yamlld_changes_reach_added_and_removed_roles() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let valid = write_file(
+        dir.path(),
+        "valid.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:age 42 .\nex:bob a ex:Person ; ex:age 7 .\n",
+    );
+    let additions = write_file(
+        dir.path(),
+        "added.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 43\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
+    );
+    let removal_neighbor = write_file(
+        dir.path(),
+        "neighbor.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 42\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = write_file(dir.path(), "first.json", r#"{"version":1,"yaml_ld":{}}"#);
+    for selected in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--changes",
+            &additions,
+            "--changes-removed",
+            &removal_neighbor,
+            "--changes-removed-yamlld-input-options",
+            &first,
+        ];
+        if selected {
+            args.extend(["--changes-yamlld-input-options", &all]);
+        }
+        args.push(&valid);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {}\n", !selected)),
+            "{}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains(&format!(
+                "shacl change-expansion bounded {}\n",
+                if selected { 2 } else { 1 }
+            )),
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(
+            stdout(&out).contains("DatatypeConstraintComponent"),
+            selected
+        );
+        assert_eq!(stdout(&out).contains("<http://example.org/bob>"), selected);
+    }
+    // A named target remains after removing both of its age values; Bob also changes.
+    let invalid = write_file(
+        dir.path(),
+        "invalid.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:age 42, \"nope\" .\nex:bob a ex:Person ; ex:age 7 .\n",
+    );
+    let removals = write_file(
+        dir.path(),
+        "removed.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 42\n---\n'@id': http://example.org/alice\nhttp://example.org/age: nope\n",
+    );
+    let ordinary_addition = write_file(
+        dir.path(),
+        "touch.nq",
+        "<http://example.org/bob> <http://example.org/age> \"8\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+    );
+    for selected in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--changes",
+            &ordinary_addition,
+            "--changes-removed",
+            &removals,
+        ];
+        if selected {
+            args.extend(["--changes-removed-yamlld-input-options", &all]);
+        }
+        args.push(&invalid);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {selected}\n")),
+            "{}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("shacl change-expansion bounded 2\n"),
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(
+            stdout(&out).contains("DatatypeConstraintComponent"),
+            !selected
+        );
+        assert_eq!(
+            stdout(&out).contains("<http://example.org/alice>"),
+            !selected
+        );
+    }
+    let product = dir.path().join("shapes.purrshp");
+    let product = product.to_str().unwrap();
+    let receipt = dir.path().join("receipt.json");
+    let receipt = receipt.to_str().unwrap();
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        receipt,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product,
+        "--changes",
+        &additions,
+        "--changes-yamlld-input-options",
+        &all,
+        "--changes-removed",
+        &removal_neighbor,
+        "--changes-removed-yamlld-input-options",
+        &first,
+        &valid,
+    ]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(stderr(&restored).contains("shacl conforms false\n"));
+    assert!(stdout(&restored).contains("<http://example.org/bob>"));
+    assert!(stdout(&restored).contains("DatatypeConstraintComponent"));
+}
+
+/// Both change roles and formats admit before options, RDF and filesystem-base acquisition.
+#[test]
+fn configured_change_options_precede_source_acquisition() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing_root = dir.path().join("missing.ttl");
+    let missing_root = missing_root.to_str().unwrap();
+    let missing_yaml = dir.path().join("missing.yamlld");
+    let missing_yaml = missing_yaml.to_str().unwrap();
+    let missing_options = dir.path().join("missing.json");
+    let missing_options = missing_options.to_str().unwrap();
+    for (flag, other_role) in [
+        ("--changes-yamlld-input-options", "--changes-removed"),
+        ("--changes-removed-yamlld-input-options", "--changes"),
+    ] {
+        let refused = run(&[
+            "validate",
+            "--shapes",
+            missing_root,
+            other_role,
+            missing_yaml,
+            flag,
+            missing_options,
+            missing_root,
+        ]);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(flag));
+    }
+    for override_format in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            missing_root,
+            "--changes",
+            missing_yaml,
+            "--changes-yamlld-input-options",
+            missing_options,
+            "--changes-removed",
+            if override_format {
+                missing_yaml
+            } else {
+                missing_root
+            },
+            "--changes-removed-yamlld-input-options",
+            missing_options,
+        ];
+        if override_format {
+            args.extend(["--changes-from", "nquads"]);
+        }
+        args.push(missing_root);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("YAML-LD"), "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(if override_format {
+            "--changes-yamlld-input-options"
+        } else {
+            "--changes-removed-yamlld-input-options"
+        }));
+    }
+    let valid_options = write_file(dir.path(), "valid.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat(16_385));
+    let output = write_file(dir.path(), "report.nt", "unchanged report");
+    for (shape_flag, final_options) in [("--shapes", &malformed), ("--shapes-product", &oversized)]
+    {
+        let refused = run(&[
+            "validate",
+            shape_flag,
+            missing_root,
+            "--changes",
+            missing_yaml,
+            "--changes-yamlld-input-options",
+            &valid_options,
+            "--changes-removed",
+            missing_yaml,
+            "--changes-removed-yamlld-input-options",
+            final_options,
+            missing_root,
+            &output,
+        ]);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("rdf-input-options"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged report"
+        );
+    }
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let removed = write_file(
+        dir.path(),
+        "removed.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: nope\n",
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--changes-removed",
+        &removed,
+        "--changes-removed-yamlld-input-options",
+        &limited,
+        &data,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged report"
     );
 }

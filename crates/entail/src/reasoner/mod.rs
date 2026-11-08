@@ -98,15 +98,18 @@ use purrdf_core::{DatasetView, TermValue};
 use crate::EntailError;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::graph::{Assumptions, Budget};
-use crate::owl_dl::parser::Vocab;
+use crate::owl_dl::parser::{self, Vocab};
 use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
+pub mod analysis;
 pub mod axiom;
 pub mod certificate;
 pub mod classify;
+mod hierarchy;
 pub mod module;
+pub mod object_properties;
 pub mod profile;
 pub mod proof;
 pub mod realize;
@@ -117,12 +120,16 @@ pub(crate) mod schema_tests;
 #[cfg(test)]
 mod borrowed_tests;
 
+pub use analysis::ClassAnalysis;
 pub use axiom::DlAxiom;
-pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
+pub use certificate::{
+    Certified, DirectnessRefusal, DlCertificate, DlCompleteness, OwnedDirectnessRefusal, Verdict,
+};
 pub use classify::ClassHierarchy;
 pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
 };
+pub use object_properties::ObjectPropertyHierarchy;
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
 pub use proof::{
     Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
@@ -285,12 +292,13 @@ impl Reasoner {
     ///
     /// The failures [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
-    /// term, or an exhausted n-degree search budget) — `ds` is wholly caller-supplied here,
-    /// so this comes back as a value rather than the panic
-    /// [`purrdf_core::canonicalize`] would raise for the same
-    /// input.
-    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, SchemaPreparationBudget::default(), None)
+    /// term, or an exhausted n-degree search budget). `ds` is caller-supplied,
+    /// and the original canonicalization refusal is retained.
+    pub fn with_proofs<D: DatasetView>(
+        ds: &D,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::recorded(ds, SchemaPreparationBudget::default(), None, control)
     }
 
     /// Construct with preparation resource ceilings selected before schema encoding.
@@ -310,8 +318,9 @@ impl Reasoner {
     pub fn with_proofs_and_preparation_budget<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, budget, None)
+        Self::recorded(ds, budget, None, control)
     }
 
     /// Record proofs while retaining one caller stop signal from input identity
@@ -328,23 +337,19 @@ impl Reasoner {
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, budget, Some(stop))
+        Self::recorded(ds, budget, Some(stop), control)
     }
 
     fn recorded<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        let input = match stop.as_deref() {
-            Some(stop) => crate::owl_dl::proof::try_ontology_identity_with_stop(ds, stop),
-            None => crate::owl_dl::proof::try_ontology_identity(ds),
-        }
-        .map_err(|error| match error {
-            purrdf_core::CanonError::Stopped => EntailError::Stopped,
-            error => EntailError::Canonicalization(error),
-        })?;
+        let input = crate::owl_dl::proof::try_ontology_identity(ds, control)
+            .map_err(EntailError::Canonicalization)?;
         Self::build_with_preparation(ds, Some(input), budget, stop)
     }
 
@@ -479,6 +484,19 @@ impl Reasoner {
     /// and opens no session.
     pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
         match question {
+            Question::ClassAnalysis { .. } => {
+                if question != &self.class_analysis_question() {
+                    return Err(EntailError::Parse("class analysis question differs from the source class and individual universe".to_owned()));
+                }
+            }
+            Question::ObjectPropertyClassification { properties } => {
+                let expected = self.object_property_classification_question()?;
+                if !matches!(expected, Question::ObjectPropertyClassification { properties: ref names } if names == properties)
+                {
+                    return Err(EntailError::Parse("object-property classification question differs from the source property universe".to_owned()));
+                }
+                let _prepared = self.prepare_object_properties()?;
+            }
             Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
                 self.concept_of(class)?;
             }
@@ -517,7 +535,7 @@ impl Reasoner {
     /// reader could not account for — this refuses, and names the constructor to use.
     ///
     /// ```
-    /// use purrdf_core::{RdfDatasetBuilder, TermValue};
+    /// use purrdf_core::{CanonicalizationControl, RdfDatasetBuilder, SearchPolicy, TermValue};
     /// use purrdf_entail::reasoner::{DlAxiom, Question, Reasoner};
     ///
     /// let mut b = RdfDatasetBuilder::new();
@@ -534,18 +552,19 @@ impl Reasoner {
     /// let question = Question::AxiomEntailment { axiom: Box::new(axiom.clone()) };
     ///
     /// // Recording is OPT-IN, so the producer asks for it.
-    /// let mut reasoner = Reasoner::with_proofs(&ds).expect("reverse-map");
+    /// let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+    /// let mut reasoner = Reasoner::with_proofs(&ds, &mut control).expect("reverse-map");
     /// let answer = reasoner.entails(&axiom).expect("consistent");
     ///
     /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
-    /// let mut checker = Reasoner::with_proofs(&ds).expect("reverse-map");
+    /// let mut checker = Reasoner::with_proofs(&ds, &mut control).expect("reverse-map");
     /// checker.prepare(&question).expect("prepare the checking question");
     /// let ctx = checker.proof_context().expect("a recording reasoner checks proofs");
     /// let certificate = answer.certificate();
     /// let replay = answer
     ///     .proof()
     ///     .expect("a recording reasoner carries a proof")
-    ///     .verify(&ds, &question, Some(certificate), &ctx)
+    ///     .verify(&ds, &question, Some(certificate), &ctx, &mut control)
     ///     .expect("a genuine proof checks");
     /// assert_eq!(replay.runs(), replay.replayed());
     ///
@@ -572,10 +591,11 @@ impl Reasoner {
     /// afterwards this reasoner remains available for subsequent services.
     ///
     /// ```compile_fail
-    /// use purrdf_core::RdfDataset;
+    /// use purrdf_core::{CanonicalizationControl, RdfDataset, SearchPolicy};
     /// use purrdf_entail::reasoner::{Question, Reasoner};
     /// fn mutate_while_checking(dataset: &RdfDataset) {
-    ///     let mut consumer = Reasoner::with_proofs(dataset).unwrap();
+    ///     let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+    ///     let mut consumer = Reasoner::with_proofs(dataset, &mut control).unwrap();
     ///     let context = consumer.borrowed_proof_context().unwrap();
     ///     consumer.prepare(&Question::Consistency).unwrap();
     ///     let _ = context.input();
@@ -748,7 +768,17 @@ impl Reasoner {
         answer: T,
         bind: impl FnOnce() -> (Question, Vec<Claim>),
     ) -> Certified<T> {
-        let certificate = session.certificate(&self.boundaries);
+        Self::seal_with_boundaries(session, answer, &self.boundaries, bind)
+    }
+
+    /// A query's unsupported operands qualify that answer, not later unrelated services.
+    fn seal_with_boundaries<T>(
+        session: Session<'_>,
+        answer: T,
+        boundaries: &BTreeSet<Construct>,
+        bind: impl FnOnce() -> (Question, Vec<Claim>),
+    ) -> Certified<T> {
+        let certificate = session.certificate(boundaries);
         let proof = session.proof(&certificate, bind);
         Certified::new(answer, certificate, proof)
     }
@@ -925,7 +955,7 @@ impl Reasoner {
     /// [`EntailError::Unsatisfiable`] if the ontology has no model, in which case every
     /// axiom is entailed and the answer would be worthless.
     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
-        let plan = self.plan(axiom)?;
+        let (plan, boundaries) = self.plan(axiom)?;
         let (mut session, usable) = self.open()?;
         let mut runs = Vec::new();
         let answer = if usable {
@@ -934,20 +964,25 @@ impl Reasoner {
             Verdict::Unknown
         };
         session.check_storage()?;
-        Ok(self.seal(session, answer, || {
-            (
-                Question::AxiomEntailment {
-                    axiom: Box::new(axiom.clone()),
-                },
-                vec![refutation_claim(
-                    ClaimSubject::Axiom {
+        Ok(Self::seal_with_boundaries(
+            session,
+            answer,
+            &boundaries,
+            || {
+                (
+                    Question::AxiomEntailment {
                         axiom: Box::new(axiom.clone()),
                     },
-                    answer,
-                    &runs,
-                )],
-            )
-        }))
+                    vec![refutation_claim(
+                        ClaimSubject::Axiom {
+                            axiom: Box::new(axiom.clone()),
+                        },
+                        answer,
+                        &runs,
+                    )],
+                )
+            },
+        ))
     }
 
     /// Intern everything `axiom` needs and reduce it to the refutation(s) that decide it.
@@ -955,8 +990,9 @@ impl Reasoner {
     /// Separated from [`Reasoner::entails`] because interning needs `&mut self` while the
     /// session borrows `&self`, and because it puts every axiom's encoding in one readable
     /// place instead of spreading eight of them through a borrow-juggling function.
-    fn plan(&mut self, axiom: &DlAxiom) -> Result<Refutation, EntailError> {
-        Ok(match axiom {
+    fn plan(&mut self, axiom: &DlAxiom) -> Result<(Refutation, BTreeSet<Construct>), EntailError> {
+        let mut boundaries = self.boundaries.clone();
+        let refutation = match axiom {
             DlAxiom::SubClassOf { sub, sup } => {
                 let sub = self.concept_of(sub)?;
                 let sup = self.concept_of(sup)?;
@@ -988,6 +1024,9 @@ impl Reasoner {
                 let subject = self.term_of(subject);
                 let property = self.term_of(property);
                 let object = self.term_of(object);
+                parser::record_role_support(&self.kb.interner, &mut boundaries, [property]);
+                // Query-only empty roles have the same native law as source roles.
+                parser::constrain_bottom_roles(&mut self.kb, [property]);
                 let negated_reach = self.negated(reaches(property, object))?;
                 Refutation::RoleAssertion {
                     subject,
@@ -1020,6 +1059,8 @@ impl Reasoner {
             DlAxiom::SubObjectPropertyOf { sub, sup } => {
                 let sub = self.term_of(sub);
                 let sup = self.term_of(sup);
+                parser::record_role_support(&self.kb.interner, &mut boundaries, [sub, sup]);
+                parser::constrain_bottom_roles(&mut self.kb, [sub, sup]);
                 let x = self.fresh.mint(&mut self.kb.interner);
                 let y = self.fresh.mint(&mut self.kb.interner);
                 let negated_reach = self.negated(reaches(sup, y))?;
@@ -1030,7 +1071,8 @@ impl Reasoner {
                     negated_reach,
                 }
             }
-        })
+        };
+        Ok((refutation, boundaries))
     }
 
     /// Intern `concept` and finalize the complete blocking closure, returning its id.
@@ -1291,14 +1333,30 @@ mod tests {
             hierarchy.certificate().completeness(),
             DlCompleteness::BudgetExhausted
         );
+        let realized = reasoner
+            .realize()
+            .expect("stopped realization remains partial");
+        for (refusal, original) in [
+            (
+                hierarchy
+                    .direct_subsumptions()
+                    .expect_err("stopped hierarchy"),
+                hierarchy.certificate(),
+            ),
+            (
+                realized.direct_types().expect_err("stopped realization"),
+                realized.certificate(),
+            ),
+        ] {
+            assert!(original.stopped());
+            assert!(std::ptr::eq(refusal.certificate(), original));
+        }
     }
 
     /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
     /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI
     /// ([`purrdf_core::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
-    /// identity as an [`EntailError::Canonicalization`] VALUE, rather than aborting the
-    /// process through the panicking `purrdf_core::canonicalize`
-    /// [`crate::owl_dl::proof::ontology_identity`] used to reach.
+    /// identity as the original [`EntailError::Canonicalization`] value.
     #[test]
     fn with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value() {
         let mut b = RdfDatasetBuilder::new();
@@ -1311,8 +1369,14 @@ mod tests {
             .unwrap();
         b.push_quad(cat, sub, reserved, None).unwrap();
         let ds = b.freeze().expect("freeze");
-        let error = Reasoner::with_proofs(&ds)
-            .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
+        let error = Reasoner::with_proofs(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
         assert!(
             error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
@@ -1332,7 +1396,14 @@ mod tests {
             .unwrap();
         b.push_quad(cat, sub, animal, None).unwrap();
         let ds = b.freeze().expect("freeze");
-        let reasoner = Reasoner::with_proofs(&ds).expect("an ordinary dataset must still build");
+        let reasoner = Reasoner::with_proofs(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("an ordinary dataset must still build");
         assert!(reasoner.records_proofs());
     }
 }

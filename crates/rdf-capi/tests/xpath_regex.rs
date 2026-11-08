@@ -19,6 +19,10 @@
 //! an invalid argument with its exact neighbour accepted, and a law's resource refusal
 //! is an error status rather than an empty answer.
 
+use purrdf::buffer;
+#[path = "support/receipt.rs"]
+mod receipt;
+
 use std::ffi::{CStr, CString};
 
 use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
@@ -121,6 +125,8 @@ fn dataset(nt: &str) -> *mut PurrdfDataset {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut out,
             &raw mut error,
         )
@@ -232,6 +238,9 @@ fn select(entry: Select, regex: Option<&str>, query: &str) -> Result<Vec<String>
                 query.as_ptr(),
                 std::ptr::null(),
                 regex,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut kind,
                 &raw mut rows,
                 std::ptr::null_mut(),
@@ -247,6 +256,9 @@ fn select(entry: Select, regex: Option<&str>, query: &str) -> Result<Vec<String>
                     std::ptr::null(),
                     std::ptr::null(),
                     regex,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut buffer,
                     &raw mut error,
                 );
@@ -267,6 +279,9 @@ fn select(entry: Select, regex: Option<&str>, query: &str) -> Result<Vec<String>
                     std::ptr::null(),
                     regex,
                     &raw const governors,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut outcome,
                     &raw mut kind,
                     &raw mut rows,
@@ -297,8 +312,12 @@ fn select(entry: Select, regex: Option<&str>, query: &str) -> Result<Vec<String>
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
                     regex,
                     &raw const governors,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut outcome,
                     &raw mut kind,
                     &raw mut rows,
@@ -427,6 +446,9 @@ fn null_regex_profile_is_the_compatibility_entry_point_byte_for_byte() {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut legacy,
                     &raw mut error,
                 ),
@@ -440,6 +462,9 @@ fn null_regex_profile_is_the_compatibility_entry_point_byte_for_byte() {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut selected,
                     &raw mut error,
                 ),
@@ -454,6 +479,9 @@ fn null_regex_profile_is_the_compatibility_entry_point_byte_for_byte() {
                     data,
                     query.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut kind,
                     &raw mut rows,
                     std::ptr::null_mut(),
@@ -499,6 +527,9 @@ fn update_marks(regex: Option<&str>, pattern: &str) -> Result<Vec<String>, Failu
             regex,
             purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
             &raw const governors,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut outcome,
             evidence.as_mut_ptr(),
             &raw mut error,
@@ -517,6 +548,9 @@ fn update_marks(regex: Option<&str>, pattern: &str) -> Result<Vec<String>, Failu
                     data,
                     query.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut receipt::Output::default().0,
                     &raw mut kind,
                     &raw mut rows,
                     std::ptr::null_mut(),
@@ -750,6 +784,9 @@ fn product(shapes: &str) -> Vec<u8> {
             std::ptr::null(),
             0,
             &raw mut buffer,
+            c"1000000".as_ptr(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut error,
         )
     };
@@ -1118,8 +1155,14 @@ fn entail(regex: Option<&str>, legacy: bool, pattern: &str) -> Result<String, Fa
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 std::ptr::null_mut(),
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut error,
             )
         } else {
@@ -1136,8 +1179,14 @@ fn entail(regex: Option<&str>, legacy: bool, pattern: &str) -> Result<String, Fa
                 std::ptr::null(),
                 std::ptr::null(),
                 regex,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 std::ptr::null_mut(),
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut error,
             )
         }
@@ -1184,6 +1233,9 @@ fn apply_rules(
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut inferred,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1205,6 +1257,9 @@ fn apply_rules(
                 std::ptr::null(),
                 0,
                 regex,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut inferred,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -1487,6 +1542,9 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
                 std::ptr::null(),
                 std::ptr::null(),
                 regex,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 &raw mut error,
             )
@@ -1527,6 +1585,9 @@ fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_
                 std::ptr::null(),
                 std::ptr::null(),
                 regex,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 &raw mut error,
             )
@@ -1560,6 +1621,9 @@ fn query_column(data: *mut PurrdfDataset, query: &str, regex: Option<&str>) -> V
             std::ptr::null(),
             std::ptr::null(),
             regex,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         )

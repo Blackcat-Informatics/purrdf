@@ -34,7 +34,14 @@ header and bumped
 on every exported-signature change, pinned by
 `crates/rdf-capi/tests/abi_signatures.rs`, and read back at runtime through
 `purrdf_abi_version`. It is versioned separately from the workspace and stays
-`0.x`: it is not frozen, and the workspace's 1.0.0 makes no promise about it.
+`0.x`. During workspace v4, the ABI 0.20.0 surface shipped with v4.0 remains
+compatible despite that beta version. Preserve existing signatures, layouts,
+discriminants and array dimensions; add symbols and retained handles for new
+capabilities. An ABI minor bump identifies additive exports and does not permit
+a v4 break. The C ABI row in
+[Compatibility after 4.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/MIGRATION-4.0.md#compatibility-after-40)
+is the governing policy. Earlier workspace releases allowed breaking ABI minor
+bumps; that historical exception does not apply during v4.
 
 ## MSRV policy
 
@@ -67,7 +74,7 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
-Every functional version of every crate in the 33-crate release set is
+Every functional version of every crate in the 37-crate release set is
 published by that lane. Functional publication requires the crate records to be
 locked with *Require trusted publishing* (`trustpub_only`). That setting prevents
 an API token from publishing a new version: crates.io answers with
@@ -77,7 +84,7 @@ Set up new crate records **before tagging**. A token creates each missing
 record by publishing an isolated, empty, dependency-free **0.0.0** package;
 the real workspace crate keeps its functional release version. Configure its
 Trusted Publisher entry and enable *Require trusted publishing*, then reconcile
-`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 33 records
+`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 37 records
 must exist, all publisher entries must be configured, every record must be
 locked, and the ledger must be empty before the functional release begins.
 `scripts/check-crates-io-records.sh --require-all` verifies the public records
@@ -89,10 +96,11 @@ versions using a token with the separate yank permission, retaining the records
 and publisher settings. The complete setup and historical bootstrap receipts
 are in the release process document linked above.
 
-Twelve workspace members are deliberately never published to crates.io:
+Thirteen workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
 `purrdf-sparql-conformance` (the test harness), `purrdf-conformance-kit` (the
 manifest, report and outcome grading the community corpus runner uses),
+`purrdf-shacl-conformance` (shared SHACL corpus and vocabulary fixtures),
 `purrdf-hash-conformance` (the
 frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),

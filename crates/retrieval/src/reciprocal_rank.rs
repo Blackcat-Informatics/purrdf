@@ -9,8 +9,7 @@
 //! weight / (K + r)
 //! ```
 //!
-//! at the declared scale ([`SCALE_DIGITS`](purrdf_text::SCALE_DIGITS) fractional
-//! digits), truncating toward zero, where `K` is the profile's smoothing
+//! at the declared scale ([`Precision`] decimal digits), truncating toward zero, where `K` is the profile's smoothing
 //! constant. There is no transcendental: the quantity is one division, so it
 //! needs none of the target-dependent care a logarithm does, and the emitted
 //! order is byte-identical wherever it is computed.
@@ -19,10 +18,10 @@
 //!
 //! [`DecayRule::ReciprocalRank`] evaluates the *reciprocal* first and applies
 //! the weight afterwards: `trunc(w_raw · trunc(S / D) / S)` with `D = K + r` and
-//! `S = 10^SCALE_DIGITS`. Two truncations, and the inner one is a ceiling the
+//! `S = 10^precision.digits()`. Two truncations, and the inner one is a ceiling the
 //! weight cannot lift — `trunc(S / D)` stops strictly decreasing once
 //! `D² > S`, so every weight at or above one shares one monotone range ending
-//! just past `D = 10^6`.
+//! just past `D = sqrt(S)`.
 //!
 //! [`DecayRule::WeightedReciprocalRank`] folds the weight into the numerator
 //! instead. A weight's raw integer is already `w · S`, so `w / D` at the
@@ -32,28 +31,26 @@
 //! rule's and never more than `⌊w⌋ + 1` raw units above it — and because the weight
 //! now sits in the numerator, adjacent values differ by `w_raw / (D · (D + 1))`
 //! and stay distinct while that is at least one, which is `D ≲ sqrt(w · S) =
-//! 10^6 · sqrt(w)`. Depth is bought with weight.
+//! sqrt(S · w)`. Depth is bought with weight.
 //!
 //! Neither rule is a default and neither replaces the other: a profile names the
 //! one it runs under and carries that choice in its identity.
 
 use core::convert::Infallible;
 
-use purrdf_text::{Fixed, SCALE_DIGITS};
+use crate::score::{Precision, Score};
+use purrdf_xsd::wide::{mul_div, mul_div_ceil};
 
 use crate::error::FusionError;
 use crate::fusion_profile::DecayRule;
 
-/// `10^SCALE_DIGITS` — the scale of a [`Fixed`]'s raw integer.
-const SCALE_RAW: i128 = 10_i128.pow(SCALE_DIGITS);
-
-/// The same scale as a `u64`, for the reciprocal divisions.
-///
-/// `10^12` is a third of the way into a `u64` and a denominator is under `2^33`,
-/// so `S / D` is a narrow division. It is the innermost operation of the weight
-/// search, where it runs hundreds of millions of times, and a `u128` divide
-/// there is a software routine rather than an instruction.
-const SCALE_NARROW: u64 = 10_u64.pow(SCALE_DIGITS);
+/// Integer quotient with a hardware-width fast path when both actual operands fit.
+fn quotient(numerator: u128, divisor: u128) -> u128 {
+    match (u64::try_from(numerator), u64::try_from(divisor)) {
+        (Ok(n), Ok(d)) => u128::from(n / d),
+        _ => numerator / divisor,
+    }
+}
 
 /// `K + rank` as a `u128`, or the typed refusal for an unusable operand.
 ///
@@ -126,9 +123,9 @@ fn usable_width(max_width: u64) -> Result<u64, FusionError> {
 /// under [`DecayRule::ReciprocalRank`].
 ///
 /// The reciprocal is formed as the single integer division `10^scale / (K + r)`,
-/// truncated toward zero, and then multiplied by `weight` through `Fixed`'s
-/// wide-intermediate checked multiply, so an intermediate product that exceeds
-/// `i128` is handled without either wrapping or a spurious overflow.
+/// truncated toward zero, and then multiplied by `weight` through the shared
+/// wide-intermediate multiply/divide, so an intermediate product that exceeds
+/// `u128` is handled without either wrapping or a spurious overflow.
 ///
 /// These numbers are frozen: they are the ones every profile issued under this
 /// rule has already produced. A caller that wants the weight folded into the
@@ -140,53 +137,38 @@ fn usable_width(max_width: u64) -> Result<u64, FusionError> {
 /// * [`FusionError::InvalidK`] when `k == 0`.
 /// * [`FusionError::InvalidRank`] when `rank == 0`.
 /// * [`FusionError::Overflow`] when the product leaves the fixed-point range.
-pub fn contribution(weight: Fixed, rank: u64, k: u32) -> Result<Fixed, FusionError> {
+pub fn contribution(weight: Score, rank: u64, k: u32) -> Result<Score, FusionError> {
     let denominator = denominator(rank, k)?;
-    // recip = 1 / (K + r), at the declared scale. A rank beyond the scale
-    // truncates to zero, which is the exact value of every representable
-    // reciprocal below 10^-12.
-    let reciprocal_raw = u128::try_from(SCALE_RAW)
-        .map_err(|_| FusionError::Overflow)?
-        .checked_div(denominator)
-        .ok_or(FusionError::Overflow)?;
-    let reciprocal_raw = i128::try_from(reciprocal_raw).map_err(|_| FusionError::Overflow)?;
-
-    weight
-        .checked_mul(Fixed::from_raw(reciprocal_raw))
-        .map_err(|_| FusionError::Overflow)
+    let reciprocal = quotient(weight.precision().scale(), denominator);
+    Ok(Score::from_raw(
+        mul_div(weight.into_raw(), reciprocal, weight.precision().scale())
+            .ok_or(FusionError::Overflow)?,
+        weight.precision(),
+    ))
 }
 
 /// The contribution of a stratum weight at a 1-based rank under smoothing `K`,
 /// under [`DecayRule::WeightedReciprocalRank`].
 ///
-/// A [`Fixed`]'s raw integer is the value times `10^SCALE_DIGITS`, so the value
+/// A [`Score`]'s raw integer is the value times `10^precision.digits()`, so the value
 /// `w / (K + r)` at that same scale is exactly `trunc(w_raw / (K + r))`: one
 /// division, truncated toward zero, and nothing else. That is the correctly
 /// rounded answer by construction, which is what [`contribution`] cannot be —
 /// it truncates the reciprocal before the weight reaches it.
 ///
-/// The sign is carried separately so the truncation is toward zero for a
-/// negative weight as well, matching every other rounding in the layer. A
-/// validated profile never holds one, but this function is reachable from a
-/// caller's own arithmetic and answers for the whole domain rather than for the
-/// part a profile happens to use.
+/// Unsigned raw units are divided directly, preserving the input precision.
 ///
 /// # Errors
 ///
 /// * [`FusionError::InvalidK`] when `k == 0`.
 /// * [`FusionError::InvalidRank`] when `rank == 0`.
 /// * [`FusionError::Overflow`] when the quotient leaves the fixed-point range.
-pub fn weighted_contribution(weight: Fixed, rank: u64, k: u32) -> Result<Fixed, FusionError> {
+pub fn weighted_contribution(weight: Score, rank: u64, k: u32) -> Result<Score, FusionError> {
     let denominator = denominator(rank, k)?;
-    let raw = weight.into_raw();
-    // `K >= 1` and `rank >= 1` above, so the divisor is at least two and the
-    // quotient is at most half of `2^127` — inside `i128` even for the one
-    // magnitude (`i128::MIN`'s) that is not representable positive. The
-    // conversion is still checked, so widening either operand later cannot turn
-    // this into a silent wrap.
-    let magnitude = raw.unsigned_abs() / denominator;
-    let quotient = i128::try_from(magnitude).map_err(|_| FusionError::Overflow)?;
-    Ok(Fixed::from_raw(if raw < 0 { -quotient } else { quotient }))
+    Ok(Score::from_raw(
+        quotient(weight.into_raw(), denominator),
+        weight.precision(),
+    ))
 }
 
 /// The contribution of a stratum weight at a 1-based rank, under whichever rule
@@ -201,9 +183,9 @@ pub fn weighted_contribution(weight: Fixed, rank: u64, k: u32) -> Result<Fixed, 
 /// [`weighted_contribution`].
 pub fn contribution_under(
     decay: DecayRule,
-    weight: Fixed,
+    weight: Score,
     rank: u64,
-) -> Result<Fixed, FusionError> {
+) -> Result<Score, FusionError> {
     match decay {
         DecayRule::ReciprocalRank { k } => contribution(weight, rank, k),
         DecayRule::WeightedReciprocalRank { k } => weighted_contribution(weight, rank, k),
@@ -482,14 +464,23 @@ impl CrossingRank {
 /// [`FusionError::NonPositiveCrossingWeight`] for a weight that is not strictly
 /// positive, [`FusionError::Overflow`] if the sum leaves the fixed-point range,
 /// and whatever [`contribution_under`] refuses for the rank.
-pub fn threshold_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Result<Fixed, FusionError> {
-    weights.iter().try_fold(Fixed::ZERO, |total, weight| {
-        if *weight <= Fixed::ZERO {
-            return Err(FusionError::NonPositiveCrossingWeight { weight: *weight });
-        }
-        let term = contribution_under(decay, *weight, rank)?;
-        total.checked_add(term).map_err(|_| FusionError::Overflow)
-    })
+pub fn threshold_at(
+    decay: DecayRule,
+    precision: Precision,
+    weights: &[Score],
+    rank: u64,
+) -> Result<Score, FusionError> {
+    // Even an empty sum is evaluated under a real law and a positive rank.
+    denominator(rank, decay.k())?;
+    weights
+        .iter()
+        .try_fold(Score::zero(precision), |total, weight| {
+            if weight.into_raw() == 0 {
+                return Err(FusionError::NonPositiveCrossingWeight { weight: *weight });
+            }
+            let term = contribution_under(decay, *weight, rank)?;
+            total.checked_add(term)
+        })
 }
 
 /// The head rank at which a candidate sitting at `at_rank` in each of the
@@ -538,14 +529,15 @@ pub fn threshold_at(decay: DecayRule, weights: &[Fixed], rank: u64) -> Result<Fi
 /// rank the rule cannot evaluate, or an out-of-range sum.
 pub fn crossing_rank_at(
     decay: DecayRule,
-    naming: &[Fixed],
+    precision: Precision,
+    naming: &[Score],
     at_rank: u64,
-    sharing: &[Fixed],
+    sharing: &[Score],
 ) -> Result<CrossingRank, FusionError> {
-    let lower = threshold_at(decay, naming, at_rank)?;
+    let lower = threshold_at(decay, precision, naming, at_rank)?;
     // The shallow end first, so a candidate every sharer named — the ordinary
     // case — is answered by two evaluations and no search at all.
-    if lower > threshold_at(decay, sharing, 1)? {
+    if lower > threshold_at(decay, precision, sharing, 1)? {
         return Ok(CrossingRank::from_rank(1));
     }
     // And the deep end, which decides between "crosses somewhere inside the
@@ -553,7 +545,7 @@ pub fn crossing_rank_at(
     // contribution reaches zero, so a positive lower bound crosses eventually;
     // an empty `naming` list collects nothing and never crosses, and that is
     // reported as the absence it is rather than as an enormous rank.
-    if lower <= threshold_at(decay, sharing, MAX_DEPTH)? {
+    if lower <= threshold_at(decay, precision, sharing, MAX_DEPTH)? {
         return Ok(CrossingRank::NeverInsideAnyPlan);
     }
     // Invariant: `low` is known not to cross and `high` is known to cross, so
@@ -562,7 +554,7 @@ pub fn crossing_rank_at(
     let mut high = MAX_DEPTH;
     while high - low > 1 {
         let mid = low + (high - low) / 2;
-        if lower > threshold_at(decay, sharing, mid)? {
+        if lower > threshold_at(decay, precision, sharing, mid)? {
             high = mid;
         } else {
             low = mid;
@@ -603,11 +595,11 @@ pub fn crossing_rank_at(
 /// and past that boundary a pair collides only when the interval
 /// `(B/(D + 1), B/D]` misses an integer, which it does with probability roughly
 /// `2 (D - sqrt(B)) / sqrt(B)`. The first miss therefore arrives after about
-/// `B^(1/4)` steps. For the truncated rule `B` never exceeds `S`, so the walk is
-/// a few hundred to a thousand steps; for the weighted rule `B` grows with the
-/// weight, and the walk is bounded by the point where the guarantee alone
-/// reaches [`MAX_DEPTH`] and no walk runs at all — under sixty thousand steps at
-/// the worst weight, each one division.
+/// `B^(1/4)` steps. For the truncated rule `B` never exceeds `S`; for the
+/// weighted rule it grows with the weight. In either case the plan-depth bound
+/// limits the walk: when the guarantee alone reaches [`MAX_DEPTH`], no exact
+/// walk runs. The step count therefore depends on the selected precision and
+/// weight, rather than on a fixed decimal scale.
 ///
 /// # Errors
 ///
@@ -629,25 +621,23 @@ pub fn crossing_rank_at(
 /// can leave the range. The refusal is nonetheless carried rather than rendered
 /// as a separation bound, so that moving a guard surfaces the failure instead of
 /// quietly converting it into the most flattering depth available.
-pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> Result<u64, FusionError> {
+pub(crate) fn monotone_depth(decay: DecayRule, weight: Score) -> Result<u64, FusionError> {
     // The law before the measurement. An unusable constant is refused rather
     // than answered with the smallest ordered range, because that range would be
     // a real measurement's shape carrying no measurement.
     let k = usable_k(decay)?;
     // A weight of zero maps every rank to zero, so the first adjacent pair
     // already collides and a single rank is the *measured* answer rather than a
-    // stand-in for one. A negative weight is not a weight a profile can hold —
-    // `FusionProfile::with_decay` refuses one — and is read the same way here so
-    // that the short-circuit covers the whole non-positive half.
-    if weight <= Fixed::ZERO {
+    // stand-in for one. Unsigned weights cannot carry a negative value.
+    if weight.into_raw() == 0 {
         return Ok(1);
     }
-    let weight_raw = weight.into_raw().unsigned_abs();
-    let value: fn(Fixed, u64, u32) -> Result<Fixed, FusionError>;
+    let weight_raw = weight.into_raw();
+    let value: fn(Score, u64, u32) -> Result<Score, FusionError>;
     let guaranteed = match decay {
         DecayRule::ReciprocalRank { .. } => {
             value = contribution;
-            truncated_guarantee(weight_raw, k)
+            truncated_guarantee(weight_raw, weight.precision().scale(), k)
         }
         DecayRule::WeightedReciprocalRank { .. } => {
             value = weighted_contribution;
@@ -679,10 +669,10 @@ pub(crate) fn monotone_depth(decay: DecayRule, weight: Fixed) -> Result<u64, Fus
 /// claim this function can make — "every adjacent pair below here is distinct" —
 /// at exactly the point where no pair was compared at all.
 fn first_collision(
-    weight: Fixed,
+    weight: Score,
     k: u32,
     start: u64,
-    value: fn(Fixed, u64, u32) -> Result<Fixed, FusionError>,
+    value: fn(Score, u64, u32) -> Result<Score, FusionError>,
 ) -> Result<u64, FusionError> {
     let mut rank = start;
     let mut current = value(weight, rank, k)?;
@@ -742,7 +732,7 @@ fn first_collision(
 /// an answer, made exactly where no answer was computed at all.
 pub(crate) fn class_width(
     decay: DecayRule,
-    weight: Fixed,
+    weight: Score,
     rank: u64,
 ) -> Result<ClassWidth, FusionError> {
     // The law before the question, and stated here rather than left to the
@@ -862,8 +852,8 @@ pub(crate) fn class_width(
 /// one walks not at all, four costs one separating depth's worth of steps,
 /// 4096 costs about sixty-three. Each step is one integer division.
 ///
-/// The separating depth is therefore what sets the scale, and it is near `10^6`
-/// under the truncated rule at every weight but near `10^6 · sqrt(w)` under the
+/// The separating depth is therefore what sets the scale, and it is near `sqrt(S)`
+/// under the truncated rule at every weight but near `sqrt(S · w)` under the
 /// folded one — so a large tolerance at a heavy folded weight is where this
 /// walks farthest.
 ///
@@ -899,7 +889,7 @@ pub(crate) fn class_width(
 /// nothing established.
 pub(crate) fn deepest_rank_within_width(
     decay: DecayRule,
-    weight: Fixed,
+    weight: Score,
     max_width: u64,
 ) -> Result<ToleratedDepth, FusionError> {
     // The law before the question. [`monotone_depth`] below refuses an unusable
@@ -952,7 +942,7 @@ enum Separation {
     /// They collide here, and this is the **next** weight that can separate
     /// them: strictly heavier than the one probed, with every weight in between
     /// ruled out by the same algebra that ruled this one out.
-    NextWeight(i128),
+    NextWeight(u128),
     /// They collide at every weight. Only [`DecayRule::ReciprocalRank`] can say
     /// this, and it is the rule's real saturation rather than a shortfall in the
     /// search.
@@ -964,7 +954,7 @@ enum Separation {
 ///
 /// # The algebra, one rule at a time
 ///
-/// Write `S` for [`SCALE_RAW`], `w` for the weight's raw integer and `a` for the
+/// Write `S` for the selected decimal scale, `w` for the weight's raw integer and `a` for the
 /// smaller denominator.
 ///
 /// **Folded** ([`DecayRule::WeightedReciprocalRank`]) contributes
@@ -986,10 +976,10 @@ enum Separation {
 ///
 /// Both next-candidate formulas are strictly greater than the weight probed,
 /// which is what makes the search terminate.
-fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation {
+fn separation_at(decay: DecayRule, scale: u128, weight: u128, denominator: u64) -> Separation {
     match decay {
         DecayRule::WeightedReciprocalRank { .. } => {
-            let narrow = i128::from(denominator);
+            let narrow = u128::from(denominator);
             let quotient = weight / narrow;
             if weight % narrow < quotient {
                 Separation::Holds
@@ -998,11 +988,10 @@ fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation
             }
         }
         DecayRule::ReciprocalRank { .. } => {
-            // Both `S` and a denominator fit a `u64` — the scale is `10^12` and
-            // a denominator is under `2^33` — so the two reciprocals are narrow
-            // divisions rather than wide ones. That is the sweep's inner loop.
-            let here = i128::from(SCALE_NARROW / denominator);
-            let beyond = i128::from(SCALE_NARROW / (denominator + 1));
+            // Narrow division is retained whenever the actual operands fit;
+            // larger scales use the same exact quotient at full width.
+            let here = quotient(scale, u128::from(denominator));
+            let beyond = quotient(scale, u128::from(denominator + 1));
             if here == beyond {
                 return Separation::Impossible;
             }
@@ -1012,16 +1001,21 @@ fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation
             // This is the common case away from the saturation point, and
             // taking it early is what keeps the sweep affordable at depths near
             // a million.
-            if weight * (here - beyond) >= SCALE_RAW {
+            if weight >= ceil_div(scale, here - beyond) {
                 return Separation::Holds;
             }
-            let level = weight * here / SCALE_RAW;
-            if level > weight * beyond / SCALE_RAW {
+            // INVARIANT: weight <= scale and each reciprocal <= scale / 2.
+            let level = mul_div(weight, here, scale).expect("INVARIANT: bounded contribution");
+            if level > mul_div(weight, beyond, scale).expect("INVARIANT: bounded contribution") {
                 Separation::Holds
             } else {
                 // ⌈(level + 1)·S / here⌉, formed without leaving the integers.
-                let target = (level + 1) * SCALE_RAW;
-                Separation::NextWeight(ceil_div(target, here))
+                // INVARIANT: level < scale / 2; scale itself satisfies this pair,
+                // so the next weight is representable and no greater than scale.
+                Separation::NextWeight(
+                    mul_div_ceil(level + 1, scale, here)
+                        .expect("INVARIANT: a separating weight at or below scale"),
+                )
             }
         }
     }
@@ -1042,11 +1036,12 @@ fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation
 /// separates — one comparison clears the whole stretch instead of one probe per
 /// rank. Near the saturation point that is hundreds of thousands of ranks
 /// cleared by two divisions.
-fn shortfall_at(shortfall: i128, denominator: u64) -> i128 {
-    let reciprocal = i128::from(SCALE_NARROW / denominator);
+fn shortfall_at(scale: u128, shortfall: u128, denominator: u64) -> u128 {
+    let reciprocal = quotient(scale, u128::from(denominator));
     // ⌈f·I / S⌉, formed without leaving the integers. `f ≤ S` and `I ≤ S/2`, so
-    // the product stays far inside an `i128`.
-    ceil_div(shortfall * reciprocal, SCALE_RAW)
+    // the quotient fits even when the product needs 256 bits.
+    // INVARIANT: shortfall <= scale, so the ceiling is at most reciprocal.
+    mul_div_ceil(shortfall, reciprocal, scale).expect("INVARIANT: bounded shortfall")
 }
 
 /// `⌈numerator / divisor⌉` for a positive `divisor`, formed without leaving the
@@ -1054,17 +1049,10 @@ fn shortfall_at(shortfall: i128, denominator: u64) -> i128 {
 ///
 /// The one ceiling division of this module: the separation sweep's next
 /// weight, the shortfall's step and the counting bound all round up through it.
-/// It is written out because the standard library's signed `div_ceil` is not
-/// stable; truncating division already rounds a negative quotient up, so only a
-/// positive remainder moves the quotient.
-pub(crate) const fn ceil_div(numerator: i128, divisor: i128) -> i128 {
+/// A remainder adds one unit without forming an overflowing numerator sum.
+pub(crate) const fn ceil_div(numerator: u128, divisor: u128) -> u128 {
     debug_assert!(divisor > 0, "a ceiling division by a positive divisor");
-    let quotient = numerator / divisor;
-    if numerator % divisor > 0 {
-        quotient + 1
-    } else {
-        quotient
-    }
+    numerator.div_ceil(divisor)
 }
 
 /// What one sweep of the constraints over a weight found.
@@ -1078,13 +1066,13 @@ enum Lap {
     Separated,
     /// At least one did not, and this is the heaviest next candidate any of them
     /// named — the lightest weight above this one that could satisfy all of them.
-    Advance(i128),
+    Advance(u128),
     /// A pair in the range collides at every weight there is.
     Unreachable,
 }
 
-impl From<Option<i128>> for Lap {
-    fn from(heaviest: Option<i128>) -> Self {
+impl From<Option<u128>> for Lap {
+    fn from(heaviest: Option<u128>) -> Self {
         heaviest.map_or(Self::Separated, Self::Advance)
     }
 }
@@ -1118,26 +1106,27 @@ impl From<Option<i128>> for Lap {
 /// range by checking that a weight of one reaches the depth. Under
 /// [`DecayRule::WeightedReciprocalRank`] no such shortcut is needed: that rule's
 /// closed-form guarantee is exact, so the range it leaves open is short.
-fn sweep(decay: DecayRule, weight: i128, floor: u64, widest: u64) -> Lap {
-    let mut heaviest: Option<i128> = None;
-    let probe =
-        |cursor: u64, heaviest: &mut Option<i128>| match separation_at(decay, weight, cursor) {
-            Separation::Holds => true,
-            Separation::Impossible => false,
-            Separation::NextWeight(next) => {
-                *heaviest = Some(heaviest.map_or(next, |far: i128| far.max(next)));
-                true
-            }
-        };
+fn sweep(decay: DecayRule, scale: u128, weight: u128, floor: u64, widest: u64) -> Lap {
+    let mut heaviest: Option<u128> = None;
+    let probe = |cursor: u64, heaviest: &mut Option<u128>| match separation_at(
+        decay, scale, weight, cursor,
+    ) {
+        Separation::Holds => true,
+        Separation::Impossible => false,
+        Separation::NextWeight(next) => {
+            *heaviest = Some(heaviest.map_or(next, |far: u128| far.max(next)));
+            true
+        }
+    };
 
-    let span = i128::from(widest - floor + 1);
+    let span = u128::from(widest - floor + 1);
     // The folded rule has no shortfall to step on, and the truncated rule only
     // gains by stepping when the shortfall steps less often than once a rank.
     let by_shortfall = match decay {
         DecayRule::ReciprocalRank { .. } => {
-            let shortfall = SCALE_RAW - weight;
-            let settled = shortfall_at(shortfall, widest + 1);
-            let steps = shortfall_at(shortfall, floor) - settled;
+            let shortfall = scale - weight;
+            let settled = shortfall_at(scale, shortfall, widest + 1);
+            let steps = shortfall_at(scale, shortfall, floor) - settled;
             (steps < span).then_some((shortfall, settled))
         }
         DecayRule::WeightedReciprocalRank { .. } => None,
@@ -1153,7 +1142,7 @@ fn sweep(decay: DecayRule, weight: i128, floor: u64, widest: u64) -> Lap {
 
     let mut cursor = floor;
     while cursor <= widest {
-        let here = shortfall_at(shortfall, cursor);
+        let here = shortfall_at(scale, shortfall, cursor);
         if here == settled {
             // The shortfall is flat from here to the end of the range, so every
             // remaining pair separates.
@@ -1163,7 +1152,11 @@ fn sweep(decay: DecayRule, weight: i128, floor: u64, widest: u64) -> Lap {
         // strictly past `cursor` — `cursor`'s own shortfall is `here` — and at
         // or before `widest + 1`, because the shortfall is `settled` there and
         // `settled` is below `here`.
-        let reach = SCALE_RAW / ((here - 1) * SCALE_RAW / shortfall + 1) + 1;
+        // INVARIANT: here <= ceil(shortfall / 2), so the inner quotient
+        // is below scale and both following increments are representable.
+        let threshold =
+            mul_div(here - 1, scale, shortfall).expect("INVARIANT: bounded shortfall transition");
+        let reach = scale / (threshold + 1) + 1;
         // Every pair from `cursor` up to the one before that denominator spans a
         // flat shortfall and so separates. The pair at the denominator just
         // before it is the one that steps, and the only one in the stretch that
@@ -1205,7 +1198,7 @@ fn sweep(decay: DecayRule, weight: i128, floor: u64, widest: u64) -> Lap {
 /// minimum sits within a part in twenty thousand of a weight of one, and walking
 /// up to it from a single raw unit takes millions of candidate steps. The bound
 /// removes the great majority of them without probing a single rank.
-fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i128 {
+fn heaviest_counting_bound(decay: DecayRule, scale: u128, narrowest: u64, widest: u64) -> u128 {
     // `sqrt` of a quantity under 2^33, so the window is under a million wide
     // even at the deepest expressible plan. The root is found with the same
     // bisection the rest of the file uses rather than by a cast.
@@ -1215,19 +1208,21 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
             .is_some_and(|square| square <= widest)
     });
     let from = widest.saturating_sub(root * 8 + 16).max(narrowest);
-    let beyond = i128::from(widest) + 1;
-    let outermost = SCALE_RAW / beyond;
-    let mut bound: i128 = 1;
+    let beyond = u128::from(widest) + 1;
+    let outermost = scale / beyond;
+    let mut bound: u128 = 1;
     for p in from..widest {
-        let steps = i128::from(widest - p);
-        let narrow = i128::from(p);
+        let steps = u128::from(widest - p);
+        let narrow = u128::from(p);
         let candidate = match decay {
             DecayRule::ReciprocalRank { .. } => {
-                let gap = SCALE_RAW / narrow - outermost;
-                if gap <= 0 {
+                let gap = scale / narrow - outermost;
+                if gap == 0 {
                     continue;
                 }
-                SCALE_RAW * steps / gap + 1
+                // INVARIANT: scale separates every pair in the admitted interval,
+                // hence gap > steps and this bound is strictly below scale.
+                mul_div(scale, steps, gap).expect("INVARIANT: bound below scale") + 1
             }
             DecayRule::WeightedReciprocalRank { .. } => {
                 let numerator = narrow * (beyond * steps + 1);
@@ -1286,9 +1281,9 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 ///   rule that was never evaluated.
 /// * [`FusionError::Overflow`] is carried by the signature but cannot be
 ///   provoked once `depth` is inside the range a plan can record: the
-///   sufficient weight is then at most `(u32::MAX + u32::MAX)²`, far inside an
-///   `i128`. The checked steps that would raise it are kept so that widening
-///   that range cannot silently wrap instead.
+///   folded sufficient weight is below `(u32::MAX + u32::MAX)²`; the truncated
+///   sufficient weight is the declared scale, at most `10^38`. Both fit `u128`,
+///   while their wider intermediate products use the shared exact kernel.
 ///
 /// # Why it is not bisected
 ///
@@ -1339,7 +1334,11 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
 /// answer sits within a part in twenty thousand of a weight of one, so the
 /// candidate steps between the bound and it are correspondingly fine and there
 /// are a great many of them.
-pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<Fixed, FusionError> {
+pub(crate) fn minimum_weight_for_depth(
+    decay: DecayRule,
+    precision: Precision,
+    depth: u64,
+) -> Result<Score, FusionError> {
     // The law before the question. A rule with a zero smoothing constant is not
     // a rule to price a depth under, and the two ways this reads without the
     // check are both wrong in the same direction: a depth of one takes the
@@ -1367,7 +1366,8 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
 
     // The lightest weight there is. With fewer than two ranks to order there is
     // no adjacent pair and therefore no constraint, so it is already the answer.
-    let lightest = Fixed::from_raw(1);
+    let scale = precision.scale();
+    let lightest = precision.score(1);
     let Some(constraints) = depth.checked_sub(1).filter(|count| *count > 0) else {
         return Ok(lightest);
     };
@@ -1382,20 +1382,19 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
     // reciprocal has already lost — so if one does not reach `depth`, nothing
     // does.
     let sufficient = match decay {
-        DecayRule::ReciprocalRank { .. } => SCALE_RAW,
+        DecayRule::ReciprocalRank { .. } => scale,
         DecayRule::WeightedReciprocalRank { k } => {
             let widest = u128::from(k)
                 .checked_add(u128::from(depth))
                 .ok_or(FusionError::Overflow)?;
-            let square = widest.checked_mul(widest).ok_or(FusionError::Overflow)?;
-            i128::try_from(square).map_err(|_| FusionError::Overflow)?
+            widest.checked_mul(widest).ok_or(FusionError::Overflow)?
         }
     };
     // How deep the rule separates at all, measured once. `depth` is inside the
     // plan's range, so a value below it is a real rank the rule reached and
     // stopped at — never the saturating case, which is only ever at or above
     // `MAX_DEPTH`. That is what makes it honest to report as an exact number.
-    let separates_to = monotone_depth(decay, Fixed::from_raw(sufficient))?;
+    let separates_to = monotone_depth(decay, precision.score(sufficient))?;
     let unreachable = || FusionError::DepthUnreachable {
         depth,
         saturates_at: separates_to,
@@ -1416,15 +1415,15 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
     // true at a heavier one — it only leaves a longer tail than it has to. It is
     // therefore re-read when the weight has doubled rather than every lap: at
     // most a handful of times over a walk, instead of once per candidate.
-    let settled = |weight: i128| {
-        let magnitude = weight.unsigned_abs();
+    let settled = |weight: u128| {
+        let magnitude = weight;
         match decay {
-            DecayRule::ReciprocalRank { .. } => truncated_guarantee(magnitude, k),
+            DecayRule::ReciprocalRank { .. } => truncated_guarantee(magnitude, scale, k),
             DecayRule::WeightedReciprocalRank { .. } => weighted_guarantee(magnitude, k),
         }
     };
 
-    let mut weight = heaviest_counting_bound(decay, narrowest, widest).max(1);
+    let mut weight = heaviest_counting_bound(decay, scale, narrowest, widest).max(1);
     let mut guaranteed = settled(weight);
     let mut stale_above = weight.saturating_mul(2);
     while weight <= sufficient {
@@ -1433,13 +1432,13 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
             stale_above = weight.saturating_mul(2);
         }
         if guaranteed >= constraints {
-            return Ok(Fixed::from_raw(weight));
+            return Ok(precision.score(weight));
         }
         // The tail the guarantee leaves open: ranks `guaranteed + 1 ..=
         // constraints`, which are the denominators below `widest` by that many.
         let floor = widest - (constraints - guaranteed) + 1;
-        match sweep(decay, weight, floor, widest) {
-            Lap::Separated => return Ok(Fixed::from_raw(weight)),
+        match sweep(decay, scale, weight, floor, widest) {
+            Lap::Separated => return Ok(precision.score(weight)),
             // Retained rather than reachable. Under the truncated rule a lap
             // reports this only where `trunc(S / a) == trunc(S / (a + 1))`, and
             // that is exactly where a unit weight — which is `sufficient` for
@@ -1450,16 +1449,17 @@ pub(crate) fn minimum_weight_for_depth(decay: DecayRule, depth: u64) -> Result<F
             // answer, and it names the same exact rank the guard would have.
             Lap::Unreachable => return Err(unreachable()),
             Lap::Advance(next) => {
-                debug_assert!(next > weight, "a candidate must advance the search");
+                if next <= weight || next > sufficient {
+                    return Err(FusionError::ResolutionInvariant);
+                }
                 weight = next;
             }
         }
     }
-    // Unreachable: `sufficient` satisfies every constraint in the range and no
-    // step skips a satisfying weight, so the lap completes at or below it. The
-    // bound is honoured rather than asserted, and `sufficient` is a correct if
-    // not minimal answer, so the walk cannot run away.
-    Ok(Fixed::from_raw(sufficient))
+    // `sufficient` satisfies every constraint. Leaving the loop without an
+    // exact answer violates candidate advancement; a merely sufficient weight
+    // must never be returned as the true minimum.
+    Err(FusionError::ResolutionInvariant)
 }
 
 /// The largest rank in `0..=MAX_DEPTH` for which `guarantees` holds, or zero
@@ -1521,8 +1521,7 @@ fn largest_rank_satisfying_checked<E>(
 /// the weight: once `D · (D + 1) > S` the quotient `q` is zero and the product
 /// is zero for every weight, so the guarantee ends just below `D = sqrt(S)` no
 /// matter how heavy the stratum is.
-fn truncated_guarantee(weight_raw: u128, k: u32) -> u64 {
-    let scale = SCALE_RAW.unsigned_abs();
+fn truncated_guarantee(weight_raw: u128, scale: u128, k: u32) -> u64 {
     largest_rank_satisfying(|rank| {
         let denominator = u128::from(k) + u128::from(rank);
         let Some(product) = denominator.checked_mul(denominator + 1) else {
@@ -1549,7 +1548,7 @@ fn truncated_guarantee(weight_raw: u128, k: u32) -> u64 {
 /// The left-hand side is formed in `u128`. `D` is at most
 /// `u32::MAX + MAX_DEPTH < 2^33`, so `D · (D + 1) < 2^67` — above a `u64` and
 /// far inside a `u128`, which is why the arithmetic is not narrowed. `w_raw` is
-/// a [`Fixed`]'s magnitude, at most `2^127`.
+/// a [`Score`]'s magnitude, at most `u128::MAX`.
 fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
     largest_rank_satisfying(|rank| {
         let denominator = u128::from(k) + u128::from(rank);
@@ -1568,13 +1567,21 @@ mod tests {
     };
     use crate::error::FusionError;
     use crate::fusion_profile::DecayRule;
-    use purrdf_text::{Fixed, SCALE_DIGITS};
+    use crate::score::{Precision, Score};
+
+    fn precision() -> Precision {
+        Precision::new(12).expect("fixture precision")
+    }
+    fn score(raw: u128) -> Score {
+        precision().score(raw)
+    }
+    const SCALE_DIGITS: u32 = 12;
 
     /// `10^SCALE_DIGITS`, the raw value of a weight of exactly one.
-    const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
+    const SCALE: u128 = 10_u128.pow(SCALE_DIGITS);
 
     /// Ceiling division at its boundaries: zero, an exact quotient, one either
-    /// side of it, a negative numerator, and the top of the range, where the
+    /// side of it, and the top of the range, where the
     /// hand-written `n + d - 1` would overflow.
     #[test]
     fn ceil_div_rounds_up_at_every_boundary() {
@@ -1583,14 +1590,10 @@ mod tests {
         assert_eq!(ceil_div(13, 7), 2);
         assert_eq!(ceil_div(15, 7), 3);
         assert_eq!(ceil_div(1, 7), 1);
-        assert_eq!(ceil_div(-1, 7), 0);
-        assert_eq!(ceil_div(-7, 7), -1);
-        assert_eq!(ceil_div(-8, 7), -1);
-        assert_eq!(ceil_div(-14, 7), -2);
-        assert_eq!(ceil_div(i128::MAX, 2), i128::MAX / 2 + 1);
-        assert_eq!(ceil_div(i128::MAX, 1), i128::MAX);
-        for numerator in -50_i128..=50 {
-            for divisor in 1_i128..=9 {
+        assert_eq!(ceil_div(u128::MAX, 2), u128::MAX / 2 + 1);
+        assert_eq!(ceil_div(u128::MAX, 1), u128::MAX);
+        for numerator in 1_u128..=50 {
+            for divisor in 1_u128..=9 {
                 let up = ceil_div(numerator, divisor);
                 assert!(up * divisor >= numerator, "{numerator}/{divisor}");
                 assert!((up - 1) * divisor < numerator, "{numerator}/{divisor}");
@@ -1598,11 +1601,11 @@ mod tests {
         }
     }
 
-    fn value(weight: Fixed, rank: u64, k: u32) -> Fixed {
+    fn value(weight: Score, rank: u64, k: u32) -> Score {
         contribution(weight, rank, k).expect("a positive weight and a 1-based rank do not overflow")
     }
 
-    fn weighted(weight: Fixed, rank: u64, k: u32) -> Fixed {
+    fn weighted(weight: Score, rank: u64, k: u32) -> Score {
         weighted_contribution(weight, rank, k)
             .expect("a positive weight and a 1-based rank do not overflow")
     }
@@ -1621,7 +1624,7 @@ mod tests {
     /// and a positive weight, so a refusal here would be a broken fixture rather
     /// than a case under test. The refusal itself is exercised directly against
     /// [`first_collision`], which is where it is raised.
-    fn measured_bound(decay: DecayRule, weight: Fixed) -> u64 {
+    fn measured_bound(decay: DecayRule, weight: Score) -> u64 {
         monotone_depth(decay, weight)
             .expect("a usable smoothing constant and a positive weight measure a bound")
     }
@@ -1629,7 +1632,7 @@ mod tests {
     /// The property the bound is defined by, asserted on both sides of it: every
     /// adjacent pair at or below the bound is strictly ordered, and the pair
     /// immediately beyond it is not.
-    fn assert_bound_is_exact(weight: Fixed, k: u32) {
+    fn assert_bound_is_exact(weight: Score, k: u32) {
         let bound = measured_bound(truncated(k), weight);
         assert!(bound >= 1, "a single rank is always in range");
         assert!(
@@ -1658,7 +1661,7 @@ mod tests {
     fn adjacent_ranks_stay_distinct_to_the_bound_and_collide_beyond_it() {
         // A weight of 10^-6, so the bound is in the low thousands and the whole
         // walk is legible.
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         assert_bound_is_exact(weight, 1);
         assert_bound_is_exact(weight, 60);
     }
@@ -1667,7 +1670,7 @@ mod tests {
     /// resolution is what binds.
     #[test]
     fn the_bound_is_exact_at_unit_weight() {
-        assert_bound_is_exact(Fixed::ONE, 60);
+        assert_bound_is_exact(score(SCALE), 60);
     }
 
     /// The correction to the reviewed model. `r ≲ sqrt(w·S) − K` predicts that a
@@ -1678,10 +1681,10 @@ mod tests {
     /// Every weight at or above one therefore shares one bound.
     #[test]
     fn a_weight_above_one_buys_no_depth_under_the_truncated_rule() {
-        let unit = measured_bound(truncated(60), Fixed::ONE);
+        let unit = measured_bound(truncated(60), score(SCALE));
         for raw in [SCALE, SCALE * 2, SCALE * 1_000, SCALE * 1_000_000] {
             assert_eq!(
-                measured_bound(truncated(60), Fixed::from_raw(raw)),
+                measured_bound(truncated(60), score(raw)),
                 unit,
                 "weight raw {raw} must share the unit weight's bound"
             );
@@ -1700,18 +1703,17 @@ mod tests {
     /// the bound tracks `sqrt(w · S)`.
     #[test]
     fn a_weight_above_one_buys_depth_under_the_weighted_rule() {
-        let unit = measured_bound(folded(60), Fixed::ONE);
+        let unit = measured_bound(folded(60), score(SCALE));
         let mut previous = unit;
-        for weight_units in [4_i128, 100, 10_000] {
-            let bound = measured_bound(folded(60), Fixed::from_raw(weight_units * SCALE));
+        for weight_units in [4_u128, 100, 10_000] {
+            let bound = measured_bound(folded(60), score(weight_units * SCALE));
             assert!(
                 bound > previous,
                 "weight {weight_units} must buy depth over {previous}, got {bound}"
             );
             // sqrt(w · S) = 10^6 · sqrt(w), to within the walk from the
             // guarantee to the first real collision.
-            let predicted =
-                1_000_000_u64 * integer_sqrt(u128::try_from(weight_units).expect("positive"));
+            let predicted = 1_000_000_u64 * integer_sqrt(weight_units);
             assert!(
                 bound >= predicted && bound < predicted + predicted / 100,
                 "bound {bound} must sit just above the predicted {predicted}"
@@ -1741,9 +1743,9 @@ mod tests {
     #[test]
     fn a_weight_below_one_lowers_the_bound() {
         for decay in [truncated(1), folded(1)] {
-            let mut previous = measured_bound(decay, Fixed::ONE);
+            let mut previous = measured_bound(decay, score(SCALE));
             for raw in [SCALE / 100, SCALE / 10_000, SCALE / 1_000_000, 100, 1] {
-                let bound = measured_bound(decay, Fixed::from_raw(raw));
+                let bound = measured_bound(decay, score(raw));
                 assert!(
                     bound < previous,
                     "weight raw {raw} under {decay:?} must lower the bound below {previous}, got {bound}"
@@ -1758,7 +1760,7 @@ mod tests {
     /// rather than with a number that would license a depth.
     #[test]
     fn a_weight_that_truncates_to_nothing_has_a_bound_of_one() {
-        let weight = Fixed::from_raw(1);
+        let weight = score(1);
         assert_eq!(measured_bound(truncated(60), weight), 1);
         assert_eq!(value(weight, 1, 60), value(weight, 2, 60));
         assert_eq!(measured_bound(folded(60), weight), 1);
@@ -1770,7 +1772,7 @@ mod tests {
     /// rules, because both divide by `K + r`.
     #[test]
     fn the_smoothing_constant_shifts_the_bound_one_for_one() {
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         for rule in [truncated as fn(u32) -> DecayRule, folded] {
             let base = measured_bound(rule(1), weight);
             for k in [2_u32, 10, 60, 500] {
@@ -1788,8 +1790,8 @@ mod tests {
     /// the unaccelerated one over a range small enough to walk from rank one.
     #[test]
     fn the_accelerated_search_agrees_with_a_walk_from_rank_one() {
-        for raw in [1_i128, 7, 1_000, 999_983, 1_000_000, 12_345_678] {
-            let weight = Fixed::from_raw(raw);
+        for raw in [1_u128, 7, 1_000, 999_983, 1_000_000, 12_345_678] {
+            let weight = score(raw);
             for k in [1_u32, 3, 60] {
                 for decay in [truncated(k), folded(k)] {
                     let at = |rank: u64| {
@@ -1834,8 +1836,8 @@ mod tests {
     /// truncated rule is usable at all.
     #[test]
     fn the_weighted_rule_is_the_truncated_rule_computed_more_accurately() {
-        for weight_raw in [1_i128, 1_000_000, SCALE / 2, SCALE, 7 * SCALE, 200 * SCALE] {
-            let weight = Fixed::from_raw(weight_raw);
+        for weight_raw in [1_u128, 1_000_000, SCALE / 2, SCALE, 7 * SCALE, 200 * SCALE] {
+            let weight = score(weight_raw);
             let slack = weight_raw / SCALE + 1;
             for k in [1_u32, 60, 500] {
                 for rank in [1_u64, 2, 17, 1_000, 999_999, 1_000_001, 8_508_044] {
@@ -1844,14 +1846,14 @@ mod tests {
                     // the implementation.
                     assert_eq!(
                         exact.into_raw(),
-                        weight_raw / (i128::from(k) + i128::from(rank)),
+                        weight_raw / (u128::from(k) + u128::from(rank)),
                         "the weighted rule must be trunc(w_raw / (K + r))"
                     );
                     let truncated_value = value(weight, rank, k);
                     let gap = exact.into_raw() - truncated_value.into_raw();
                     assert!(
-                        gap >= 0,
-                        "the truncated rule must never exceed the exactly-rounded value"
+                        exact >= truncated_value,
+                        "the truncated rule cannot exceed the weighted rule"
                     );
                     assert!(
                         gap <= slack,
@@ -1865,10 +1867,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn selected_scales_preserve_full_width_and_largest_rank_arithmetic() {
+        for digits in [0, 18, 19, 20, 38] {
+            let precision = Precision::new(digits).expect("supported precision");
+            let weight = precision.score(u128::MAX);
+            assert_eq!(
+                weighted_contribution(weight, 1, 1).unwrap().into_raw(),
+                u128::MAX / 2
+            );
+            let direct = contribution(weight, 1, 1).unwrap().into_raw();
+            let expected = purrdf_xsd::BigInt::from_u128(u128::MAX)
+                .mul(&purrdf_xsd::BigInt::from_u128(precision.scale() / 2))
+                .div_rem(&purrdf_xsd::BigInt::from_u128(precision.scale()))
+                .unwrap()
+                .0;
+            assert_eq!(purrdf_xsd::BigInt::from_u128(direct), expected);
+            let large = weighted_contribution(weight, u64::MAX, u32::MAX).unwrap();
+            assert_eq!(
+                large.into_raw(),
+                u128::MAX / (u128::from(u64::MAX) + u128::from(u32::MAX))
+            );
+            assert_eq!(large.precision(), precision);
+        }
+        let precision = Precision::new(18).unwrap();
+        let weight = precision.score(200 * precision.scale());
+        assert_eq!(
+            weighted_contribution(weight, 1, 60).unwrap().into_raw(),
+            200 * precision.scale() / 61
+        );
+        assert_eq!(
+            contribution(weight, 1, 60).unwrap().into_raw(),
+            200 * (precision.scale() / 61)
+        );
+    }
+
     /// The dispatcher runs the rule it is handed and nothing else.
     #[test]
     fn the_dispatcher_selects_the_named_rule() {
-        let weight = Fixed::from_raw(200 * SCALE);
+        let weight = score(200 * SCALE);
         assert_eq!(
             contribution_under(truncated(60), weight, 7).expect("fits"),
             contribution(weight, 7, 60).expect("fits")
@@ -1882,10 +1919,10 @@ mod tests {
     /// Both rules refuse the same unusable operands with the same typed errors.
     #[test]
     fn both_rules_refuse_a_zero_constant_and_a_zero_rank() {
-        assert!(weighted_contribution(Fixed::ONE, 1, 0).is_err());
-        assert!(weighted_contribution(Fixed::ONE, 0, 60).is_err());
-        assert!(contribution(Fixed::ONE, 1, 0).is_err());
-        assert!(contribution(Fixed::ONE, 0, 60).is_err());
+        assert!(weighted_contribution(score(SCALE), 1, 0).is_err());
+        assert!(weighted_contribution(score(SCALE), 0, 60).is_err());
+        assert!(contribution(score(SCALE), 1, 0).is_err());
+        assert!(contribution(score(SCALE), 0, 60).is_err());
     }
 
     /// The precision floor a caller choosing a weight is warned about, measured
@@ -1899,7 +1936,7 @@ mod tests {
     /// for the relation `(K + rank) / w_raw`.
     #[test]
     fn a_weight_near_the_raw_unit_truncates_a_measurable_share_of_each_contribution() {
-        let small = Fixed::from_raw(1_000);
+        let small = score(1_000);
         let emitted = weighted(small, 1, 60).into_raw();
         assert_eq!(emitted, 16, "1000 / 61 = 16.39… truncates to 16 raw units");
         assert_eq!(
@@ -1911,7 +1948,7 @@ mod tests {
         // The shortfall exactly, in thousandths of a raw unit, so the ~2.4% the
         // docs quote is a measurement and not a rounding: 1000·1000/61 = 16393
         // thousandths wanted, 16000 emitted, 393 lost.
-        let wanted_thousandths = 1_000_i128 * 1_000 / 61;
+        let wanted_thousandths = 1_000_u128 * 1_000 / 61;
         assert_eq!(wanted_thousandths, 16_393);
         assert_eq!(wanted_thousandths - emitted * 1_000, 393);
 
@@ -1921,20 +1958,11 @@ mod tests {
 
         // The other anchor. A whole-number weight keeps the same one-unit loss
         // against a contribution ten orders of magnitude larger.
-        let whole = Fixed::from_raw(SCALE);
+        let whole = score(SCALE);
         let whole_emitted = weighted(whole, 1, 60).into_raw();
         assert_eq!(whole_emitted, 16_393_442_622);
         assert_eq!(whole_emitted, SCALE / 61);
         assert!(whole_emitted * 61 <= SCALE && (whole_emitted + 1) * 61 > SCALE);
-    }
-
-    /// A negative weight truncates toward zero under the weighted rule, the same
-    /// direction every other rounding in the layer takes.
-    #[test]
-    fn a_negative_weight_truncates_toward_zero() {
-        let negative = Fixed::from_raw(-7);
-        assert_eq!(weighted(negative, 1, 1).into_raw(), -3);
-        assert_eq!(weighted(Fixed::from_raw(7), 1, 1).into_raw(), 3);
     }
 
     /// Non-increase is a property of the decay rule, not a per-row observation.
@@ -1962,12 +1990,7 @@ mod tests {
     /// a plateau.
     #[test]
     fn every_decay_rule_is_non_increasing_in_the_rank() {
-        let weights = [
-            Fixed::from_raw(1),
-            Fixed::from_raw(1_000),
-            Fixed::from_raw(1_000_000),
-            Fixed::from_raw(SCALE),
-        ];
+        let weights = [score(1), score(1_000), score(1_000_000), score(SCALE)];
         for decay in [truncated(60), folded(60), truncated(1), folded(1)] {
             for weight in weights {
                 let mut previous = contribution_under(decay, weight, 1)
@@ -1996,13 +2019,13 @@ mod tests {
     /// sweep would step straight past a collision.
     #[test]
     fn the_shortfall_is_exactly_what_the_contribution_loses() {
-        for weight_raw in [1_i128, 2, 1_000, 999_983, SCALE / 2, SCALE - 1, SCALE] {
+        for weight_raw in [1_u128, 2, 1_000, 999_983, SCALE / 2, SCALE - 1, SCALE] {
             let shortfall = SCALE - weight_raw;
             for denominator in [2_u64, 3, 61, 1_000, 999_983, 1_000_000, 1_048_577] {
-                let reciprocal = SCALE / i128::from(denominator);
+                let reciprocal = SCALE / u128::from(denominator);
                 assert_eq!(
                     weight_raw * reciprocal / SCALE,
-                    reciprocal - shortfall_at(shortfall, denominator),
+                    reciprocal - shortfall_at(SCALE, shortfall, denominator),
                     "weight raw {weight_raw} at denominator {denominator}"
                 );
             }
@@ -2024,12 +2047,12 @@ mod tests {
             (SCALE - 97, 1),
             (SCALE - 44_559_030, 700_000),
         ] {
-            let weight = Fixed::from_raw(weight_raw);
+            let weight = score(weight_raw);
             let shortfall = SCALE - weight_raw;
             let mut flat = 0_u64;
             for rank in from..from + 4_000 {
-                let here = shortfall_at(shortfall, u64::from(k) + rank);
-                let next = shortfall_at(shortfall, u64::from(k) + rank + 1);
+                let here = shortfall_at(SCALE, shortfall, u64::from(k) + rank);
+                let next = shortfall_at(SCALE, shortfall, u64::from(k) + rank + 1);
                 if here != next {
                     continue;
                 }
@@ -2052,24 +2075,50 @@ mod tests {
     /// the accelerators are only allowed to change how long the answer takes.
     #[test]
     fn the_minimum_weight_agrees_with_an_exhaustive_search() {
-        for k in [1_u32, 2, 7, 60] {
-            for depth in [2_u64, 3, 5, 9, 17, 40] {
-                for decay in [
-                    DecayRule::ReciprocalRank { k },
-                    DecayRule::WeightedReciprocalRank { k },
-                ] {
-                    let named = minimum_weight_for_depth(decay, depth)
-                        .expect("these depths are reachable under both rules");
-                    let expected = (1..=named.into_raw())
-                        .find(|raw| measured_bound(decay, Fixed::from_raw(*raw)) >= depth)
-                        .expect("the named weight itself reaches the depth");
-                    assert_eq!(
-                        named.into_raw(),
-                        expected,
-                        "{decay:?} depth {depth}: the lightest weight that reaches it is \
-                         {expected}, not {}",
-                        named.into_raw()
-                    );
+        use purrdf_xsd::BigInt;
+        for digits in [0, 1, 2, 3, 18, 38] {
+            let precision = Precision::new(digits).expect("supported precision");
+            let scale = precision.scale();
+            for k in [1_u32, 7] {
+                for depth in [2_u64, 3, 5] {
+                    for decay in [truncated(k), folded(k)] {
+                        let oracle = |raw: u128, rank: u64| {
+                            let denominator = u128::from(k) + u128::from(rank);
+                            match decay {
+                                DecayRule::WeightedReciprocalRank { .. } => {
+                                    BigInt::from_u128(raw / denominator)
+                                }
+                                DecayRule::ReciprocalRank { .. } => {
+                                    BigInt::from_u128(raw)
+                                        .mul(&BigInt::from_u128(scale / denominator))
+                                        .div_rem(&BigInt::from_u128(scale))
+                                        .expect("positive scale")
+                                        .0
+                                }
+                            }
+                        };
+                        let bound = match decay {
+                            DecayRule::ReciprocalRank { .. } => scale.min(256),
+                            DecayRule::WeightedReciprocalRank { .. } => {
+                                (u128::from(k) + u128::from(depth)).pow(2)
+                            }
+                        };
+                        let expected = (1..=bound).find(|raw| {
+                            (1..depth).all(|rank| oracle(*raw, rank) > oracle(*raw, rank + 1))
+                        });
+                        let named = minimum_weight_for_depth(decay, precision, depth);
+                        match expected {
+                            Some(raw) => assert_eq!(
+                                named.expect("reachable").into_raw(),
+                                raw,
+                                "{decay:?}, digits {digits}, depth {depth}"
+                            ),
+                            None => assert!(
+                                matches!(named, Err(FusionError::DepthUnreachable { .. })),
+                                "{decay:?}, digits {digits}, depth {depth}: {named:?}"
+                            ),
+                        }
+                    }
                 }
             }
         }
@@ -2087,13 +2136,13 @@ mod tests {
             DecayRule::WeightedReciprocalRank { k: 60 },
         ] {
             assert_eq!(
-                minimum_weight_for_depth(decay, 1).expect("nothing to separate"),
-                Fixed::from_raw(1),
+                minimum_weight_for_depth(decay, precision(), 1).expect("nothing to separate"),
+                score(1),
                 "{decay:?} depth 1"
             );
             assert!(
                 matches!(
-                    minimum_weight_for_depth(decay, 0),
+                    minimum_weight_for_depth(decay, precision(), 0),
                     Err(FusionError::InvalidRank { rank: 0 })
                 ),
                 "{decay:?}: a depth of zero names no rank and must be refused"
@@ -2124,7 +2173,7 @@ mod tests {
     /// usable law there is, which must still answer.
     #[test]
     fn a_zero_smoothing_constant_is_refused_as_a_malformed_law_on_every_path() {
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         for rule in [truncated as fn(u32) -> DecayRule, folded] {
             // Read a refusal both ways: the variant it carries, and the story it
             // tells. `1` is the short-circuiting argument on both axes and the
@@ -2149,11 +2198,11 @@ mod tests {
             };
 
             for depth in [1_u64, 2, 64] {
-                let refused = minimum_weight_for_depth(rule(0), depth)
+                let refused = minimum_weight_for_depth(rule(0), precision(), depth)
                     .expect_err("a zero constant prices no depth");
                 refuses_as_malformed_law("depth", depth, &refused);
                 assert!(
-                    minimum_weight_for_depth(rule(1), depth).is_ok(),
+                    minimum_weight_for_depth(rule(1), precision(), depth).is_ok(),
                     "{:?} depth {depth}: the smallest usable constant still prices it",
                     rule(1)
                 );
@@ -2201,7 +2250,7 @@ mod tests {
     /// neighbour still answers.
     #[test]
     fn an_unusable_smoothing_constant_is_propagated_rather_than_rendered_as_a_measurement() {
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         assert!(
             matches!(
                 class_width(truncated(0), weight, 4),
@@ -2244,7 +2293,7 @@ mod tests {
     #[test]
     fn the_tolerance_walk_lands_near_the_square_root_of_the_tolerance() {
         for decay in [truncated(60), folded(60)] {
-            let weight = Fixed::from_raw(SCALE);
+            let weight = score(SCALE);
             let separating = measured_bound(decay, weight);
             assert_eq!(
                 deepest_rank_within_width(decay, weight, 1).expect("a unit weight measures"),
@@ -2286,10 +2335,7 @@ mod tests {
     fn a_tolerated_depth_that_saturates_is_reported_as_saturation_and_not_as_a_number() {
         let decay = folded(60);
 
-        for weight in [
-            Fixed::from_raw(20_000_000 * SCALE),
-            Fixed::from_raw(1_000_000_000 * SCALE),
-        ] {
+        for weight in [score(20_000_000 * SCALE), score(1_000_000_000 * SCALE)] {
             assert_eq!(
                 deepest_rank_within_width(decay, weight, 1).expect("the arithmetic evaluates"),
                 ToleratedDepth::ReadsBeyondAnyPlan,
@@ -2309,7 +2355,7 @@ mod tests {
         // The neighbouring weight, below the wall: a measured depth, reported
         // as one. Two million raw units lighter than the first saturating
         // weight above, and the answer changes shape rather than degree.
-        let below = Fixed::from_raw(18_000_000 * SCALE);
+        let below = score(18_000_000 * SCALE);
         let bound = monotone_depth(decay, below).expect("the arithmetic evaluates");
         assert!(
             bound < MAX_DEPTH,
@@ -2325,7 +2371,7 @@ mod tests {
         // smallest weight that separates to one rank short of the ceiling,
         // walked at a tolerance of two, steps off the end of the expressible
         // range instead of stopping inside it.
-        let at_the_edge = minimum_weight_for_depth(decay, MAX_DEPTH - 1)
+        let at_the_edge = minimum_weight_for_depth(decay, precision(), MAX_DEPTH - 1)
             .expect("the folded rule prices the deepest expressible depths");
         assert_eq!(
             monotone_depth(decay, at_the_edge).expect("the arithmetic evaluates"),
@@ -2344,7 +2390,7 @@ mod tests {
         // priced, so the refusal is about the depth and nothing else.
         assert!(
             matches!(
-                minimum_weight_for_depth(decay, MAX_DEPTH + 1),
+                minimum_weight_for_depth(decay, precision(), MAX_DEPTH + 1),
                 Err(FusionError::DepthBeyondPlanRange {
                     limit: MAX_DEPTH,
                     ..
@@ -2353,7 +2399,7 @@ mod tests {
             "a requested depth past the wall is a range refusal, never a saturated measurement"
         );
         assert!(
-            minimum_weight_for_depth(decay, MAX_DEPTH).is_ok(),
+            minimum_weight_for_depth(decay, precision(), MAX_DEPTH).is_ok(),
             "and the deepest expressible depth is still priced"
         );
     }
@@ -2369,7 +2415,7 @@ mod tests {
     /// precisely where nothing was asked.
     #[test]
     fn a_tolerance_of_zero_is_refused_rather_than_read_as_the_narrowest_real_one() {
-        let weight = Fixed::from_raw(1_000);
+        let weight = score(1_000);
         for decay in [truncated(60), folded(60)] {
             assert!(
                 matches!(
@@ -2403,13 +2449,13 @@ mod tests {
         for decay in [truncated(60), folded(60)] {
             assert!(
                 matches!(
-                    class_width(decay, Fixed::ONE, 0),
+                    class_width(decay, score(SCALE), 0),
                     Err(FusionError::InvalidRank { rank: 0 })
                 ),
                 "{decay:?}: rank zero names no rank for a class to form around"
             );
             assert_eq!(
-                class_width(decay, Fixed::ONE, 1).expect("rank one is a rank"),
+                class_width(decay, score(SCALE), 1).expect("rank one is a rank"),
                 ClassWidth::SpansTo(1),
                 "{decay:?}: rank one is separated from its neighbour at a unit weight"
             );
@@ -2428,7 +2474,7 @@ mod tests {
     #[test]
     fn the_separation_walk_propagates_an_unusable_operand_rather_than_naming_the_rank_it_failed_at()
     {
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         assert!(
             matches!(
                 first_collision(weight, 0, 1, contribution),
@@ -2464,16 +2510,15 @@ mod tests {
     ///
     /// A weight of zero is measured and the measurement is one: every rank's
     /// contribution is zero, so the first adjacent pair already collides and one
-    /// is the exact first-collision rank rather than a stand-in for it. The
-    /// negative half is short-circuited alongside it — `FusionProfile::with_decay`
-    /// refuses a negative weight where one is declared — so the walk is never
-    /// entered with a weight whose contributions do not decrease.
+    /// is the exact first-collision rank rather than a stand-in for it.
+    /// `FusionProfile::with_decay` refuses zero as a declared stratum weight;
+    /// standalone arithmetic still measures its resolution.
     ///
     /// Each case is paired with its usable neighbour, which must still measure a
     /// deeper range.
     #[test]
     fn an_unusable_constant_is_refused_while_a_zero_weight_measures_the_single_rank_it_orders() {
-        let weight = Fixed::from_raw(1_000_000);
+        let weight = score(1_000_000);
         for rule in [truncated as fn(u32) -> DecayRule, folded] {
             let unusable_k = monotone_depth(rule(0), weight);
             assert!(
@@ -2486,14 +2531,12 @@ mod tests {
                 "and the neighbouring constant of one still measures a deeper range"
             );
 
-            for raw in [0_i128, -1, -1_000_000] {
-                let unusable_weight = monotone_depth(rule(60), Fixed::from_raw(raw));
-                assert!(
-                    matches!(unusable_weight, Ok(1)),
-                    "a weight of raw {raw} orders a single rank and is not walked, \
-                     got {unusable_weight:?}"
-                );
-            }
+            let unusable_weight = monotone_depth(rule(60), score(0));
+            assert!(
+                matches!(unusable_weight, Ok(1)),
+                "a zero raw weight orders a single rank and is not walked, \
+                 got {unusable_weight:?}"
+            );
             assert!(
                 measured_bound(rule(60), weight) > 1,
                 "and the neighbouring positive weight still measures a deeper range"
@@ -2512,15 +2555,15 @@ mod tests {
     fn every_positive_weight_under_a_usable_constant_measures_a_bound_rather_than_refusing() {
         for k in [1_u32, 60, u32::MAX] {
             for raw in [
-                1_i128,
+                1_u128,
                 1_000,
                 SCALE / 2,
                 SCALE,
                 SCALE * 1_000_000,
-                i128::MAX / 2,
-                i128::MAX,
+                u128::MAX / 2,
+                u128::MAX,
             ] {
-                let weight = Fixed::from_raw(raw);
+                let weight = score(raw);
                 for decay in [truncated(k), folded(k)] {
                     let depth = monotone_depth(decay, weight);
                     assert!(
@@ -2540,12 +2583,12 @@ mod tests {
     fn the_deepest_expressible_depth_is_priced_and_one_past_it_is_a_plan_range_refusal() {
         let folded = DecayRule::WeightedReciprocalRank { k: 60 };
         assert!(
-            minimum_weight_for_depth(folded, MAX_DEPTH).is_ok(),
+            minimum_weight_for_depth(folded, precision(), MAX_DEPTH).is_ok(),
             "the folded rule separates to the deepest depth a plan can record"
         );
         assert!(
             matches!(
-                minimum_weight_for_depth(folded, MAX_DEPTH + 1),
+                minimum_weight_for_depth(folded, precision(), MAX_DEPTH + 1),
                 Err(FusionError::DepthBeyondPlanRange {
                     limit: MAX_DEPTH,
                     ..
@@ -2555,7 +2598,11 @@ mod tests {
         );
         assert!(
             matches!(
-                minimum_weight_for_depth(DecayRule::ReciprocalRank { k: 60 }, MAX_DEPTH),
+                minimum_weight_for_depth(
+                    DecayRule::ReciprocalRank { k: 60 },
+                    precision(),
+                    MAX_DEPTH
+                ),
                 Err(FusionError::DepthUnreachable { .. })
             ),
             "the truncated rule saturates well inside the plan's range"

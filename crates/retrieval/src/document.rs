@@ -382,12 +382,15 @@ impl RequestTerm {
 }
 
 impl ReadBound {
-    /// The bound as an externally tagged JSON value: `"Complete"`, or
-    /// `{"Bounded": rows}`.
+    /// The bound as an externally tagged JSON value: `"Complete"`,
+    /// `{"Bounded": rows}`, or `{"CallerOrdered": rows}`.
     #[must_use]
     pub fn to_json(self) -> Value {
         match self {
             Self::Bounded(top_k) => Object::new().with("Bounded", top_k.to_json()).into(),
+            Self::CallerOrdered(top_k) => {
+                Object::new().with("CallerOrdered", top_k.to_json()).into()
+            }
             Self::Complete => "Complete".into(),
         }
     }
@@ -404,7 +407,14 @@ impl ReadBound {
                 .and_then(TopK::from_json)
                 .map_err(|error| error.within("Bounded"))
                 .map(Self::Bounded),
-            (name, _) => Err(unknown_variant(name, &["Bounded", "Complete"])),
+            ("CallerOrdered", body) => content("CallerOrdered", body)
+                .and_then(TopK::from_json)
+                .map_err(|error| error.within("CallerOrdered"))
+                .map(Self::CallerOrdered),
+            (name, _) => Err(unknown_variant(
+                name,
+                &["Bounded", "CallerOrdered", "Complete"],
+            )),
         }
     }
 }
@@ -802,9 +812,9 @@ impl Plan {
     /// [`PlanOrigin::Deserialized`]: its registry instance id was minted
     /// elsewhere.
     ///
-    /// Reading checks the document's shape and each value's construction law,
-    /// never a plan's coherence; admission does that, for a plan from any
-    /// source.
+    /// Reading checks the document's shape, each value's construction law and
+    /// its read-order license. Caller ordering also requires derivable depths;
+    /// general plan coherence remains with certification and admission.
     ///
     /// # Errors
     ///
@@ -814,7 +824,7 @@ impl Plan {
     /// twice.
     pub fn from_json(value: &Value) -> Result<Self, PlanError> {
         let mut fields = fields_of(value)?;
-        Ok(Self {
+        let plan = Self {
             version: fields.required("version")?,
             request_terms: fields.required_with("request_terms", |value| {
                 items_with(value, RequestTerm::from_json)
@@ -849,7 +859,9 @@ impl Plan {
                 .map(RegistryId::from_raw)?,
             registry_content_fingerprint: fields.required("registry_content_fingerprint")?,
             origin: PlanOrigin::Deserialized,
-        })
+        };
+        plan.validate_order_bound()?;
+        Ok(plan)
     }
 
     /// [`Plan::to_json`], written as compact JSON.
@@ -950,7 +962,7 @@ mod tests {
     /// The document shape, pinned byte for byte: struct members in field order,
     /// externally tagged variants, `null` for an absent optional, a fixed-point
     /// value as its raw integer and an embedding component as its shortest
-    /// binary32 lexeme.
+    /// `binary32` lexeme.
     #[test]
     fn every_request_term_writes_its_pinned_document_and_reads_it_back() {
         let predicate = Iri::parse("http://example.org/p").expect("IRI");

@@ -74,20 +74,27 @@
 #![forbid(unsafe_code)]
 
 pub mod build;
+pub mod canonical;
 pub mod complete;
+pub mod document;
+pub mod document_expansion;
 pub mod entail;
 pub mod expr_selector;
 pub mod geo;
 pub mod governors;
+mod json_config;
 pub mod model;
+pub mod native_error;
 pub mod path_syntax;
 pub mod product;
 pub mod query;
+pub mod rdf_input;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
 pub mod shapes_tools;
 pub mod xpath_regex;
+pub mod yaml_source;
 
 pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
@@ -100,7 +107,8 @@ pub use complete::{
 };
 pub use entail::{
     EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,
-    entail_to_ntriples_string_with_shapes_graph, entail_to_ntriples_with_xpath_regex,
+    entail_to_ntriples_string_with_shapes_graph, entail_to_ntriples_with_coordinates,
+    entail_to_ntriples_with_xpath_regex,
 };
 pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
@@ -108,6 +116,7 @@ pub use product::{
     admit_shapes_product, admit_shapes_product_expecting,
     admit_shapes_product_with_implementations, certify_shapes_product, diff_shapes_products,
     explain_shapes_product, pack_shapes_product, pack_shapes_product_from_dataset,
+    pack_shapes_product_from_dataset_with_options, pack_shapes_product_with_options,
     pack_shapes_product_with_shapes_graph, parse_identity_digest, prepared_to_product,
     prepared_to_product_with_implementations, rebuild_shapes_product,
     rebuild_shapes_product_expecting, restore_shapes_product_with_options,
@@ -149,7 +158,8 @@ pub use purrdf_shapes::{
     ShapesImportError, UnsupportedTargetRefusal,
 };
 pub use shacl::{
-    validate_changes_to_sarif_string, validate_changes_to_sarif_string_with_shapes_graph,
+    requested_shacl_recursion, validate_changes_to_sarif_string,
+    validate_changes_to_sarif_string_with_shapes_graph,
     validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string,
     validate_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_xpath_regex,
 };
@@ -176,8 +186,14 @@ pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, Sel
 pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
     NodeExprOutcome, NodeExprRequest, RuleLimits, RulesHost, RulesOutcome, RulesRequest,
-    apply_rules_to_ntriples, apply_rules_to_ntriples_with_xpath_regex, check_rules, eval_node_expr,
+    ScopeBindingError, apply_rules_to_ntriples, apply_rules_to_ntriples_with_coordinates,
+    apply_rules_to_ntriples_with_xpath_regex, check_rules, eval_node_expr,
     eval_node_expr_with_xpath_regex, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph,
     parse_check_level, parse_scope_binding,
 };
 pub use xpath_regex::{UnknownXPathRegex, XPathValidationError};
+
+/// Original explicit SHACL profile selection or regex-law conflict.
+pub use purrdf_shapes::profile::ProfileRequestError;
+/// Original explicit recursive SHACL request mode and limits.
+pub use purrdf_shapes::recursion::RecursionRequestError;

@@ -65,8 +65,8 @@ mod sort;
 
 pub use scalar::{DebugScalar, write_debug_scalars};
 pub use sort::{
-    try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_partition_unique_by,
-    try_sort_unstable_by,
+    HeapSortFrame, try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by,
+    try_partition_unique_by, try_sort_unstable_by,
 };
 
 /// A buffer owner that reserves storage before publishing vector elements.

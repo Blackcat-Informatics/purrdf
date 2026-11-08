@@ -78,7 +78,7 @@ fn contextual_reassignment_reuses_current_dated_laws_and_refuses_resource_exhaus
         BIND(REGEX("a", "(?:a)") AS ?value)
     }"#;
     let prepared = engine
-        .prepare_rdflib_query(query, None, &[], QueryOptions::EMPTY)
+        .prepare_rdflib_query(query, None, &[], &QueryOptions::EMPTY)
         .unwrap();
     for (profile, expected) in [
         (Profile::Xpath31, "true"),
@@ -88,7 +88,7 @@ fn contextual_reassignment_reuses_current_dated_laws_and_refuses_resource_exhaus
         let options = QueryOptions::new().with_xpath_regex(profile, Limits::new());
         let (_, rows) = solutions(
             engine
-                .query_rdflib_prepared_view(&data, &prepared, options)
+                .query_rdflib_prepared_view(&data, &prepared, &options)
                 .unwrap(),
         );
         assert_eq!(rows.len(), 1);
@@ -103,7 +103,7 @@ fn contextual_reassignment_reuses_current_dated_laws_and_refuses_resource_exhaus
     );
     assert_eq!(
         engine
-            .query_rdflib_prepared_view(&data, &prepared, exhausted)
+            .query_rdflib_prepared_view(&data, &prepared, &exhausted)
             .unwrap_err()
             .code,
         Resource::PatternBytes.code(),
@@ -114,7 +114,7 @@ fn contextual_reassignment_reuses_current_dated_laws_and_refuses_resource_exhaus
             .query_rdflib_prepared_view(
                 &data,
                 &prepared,
-                QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new()),
+                &QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new()),
             )
             .unwrap(),
     );
@@ -142,7 +142,7 @@ fn one_prepared_query_alternates_dated_laws_without_changing_compatibility() {
         assert_eq!(engine.xpath_regex(), Some((profile, Limits::new())));
         let (_, rows) = solutions(
             engine
-                .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
                 .unwrap(),
         );
         assert_eq!(rows.len(), 1);
@@ -154,7 +154,7 @@ fn one_prepared_query_alternates_dated_laws_without_changing_compatibility() {
     }
     let (_, rows) = solutions(
         compatibility
-            .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap(),
     );
     assert!(rows[0][0].is_none());
@@ -177,7 +177,7 @@ fn one_engine_reuses_a_preparation_with_request_laws_and_current_bounds() {
         assert_eq!(options.xpath_regex(), Some((profile, Limits::new())));
         let (_, rows) = solutions(
             engine
-                .query_prepared(&data, &prepared, &[], options)
+                .query_prepared(&data, &prepared, &[], &options)
                 .unwrap(),
         );
         assert_eq!(render_cell(rows[0][0].as_ref()), expected);
@@ -193,18 +193,18 @@ fn one_engine_reuses_a_preparation_with_request_laws_and_current_bounds() {
             QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new().with(resource, 0));
         assert_eq!(
             engine
-                .query_prepared(&data, &prepared, &[], low)
+                .query_prepared(&data, &prepared, &[], &low)
                 .unwrap_err()
                 .code,
             resource.code()
         );
     }
     let high = QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new());
-    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], high).unwrap());
+    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], &high).unwrap());
     assert_eq!(render_cell(rows[0][0].as_ref()), "true");
     let (_, rows) = solutions(
         engine
-            .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap(),
     );
     assert!(
@@ -232,13 +232,13 @@ fn prepared_algebra_has_fresh_regex_construction_and_execution_bounds() {
     // execution context, so no compiled artifact exists on this first request.
     assert_eq!(
         engine
-            .query_prepared(&data, &prepared, &[], no_compile)
+            .query_prepared(&data, &prepared, &[], &no_compile)
             .unwrap_err()
             .code,
         Resource::CompileSteps.code()
     );
     let high = QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new());
-    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], high).unwrap());
+    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], &high).unwrap());
     assert_eq!(render_cell(rows[0][0].as_ref()), "true");
     assert_eq!(render_cell(rows[0][1].as_ref()), "x");
     for resource in [
@@ -250,13 +250,13 @@ fn prepared_algebra_has_fresh_regex_construction_and_execution_bounds() {
             QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new().with(resource, 0));
         assert_eq!(
             engine
-                .query_prepared(&data, &prepared, &[], low)
+                .query_prepared(&data, &prepared, &[], &low)
                 .unwrap_err()
                 .code,
             resource.code()
         );
     }
-    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], high).unwrap());
+    let (_, rows) = solutions(engine.query_prepared(&data, &prepared, &[], &high).unwrap());
     assert_eq!(render_cell(rows[0][0].as_ref()), "true");
     assert_eq!(render_cell(rows[0][1].as_ref()), "x");
 }
@@ -280,7 +280,7 @@ fn request_laws_reach_governed_queries_and_both_update_lanes() {
     };
     assert!(matches!(
         engine
-            .query_governed(&data, ask, high, &QueryGovernors::METERED)
+            .query_governed(&data, ask, &high, &QueryGovernors::METERED)
             .unwrap(),
         purrdf_sparql_eval::GovernedOutcome::Complete {
             result: SparqlResult::Boolean(true),
@@ -289,7 +289,7 @@ fn request_laws_reach_governed_queries_and_both_update_lanes() {
     ));
     assert_eq!(
         engine
-            .query_governed(&data, ask, low, &QueryGovernors::METERED)
+            .query_governed(&data, ask, &low, &QueryGovernors::METERED)
             .unwrap_err()
             .code,
         Resource::MatchSteps.code()
@@ -306,22 +306,22 @@ fn request_laws_reach_governed_queries_and_both_update_lanes() {
         let mut changed = Arc::clone(&original);
         let error = if governed {
             engine
-                .update_governed(&mut changed, update, low, &QueryGovernors::METERED)
+                .update_governed(&mut changed, update, &low, &QueryGovernors::METERED)
                 .unwrap_err()
         } else {
             engine
-                .update_with_options(&mut changed, update, low)
+                .update_with_options(&mut changed, update, &low)
                 .unwrap_err()
         };
         assert_eq!(error.code, Resource::MatchSteps.code());
         assert!(Arc::ptr_eq(&changed, &original));
         if governed {
             engine
-                .update_governed(&mut changed, update, high, &QueryGovernors::METERED)
+                .update_governed(&mut changed, update, &high, &QueryGovernors::METERED)
                 .unwrap();
         } else {
             engine
-                .update_with_options(&mut changed, update, high)
+                .update_with_options(&mut changed, update, &high)
                 .unwrap();
         }
         assert_eq!(changed.quad_count(), 2);
@@ -456,7 +456,7 @@ fn prepared_execution_does_not_retain_an_earlier_admission_or_refusal() {
                 let limits =
                     limit.map_or_else(Limits::new, |limit| Limits::new().with(resource, limit));
                 let engine = NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath31, limits);
-                let result = engine.query_prepared(&data, &prepared, &[], QueryOptions::EMPTY);
+                let result = engine.query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY);
                 if limit.is_some() {
                     assert_eq!(result.unwrap_err().code, resource.code());
                 } else {
@@ -484,13 +484,13 @@ fn governed_and_fallible_execution_refuse_instead_of_certifying_partial_rows() {
         .query_governed(
             &data,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap_err();
     assert_eq!(error.code, Resource::MatchSteps.code());
     let error = engine
-        .query_fallible_view(&*data, request, QueryOptions::EMPTY)
+        .query_fallible_view(&*data, request, &QueryOptions::EMPTY)
         .unwrap_err();
     let FallibleSparqlError::Query { diagnostic, .. } = error else {
         panic!("native XPath refusal must not become a view failure or a partial answer");
@@ -515,14 +515,14 @@ fn update_where_refusal_rolls_back_the_entire_request() {
         Limits::new().with(Resource::MatchSteps, 0),
     );
     assert_eq!(
-        low.update_with_options(&mut data, request, QueryOptions::EMPTY)
+        low.update_with_options(&mut data, request, &QueryOptions::EMPTY)
             .unwrap_err()
             .code,
         Resource::MatchSteps.code()
     );
     assert!(Arc::ptr_eq(&data, &original));
     let high = NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath31, Limits::new());
-    high.update_with_options(&mut data, request, QueryOptions::EMPTY)
+    high.update_with_options(&mut data, request, &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(data.quad_count(), 2);
 }
@@ -558,16 +558,16 @@ fn on_demand_row_filters_use_the_same_law_and_typed_refusal() {
     );
     let high = NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath31, Limits::new());
     let prepared = high
-        .prepare_query_with_options(&query, None, options)
+        .prepare_query_with_options(&query, None, &options)
         .unwrap();
-    let mut cursor = high.open_call_cursor(&prepared, options).unwrap();
+    let mut cursor = high.open_call_cursor(&prepared, &options).unwrap();
     assert!(cursor.next_row(&*data).unwrap().is_some());
     assert!(cursor.next_row(&*data).unwrap().is_none());
     let low = NativeSparqlEngine::new().with_xpath_regex(
         Profile::Xpath31,
         Limits::new().with(Resource::MatchSteps, 0),
     );
-    let mut cursor = low.open_call_cursor(&prepared, options).unwrap();
+    let mut cursor = low.open_call_cursor(&prepared, &options).unwrap();
     let EvalError::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) =
         cursor.next_row(&*data).unwrap_err()
     else {
@@ -579,7 +579,7 @@ fn on_demand_row_filters_use_the_same_law_and_typed_refusal() {
         (&high, Limits::new().with(Resource::MatchSteps, 0), false),
     ] {
         let options = options.with_xpath_regex(Profile::Xpath31, limits);
-        let mut cursor = engine.open_call_cursor(&prepared, options).unwrap();
+        let mut cursor = engine.open_call_cursor(&prepared, &options).unwrap();
         let row = cursor.next_row(&*data);
         if permitted {
             assert!(row.unwrap().is_some());
@@ -607,7 +607,7 @@ fn explain_evaluates_under_the_requests_dated_law() {
     // The request's law runs the pattern, so its exhausted bound is the
     // explanation's operational failure rather than a compatibility verdict.
     let error = engine
-        .explain_query_with_options(&data, query, None, withheld)
+        .explain_query_with_options(&data, query, None, &withheld)
         .unwrap_err();
     assert_eq!(error.code, Resource::MatchSteps.code());
     for options in [
@@ -616,7 +616,7 @@ fn explain_evaluates_under_the_requests_dated_law() {
         QueryOptions::EMPTY,
     ] {
         engine
-            .explain_query_with_options(&data, query, None, options)
+            .explain_query_with_options(&data, query, None, &options)
             .unwrap();
     }
 }

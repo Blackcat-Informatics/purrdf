@@ -18,15 +18,17 @@
 //!   `d = 10^scale` (a `u128` for `scale ≤ 38`), exact integer division yields the
 //!   top 64 significant bits of `u / d` — the integer quotient, then 64-bit
 //!   chunks of the binary fraction while `d < 2^64` (one `u128` division each;
-//!   `scale ≤ 19`, which includes every scale this crate constructs), bit by bit
-//!   beyond — with a sticky bit OR-ed into the lowest bit for any nonzero
+//!   `scale ≤ 19`), bit by bit beyond — with a sticky bit OR-ed into the lowest
+//!   bit for any nonzero
 //!   remainder. That bit lies at least 11 places below any rounding position, so
 //!   it only breaks ties, never moves one. [`round_top64`] then rounds those 64
 //!   bits once to the target's precision, subnormal precision included.
-//! * **Scales above 38** have no `u128` power of ten. No construction in this
-//!   crate produces one (the scale is capped at 18), so the value is handed to
-//!   Rust's decimal-to-float parser, which is itself correctly rounded; this
-//!   keeps the function total without a panic path.
+//! * **Scales above 38** have no `u128` power of ten. No current inline
+//!   conversion caller supplies one: bounded decimals cap their scale
+//!   at 18 and the exact tower calls this kernel through scale 38. For the
+//!   kernel's remaining `u8` scale domain, Rust's correctly rounded parser
+//!   handles the generated valid scientific lexical form. Refusing that form
+//!   is an invariant failure.
 //!
 //! The rounding never goes through `f64` on the way to `f32`: narrowing a
 //! rounded `f64` rounds twice, and differs from the correctly rounded `f32`
@@ -72,12 +74,15 @@ pub(crate) fn decimal_to_f64(mantissa: i128, scale: u8) -> f64 {
     if scale == 0 {
         return mantissa as f64;
     }
-    let magnitude = mantissa.unsigned_abs();
-    if magnitude < 1 << 53 && usize::from(scale) < POW10_F64.len() {
-        // Both operands exact (`magnitude < 2^53`), so the division rounds once --
+    if let Ok(small) = i64::try_from(mantissa)
+        && small.unsigned_abs() < 1 << 53
+        && usize::from(scale) < POW10_F64.len()
+    {
+        // Both operands exact (`|small| < 2^53`), so the division rounds once --
         // on every target, the x87 included (`crate::ieee`).
-        return crate::ieee::f64_div(mantissa as f64, POW10_F64[usize::from(scale)]);
+        return crate::ieee::f64_div(small as f64, POW10_F64[usize::from(scale)]);
     }
+    let magnitude = mantissa.unsigned_abs();
     let Some(bits) = exact_bits(magnitude, scale, BINARY64) else {
         return parse_fallback::<f64>(mantissa, scale);
     };
@@ -103,17 +108,20 @@ pub(crate) fn decimal_to_f32(mantissa: i128, scale: u8) -> f32 {
         return parse_fallback::<f32>(mantissa, scale);
     };
     // `exact_bits` for binary32 fits the low 32 bits by construction.
-    let value = f32::from_bits(u32::try_from(bits).unwrap_or(0x7F80_0000));
+    let value = f32::from_bits(u32::try_from(bits).expect("a binary32 pattern fits in 32 bits"));
     if mantissa < 0 { -value } else { value }
 }
 
 /// The correctly rounded conversion by Rust's decimal-to-float parser, for a
 /// scale past `u128`'s powers of ten (see the module docs: unreachable from any
 /// decimal this crate constructs).
-fn parse_fallback<F: std::str::FromStr + Default>(mantissa: i128, scale: u8) -> F {
+fn parse_fallback<F: std::str::FromStr>(mantissa: i128, scale: u8) -> F
+where
+    F::Err: std::fmt::Debug,
+{
     format!("{mantissa}e-{scale}")
         .parse::<F>()
-        .unwrap_or_default()
+        .expect("an integer coefficient and u8 scale form valid scientific float text")
 }
 
 /// The magnitude bits of `magnitude / 10^scale` (nonzero `magnitude`,

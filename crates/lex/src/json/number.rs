@@ -10,6 +10,7 @@ use core::ops::RangeInclusive;
 use core::str::FromStr;
 
 use super::{Error, ErrorKind};
+use crate::allocation::{Admission, Memory, Resident, StorageError};
 
 /// A JSON number, held as its lexeme.
 ///
@@ -38,6 +39,12 @@ use super::{Error, ErrorKind};
 #[derive(Clone)]
 pub struct Number(String);
 
+impl Number {
+    pub(super) fn owned_text_bytes(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
 /// The base-ten exponent of a [`Decimal`]: a machine word until the exponent
 /// leaves `i64`, and its digits after that, so the representation is
 /// canonical and derived equality and hashing are the value's.
@@ -57,71 +64,102 @@ pub enum Exponent {
 
 impl Exponent {
     /// `[ "+" / "-" ] 1*DIGIT`, already matched by the JSON number grammar.
-    fn from_written(sign_and_digits: &str) -> Self {
+    fn from_written<S: Admission + ?Sized>(
+        sign_and_digits: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         let (negative, digits) = match sign_and_digits.as_bytes().first() {
             Some(b'-') => (true, &sign_and_digits[1..]),
             Some(b'+') => (false, &sign_and_digits[1..]),
             _ => (false, sign_and_digits),
         };
-        Self::from_magnitude(negative, digits.trim_start_matches('0'))
+        Self::from_magnitude(negative, digits.trim_start_matches('0'), memory)
     }
 
     /// The exponent with sign `negative` and magnitude `digits` (no leading
     /// zeros; empty is zero).
-    fn from_magnitude(negative: bool, digits: &str) -> Self {
+    fn from_magnitude<S: Admission + ?Sized>(
+        negative: bool,
+        digits: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         let signed = if negative && !digits.is_empty() {
-            format!("-{digits}")
+            memory.format(&format_args!("-{digits}"))?
         } else {
-            digits.to_owned()
+            memory.string(digits)?
         };
-        signed.parse::<i64>().map_or_else(
-            |_| {
+        let result = match signed.parse::<i64>() {
+            Err(_) => {
                 if digits.is_empty() {
                     Self::Small(0)
                 } else {
                     Self::Large {
                         negative,
-                        digits: digits.to_owned(),
+                        digits: memory.string(digits)?,
                     }
                 }
-            },
-            Self::Small,
-        )
+            }
+            Ok(value) => Self::Small(value),
+        };
+        memory.release_string(signed)?;
+        Ok(result)
     }
 
     /// `self + amount`, exactly.
-    fn offset(&self, amount: i128) -> Self {
+    fn offset<S: Admission + ?Sized>(
+        self,
+        amount: i128,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         match self {
             Self::Small(value) => {
-                let sum = i128::from(*value).saturating_add(amount);
-                i64::try_from(sum).map_or_else(
-                    |_| Self::from_magnitude(sum < 0, &sum.unsigned_abs().to_string()),
-                    Self::Small,
-                )
+                let sum = i128::from(value).saturating_add(amount);
+                if let Ok(value) = i64::try_from(sum) {
+                    return Ok(Self::Small(value));
+                }
+                let digits = memory.format(&sum.unsigned_abs())?;
+                let result = Self::from_magnitude(sum < 0, &digits, memory)?;
+                memory.release_string(digits)?;
+                Ok(result)
             }
             Self::Large { negative, digits } => {
-                let step = amount.unsigned_abs().to_string();
-                if *negative == (amount < 0) {
-                    Self::from_magnitude(*negative, &add_digits(digits, &step))
+                let step = memory.format(&amount.unsigned_abs())?;
+                let adjusted = if negative == (amount < 0) {
+                    add_digits(&digits, &step, memory)?
                 } else {
                     // The exponent is outside `i64` and a step is a slice
                     // length, so the magnitude is the larger and stays
                     // positive; the sign is the exponent's.
-                    Self::from_magnitude(*negative, &subtract_digits(digits, &step))
-                }
+                    subtract_digits(&digits, &step, memory)?
+                };
+                let result = Self::from_magnitude(negative, &adjusted, memory)?;
+                memory.release_string(adjusted)?;
+                memory.release_string(step)?;
+                memory.release_string(digits)?;
+                Ok(result)
             }
         }
     }
 }
 
 /// `left + right` over ASCII digit strings.
-fn add_digits(left: &str, right: &str) -> String {
+fn add_digits<S: Admission + ?Sized>(
+    left: &str,
+    right: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
     let (long, short) = if left.len() >= right.len() {
         (left.as_bytes(), right.as_bytes())
     } else {
         (right.as_bytes(), left.as_bytes())
     };
-    let mut out = Vec::with_capacity(long.len() + 1);
+    let mut out = Vec::new();
+    memory.reserve(
+        &mut out,
+        long.len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?,
+    )?;
     let mut carry = 0_u8;
     for (index, digit) in long.iter().rev().enumerate() {
         let other = short
@@ -136,14 +174,19 @@ fn add_digits(left: &str, right: &str) -> String {
         out.push(b'0' + carry);
     }
     out.reverse();
-    String::from_utf8(out).expect("ASCII digits")
+    Ok(String::from_utf8(out).expect("ASCII digits"))
 }
 
 /// `left - right` over ASCII digit strings, `left >= right`, without leading
 /// zeros.
-fn subtract_digits(left: &str, right: &str) -> String {
+fn subtract_digits<S: Admission + ?Sized>(
+    left: &str,
+    right: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
     let (left, right) = (left.as_bytes(), right.as_bytes());
-    let mut out = Vec::with_capacity(left.len());
+    let mut out = Vec::new();
+    memory.reserve(&mut out, left.len())?;
     let mut borrow = 0_u8;
     for (index, digit) in left.iter().rev().enumerate() {
         let other = right
@@ -164,7 +207,7 @@ fn subtract_digits(left: &str, right: &str) -> String {
         out.pop();
     }
     out.reverse();
-    String::from_utf8(out).expect("ASCII digits")
+    Ok(String::from_utf8(out).expect("ASCII digits"))
 }
 
 /// The exact value of a JSON number: `±coefficient × 10^exponent`, the
@@ -208,12 +251,15 @@ impl Decimal {
         &self.exponent
     }
 
-    fn zero() -> Self {
-        Self {
-            negative: false,
-            coefficient: "0".to_owned(),
-            exponent: Exponent::Small(0),
+    fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        memory.release_string(self.coefficient)?;
+        if let Exponent::Large { digits, .. } = self.exponent {
+            memory.release_string(digits)?;
         }
+        Ok(())
     }
 }
 
@@ -324,6 +370,14 @@ impl Number {
     /// assert!(!number("1e2").same_text(&number("100")));
     /// ```
     pub fn decimal(&self) -> Decimal {
+        self.decimal_with_memory(&mut Memory::new(&mut Resident))
+            .expect("resident JSON decimal allocation")
+    }
+
+    fn decimal_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Decimal, StorageError> {
         let body = self.0.strip_prefix('-');
         let negative = body.is_some();
         let body = body.unwrap_or(&self.0);
@@ -333,12 +387,23 @@ impl Number {
                 (mantissa, Some(written))
             });
         let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-        let mut coefficient = String::with_capacity(int.len() + frac.len());
+        let mut coefficient = String::new();
+        memory.reserve_string(
+            &mut coefficient,
+            int.len()
+                .checked_add(frac.len())
+                .ok_or(StorageError::SizeOverflow)?,
+        )?;
         coefficient.push_str(int);
         coefficient.push_str(frac);
         let leading = coefficient.len() - coefficient.trim_start_matches('0').len();
         if leading == coefficient.len() {
-            return Decimal::zero();
+            memory.release_string(coefficient)?;
+            return Ok(Decimal {
+                negative: false,
+                coefficient: memory.string("0")?,
+                exponent: Exponent::Small(0),
+            });
         }
         coefficient.drain(..leading);
         let significant = coefficient.trim_end_matches('0').len();
@@ -348,11 +413,42 @@ impl Number {
         // offset is a slice length, far inside `i128`.
         let shift = i128::try_from(trailing).unwrap_or(i128::MAX)
             - i128::try_from(frac.len()).unwrap_or(i128::MAX);
-        Decimal {
+        Ok(Decimal {
             negative,
             coefficient,
-            exponent: Exponent::from_written(written.unwrap_or("0")).offset(shift),
+            exponent: Exponent::from_written(written.unwrap_or("0"), memory)?
+                .offset(shift, memory)?,
+        })
+    }
+
+    pub(super) fn eq_with_memory<S: Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<bool, StorageError> {
+        if self.same_text(other) {
+            return Ok(true);
         }
+        memory.scope(|memory| {
+            let left = self.decimal_with_memory(memory)?;
+            let right = other.decimal_with_memory(memory)?;
+            let equal = left == right;
+            left.release(memory)?;
+            right.release(memory)?;
+            Ok(equal)
+        })
+    }
+
+    pub(super) fn hash_with_memory<H: Hasher, S: Admission + ?Sized>(
+        &self,
+        state: &mut H,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        memory.scope(|memory| {
+            let decimal = self.decimal_with_memory(memory)?;
+            decimal.hash(state);
+            decimal.release(memory)
+        })
     }
 
     /// Whether both numbers are spelled identically (`1.0` and `1` are not),
@@ -461,6 +557,17 @@ impl Number {
         Self::from_shortest(value.is_finite(), value, -5..=15)
     }
 
+    /// Construct the same shortest representation with every temporary and retained
+    /// string admitted before allocation through the caller's account.
+    /// # Errors
+    /// Returns the original layout, admission or physical allocation refusal.
+    pub fn from_f64_with_memory<S: Admission + ?Sized>(
+        value: f64,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        Self::from_shortest_with_memory(value.is_finite(), value, -5..=15, memory)
+    }
+
     /// [`Number::from_f64`] for a binary32: the shortest digits that round-trip
     /// through binary32, positional when the decimal exponent is in `-6..=12`.
     pub fn from_f32(value: f32) -> Option<Self> {
@@ -476,14 +583,36 @@ impl Number {
         value: impl fmt::LowerExp,
         positional: RangeInclusive<i32>,
     ) -> Option<Self> {
-        finite.then(|| Self(layout(&format!("{value:e}"), positional)))
+        Self::from_shortest_with_memory(finite, value, positional, &mut Memory::new(&mut Resident))
+            .expect("resident JSON number formatting allocation")
+    }
+
+    fn from_shortest_with_memory<S: Admission + ?Sized>(
+        finite: bool,
+        value: impl fmt::LowerExp,
+        positional: RangeInclusive<i32>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        if !finite {
+            return Ok(None);
+        }
+        memory.scope(|memory| {
+            let scientific = memory.format(&format_args!("{value:e}"))?;
+            let result = layout(&scientific, positional, memory)?;
+            memory.release_string(scientific)?;
+            Ok(Some(Self(result)))
+        })
     }
 }
 
 /// Lay out the shortest round-trip digits in `scientific` (Rust's `{:e}`
 /// spelling: `[-]d[.ddd]e[-]x`), positionally when the decimal exponent is in
 /// `positional`.
-fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
+fn layout<S: Admission + ?Sized>(
+    scientific: &str,
+    positional: RangeInclusive<i32>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
     let (negative, body) = match scientific.strip_prefix('-') {
         Some(body) => (true, body),
         None => (false, scientific),
@@ -494,54 +623,62 @@ fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
     let exponent: i32 = exponent
         .parse()
         .expect("the scientific spelling writes a decimal exponent");
-    let digits: String = mantissa.chars().filter(|&c| c != '.').collect();
-    let mut out = String::with_capacity(digits.len() + 8);
+    let mut digits = String::new();
+    for ch in mantissa.chars().filter(|&ch| ch != '.') {
+        memory.push_char(&mut digits, ch)?;
+    }
+    let mut out = String::new();
     if negative {
-        out.push('-');
+        memory.push_char(&mut out, '-')?;
     }
     if digits == "0" {
-        out.push_str("0.0");
-        return out;
+        memory.push_str(&mut out, "0.0")?;
+        memory.release_string(digits)?;
+        return Ok(out);
     }
     let length = digits.len() as i32;
     if positional.contains(&exponent) {
         if length - 1 <= exponent {
             // 1234e7 -> 12340000000.0
-            out.push_str(&digits);
+            memory.push_str(&mut out, &digits)?;
             for _ in length..=exponent {
-                out.push('0');
+                memory.push_char(&mut out, '0')?;
             }
-            out.push_str(".0");
+            memory.push_str(&mut out, ".0")?;
         } else if exponent >= 0 {
             // 1234e-2 -> 12.34
             let point = (exponent + 1) as usize;
-            out.push_str(&digits[..point]);
-            out.push('.');
-            out.push_str(&digits[point..]);
+            memory.push_str(&mut out, &digits[..point])?;
+            memory.push_char(&mut out, '.')?;
+            memory.push_str(&mut out, &digits[point..])?;
         } else {
             // 1234e-6 -> 0.001234
-            out.push_str("0.");
+            memory.push_str(&mut out, "0.")?;
             for _ in 0..(-exponent - 1) {
-                out.push('0');
+                memory.push_char(&mut out, '0')?;
             }
-            out.push_str(&digits);
+            memory.push_str(&mut out, &digits)?;
         }
     } else {
-        out.push_str(&digits[..1]);
+        memory.push_str(&mut out, &digits[..1])?;
         if length > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
+            memory.push_char(&mut out, '.')?;
+            memory.push_str(&mut out, &digits[1..])?;
         }
-        out.push('e');
-        out.push(if exponent < 0 { '-' } else { '+' });
-        out.push_str(&exponent.unsigned_abs().to_string());
+        memory.push_char(&mut out, 'e')?;
+        memory.push_char(&mut out, if exponent < 0 { '-' } else { '+' })?;
+        let exponent = memory.format(&exponent.unsigned_abs())?;
+        memory.push_str(&mut out, &exponent)?;
+        memory.release_string(exponent)?;
     }
-    out
+    memory.release_string(digits)?;
+    Ok(out)
 }
 
 impl PartialEq for Number {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 || self.decimal() == other.decimal()
+        self.eq_with_memory(other, &mut Memory::new(&mut Resident))
+            .expect("resident JSON number equality allocation")
     }
 }
 
@@ -550,7 +687,8 @@ impl Eq for Number {}
 impl Hash for Number {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // The decimal form is canonical, so equal numbers hash alike.
-        self.decimal().hash(state);
+        self.hash_with_memory(state, &mut Memory::new(&mut Resident))
+            .expect("resident JSON number hashing allocation");
     }
 }
 

@@ -39,6 +39,10 @@ pub enum PurrdfGovernorFlag {
     DeadlineMillis = 1 << 5,
     /// Poll `cancellation`.
     Cancellation = 1 << 6,
+    /// Enforce the inclusive logical depth in `max_udf_depth`.
+    MaxUdfDepth = 1 << 7,
+    /// Remove the default logical user-function depth ceiling.
+    UnlimitedUdfDepth = 1 << 8,
 }
 
 const KNOWN_FLAGS: u32 = PurrdfGovernorFlag::Fuel as u32
@@ -47,14 +51,18 @@ const KNOWN_FLAGS: u32 = PurrdfGovernorFlag::Fuel as u32
     | PurrdfGovernorFlag::MaxScratchBytes as u32
     | PurrdfGovernorFlag::MaxRemoteRequests as u32
     | PurrdfGovernorFlag::DeadlineMillis as u32
-    | PurrdfGovernorFlag::Cancellation as u32;
+    | PurrdfGovernorFlag::Cancellation as u32
+    | PurrdfGovernorFlag::MaxUdfDepth as u32
+    | PurrdfGovernorFlag::UnlimitedUdfDepth as u32;
 
 /// Caller-supplied governors for one C-ABI query or UPDATE call.
 ///
 /// Set the corresponding [`PurrdfGovernorFlag`] bit in `enabled` for every field that is
 /// meaningful. Zero is a valid inclusive ceiling. Unset numeric fields are ignored, and
 /// every governed call still meters them at the native `METERED` ceiling so its evidence
-/// is useful. `reserved` must be zero. `cancellation`, when enabled, must remain a live
+/// is useful. Logical UDF depth defaults to 32. Enable MaxUdfDepth for an inclusive
+/// finite depth or UnlimitedUdfDepth to remove it; enabling both is an error.
+/// `reserved` must be zero. `cancellation`, when enabled, must remain a live
 /// handle until the synchronous call returns.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -73,6 +81,9 @@ pub struct PurrdfQueryGovernors {
     pub max_scratch_bytes: u64,
     /// Inclusive remote-request ceiling.
     pub max_remote_requests: u64,
+    /// Inclusive logical depth when MaxUdfDepth is enabled.
+    /// MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
+    pub max_udf_depth: u64,
     /// Relative wall-clock budget in milliseconds.
     pub deadline_millis: u64,
     /// Optional shareable cancellation handle.
@@ -88,6 +99,7 @@ impl PurrdfQueryGovernors {
         max_intermediate_cells: 0,
         max_scratch_bytes: 0,
         max_remote_requests: 0,
+        max_udf_depth: 0,
         deadline_millis: 0,
         cancellation: std::ptr::null(),
     };
@@ -97,7 +109,8 @@ impl PurrdfQueryGovernors {
     }
 }
 
-/// Initialize `*out` as a metered governed call with no finite caller ceiling.
+/// Initialize `*out` as a metered governed call with the default UDF depth limit.
+/// Other resource dimensions have no finite caller ceiling.
 ///
 /// # Safety
 /// `out` must be writable.
@@ -117,6 +130,12 @@ pub unsafe extern "C" fn purrdf_query_governors_init(out: *mut PurrdfQueryGovern
 /// A shareable, monotone cancellation handle. Create one per cancellation lifetime.
 #[derive(Debug)]
 pub struct PurrdfCancellation(CancellationFlag);
+
+impl purrdf_core::StopSignal for PurrdfCancellation {
+    fn stopped(&self) -> bool {
+        self.0.is_cancelled()
+    }
+}
 
 /// Allocate a fresh, uncancelled handle in `*out`.
 ///
@@ -234,7 +253,10 @@ pub enum PurrdfStopCause {
     Deadline = 2,
 }
 
-/// A fixed, named C representation of the kernel's eight-dimensional resource vector.
+/// A fixed projection of the kernel's eight currently named resource dimensions.
+///
+/// This layout remains fixed when the Rust vocabulary grows. New dimensions need
+/// an additional C evidence carrier retaining the complete native receipt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PurrdfResourceVector {
@@ -275,7 +297,8 @@ impl PurrdfResourceVector {
 pub struct PurrdfGovernorTrip {
     /// [`PurrdfGovernorTripKind`] discriminant.
     pub kind: i32,
-    /// [`PurrdfResourceDimension`] discriminant, or `-1` for a stop/none/unknown.
+    /// [`PurrdfResourceDimension`] discriminant, or `-1` when absent or not represented
+    /// by this ABI. A budget/refusal still retains its kind and counts in that case.
     pub dimension: i32,
     /// [`PurrdfStopCause`] discriminant.
     pub stop_cause: i32,
@@ -350,7 +373,11 @@ fn expression_error_index(code: ErrorCode) -> usize {
     discriminant as usize
 }
 
-/// One governed execution's deterministic accounting receipt.
+/// One governed execution's deterministic accounting receipt projected to this ABI.
+///
+/// The consumed and limit vectors retain their eight fixed fields. Complete evidence
+/// for a future Rust dimension needs an additive carrier owning the native receipt;
+/// the projected fields cannot recover measurements that they do not represent.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PurrdfGovernorEvidence {
@@ -409,22 +436,24 @@ unsafe fn decode_parts(
             ));
         }
 
-        let parts = GovernorParts {
-            fuel: config.flag(PurrdfGovernorFlag::Fuel).then_some(config.fuel),
-            max_answers: config
-                .flag(PurrdfGovernorFlag::MaxAnswers)
-                .then_some(config.max_answers),
-            max_intermediate_cells: config
-                .flag(PurrdfGovernorFlag::MaxIntermediateCells)
-                .then_some(config.max_intermediate_cells),
-            max_scratch_bytes: config
-                .flag(PurrdfGovernorFlag::MaxScratchBytes)
-                .then_some(config.max_scratch_bytes),
-            max_remote_requests: config
-                .flag(PurrdfGovernorFlag::MaxRemoteRequests)
-                .then_some(config.max_remote_requests),
-            no_ceiling: false,
-        };
+        let mut parts = GovernorParts::new();
+        parts.fuel = config.flag(PurrdfGovernorFlag::Fuel).then_some(config.fuel);
+        parts.max_answers = config
+            .flag(PurrdfGovernorFlag::MaxAnswers)
+            .then_some(config.max_answers);
+        parts.max_intermediate_cells = config
+            .flag(PurrdfGovernorFlag::MaxIntermediateCells)
+            .then_some(config.max_intermediate_cells);
+        parts.max_scratch_bytes = config
+            .flag(PurrdfGovernorFlag::MaxScratchBytes)
+            .then_some(config.max_scratch_bytes);
+        parts.max_remote_requests = config
+            .flag(PurrdfGovernorFlag::MaxRemoteRequests)
+            .then_some(config.max_remote_requests);
+        parts.max_udf_depth = config
+            .flag(PurrdfGovernorFlag::MaxUdfDepth)
+            .then_some(config.max_udf_depth);
+        parts.unlimited_udf_depth = config.flag(PurrdfGovernorFlag::UnlimitedUdfDepth);
 
         let cancellation = if config.flag(PurrdfGovernorFlag::Cancellation) {
             if config.cancellation.is_null() {
@@ -521,6 +550,7 @@ fn encode_dimension(dimension: ResourceDimension) -> i32 {
         ResourceDimension::UdfDepth => PurrdfResourceDimension::UdfDepth as i32,
         ResourceDimension::Pages => PurrdfResourceDimension::Pages as i32,
         ResourceDimension::Bytes => PurrdfResourceDimension::Bytes as i32,
+        _ => -1,
     }
 }
 

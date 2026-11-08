@@ -173,7 +173,8 @@ fn reverse_evidence(
     config: &SchemaImportConfig,
 ) -> Result<Value, Box<dyn Error>> {
     let imported = import_typescript_package(package, config)?;
-    check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")?;
+    check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let repeated = import_typescript_package(package, config)?;
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("TypeScript reverse ledger is not deterministic".into());
@@ -1114,7 +1115,8 @@ fn complement_proofs() -> Vec<Proof> {
 }
 
 fn lossy_fixture(schema: &Value, package: TypeScriptPackage) -> Result<Fixture, Box<dyn Error>> {
-    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     check_ledger_complete(&package.losses, &CLOSED_PROFILE)?;
     let observed_codes = package
         .losses
@@ -1445,8 +1447,12 @@ fn lists_fixture() -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_lists::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
-    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
-    let members = "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items";
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
+    let members = oracle::referenced_location(
+        &schema,
+        "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items",
+    )?;
     let expected_losses = [
         (
             "unique-repeated",
@@ -1499,7 +1505,8 @@ fn temporal_fixture() -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_temporal::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
-    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let mut probes = Vec::new();
     for case in shacl_temporal::FIXTURE.cases()? {
         let property = shacl_temporal::VARIANTS
@@ -1553,7 +1560,8 @@ fn value_shapes_fixture() -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_value_shapes::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_typescript(&compiled, &config()?)?;
-    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")?;
+    check_ledger_sound(&package.losses, "json-schema", "typescript-7.0")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let expected_losses = [
         (
             "some-none",

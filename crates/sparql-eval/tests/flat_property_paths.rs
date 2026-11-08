@@ -51,7 +51,7 @@ fn run(data: &Arc<RdfDataset>, query: &str) -> Result<SparqlResult, RdfDiagnosti
             substitutions: &[],
         },
         &resolver,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
 }
 

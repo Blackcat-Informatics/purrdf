@@ -3,6 +3,8 @@
 
 //! Original engine claim ingress and alternative-witness coalescing on native/WASM.
 
+mod support;
+
 use purrdf_core::evidence::{
     EvidenceRecord, Frame, Information, InformationMap, ReasonDescription, ReasonId,
     SearchCompleteness,
@@ -28,22 +30,22 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         AnswerRequest, AnswerTier, StandpointKey, WitnessQuestion, WitnessVerdict,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
-    struct CountedClaims {
-        opposed: TermId,
-        poison: TermId,
+    struct CountedClaims<I> {
+        opposed: I,
+        poison: I,
         record: EvidenceRecord,
         calls: AtomicUsize,
         completeness: SearchCompleteness,
     }
-    impl EvidenceSource<TermId> for CountedClaims {
-        fn claim(&self, quad: &QuadIds<TermId>) -> Result<Option<&EvidenceRecord>, EvalError> {
+    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for CountedClaims<I> {
+        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if quad.p == self.poison {
                 return Err(EvalError::WorkspaceUnpriced("unvisited producer suffix"));
             }
             Ok((quad.p == self.opposed).then_some(&self.record))
         }
-        fn scope(&self, _: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
+        fn scope(&self, _: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
             Ok(EvidenceScope {
                 completeness: self.completeness,
                 closure_declared: true,
@@ -64,128 +66,146 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let dataset = builder.freeze().unwrap();
-    let mut source = CountedClaims {
-        opposed,
-        poison,
-        record: EvidenceRecord::from_parts(
-            &InformationMap::uniform(Information::Opposed),
-            SearchCompleteness::Complete,
-            &Frame::actual(),
-            &[],
-            &[],
-            &mut Memory::new(&mut Resident),
-        )
-        .unwrap(),
-        calls: AtomicUsize::new(0),
-        completeness: SearchCompleteness::Complete,
-    };
-    let engine = NativeSparqlEngine::new();
-    let positive_arm = "{ ?s <https://example.org/positive> ?o }";
-    let negative_arm = "{ ?s <https://example.org/opposed> ?o }";
-    let poison_arm = "{ ?s <https://example.org/poison> ?o }";
-    for form in [
-        "SELECT ?s",
-        "ASK",
-        "CONSTRUCT { ?s <https://example.org/result> ?o }",
-        "DESCRIBE ?s",
-    ] {
-        for (body, question, calls, information) in [
-            (
-                format!("{positive_arm} UNION {poison_arm}"),
-                WitnessQuestion::Support,
-                1,
-                Information::Supported,
-            ),
-            (
-                format!("{positive_arm} UNION {negative_arm} UNION {poison_arm}"),
-                WitnessQuestion::Contradiction,
-                2,
-                Information::Both,
-            ),
-            (
-                format!(
-                    "{{ ?s <https://example.org/positive> ?o FILTER(false) }} UNION {positive_arm} UNION {poison_arm}"
-                ),
-                WitnessQuestion::Support,
-                2,
-                Information::Supported,
-            ),
+    fn check<D: purrdf_core::FallibleDatasetView + Sync>(dataset: &D) {
+        let mut source = CountedClaims {
+            opposed: dataset
+                .term_id_by_value(&purrdf_core::TermValue::iri("https://example.org/opposed"))
+                .unwrap()
+                .unwrap(),
+            poison: dataset
+                .term_id_by_value(&purrdf_core::TermValue::iri("https://example.org/poison"))
+                .unwrap()
+                .unwrap(),
+            record: EvidenceRecord::from_parts(
+                &InformationMap::uniform(Information::Opposed),
+                SearchCompleteness::Complete,
+                &Frame::actual(),
+                &[],
+                &[],
+                &mut Memory::new(&mut Resident),
+            )
+            .unwrap(),
+            calls: AtomicUsize::new(0),
+            completeness: SearchCompleteness::Complete,
+        };
+        let engine = NativeSparqlEngine::new();
+        let positive_arm = "{ ?s <https://example.org/positive> ?o }";
+        let negative_arm = "{ ?s <https://example.org/opposed> ?o }";
+        let poison_arm = "{ ?s <https://example.org/poison> ?o }";
+        for form in [
+            "SELECT ?s",
+            "ASK",
+            "CONSTRUCT { ?s <https://example.org/result> ?o }",
+            "DESCRIBE ?s",
         ] {
+            for (body, question, calls, information) in [
+                (
+                    format!("{positive_arm} UNION {poison_arm}"),
+                    WitnessQuestion::Support,
+                    1,
+                    Information::Supported,
+                ),
+                (
+                    format!("{positive_arm} UNION {negative_arm} UNION {poison_arm}"),
+                    WitnessQuestion::Contradiction,
+                    2,
+                    Information::Both,
+                ),
+                (
+                    format!(
+                        "{{ ?s <https://example.org/positive> ?o FILTER(false) }} UNION {positive_arm} UNION {poison_arm}"
+                    ),
+                    WitnessQuestion::Support,
+                    2,
+                    Information::Supported,
+                ),
+            ] {
+                source.calls.store(0, Ordering::Relaxed);
+                let query = format!("{form} WHERE {{ {body} }}");
+                engine
+                    .query_evidence_status_fallible_view(
+                        dataset,
+                        request(&query),
+                        &QueryOptions::default(),
+                        &source,
+                        AnswerRequest {
+                            tier: AnswerTier::Verdict,
+                            question: Some(question),
+                            standpoint: StandpointKey::Unscoped,
+                            input_completeness: SearchCompleteness::Complete,
+                            closure_declared: true,
+                        },
+                        |_, status| {
+                            assert_eq!(status.verdict, Some(WitnessVerdict::Yes));
+                            assert_eq!(status.information, information);
+                            assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
+                            assert_eq!(status.reasons, []);
+                        },
+                    )
+                    .expect("settled verdict leaves the hard-failing suffix unopened");
+                assert_eq!(source.calls.load(Ordering::Relaxed), calls, "{query}");
+            }
             source.calls.store(0, Ordering::Relaxed);
-            let query = format!("{form} WHERE {{ {body} }}");
+            let query = format!("{form} WHERE {{ {positive_arm} UNION {negative_arm} }}");
             engine
-                .query_evidence_status_view(
-                    &dataset,
+                .query_evidence_status_fallible_view(
+                    dataset,
                     request(&query),
-                    QueryOptions::default(),
+                    &QueryOptions::default(),
                     &source,
                     AnswerRequest {
-                        tier: AnswerTier::Verdict,
-                        question: Some(question),
+                        tier: AnswerTier::Summary,
+                        question: Some(WitnessQuestion::Support),
                         standpoint: StandpointKey::Unscoped,
                         input_completeness: SearchCompleteness::Complete,
                         closure_declared: true,
                     },
                     |_, status| {
-                        assert_eq!(status.verdict, Some(WitnessVerdict::Yes));
-                        assert_eq!(status.information, information);
-                        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
-                        assert_eq!(status.reasons, []);
+                        assert_eq!(status.information, Information::Both);
+                        assert_eq!(status.completeness, SearchCompleteness::Complete);
+                        assert_eq!(status.established, 2);
                     },
                 )
-                .expect("settled verdict leaves the hard-failing suffix unopened");
-            assert_eq!(source.calls.load(Ordering::Relaxed), calls, "{query}");
+                .unwrap();
+            assert_eq!(source.calls.load(Ordering::Relaxed), 2);
         }
+        source.completeness = SearchCompleteness::Undetermined;
         source.calls.store(0, Ordering::Relaxed);
-        let query = format!("{form} WHERE {{ {positive_arm} UNION {negative_arm} }}");
         engine
-            .query_evidence_status_view(
-                &dataset,
-                request(&query),
-                QueryOptions::default(),
+            .query_evidence_status_fallible_view(
+                dataset,
+                request("SELECT ?s WHERE { ?s <https://example.org/poison> ?o }"),
+                &QueryOptions::default(),
                 &source,
                 AnswerRequest {
-                    tier: AnswerTier::Summary,
-                    question: Some(WitnessQuestion::Support),
+                    tier: AnswerTier::Verdict,
+                    question: Some(WitnessQuestion::ClosedAbsence),
                     standpoint: StandpointKey::Unscoped,
                     input_completeness: SearchCompleteness::Complete,
                     closure_declared: true,
                 },
                 |_, status| {
-                    assert_eq!(status.information, Information::Both);
-                    assert_eq!(status.completeness, SearchCompleteness::Complete);
-                    assert_eq!(status.established, 2);
+                    assert_eq!(status.verdict, Some(WitnessVerdict::Unknown));
+                    assert_eq!(status.established, 0);
                 },
             )
             .unwrap();
-        assert_eq!(source.calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            source.calls.load(Ordering::Relaxed),
+            0,
+            "declared incompleteness settles absence before opening the producer"
+        );
     }
-    source.completeness = SearchCompleteness::Undetermined;
-    source.calls.store(0, Ordering::Relaxed);
-    engine
-        .query_evidence_status_view(
-            &dataset,
-            request("SELECT ?s WHERE { ?s <https://example.org/poison> ?o }"),
-            QueryOptions::default(),
-            &source,
-            AnswerRequest {
-                tier: AnswerTier::Verdict,
-                question: Some(WitnessQuestion::ClosedAbsence),
-                standpoint: StandpointKey::Unscoped,
-                input_completeness: SearchCompleteness::Complete,
-                closure_declared: true,
-            },
-            |_, status| {
-                assert_eq!(status.verdict, Some(WitnessVerdict::Unknown));
-                assert_eq!(status.established, 0);
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        source.calls.load(Ordering::Relaxed),
-        0,
-        "declared incompleteness settles absence before opening the producer"
-    );
+    check(&dataset);
+    let paged = purrdf_core::PagedDataset::from_provider(std::sync::Arc::new(
+        purrdf_core::InMemoryPageProvider::with_byte_lengths(
+            vec![(dataset, 64)],
+            purrdf_core::PageGeneration(69),
+        ),
+    ))
+    .unwrap();
+    let view = paged.query_view(purrdf_core::PagedQueryLimits::UNBOUNDED);
+    check(&view);
 }
 
 fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims() {
@@ -261,7 +281,7 @@ fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified
         .query_interned_evidence_view(
             &dataset,
             request(query),
-            QueryOptions::default(),
+            &QueryOptions::default(),
             &ScopedClaims {
                 record: &record,
                 order: Some(&order),
@@ -304,7 +324,7 @@ fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified
     let missing: Result<(), _> = engine.query_interned_evidence_view(
         &dataset,
         request(query),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &ScopedClaims {
             record: &record,
             order: None,
@@ -322,7 +342,7 @@ fn actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified
     let undeclared: Result<(), _> = engine.query_interned_evidence_view(
         &dataset,
         request(query),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &ScopedClaims {
             record: &record,
             order: Some(&incomplete_order),
@@ -542,7 +562,7 @@ fn service_rows_keep_signed_and_undecided_declarations_through_original_operator
             .query_interned_evidence_view(
                 &dataset,
                 request(query),
-                QueryOptions::default().with_remote(Some(&remote)),
+                &QueryOptions::default().with_remote(Some(&remote)),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -573,7 +593,7 @@ fn service_rows_keep_signed_and_undecided_declarations_through_original_operator
     }
     engine.query_interned_evidence_view(&dataset,
         request("SELECT DISTINCT ?one WHERE { SERVICE <https://example.org/service> { [] <https://example.org/p> [] } BIND(true AS ?one) }"),
-        QueryOptions::default().with_remote(Some(&remote)), &source, |outcome| {
+        &QueryOptions::default().with_remote(Some(&remote)), &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("native SELECT"); };
             assert_eq!(rows.len(), 1);
             assert_eq!(rows.established_rows().count(), 1);
@@ -588,7 +608,7 @@ fn service_rows_keep_signed_and_undecided_declarations_through_original_operator
             .query_interned_evidence_view(
                 &dataset,
                 request(query),
-                QueryOptions::default().with_remote(Some(&remote)),
+                &QueryOptions::default().with_remote(Some(&remote)),
                 &source,
                 |_| {}
             )
@@ -606,7 +626,7 @@ fn service_rows_keep_signed_and_undecided_declarations_through_original_operator
             .query_interned_evidence_view(
                 &dataset,
                 request(query),
-                QueryOptions::default().with_remote(Some(&remote)),
+                &QueryOptions::default().with_remote(Some(&remote)),
                 &source,
                 |_| {}
             )
@@ -648,7 +668,7 @@ fn empty_service_keeps_search_reason_without_inventing_an_answer_row() {
             .query_evidence_status_view(
                 &dataset,
                 request("SELECT ?s WHERE { SERVICE <https://example.org/service> { ?s ?p ?o } }"),
-                QueryOptions::default().with_remote(Some(&remote)),
+                &QueryOptions::default().with_remote(Some(&remote)),
                 &source,
                 AnswerRequest {
                     tier: AnswerTier::Summary,
@@ -683,7 +703,7 @@ fn empty_service_keeps_search_reason_without_inventing_an_answer_row() {
     source.closure_declared = false;
     NativeSparqlEngine::new().query_interned_evidence_view(&dataset,
         request("SELECT ?x WHERE { BIND(1 AS ?x) FILTER NOT EXISTS { SERVICE <https://example.org/service> { ?s ?p ?o } } }"),
-        QueryOptions::default().with_remote(Some(&remote)), &source, |outcome| {
+        &QueryOptions::default().with_remote(Some(&remote)), &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("native SELECT"); };
             assert_eq!(rows.len(), 1);
             assert_eq!(rows.established_rows().count(), 0);
@@ -772,7 +792,7 @@ fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_eviden
                 .query_interned_evidence_view(
                     &dataset,
                     request(&query),
-                    QueryOptions::default().with_functions(&functions),
+                    &QueryOptions::default().with_functions(&functions),
                     &source,
                     |outcome| {
                         let InternedOutcome::Solutions(rows) = outcome else {
@@ -799,7 +819,7 @@ fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_eviden
     let result: Result<(), _> = engine.query_interned_evidence_view(
         &dataset,
         request("SELECT (<https://example.org/nested>() AS ?value) WHERE {}"),
-        QueryOptions::default().with_functions(&functions),
+        &QueryOptions::default().with_functions(&functions),
         &failed,
         |_| panic!("an original function-body source refusal cannot publish"),
     );
@@ -808,7 +828,7 @@ fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_eviden
         .query_interned_evidence_view(
             &dataset,
             request("SELECT (IF(false, <https://example.org/nested>(), 1) AS ?value) WHERE {}"),
-            QueryOptions::default().with_functions(&functions),
+            &QueryOptions::default().with_functions(&functions),
             &failed,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -856,7 +876,7 @@ fn distinct_coalesces_both_polarities_without_changing_binding_identity() {
         .query_interned_evidence_view(
             &dataset,
             request(query),
-            QueryOptions::default(),
+            &QueryOptions::default(),
             &source,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -902,7 +922,7 @@ fn source_refusal_never_publishes_partial_or_undetermined_rows() {
     let result = NativeSparqlEngine::new().query_interned_evidence_view(
         &dataset,
         request("SELECT * WHERE { ?s ?p ?o }"),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &source,
         |_| {
             visited = true;
@@ -937,7 +957,7 @@ fn unmatched_optional_preserves_information_and_declared_missing_scope() {
         };
         engine.query_interned_evidence_view(
             &dataset, request("SELECT ?s ?missing WHERE { ?s <https://example.org/p> ?o OPTIONAL { ?s <https://example.org/missing> ?missing } }"),
-            QueryOptions::default(), &source, |outcome| {
+            &QueryOptions::default(), &source, |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else { panic!("SELECT result"); };
                 assert_eq!(rows.len(), 1);
                 let row = &rows.rows()[0];
@@ -977,7 +997,7 @@ fn group_bounds_follow_whole_scope_and_declared_sum_domain() {
             .query_interned_evidence_view(
                 &dataset,
                 request(&query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -1043,7 +1063,7 @@ fn nested_projection_retains_only_visible_aggregate_aliases() {
     NativeSparqlEngine::new().query_interned_evidence_view(
         &dataset,
         request("SELECT ?visible WHERE { { SELECT (COUNT(*) AS ?count) (MIN(?n) AS ?hidden) WHERE { VALUES ?n { 2 5 } } } BIND(?count AS ?visible) }"),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &source,
         |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("SELECT result"); };
@@ -1198,6 +1218,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
                 }],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity {
@@ -1220,7 +1241,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
         .query_interned_evidence_view(
             &dataset,
             request(query),
-            QueryOptions::default().with_env(&env),
+            &QueryOptions::default().with_env(&env),
             &source,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -1246,7 +1267,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
     let empty = "SELECT ?doc WHERE { ?doc <https://example.org/search> \"absent\" }";
     engine.query_evidence_status_view(&dataset,
         request("SELECT ?doc WHERE { { ?doc <https://example.org/search> \"absent\" } UNION { BIND(<https://example.org/known> AS ?doc) } }"),
-        QueryOptions::default().with_env(&env), &source,
+        &QueryOptions::default().with_env(&env), &source,
         AnswerRequest { tier: AnswerTier::Verdict, question: Some(WitnessQuestion::ClosedAbsence), standpoint: StandpointKey::Unscoped, input_completeness: SearchCompleteness::Complete, closure_declared: true },
         |outcome, status| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("native SELECT"); };
@@ -1258,7 +1279,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
         .query_evidence_status_view(
             &dataset,
             request(empty),
-            QueryOptions::default().with_env(&env),
+            &QueryOptions::default().with_env(&env),
             &source,
             AnswerRequest {
                 tier: AnswerTier::Summary,
@@ -1298,7 +1319,7 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
             .query_interned_evidence_view(
                 &dataset,
                 request(&query),
-                QueryOptions::default().with_env(&env),
+                &QueryOptions::default().with_env(&env),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -1337,7 +1358,7 @@ fn declared_filter_gap_retains_original_row_and_reason_without_promoting_complet
             .query_interned_evidence_view(
                 &dataset,
                 request(query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -1382,7 +1403,7 @@ fn declared_filter_gap_retains_original_row_and_reason_without_promoting_complet
             .query_interned_evidence_view(
                 &dataset,
                 request(query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 &source,
                 |_| {
                     visited = true;
@@ -1422,7 +1443,7 @@ fn all_query_forms_publish_original_unknown_status_at_requested_count_tiers() {
                 .query_evidence_status_view(
                     &dataset,
                     request(&query),
-                    QueryOptions::default(),
+                    &QueryOptions::default(),
                     &source,
                     answer,
                     |outcome, status| {
@@ -1488,7 +1509,7 @@ fn minus_absence_requires_closure_but_disjoint_domains_are_decidable() {
                 .query_interned_evidence_view(
                     &dataset,
                     request(&query),
-                    QueryOptions::default(),
+                    &QueryOptions::default(),
                     &source,
                     |outcome| {
                         let InternedOutcome::Solutions(rows) = outcome else {
@@ -1518,7 +1539,7 @@ fn minus_absence_requires_closure_but_disjoint_domains_are_decidable() {
     let (dataset, source) = gap_dataset();
     engine.query_interned_evidence_view(&dataset,
         request("SELECT ?s WHERE { VALUES ?s { <https://example.org/missing> } MINUS { ?s <https://example.org/kind> ?kind OPTIONAL { ?s <https://example.org/value> ?value } FILTER(?value = <https://example.org/required>) } }"),
-        QueryOptions::default(), &source, |outcome| {
+        &QueryOptions::default(), &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("SELECT result"); };
             assert_eq!(rows.len(), 1);
             assert_eq!(rows.undecided_rows().count(), 1);
@@ -1570,7 +1591,7 @@ fn minus_negates_all_original_witnesses_under_declared_closure() {
                 .query_interned_evidence_view(
                     &dataset,
                     request(query),
-                    QueryOptions::default(),
+                    &QueryOptions::default(),
                     &source,
                     |outcome| {
                         let InternedOutcome::Solutions(rows) = outcome else {
@@ -1641,7 +1662,7 @@ fn minus_negates_all_original_witnesses_under_declared_closure() {
         .query_interned_evidence_view(
             &dataset,
             request(query),
-            QueryOptions::default(),
+            &QueryOptions::default(),
             &source,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -1661,7 +1682,7 @@ fn minus_negates_all_original_witnesses_under_declared_closure() {
     let refusal: Result<(), _> = engine.query_interned_evidence_view(
         &dataset,
         request(query),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &source,
         |_| panic!("source refusal cannot publish an unknown answer"),
     );
@@ -1733,7 +1754,7 @@ fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
                     .query_interned_evidence_view(
                         &dataset,
                         request(&query),
-                        QueryOptions::default(),
+                        &QueryOptions::default(),
                         &source,
                         |outcome| {
                             let InternedOutcome::Solutions(rows) = outcome else {
@@ -1815,7 +1836,7 @@ fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
             .query_interned_evidence_view(
                 &mixed,
                 request(&query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -1847,7 +1868,7 @@ fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
     engine.query_interned_evidence_view(
         &dataset,
         request("SELECT ?s WHERE { VALUES ?s { <https://example.org/item> } FILTER IF(true, true, EXISTS { ?s <https://example.org/p> ?o }) }"),
-        QueryOptions::default(), &source, |outcome| {
+        &QueryOptions::default(), &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("original conditional result"); };
             assert_eq!(rows.len(), 1, "the skipped native branch must not read its failing source");
         },
@@ -1855,7 +1876,7 @@ fn exists_transports_original_witnesses_through_vm_memos_and_deferred_sites() {
     let refused: Result<(), _> = engine.query_interned_evidence_view(
         &dataset,
         request("SELECT ?s WHERE { VALUES ?s { <https://example.org/item> } FILTER NOT EXISTS { ?s <https://example.org/p> ?o } }"),
-        QueryOptions::default(), &source, |_| panic!("hard source refusal cannot publish a semantic unknown"),
+        &QueryOptions::default(), &source, |_| panic!("hard source refusal cannot publish a semantic unknown"),
     );
     let refused = refused.expect_err("existential source failure remains hard");
     assert_eq!(refused.code, "native-sparql-workspace-unpriced");
@@ -1947,7 +1968,7 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
             "{form} WHERE {{ ?s <https://example.org/kind> ?kind OPTIONAL {{ ?s <https://example.org/value> ?value }} FILTER(?value = <https://example.org/required>) }}"
         );
         engine.query_evidence_answer_view(&dataset, request(&query),
-        QueryOptions::default(), &source, AnswerRequest {
+        &QueryOptions::default(), &source, AnswerRequest {
             tier: AnswerTier::Ledger,
             question: Some(WitnessQuestion::Support),
             standpoint: StandpointKey::Unscoped,
@@ -1968,7 +1989,7 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
                     let view = LedgerDataset::new(ledger, Resident).expect("borrowed actual ledger source");
                     assert!(view.quads().all(|quad| quad.g.is_none()), "ledger annotations use the answer graph");
                     let query = "SELECT ?reason ?cause WHERE { ?row <https://example.org/row-v/5> ?reason . ?reason <https://example.org/extra-v/0> ?cause }";
-                    let result = engine.query_fallible_view(&view, SparqlRequest { query, base_iri: None, substitutions: &[] }, QueryOptions::default()).expect("same evaluator queries actual answer ledger");
+                    let result = engine.query_fallible_view(&view, SparqlRequest { query, base_iri: None, substitutions: &[] }, &QueryOptions::default()).expect("same evaluator queries actual answer ledger");
                     let (_, result) = result.result.solutions().expect("ledger SELECT result");
                     assert_eq!(result.len(), 1);
                     assert_eq!(result[0][1], Some(source.cause.clone()));
@@ -2000,7 +2021,7 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
                         return;
                     }
                     let query = "SELECT ?reason ?state WHERE { ?row <https://example.org/row-v/6> ?reason . ?row <https://example.org/row-v/0> ?state }";
-                    let result = engine.query_fallible_view(&view, SparqlRequest { query, base_iri: None, substitutions: &[] }, QueryOptions::default()).expect("query visible acceptance annotation");
+                    let result = engine.query_fallible_view(&view, SparqlRequest { query, base_iri: None, substitutions: &[] }, &QueryOptions::default()).expect("query visible acceptance annotation");
                     let (_, result) = result.result.solutions().expect("merged ledger SELECT");
                     assert_eq!(result.len(), 1);
                     assert_eq!(result[0][0], Some(nodes.0[0].1.clone()));
@@ -2034,7 +2055,7 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
         .zip(&solutions)
         .map(|(node, solution)| LedgerRowTerms { node, solution })
         .collect();
-    engine.query_interned_evidence_view(&dataset, request(&query), QueryOptions::default(), &source, |outcome| {
+    engine.query_interned_evidence_view(&dataset, request(&query), &QueryOptions::default(), &source, |outcome| {
         let InternedOutcome::Solutions(rows) = outcome else { panic!("actual SELECT rows"); };
         assert_eq!(rows.len(), 2_279);
         assert_eq!(rows.undecided_rows().count(), 2_279);
@@ -2048,7 +2069,7 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
             let result = engine.query_fallible_view(&view, SparqlRequest {
                 query: "SELECT ?reason (COUNT(?row) AS ?count) WHERE { ?row <https://example.org/row-v/5> ?reason } GROUP BY ?reason",
                 base_iri: None, substitutions: &[],
-            }, QueryOptions::default()).expect("production GROUP BY over original ledger");
+            }, &QueryOptions::default()).expect("production GROUP BY over original ledger");
             let (_, grouped) = result.result.solutions().expect("grouped reason rows");
             assert_eq!(grouped.len(), 1, "all original rows share one reason node");
             assert_eq!(grouped[0][0], Some(nodes.0[0].1.clone()));
@@ -2058,20 +2079,20 @@ fn actual_unknown_answer_exposes_queryable_original_rdf_ledger() {
             let projected = engine.query_fallible_view(&view, SparqlRequest {
                 query: "CONSTRUCT { ?row <https://example.org/row-v/0> ?state . ?reason <https://example.org/extra-v/0> ?cause } WHERE { ?row <https://example.org/row-v/0> ?state . ?row <https://example.org/row-v/5> ?reason . ?reason <https://example.org/extra-v/0> ?cause }",
                 base_iri: None, substitutions: &[],
-            }, QueryOptions::default()).expect("production privacy projection");
+            }, &QueryOptions::default()).expect("production privacy projection");
             let graph = projected.result.graph().expect("CONSTRUCT graph");
             assert_eq!(graph.quad_count(), 2_280, "original incomplete rows plus one retained cause");
             let retained = engine.query_fallible_view(graph, SparqlRequest {
                 query: "SELECT ?row ?state ?cause WHERE { ?row <https://example.org/row-v/0> ?state . <https://example.org/canonical-reason> <https://example.org/extra-v/0> ?cause }",
                 base_iri: None, substitutions: &[],
-            }, QueryOptions::default()).expect("query independently retained incompleteness and cause");
+            }, &QueryOptions::default()).expect("query independently retained incompleteness and cause");
             let (_, retained) = retained.result.solutions().expect("projected evidence rows");
             assert_eq!(retained.len(), 2_279);
             assert!(retained.iter().all(|row| row[1] == Some(row_v[16].clone()) && row[2] == Some(source.cause.clone())));
             let withheld = engine.query_fallible_view(graph, SparqlRequest {
                 query: "SELECT ?row WHERE { ?row <https://example.org/row-v/5> ?reason }",
                 base_iri: None, substitutions: &[],
-            }, QueryOptions::default()).expect("query withheld reason links");
+            }, &QueryOptions::default()).expect("query withheld reason links");
             assert_eq!(withheld.result.solutions().expect("withheld-link rows").1.len(), 0);
             assert_eq!(view.read_error(), None);
         }).expect("original population publication");
@@ -2083,7 +2104,7 @@ fn acceptance_merges_original_order_without_replaying_cells_or_losing_scores() {
     let engine = NativeSparqlEngine::new();
     engine.query_interned_evidence_view(&dataset,
         request("SELECT ?s ?score WHERE { { ?s <https://example.org/kind> ?kind OPTIONAL { ?s <https://example.org/value> ?value } FILTER(?value = <https://example.org/required>) BIND(2 AS ?score) } UNION { VALUES (?s ?score) { (<https://example.org/a> 1) (<https://example.org/z> 3) } } } ORDER BY ?score"),
-        QueryOptions::default(), &source, |outcome| {
+        &QueryOptions::default(), &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("SELECT result"); };
             assert_eq!(rows.len(), 3);
             for (accepted, expected) in [(&[][..], &[0, 2][..]), (&[source.reason][..], &[0, 1, 2][..])] {
@@ -2148,7 +2169,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
         .query_interned_evidence_view(
             &dataset,
             request("SELECT ?s WHERE { ?s <https://example.org/p> <https://example.org/b> }"),
-            QueryOptions::default(),
+            &QueryOptions::default(),
             &source,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -2187,7 +2208,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
             .query_interned_view(
                 &dataset,
                 request(&query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
                         panic!("ordinary path SELECT");
@@ -2203,7 +2224,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
             .query_interned_evidence_view(
                 &dataset,
                 request(&query),
-                QueryOptions::default(),
+                &QueryOptions::default(),
                 &source,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else {
@@ -2254,7 +2275,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
     ] {
         engine.query_interned_evidence_view(&dataset, request(&format!(
             "SELECT ?s WHERE {{ BIND(<https://example.org/a> AS ?s) ?s {path} <https://example.org/end> }}"
-        )), QueryOptions::default(), &owned_source, |outcome| {
+        )), &QueryOptions::default(), &owned_source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("owned default path"); };
             assert!(!rows.is_empty());
             assert!(rows.rows().iter().any(|row| !row.evidence().is_virtual()));
@@ -2270,7 +2291,7 @@ fn native_paths_keep_derivation_polarity_and_complete_found_witnesses() {
     let failed = engine.query_interned_evidence_view(
         &dataset,
         request("SELECT ?s WHERE { ?s <https://example.org/p>+ <https://example.org/end> }"),
-        QueryOptions::default(),
+        &QueryOptions::default(),
         &refusing,
         |_| {
             published = true;
@@ -2490,7 +2511,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     NativeSparqlEngine::new().query_interned_view(
         &dataset,
         request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) FILTER(?kept) }"),
-        QueryOptions::default().with_env(&env),
+        &QueryOptions::default().with_env(&env),
         |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else { panic!("native SELECT"); };
             assert_eq!(rows.len(), 1);
@@ -2595,7 +2616,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 .query_interned_view(
                     &dataset,
                     request(query),
-                    QueryOptions::default().with_env(&env),
+                    &QueryOptions::default().with_env(&env),
                     check,
                 )
                 .expect("native alternative declarations reach ordinary DISTINCT and grouping");
@@ -2608,7 +2629,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             .query_governed_interned_in_operation(
                 &dataset,
                 request(query),
-                QueryOptions::default().with_env(&env),
+                &QueryOptions::default().with_env(&env),
                 &state,
                 check,
             )
@@ -2665,7 +2686,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             let query = format!(
                 "SELECT DISTINCT ?value WHERE {{ BIND({expression} AS ?value) FILTER(BOUND(?value)) }}"
             );
-            engine.query_interned_view(&dataset, request(&query), QueryOptions::default().with_env(&env).with_functions(&functions), |outcome| {
+            engine.query_interned_view(&dataset, request(&query), &QueryOptions::default().with_env(&env).with_functions(&functions), |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else { panic!("native function declaration"); };
                 assert_eq!(rows.len(), 1);
                 assert!(!rows.rows()[0].evidence().is_undecided());
@@ -2688,7 +2709,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             .query_interned_view(
                 &dataset,
                 request(&query),
-                QueryOptions::default()
+                &QueryOptions::default()
                     .with_env(&env)
                     .with_functions(&functions),
                 |outcome| {
@@ -2812,14 +2833,14 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                         .query_interned_evidence_view(
                             &dataset,
                             request(&query),
-                            options,
+                            &options,
                             &source,
                             check,
                         )
                         .unwrap();
                 } else {
                     engine
-                        .query_interned_view(&dataset, request(&query), options, check)
+                        .query_interned_view(&dataset, request(&query), &options, check)
                         .unwrap();
                 }
                 assert!(
@@ -2902,10 +2923,10 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                 .prepare_query_with_options(
                     "SELECT ?doc WHERE { ?doc <https://example.org/declared> \"needle\" } LIMIT 1",
                     None,
-                    options,
+                    &options,
                 )
                 .unwrap();
-                let mut cursor = engine.open_call_cursor(&prepared, options).unwrap();
+                let mut cursor = engine.open_call_cursor(&prepared, &options).unwrap();
                 cursor
                     .search_evidence()
                     .with_record(|record| {
@@ -2956,7 +2977,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                     engine.query_interned_view(
                 &dataset,
                 request(query),
-                options,
+                &options,
                 |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else { panic!("native row/search parity"); };
                     assert_eq!(rows.len(), expected_rows);
@@ -3058,7 +3079,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                         .with_functions(&functions);
                     native_owner.lock().unwrap().take();
                     engine
-                    .query_interned_view(&dataset, request(query), options, check)
+                    .query_interned_view(&dataset, request(query), &options, check)
                     .expect(
                         "native whole search needs no external EvidenceInput, on native and WASM",
                     );
@@ -3070,7 +3091,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
                         .query_governed_interned_in_operation(
                             &dataset,
                             request(query),
-                            options,
+                            &options,
                             &state,
                             check,
                         )
@@ -3137,10 +3158,10 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             .prepare_query_with_options(
                 "SELECT ?doc WHERE { ?doc <https://example.org/declared> \"needle\" }",
                 None,
-                options,
+                &options,
             )
             .unwrap();
-        let Err(error) = engine.open_call_cursor_admitted(&prepared, options, &workspace) else {
+        let Err(error) = engine.open_call_cursor_admitted(&prepared, &options, &workspace) else {
             panic!("original opening search failure is typed on demand");
         };
         assert!(matches!(
@@ -3152,12 +3173,19 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         native_owner.lock().unwrap().take();
         let mut execution = engine.prepare_execution_admitted(
         "SELECT (COUNT(?doc) AS ?count) WHERE { ?doc <https://example.org/declared> \"needle\" }",
-        None, &[], options, &workspace,
+        None, &[], &options, &workspace,
     ).unwrap();
         let error = engine
-            .execute_witnessed_admitted(&mut execution, &dataset, options, None, &workspace, |_| {
-                published = true;
-            })
+            .execute_witnessed_admitted(
+                &mut execution,
+                &dataset,
+                &options,
+                None,
+                &workspace,
+                |_| {
+                    published = true;
+                },
+            )
             .expect_err("native whole-search operational failure must precede publication");
         assert!(!published);
         assert!(matches!(
@@ -3227,10 +3255,10 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             .prepare_query_with_options(
                 "SELECT ?doc WHERE { ?doc <https://example.org/declared> \"needle\" }",
                 None,
-                options,
+                &options,
             )
             .unwrap();
-        let mut raw = engine.open_call_cursor(&prepared, options).unwrap();
+        let mut raw = engine.open_call_cursor(&prepared, &options).unwrap();
         assert!(matches!(
             raw.next_row(&dataset),
             Err(EvalError::WorkspaceUnpriced(
@@ -3242,7 +3270,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         NativeSparqlEngine::new().query_interned_view(
             &dataset,
             request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) ?other <https://example.org/value> ?value FILTER(?kept) OPTIONAL { ?doc <https://example.org/missing> ?absent FILTER(true) } } ORDER BY ?kept"),
-            QueryOptions::default().with_env(&env),
+            &QueryOptions::default().with_env(&env),
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else { panic!("ordinary API ranked SELECT"); };
                 assert_eq!(rows.len(), 1);
@@ -3269,7 +3297,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
         NativeSparqlEngine::new().query_interned_evidence_view(
             &dataset,
             request("SELECT DISTINCT ?doc ?kept WHERE { ?doc <https://example.org/declared> \"needle\" BIND(true AS ?kept) FILTER(?kept) OPTIONAL { ?doc <https://example.org/missing> ?absent FILTER(true) } } ORDER BY ?kept"),
-            QueryOptions::default().with_env(&env),
+            &QueryOptions::default().with_env(&env),
             &source,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else { panic!("original supported ranked row"); };
@@ -3308,7 +3336,7 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
             };
             NativeSparqlEngine::new().query_interned_evidence_view(&dataset,
                 request("SELECT ?doc WHERE { ?other <https://example.org/value> ?value . ?doc <https://example.org/declared> \"needle\" }"),
-                QueryOptions::default().with_env(&env), &claims, |outcome| {
+                &QueryOptions::default().with_env(&env), &claims, |outcome| {
                     let InternedOutcome::Solutions(rows) = outcome else { panic!("native declaration over admitted claims"); };
                     assert_eq!(rows.len(), 1);
                     assert_eq!(rows.rows()[0].evidence().original_rank(), rank);
@@ -3325,7 +3353,237 @@ fn native_property_rows_retain_original_declarations_through_normal_ingestion() 
     }
 }
 
+struct UniformClaims(EvidenceRecord);
+
+impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for UniformClaims {
+    fn claim(&self, _: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
+        Ok(Some(&self.0))
+    }
+
+    fn scope(&self, _: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
+        Ok(EvidenceScope {
+            completeness: self.0.completeness(),
+            closure_declared: true,
+            missing_reason: None,
+        })
+    }
+
+    fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
+        Ok(None)
+    }
+}
+
+fn uniform_claims() -> UniformClaims {
+    UniformClaims(
+        EvidenceRecord::from_parts(
+            &InformationMap::uniform(Information::Supported),
+            SearchCompleteness::Complete,
+            &Frame::actual(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap(),
+    )
+}
+
+fn healthy_paged_evidence_source() -> purrdf_core::PagedDataset {
+    use purrdf_core::{InMemoryPageProvider, PagedDataset};
+    PagedDataset::from_provider(std::sync::Arc::new(InMemoryPageProvider::new(vec![
+        support::local_dataset([("a", "p", "b")]),
+        support::local_dataset([("b", "q", "c")]),
+    ])))
+    .unwrap()
+}
+
+fn fallible_evidence_doors_keep_original_rows_and_all_query_form_status() {
+    use purrdf_core::PagedQueryLimits;
+    use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    for form in ["SELECT ?s", "ASK", "CONSTRUCT { ?s ?p ?o }", "DESCRIBE ?s"] {
+        let query = format!("{form} WHERE {{ ?s ?p ?o }}");
+        for tier in [AnswerTier::Verdict, AnswerTier::Summary, AnswerTier::Rows] {
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let answer = AnswerRequest {
+                tier,
+                question: None,
+                standpoint: StandpointKey::Unscoped,
+                input_completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+            };
+            let (value, evidence) = engine
+                .query_evidence_answer_fallible_view(
+                    &view,
+                    request(&query),
+                    &QueryOptions::EMPTY,
+                    &claims,
+                    answer,
+                    |outcome, rows, status| {
+                        match outcome {
+                            InternedOutcome::Solutions(rows) => assert_eq!(rows.len(), 2),
+                            InternedOutcome::Boolean(value) => assert!(value),
+                            InternedOutcome::Graph(graph) => {
+                                assert!(graph.dataset_handle().quad_count() >= 2);
+                            }
+                        }
+                        (
+                            rows.len(),
+                            status.information,
+                            status.established,
+                            status.undecided,
+                        )
+                    },
+                )
+                .unwrap();
+            assert_eq!(value, (2, Information::Supported, 2, 0));
+            assert_eq!(evidence.consumed_pages, 2);
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let (status, _) = engine
+                .query_evidence_status_fallible_view(
+                    &view,
+                    request(&query),
+                    &QueryOptions::EMPTY,
+                    &claims,
+                    answer,
+                    |_, status| (status.information, status.established, status.undecided),
+                )
+                .unwrap();
+            assert_eq!(status, (Information::Supported, 2, 0));
+        }
+    }
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let (count, _) = engine
+        .query_interned_evidence_fallible_view(
+            &view,
+            request("SELECT ?s WHERE { ?s ?p ?o }"),
+            &QueryOptions::EMPTY,
+            &claims,
+            |outcome| {
+                let InternedOutcome::Solutions(rows) = outcome else {
+                    panic!("SELECT rows");
+                };
+                for row in rows.rows() {
+                    row.evidence()
+                        .with_record(|record| {
+                            assert_eq!(record.information().fallback(), Information::Supported);
+                        })
+                        .unwrap();
+                }
+                rows.len()
+            },
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
+    use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+    use purrdf_core::{PageId, PagedQueryError, PagedQueryEvidence, PagedQueryLimits};
+    use purrdf_sparql_eval::FallibleSparqlError;
+    use support::fallible::{ScriptedFault, two_page_faulting_dataset};
+    fn refused(error: FallibleSparqlError<PagedQueryError, PagedQueryEvidence>) {
+        assert!(error.diagnostic().is_none());
+        assert!(error.partial_answers().is_none());
+        let FallibleSparqlError::Operational { error, evidence } = error else {
+            panic!("the read refusal must remain operational");
+        };
+        assert_eq!(
+            error,
+            PagedQueryError::Provider {
+                page: PageId(1),
+                message: "object read failed".to_owned(),
+            }
+        );
+        assert_eq!(evidence.requested_pages, vec![PageId(0), PageId(1)]);
+        assert_eq!(evidence.consumed_pages, 1);
+    }
+    let paged = two_page_faulting_dataset(ScriptedFault::Provider);
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    let query = "SELECT ?s WHERE { ?s ?p ?o }";
+    let answer = AnswerRequest {
+        tier: AnswerTier::Rows,
+        question: None,
+        standpoint: StandpointKey::Unscoped,
+        input_completeness: SearchCompleteness::Complete,
+        closure_declared: true,
+    };
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_evidence_answer_fallible_view(
+                &view,
+                request(query),
+                &QueryOptions::EMPTY,
+                &claims,
+                answer,
+                |_, _, _| 7,
+            )
+            .unwrap_err(),
+    );
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_evidence_status_fallible_view(
+                &view,
+                request(query),
+                &QueryOptions::EMPTY,
+                &claims,
+                answer,
+                |_, _| 7,
+            )
+            .unwrap_err(),
+    );
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .query_interned_evidence_fallible_view(
+                &view,
+                request(query),
+                &QueryOptions::EMPTY,
+                &claims,
+                |_| 7,
+            )
+            .unwrap_err(),
+    );
+    let mut execution = engine
+        .prepare_execution(query, None, &[], &QueryOptions::EMPTY)
+        .unwrap();
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    refused(
+        engine
+            .execute_witnessed_evidence_fallible(
+                &mut execution,
+                &view,
+                &QueryOptions::EMPTY,
+                &claims,
+                |_| 7,
+            )
+            .unwrap_err(),
+    );
+    let healthy = healthy_paged_evidence_source();
+    let view = healthy.query_view(PagedQueryLimits::UNBOUNDED);
+    let ((count, _witness), evidence) = engine
+        .execute_witnessed_evidence_fallible(
+            &mut execution,
+            &view,
+            &QueryOptions::EMPTY,
+            &claims,
+            |outcome| match outcome {
+                InternedOutcome::Solutions(rows) => rows.len(),
+                _ => panic!("prepared SELECT"),
+            },
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(evidence.consumed_pages, 2);
+}
+
 purrdf_testkit::harness_main!(
+    fallible_evidence_doors_keep_original_rows_and_all_query_form_status,
+    fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers,
     verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities,
     actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims,
     service_rows_keep_signed_and_undecided_declarations_through_original_operators,

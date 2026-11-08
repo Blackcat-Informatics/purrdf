@@ -927,21 +927,26 @@ impl<T> AdmittedVec<T> {
 /// Returned references borrow the table; replacement moves each entry once.
 #[derive(Debug)]
 pub struct AdmittedMap<K, V> {
-    entries: hashbrown::HashTable<(K, V)>,
+    entries: purrdf_core::hash::table::HashTable<(K, V)>,
     allocation: Option<WorkspaceAllocation>,
 }
 
 impl<K, V> Default for AdmittedMap<K, V> {
     fn default() -> Self {
         Self {
-            entries: hashbrown::HashTable::new(),
+            entries: purrdf_core::hash::table::HashTable::new(),
             allocation: None,
         }
     }
 }
 
 impl<K, V> AdmittedMap<K, V> {
-    pub(crate) fn into_parts(self) -> (hashbrown::HashTable<(K, V)>, Option<WorkspaceAllocation>) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        purrdf_core::hash::table::HashTable<(K, V)>,
+        Option<WorkspaceAllocation>,
+    ) {
         (self.entries, self.allocation)
     }
 }
@@ -1101,7 +1106,7 @@ impl<K: Eq + std::hash::Hash, V> AdmittedMap<K, V> {
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
             let allocation = workspace
                 .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
-            let mut entries = hashbrown::HashTable::new();
+            let mut entries = purrdf_core::hash::table::HashTable::new();
             entries
                 .try_reserve(capacity, |entry: &(K, V)| {
                     purrdf_hash::fixed::hash_one(&entry.0)
@@ -1299,6 +1304,26 @@ impl PartialEq for WorkspaceIri {
 }
 impl Eq for WorkspaceIri {}
 
+/// A copied exact integer retaining its original native allocation admission.
+#[derive(Debug)]
+pub struct WorkspaceInteger {
+    value: purrdf_xsd::exact::Integer,
+    _frame: LexicalFrame,
+}
+impl std::ops::Deref for WorkspaceInteger {
+    type Target = purrdf_xsd::exact::Integer;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+impl purrdf_hash::error::StructuredError for WorkspaceInteger {
+    purrdf_hash::error_visit! {
+        @record self { value, _frame } => "workspace-integer" {
+            "value" => Record(&self.value),
+        }
+    }
+}
+
 /// Validated IRI retaining either caller configuration or its original native grant.
 #[derive(Clone)]
 pub struct OwnedIri(OwnedIriStorage);
@@ -1361,6 +1386,22 @@ impl std::fmt::Debug for OwnedIri {
 }
 
 impl WorkspaceCapability {
+    /// Copy an exact integer through its native storage home, retaining its grant.
+    /// # Errors
+    /// Returns the original native layout, admission or allocator refusal.
+    pub fn copy_integer(
+        &self,
+        value: &purrdf_xsd::exact::Integer,
+    ) -> Result<WorkspaceInteger, EvalError> {
+        let mut frame = LexicalFrame::new(self);
+        let result = value.copy_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut frame));
+        let value = result.map_err(|error| frame.storage_error(error, "native exact integer"))?;
+        Ok(WorkspaceInteger {
+            value,
+            _frame: frame,
+        })
+    }
+
     /// Parse one new IRI through the original lexical home before publication.
     /// # Errors
     /// Returns the original physical refusal or an admitted grammar diagnostic.
@@ -2040,6 +2081,7 @@ impl<E: Clone + std::error::Error + Send + Sync + 'static> GrowthAdmission for G
         let workspace = QueryWorkspace {
             account: Some(self.account.clone()),
             capability: WorkspaceCapability::default(),
+            direct_failure: None,
         };
         let charge = workspace.charge(bytes)?;
         // The concrete box layout was admitted along with the payload above.
@@ -2067,6 +2109,7 @@ struct Account<E> {
 pub(crate) struct QueryWorkspace<E> {
     account: Option<Shared<Mutex<Account<E>>>>,
     capability: WorkspaceCapability,
+    direct_failure: Option<SharedWorkspace<Mutex<Option<E>>>>,
 }
 
 impl<E> Clone for QueryWorkspace<E> {
@@ -2074,6 +2117,7 @@ impl<E> Clone for QueryWorkspace<E> {
         Self {
             account: self.account.clone(),
             capability: self.capability.clone(),
+            direct_failure: self.direct_failure.clone(),
         }
     }
 }
@@ -2100,6 +2144,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: WorkspaceCapability { owner: None },
+            direct_failure: None,
         }
     }
 
@@ -2108,6 +2153,7 @@ impl<E> QueryWorkspace<E> {
         Self {
             account: None,
             capability: capability.clone(),
+            direct_failure: None,
         }
     }
 
@@ -2145,6 +2191,7 @@ impl<E> QueryWorkspace<E> {
         Ok(Self {
             account: Some(account),
             capability: WorkspaceCapability { owner: Some(owner) },
+            direct_failure: None,
         })
     }
 
@@ -2168,6 +2215,18 @@ pub(crate) fn shared_layout<T>() -> Result<u64, EvalError> {
 }
 
 impl<E: Clone> QueryWorkspace<E> {
+    /// Retain direct errors even for a fallible source with no live-memory budget.
+    /// Bounded sources already retain the same first cause in their original account.
+    pub(crate) fn capture_direct_errors(mut self) -> Result<Self, EvalError> {
+        if self.account.is_none() && self.direct_failure.is_none() {
+            self.direct_failure = Some(SharedWorkspace::new_admitted(
+                Mutex::new(None),
+                &self.capability,
+            )?);
+        }
+        Ok(self)
+    }
+
     pub(crate) fn source_error(&self, error: E) -> EvalError
     where
         E: std::fmt::Display,
@@ -2179,6 +2238,12 @@ impl<E: Clone> QueryWorkspace<E> {
                 account.failed = true;
             }
             EvalError::WorkspaceStopped
+        } else if let Some(failure) = &self.direct_failure {
+            let mut failure = lock(failure);
+            if failure.is_none() {
+                *failure = Some(error);
+            }
+            EvalError::WorkspaceStopped
         } else {
             EvalError::source_read(error)
         }
@@ -2188,6 +2253,11 @@ impl<E: Clone> QueryWorkspace<E> {
         self.account
             .as_ref()
             .and_then(|account| lock(account).failure.take())
+            .or_else(|| {
+                self.direct_failure
+                    .as_ref()
+                    .and_then(|failure| lock(failure).take())
+            })
     }
 
     #[cfg(test)]
@@ -2503,6 +2573,33 @@ pub(crate) mod owned_row_regressions {
     }
     impl std::error::Error for Refusal {}
 
+    #[test]
+    fn resident_composed_read_retains_first_direct_cause_across_clones() {
+        #[derive(Debug, Clone)]
+        struct NoRender(u64);
+        impl core::fmt::Display for NoRender {
+            fn fmt(&self, _: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                panic!("retaining a direct read refusal must not render it")
+            }
+        }
+        impl std::error::Error for NoRender {}
+        let workspace = QueryWorkspace::<NoRender>::resident()
+            .capture_direct_errors()
+            .unwrap();
+        let retained = workspace.clone().capture_direct_errors().unwrap();
+        assert!(matches!(
+            workspace.source_error(NoRender(71)),
+            EvalError::WorkspaceStopped
+        ));
+        assert!(matches!(
+            retained.source_error(NoRender(72)),
+            EvalError::WorkspaceStopped
+        ));
+        drop(workspace);
+        assert_eq!(retained.take_failure().unwrap().0, 71);
+        assert!(retained.take_failure().is_none());
+    }
+
     #[derive(Debug)]
     struct Reservation {
         ledger: Arc<Ledger>,
@@ -2543,6 +2640,36 @@ pub(crate) mod owned_row_regressions {
             ledger,
             base,
         )
+    }
+
+    #[test]
+    fn copied_integer_keeps_exact_native_grant_and_refunds_original_account() {
+        let input = purrdf_xsd::exact::Integer::from_i128(i128::MAX);
+        let input = input.try_mul(&input).unwrap();
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let payload_bytes = input.limb_len() * u64::try_from(size_of::<u64>()).unwrap();
+        let ordinary_grant = capability.charge(payload_bytes).unwrap();
+        let expected_live = ledger.live.load(Ordering::Relaxed);
+        drop(ordinary_grant);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        let copy = capability.copy_integer(&input).unwrap();
+        assert_eq!(*copy, input);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert_eq!(retained, expected_live, "one native limb-buffer grant");
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, _) = account(base);
+        let failure = workspace.capability().copy_integer(&input).unwrap_err();
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().unwrap().identity, 7);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
     }
 
     struct DropCursor {
@@ -2687,7 +2814,7 @@ pub(crate) mod owned_row_regressions {
         let engine = crate::NativeSparqlEngine::new();
         let query = "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }";
         let prepared = engine
-            .prepare_query_admitted(query, None, crate::QueryOptions::default(), &capability)
+            .prepare_query_admitted(query, None, &crate::QueryOptions::default(), &capability)
             .expect("original admitted parser and cache");
         let live = ledger.live.load(Ordering::Relaxed);
         assert!(live > base);
@@ -2698,7 +2825,7 @@ pub(crate) mod owned_row_regressions {
                 query,
                 None,
                 &["candidate"],
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &capability,
             )
             .expect("original native plan and parameter slots");
@@ -2728,7 +2855,7 @@ pub(crate) mod owned_row_regressions {
                 "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
                 None,
                 &[],
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &capability,
             )
             .expect("native prepared query");
@@ -2736,7 +2863,7 @@ pub(crate) mod owned_row_regressions {
             .execute_governed_admitted(
                 &mut execution,
                 &dataset,
-                crate::QueryOptions::default(),
+                &crate::QueryOptions::default(),
                 &crate::QueryGovernors::UNBOUNDED,
                 &capability,
                 |outcome| {
@@ -2775,7 +2902,7 @@ pub(crate) mod owned_row_regressions {
             "SELECT ?candidate WHERE { VALUES ?candidate { <https://example.org/item> } }",
             None,
             &["candidate"],
-            crate::QueryOptions::default(),
+            &crate::QueryOptions::default(),
             &workspace.capability(),
         );
         let Err(crate::EvaluationFailure::Evaluation(error)) = result else {
@@ -3665,6 +3792,124 @@ pub(crate) mod owned_row_regressions {
         fn term_count(&self) -> u64 {
             purrdf_core::DatasetView::term_count(self.inner)
         }
+    }
+
+    impl purrdf_core::FallibleDatasetView for GroundFaultView<'_> {
+        type Error = Refusal;
+        type Evidence = ();
+
+        fn operation_status(&self) -> purrdf_core::ViewOperationStatus<Refusal, ()> {
+            // This fixture reports point-read failures directly, without latching.
+            purrdf_core::ViewOperationStatus::Ready { evidence: () }
+        }
+    }
+
+    #[test]
+    fn unbounded_fallible_evidence_keeps_non_latching_source_errors() {
+        struct Closed;
+        impl crate::EvidenceSource<TermId> for Closed {
+            fn claim(
+                &self,
+                _: &purrdf_core::QuadIds,
+            ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, EvalError> {
+                Ok(None)
+            }
+            fn scope(&self, _: purrdf_core::GraphMatch) -> Result<crate::EvidenceScope, EvalError> {
+                Ok(crate::EvidenceScope {
+                    completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+                    closure_declared: true,
+                    missing_reason: None,
+                })
+            }
+            fn reason(
+                &self,
+                _: purrdf_core::evidence::ReasonId,
+            ) -> Result<Option<purrdf_core::evidence::ReasonDescription<'_>>, EvalError>
+            {
+                Ok(None)
+            }
+        }
+        fn refused<R>(result: crate::FallibleScopedResult<R, Refusal, ()>) {
+            match result {
+                Err(crate::FallibleSparqlError::Operational {
+                    error,
+                    evidence: (),
+                }) => assert_eq!(error.identity, 41),
+                Err(error) => panic!("the original read error became a query refusal: {error:?}"),
+                Ok(_) => panic!("a non-latching read error cannot publish success"),
+            }
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s").unwrap();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        let object = builder
+            .intern_literal(purrdf_core::RdfLiteral::simple("original value"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let clones = Arc::new(AtomicUsize::new(0));
+        let view = GroundFaultView {
+            inner: &dataset,
+            failed_id: object,
+            clones: clones.clone(),
+        };
+        assert!(purrdf_core::DatasetView::storage_live_budget(&view).is_none());
+        let engine = crate::NativeSparqlEngine::new();
+        let query = "SELECT (STR(?o) AS ?value) WHERE { ?s <http://example.org/p> ?o }";
+        let request = crate::InternedRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let answer = purrdf_core::evidence::AnswerRequest {
+            tier: purrdf_core::evidence::AnswerTier::Summary,
+            question: None,
+            standpoint: purrdf_core::evidence::StandpointKey::Unscoped,
+            input_completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+            closure_declared: true,
+        };
+        refused(engine.query_interned_evidence_fallible_view(
+            &view,
+            request,
+            &crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        refused(engine.query_evidence_status_fallible_view(
+            &view,
+            request,
+            &crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _| 7,
+        ));
+        refused(engine.query_evidence_answer_fallible_view(
+            &view,
+            request,
+            &crate::QueryOptions::EMPTY,
+            &Closed,
+            answer,
+            |_, _, _| 7,
+        ));
+        let mut execution = engine
+            .prepare_execution(query, None, &[], &crate::QueryOptions::EMPTY)
+            .unwrap();
+        refused(engine.execute_witnessed_evidence_fallible(
+            &mut execution,
+            &view,
+            &crate::QueryOptions::EMPTY,
+            &Closed,
+            |_| 7,
+        ));
+        assert_eq!(
+            clones.load(Ordering::Relaxed),
+            0,
+            "the original point-read cause moves without cloning"
+        );
+        assert!(matches!(
+            purrdf_core::FallibleDatasetView::operation_status(&view),
+            purrdf_core::ViewOperationStatus::Ready { .. }
+        ));
     }
 
     #[test]
@@ -4861,7 +5106,10 @@ pub(crate) mod owned_row_regressions {
         use crate::remote_http::{
             AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport,
         };
-        struct Native;
+        use std::sync::atomic::AtomicBool;
+        struct Native {
+            decoder_ready: Option<Arc<AtomicBool>>,
+        }
         impl HttpTransport for Native {
             fn post(&self, _: HttpRequest<'_>) -> Result<Vec<u8>, crate::remote::RemoteError> {
                 panic!("bounded production must use the native transport body")
@@ -4871,9 +5119,13 @@ pub(crate) mod owned_row_regressions {
                 _: HttpRequest<'_>,
                 workspace: super::WorkspaceCapability,
             ) -> Result<AdmittedHttpBody, crate::remote::ServiceResolutionError> {
-                AdmittedHttpBody::try_build(&workspace, |memory| {
+                let body = AdmittedHttpBody::try_build(&workspace, |memory| {
                     memory.collect(br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"same"}},{"x":{"type":"literal","value":"same"}}]}}"#.iter().copied()).map_err(Into::into)
-                })
+                })?;
+                if let Some(ready) = &self.decoder_ready {
+                    ready.store(true, Ordering::Relaxed);
+                }
+                Ok(body)
             }
         }
         let (workspace, ledger, base) = account(4_194_304);
@@ -4895,16 +5147,93 @@ pub(crate) mod owned_row_regressions {
         assert!(ledger.live.load(Ordering::Relaxed) > base);
         drop(local);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
-        let http = HttpRemoteQuerySource::new(Native)
-            .resolve_admitted(
-                ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
-                capability,
-            )
-            .expect("native transport and decoder");
+        let http = HttpRemoteQuerySource::new(Native {
+            decoder_ready: None,
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            capability,
+        )
+        .expect("native transport and decoder");
         assert_eq!(http.bindings().rows.len(), 2);
         assert_eq!(http.bindings().rows[0], http.bindings().rows[1]);
         drop(http);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+
+        // Refuse the decoder's vector growth after an original header string
+        // exists. This is an owned JSON refusal, beyond initial plain Storage.
+        struct LateReservation {
+            ledger: Arc<Ledger>,
+            ready: Arc<AtomicBool>,
+            decoder_growths: Arc<AtomicUsize>,
+        }
+        impl WorkspaceReservation for LateReservation {
+            type Error = Refusal;
+            fn resize(&mut self, bytes: u64) -> Result<(), Refusal> {
+                let old = self.ledger.live.load(Ordering::Relaxed);
+                if self.ready.load(Ordering::Relaxed)
+                    && bytes > old
+                    && self.decoder_growths.fetch_add(1, Ordering::Relaxed) == 2
+                {
+                    return Err(Refusal {
+                        identity: 7,
+                        clones: Arc::clone(&self.ledger.clones),
+                    });
+                }
+                self.ledger.live.store(bytes, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+        impl Drop for LateReservation {
+            fn drop(&mut self) {
+                self.ledger.live.store(0, Ordering::Relaxed);
+            }
+        }
+        let ready = Arc::new(AtomicBool::new(false));
+        let growths = Arc::new(AtomicUsize::new(0));
+        let failed_ledger = Arc::new(Ledger {
+            live: AtomicU64::new(base),
+            clones: Arc::new(AtomicUsize::new(0)),
+            limit: 4_194_304,
+        });
+        let failed: QueryWorkspace<Refusal> = QueryWorkspace::owned(
+            Box::new(LateReservation {
+                ledger: Arc::clone(&failed_ledger),
+                ready: Arc::clone(&ready),
+                decoder_growths: Arc::clone(&growths),
+            }),
+            0,
+        )
+        .unwrap();
+        let error = HttpRemoteQuerySource::new(Native {
+            decoder_ready: Some(ready),
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            failed.capability(),
+        )
+        .expect_err("the original decoder growth refuses after retaining text");
+        assert!(matches!(
+            error,
+            crate::remote::ServiceResolutionError::Operational(EvalError::WorkspaceStopped)
+        ));
+        assert_eq!(growths.load(Ordering::Relaxed), 3);
+        assert_eq!(failed.take_failure().unwrap().identity, 7);
+        assert_eq!(failed_ledger.clones.load(Ordering::Relaxed), 0);
+        assert_eq!(failed_ledger.live.load(Ordering::Relaxed), base);
+        let neighbor = HttpRemoteQuerySource::new(Native {
+            decoder_ready: None,
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            workspace.capability(),
+        )
+        .expect("a healthy original account still decodes its duplicate bag");
+        assert_eq!(neighbor.bindings().rows.len(), 2);
+        drop(neighbor);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(failed);
+        assert_eq!(failed_ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

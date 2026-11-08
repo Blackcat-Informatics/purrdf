@@ -1488,13 +1488,15 @@ pub(crate) fn validate_term(term: &RequestTerm) -> Result<(), PlanError> {
 fn validate_bound(bound: ReadBound) -> Result<(), PlanError> {
     let ceiling = u64::from(MAX_READ_DEPTH);
     match bound {
-        ReadBound::Bounded(top_k) if top_k.get() as u64 > ceiling => {
+        ReadBound::Bounded(top_k) | ReadBound::CallerOrdered(top_k)
+            if top_k.get() as u64 > ceiling =>
+        {
             Err(PlanError::ReadBoundBeyondDepthRange {
                 requested: top_k.get(),
                 ceiling,
             })
         }
-        ReadBound::Bounded(_) | ReadBound::Complete => Ok(()),
+        ReadBound::Bounded(_) | ReadBound::CallerOrdered(_) | ReadBound::Complete => Ok(()),
     }
 }
 

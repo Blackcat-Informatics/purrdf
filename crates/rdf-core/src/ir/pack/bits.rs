@@ -175,6 +175,39 @@ impl IntVector {
         }
     }
 
+    /// Admit backing storage for `additional` values before calling `push`.
+    /// Existing values and length remain unchanged on refusal.
+    ///
+    /// # Errors
+    /// Returns a size overflow or the original allocation refusal.
+    pub fn try_reserve(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        let values = self
+            .len
+            .checked_add(additional)
+            .ok_or(StorageError::SizeOverflow)?;
+        let bits = (values as u64)
+            .checked_mul(u64::from(self.width))
+            .ok_or(StorageError::SizeOverflow)?;
+        let words = usize::try_from(bits.div_ceil(64)).map_err(|_| StorageError::SizeOverflow)?;
+        if words > self.words.capacity() {
+            self.words
+                .try_reserve_exact(words - self.words.len())
+                .map_err(|_| StorageError::AllocationFailed)?;
+        }
+        Ok(())
+    }
+
+    /// The little-endian backing bytes, including final word padding, without
+    /// a framing header or an intermediate allocation. A carrier with its own
+    /// bit count can take only its specified number of bytes.
+    pub fn packed_bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.words.iter().flat_map(|word| word.to_le_bytes())
+    }
+
     /// The narrowest vector holding every one of `values`, in order: the width is
     /// [`bits_for`] of their maximum (0 for an empty slice), chosen once, and the
     /// backing words are sized once before the values are packed.
@@ -286,9 +319,7 @@ impl IntVector {
         let mut out = Vec::with_capacity(self.serialized_len());
         out.extend_from_slice(&(self.len as u64).to_le_bytes());
         out.extend_from_slice(&self.width.to_le_bytes());
-        for &w in &self.words {
-            out.extend_from_slice(&w.to_le_bytes());
-        }
+        out.extend(self.packed_bytes());
         out
     }
 
@@ -1090,16 +1121,16 @@ impl RankSelectDir for RankSelectRef<'_> {
 
 /// Append `value` as an unsigned LEB128 varint (7 payload bits per byte, MSB =
 /// continuation flag): 1..=10 bytes.
-pub fn write_varint(out: &mut Vec<u8>, value: u64) {
+pub fn write_varint(out: &mut impl Extend<u8>, value: u64) {
     let mut v = value;
     loop {
         let byte = (v & 0x7f) as u8;
         v >>= 7;
         if v == 0 {
-            out.push(byte);
+            out.extend([byte]);
             return;
         }
-        out.push(byte | 0x80);
+        out.extend([byte | 0x80]);
     }
 }
 
@@ -1593,9 +1624,21 @@ mod tests {
 
     #[test]
     fn varint_round_trip_edge_values() {
-        for &v in &[0u64, 1, 127, 128, 300, u64::from(u32::MAX), u64::MAX] {
+        for (v, expected) in [
+            (0_u64, b"\x00".as_slice()),
+            (1, b"\x01"),
+            (127, b"\x7f"),
+            (128, b"\x80\x01"),
+            (300, b"\xac\x02"),
+            (u64::from(u32::MAX), b"\xff\xff\xff\xff\x0f"),
+            (u64::MAX, b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01"),
+        ] {
             let mut out = Vec::new();
             write_varint(&mut out, v);
+            assert_eq!(out, expected);
+            let mut inline = crate::SmallVec::<[u8; 10]>::new();
+            write_varint(&mut inline, v);
+            assert_eq!(inline.as_slice(), expected);
             let mut pos = 0;
             let decoded = read_varint(&out, &mut pos).expect("decodes");
             assert_eq!(decoded, v);

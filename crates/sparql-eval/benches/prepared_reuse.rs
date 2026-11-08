@@ -60,7 +60,7 @@ fn bench(c: &mut Bench) {
         b.iter(|| {
             black_box(
                 engine
-                    .query_prepared(black_box(&data), &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(black_box(&data), &prepared, &[], &QueryOptions::EMPTY)
                     .expect("execute"),
             )
         });
@@ -72,7 +72,7 @@ fn bench(c: &mut Bench) {
     // Report-only, like every arm here — nothing in this file asserts a
     // threshold, and a figure from it is evidence for a reader rather than a gate.
     let mut execution = engine
-        .prepare_execution(PARAMETERIZED, None, &["s"], QueryOptions::EMPTY)
+        .prepare_execution(PARAMETERIZED, None, &["s"], &QueryOptions::EMPTY)
         .expect("prepare execution");
     group.bench_function("execute_prepared_parameterized", |b| {
         let mut index = 0_usize;
@@ -88,7 +88,7 @@ fn bench(c: &mut Bench) {
                 .execute(
                     &mut execution,
                     black_box(&*data),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     |outcome| black_box(matches!(outcome, InternedOutcome::Solutions(_))),
                 )
                 .expect("execute");
@@ -157,7 +157,18 @@ fn canonical_reuse(c: &mut Bench) {
         }
         let data = builder.freeze().expect("valid canonical benchmark dataset");
         group.bench_function(name, |b| {
-            b.iter(|| black_box(canonical_relabel(black_box(&data)).expect("canonical relabel")));
+            b.iter(|| {
+                black_box(
+                    canonical_relabel(
+                        black_box(&data),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("canonical relabel"),
+                )
+            });
         });
     }
     group.finish();

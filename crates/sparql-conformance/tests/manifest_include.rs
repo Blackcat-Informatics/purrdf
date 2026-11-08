@@ -194,6 +194,9 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
 /// refuses to run it, so its member's case runs once, through the group alone.
 #[test]
 fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     {
         let index = fixture("index/manifest.ttl");
         let cases = manifest::load(&index).expect("an index loads its members' closure");
@@ -202,7 +205,7 @@ fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
             manifest::index_members(&index).expect("readable index"),
             Some(vec![fixture("index/group/manifest.ttl")])
         );
-        let refused = purrdf_sparql_conformance::run_manifest(&index)
+        let refused = purrdf_sparql_conformance::run_manifest(&index, &mut control)
             .expect_err("an index is never run through its members");
         assert!(refused.contains("twice"), "got: {refused}");
     }

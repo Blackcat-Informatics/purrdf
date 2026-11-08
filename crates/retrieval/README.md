@@ -74,16 +74,17 @@ The stages:
   untrusted input, whether freshly planned, hand-built or deserialized, and it
   is checked here against what the registry declared before anything is emitted.
   An environment that also names the fusion profile the answer will be composed
-  under is held to that law's own arithmetic: a per-stratum depth beyond the
-  rank at which the profile's contributions stop being distinct is refused, and
-  `search` always names the profile it is about to fuse under.
+  under records that law's arithmetic resolution in `PlannedResolution`.
+  A depth past the last distinct contribution remains valid and is reported as
+  coarse; a depth beyond a producer's declared row bound is refused. `search`
+  always names the profile it is about to fuse under.
 * `execute(units, registry, dataset)` — one run per stratum through
   `purrdf-sparql-eval` against the caller's own dataset. A stratum that cannot
-  run becomes its own `ProducerStatus` while every other stratum streams on. A
-  `RankedStream` is a reading order, **not** a cursor: the evaluator materializes
-  a stratum's whole result before its first row is readable, so stopping here
-  buys independent per-stratum receipts and no cross-stratum accounting — never
-  a cheaper enumeration than reading the stratum costs.
+  run becomes its own `ProducerStatus` while every other stratum streams on.
+  The default `execute` materializes each stratum. `execute_within` also offers
+  `ReadSchedule::OnDemand`, which `search` uses: eligible property-function
+  reads produce one governed row per pull, while other query shapes materialize.
+  Each schedule preserves the producer's original terminal receipt.
 * `fuse(streams, profile, k)` / `search(request, …)` — the exact fixed-point
   reciprocal-rank fusion, bounded by the request's own `TopK` because fused
   enumeration is top-k by construction. The bound stops the reading as well as
@@ -116,6 +117,20 @@ there and the merge argument has no premise. The answer is identical either way;
 only the reading moves.
 
 ## What a producer owes this layer
+
+Caller ordering uses `FusionProfile::with_ordering` and
+`ReadBound::CallerOrdered(k)`. It compares optional leading keys, score
+descending, caller tie keys and canonical term. Keys are normalized unsigned
+lexicographic bytes under a caller-owned semantic IRI. This read bound keeps
+the fused limit while retaining the declared or measured stratum depths:
+leading keys and score-plateau ties can select a row below rank `k`.
+
+`search_ordered` takes an explicit `OrderCatalog`; direct streams may supply
+typed keys, snapshot evidence and unread bounds without that catalog. Fusion
+certifies the full order before yielding, retains buffered heads in unread
+bounds and refuses missing or inconsistent proof. Row `order_witness` values
+and trailer `ordering` / `unemitted_order` expose the proof. The default policy
+and its canonical profile bytes remain unchanged.
 
 Every number in that answer is a function of what the producers said about
 themselves, so what a producer owes is written down in one place:
@@ -254,13 +269,14 @@ is what a stratum is. An unbounded score — BM25F's field weights are natively 
 exit. So the question to ask over a shared law is: *do you want these two
 weighted differently, and is the score bounded?*
 
-A profile's weights are read as **ratios only**, so the constructor that built
-them matters and nothing can refuse the wrong one: `Fixed::ONE` and
-`Fixed::from_integer(1)` are the number one, while `Fixed::from_raw(1)` is one
-raw unit of `10^-12`. A weight map mixing the two spellings runs, refuses
-nothing, and ranks as though the smaller stratum were absent. How many
-contributions a candidate may receive is not a knob at all — it is the number of
-strata the profile weights, because a candidate surfaces at most once in each.
+A profile's weights are read as **ratios only**, and every `Score` carries an
+explicit `Precision`. With `Precision::new(18)?`,
+`Score::from_integer(1, precision)?` is one whole unit, while
+`precision.score(1)` is one raw unit of `10^-18`. Arithmetic refuses mismatched
+precisions. Mixing whole-value and raw-unit constructors within the same
+precision still changes the relative weights, so callers must choose their
+intended units. The maximum contribution count is the number of weighted
+strata, because a candidate surfaces at most once in each.
 
 ## Run it
 

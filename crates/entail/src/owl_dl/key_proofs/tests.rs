@@ -49,7 +49,14 @@ fn recorded_key_memberships_are_checked_in_the_original_world_with_all_branches(
         let input = input(branching);
         let ordinary = Kb::from_dataset(&input).unwrap();
         assert!(matches!(ordinary.key_proofs, Records::Disabled));
-        let reasoner = Reasoner::with_proofs(&input).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let context = reasoner.borrowed_proof_context().unwrap();
         assert_eq!(ordinary.same_as, context.kb.same_as);
         let Records::Ready(evidence) = &context.kb.key_proofs else {
@@ -117,6 +124,7 @@ fn deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
             work: Some(0),
             bytes: None,
         },
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
     {
@@ -140,9 +148,24 @@ fn deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
         .interner
         .id_of_iri("https://example.org/a")
         .unwrap();
-    assert!(
-        wrong_phase
-            .entails(0, individual, context.kb.keys[0].0, &context)
-            .is_err()
-    );
+    let Err(crate::EntailError::KeyMembership(error)) =
+        wrong_phase.entails(0, individual, context.kb.keys[0].0, &context)
+    else {
+        panic!("a later world must retain its original and actual preparation phase");
+    };
+    assert_eq!(error.expected.equalities, 0);
+    assert_eq!(error.actual.equalities, context.kb.same_as.len());
+    assert_eq!(error.expected_input, recorded.input);
+    assert_eq!(error.actual_input, context.input());
+    assert_eq!(error.key_concept, Some(context.kb.keys[0].0));
+    let mut same_phase = Evidence::for_phase(&context);
+    let Err(crate::EntailError::KeyMembership(error)) =
+        same_phase.entails(usize::MAX, individual, u32::MAX, &context)
+    else {
+        panic!("an absent key must retain the full original ordinal and concept");
+    };
+    assert_eq!(error.key, usize::MAX);
+    assert_eq!(error.requested_concept, u32::MAX);
+    assert_eq!(error.key_concept, None);
+    assert_eq!(error.expected, error.actual);
 }

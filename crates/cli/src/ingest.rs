@@ -41,10 +41,9 @@
 //! sources, and a quad that mentions one never collapses with its counterpart.
 //!
 //! The cost is that a pack in a multi-source list must be MATERIALIZED through
-//! `dataset_from_view` rather than read as a zero-copy `PackView`: a union takes concrete
-//! datasets, and there is no view type that is the union of two others. That is a real,
-//! deliberate trade — stated here rather than hidden — and it is why a SINGLE-source
-//! convert never enters this lane at all.
+//! `dataset_from_view` rather than read as a zero-copy `PackView`: this CLI lane returns
+//! a concrete dataset for conversion. Read-through callers can use `UnionDatasetView`
+//! to borrow arbitrary views instead. A SINGLE-source convert never enters this lane.
 //!
 //! # Why one source never enters this lane
 //!
@@ -68,6 +67,8 @@ use crate::source::{self, TransportPolicy};
 /// The resolved input side of a command: the ordered source list plus the flags that
 /// apply to every entry in it.
 pub(crate) struct Sources<'a> {
+    /// Explicit YAML-LD controls, set after format admission.
+    pub(crate) input_options: Option<&'a [u8]>,
     /// The ordered source paths — the positional `IN` first, then each `--input`.
     /// Never empty.
     pub(crate) paths: Vec<&'a str>,
@@ -94,6 +95,7 @@ impl<'a> Sources<'a> {
         paths.push(input);
         paths.extend(extra.iter().map(String::as_str));
         Self {
+            input_options: None,
             paths,
             from,
             base,
@@ -161,14 +163,21 @@ impl<'a> Sources<'a> {
 pub(crate) fn ingest(
     sources: &Sources<'_>,
     formats: &[SourceFormat],
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     debug_assert_eq!(sources.paths.len(), formats.len());
 
     let mut datasets: Vec<Arc<RdfDataset>> = Vec::with_capacity(sources.paths.len());
     let mut ledger = LossLedger::new();
     for (path, format) in sources.paths.iter().zip(formats.iter().copied()) {
-        let (dataset, source_ledger) =
-            source::load_dataset_reporting(path, format, sources.base, sources.transport)?;
+        let (dataset, source_ledger) = source::load_dataset_reporting(
+            path,
+            format,
+            sources.base,
+            sources.transport,
+            sources.input_options,
+            canonical,
+        )?;
         for entry in source_ledger.entries() {
             ledger.record(entry.clone());
         }

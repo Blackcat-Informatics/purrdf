@@ -7,6 +7,9 @@
 //! non-deactivated node shape, runs all constraints, and assembles a
 //! deterministically-sorted [`ValidationReport`].
 
+mod binding_error;
+pub use binding_error::BindingRefusal;
+
 use crate::data_view::{ShaclDatasetView, ShaclRead};
 use crate::footprint::Endpoint;
 use std::sync::{Arc, OnceLock};
@@ -292,17 +295,21 @@ impl BoundShapes {
         shapes: &[Shape],
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
-        disallows: &ConformanceDisallows,
+        request: &ValidationRequest,
     ) -> Result<Self, ShapesError> {
         let mut binding = lowered.bind(data.core_view(), &classes);
-        binding.set_conformance_disallows(disallows);
+        binding.set_validation_request(request);
         let targets = shapes
             .iter()
             .map(|shape| {
                 if shape.deactivated {
                     Ok(PreparedTargets::default())
                 } else {
-                    PreparedTargets::for_shape(data, shape, &binding, &classes)
+                    PreparedTargets::for_shape(
+                        data,
+                        shape,
+                        lowered.target_binding(&binding, &classes, shape.owner.as_ref()),
+                    )
                 }
             })
             .collect::<Result<Vec<_>, ShapesError>>()?;
@@ -322,10 +329,10 @@ impl BoundShapes {
         data: &ShaclData,
         lowered: Arc<LoweredShapes>,
         classes: Arc<ClassCatalog>,
-        disallows: &ConformanceDisallows,
+        request: &ValidationRequest,
     ) -> Self {
         let mut binding = lowered.bind(data.core_view(), &classes);
-        binding.set_conformance_disallows(disallows);
+        binding.set_validation_request(request);
         Self {
             lowered,
             classes,
@@ -407,9 +414,10 @@ impl PreparedTargets {
     fn for_shape(
         data: &ShaclData,
         shape: &Shape,
-        binding: &DatasetBinding,
-        classes: &ClassCatalog,
+        targets: crate::plan::TargetBinding<'_>,
     ) -> Result<Self, ShapesError> {
+        let binding = targets.binding;
+        let classes = targets.classes;
         let mut prepared = Self::default();
         for (index, target) in shape.targets.iter().enumerate() {
             match target {
@@ -466,13 +474,14 @@ impl PreparedTargets {
                     }
                 }
                 Target::ImplicitClass(_) => {}
-                Target::Where(shape) => {
-                    for node in crate::target_eval::where_targets(
-                        data,
-                        shape,
-                        binding.conformance_disallows(),
-                    )? {
-                        prepared.explicit_ids.insert(node);
+                Target::Where(where_shape) => {
+                    for node in crate::target_eval::where_targets(data, where_shape, targets)? {
+                        if !prepared.explicit_ids.contains(&node) {
+                            prepared.explicit_ids.try_reserve(1).map_err(|_| {
+                                purrdf_lex::allocation::StorageError::AllocationFailed
+                            })?;
+                            prepared.explicit_ids.insert(node);
+                        }
                     }
                 }
                 Target::NodeExpression(expr) => {
@@ -480,7 +489,8 @@ impl PreparedTargets {
                         data,
                         &shape.id,
                         expr,
-                        binding.conformance_disallows(),
+                        binding.validation_request(),
+                        shape.owner.as_ref(),
                     )? {
                         prepared.insert_explicit(data.core_view(), candidate);
                     }
@@ -1027,6 +1037,12 @@ const _: () = assert!(size_of::<FocusNode>() == size_of::<Term>());
 const _: () = assert!(size_of::<Option<FocusNode>>() == size_of::<FocusNode>());
 
 impl FocusNode {
+    pub(crate) fn try_clone(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match self {
+            Self::Interned(id) => Ok(Self::Interned(*id)),
+            Self::Foreign(term) => term.try_clone().map(Self::Foreign),
+        }
+    }
     /// Resolve `term` against `dataset` into the arm that describes it.
     pub(crate) fn resolve(dataset: &impl ShaclRead, term: &Term) -> Self {
         resolve_id(dataset, term).map_or_else(|| Self::Foreign(term.clone()), Self::Interned)
@@ -1140,16 +1156,11 @@ impl FocusSet {
     ///
     /// # Errors
     /// Refuses a set whose ids address a different dataset.
-    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], String> {
+    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], ShapesError> {
         if self.dataset == data.identity() {
             return Ok(&self.nodes);
         }
-        Err(
-            "focus node TermIds were resolved against a different dataset than the one this \
-             validator is bound to; TermIds are dataset-local and an in-range id from another \
-             dataset addresses a different term"
-                .to_owned(),
-        )
+        Err(BindingRefusal::ForeignFocusSet.into())
     }
 }
 
@@ -1164,9 +1175,11 @@ pub(crate) fn resolve_focus_nodes(
     data: &ShaclData,
     shape: &Term,
     targets: &[Target],
-    binding: &DatasetBinding,
-    classes: &ClassCatalog,
+    target_binding: crate::plan::TargetBinding<'_>,
 ) -> Result<Vec<FocusNode>, ShapesError> {
+    let binding = target_binding.binding;
+    let classes = target_binding.classes;
+    let model = target_binding.model;
     let ds = data.core_view();
     let mut seen_ids: IdSet = IdSet::default();
     let mut seen_foreign: FastSet<Term> = FastSet::default();
@@ -1183,11 +1196,21 @@ pub(crate) fn resolve_focus_nodes(
                 Some(instances_of_class(data, class, binding, classes)?)
             }
             Target::ImplicitClass(_) => Some(Vec::new()),
-            Target::Where(where_shape) => Some(crate::target_eval::where_targets(
-                data,
-                where_shape,
-                binding.conformance_disallows(),
-            )?),
+            Target::Where(where_shape) => {
+                let ids = crate::target_eval::where_targets(data, where_shape, target_binding)?;
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+                for id in ids {
+                    if !seen_ids.contains(&id) {
+                        seen_ids
+                            .try_reserve(1)
+                            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+                        memory.push(&mut nodes, FocusNode::Interned(id))?;
+                        seen_ids.insert(id);
+                    }
+                }
+                continue;
+            }
             Target::Node(_) | Target::Sparql { .. } | Target::NodeExpression(_) => None,
         };
         if let Some(ids) = ids {
@@ -1211,7 +1234,8 @@ pub(crate) fn resolve_focus_nodes(
                 data,
                 shape,
                 expr,
-                binding.conformance_disallows(),
+                binding.validation_request(),
+                model,
             )?,
             Target::Class(_)
             | Target::SubjectsOf(_)
@@ -1254,9 +1278,9 @@ trait ShapeReporting: Copy + Sync {
 }
 
 #[derive(Clone, Copy)]
-struct LegacyReporting;
+struct LegacyReporting<'a>(Option<&'a crate::recursion::evidence::ReportOutcome>);
 
-impl ShapeReporting for LegacyReporting {
+impl ShapeReporting for LegacyReporting<'_> {
     type Result = crate::report::ValidationResult;
     fn validate(
         self,
@@ -1270,6 +1294,7 @@ impl ShapeReporting for LegacyReporting {
             focus,
             shapes.box_role_vocab.as_ref(),
             plan,
+            self.0,
         )
     }
 }
@@ -1317,7 +1342,7 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
     //    chain no access mode serves) must fail before any focus node is visited, so
     //    the message names the declaration rather than arriving mid-validation on
     //    whichever row happened to reach it first.
-    let bound_functions = crate::sparql::bind_in_current_env(&shapes.functions)?;
+    let bound_functions = crate::sparql::bind_in_current_env(shapes, data.shapes_graph_iri())?;
 
     // Every `sh:uniqueValuesFor` grouping, built HERE, on this thread and before
     // any worker exists: a grouping reads the declaring shape's whole target set,
@@ -1411,6 +1436,7 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
 fn finish_report(
     mut results: Vec<crate::report::ValidationResult>,
     shapes: &Shapes,
+    outcome: Option<&crate::recursion::evidence::ReportOutcome>,
 ) -> ValidationReport {
     let disallows = &shapes.validation_options.conformance_disallows;
     // Deterministic sort key: (focus_node, component, source_shape, path, value,
@@ -1428,9 +1454,13 @@ fn finish_report(
     //
     // The diagnostics ride beside the results, never among them: a clone of the shapes'
     // list, which allocates nothing for a graph with no empty list.
-    ValidationReport::from_results(results, disallows.clone())
+    let mut report = ValidationReport::from_results(results, disallows.clone())
         .with_shapes_graph_well_formed(true)
-        .with_diagnostics(shapes.mandatory_diagnostics.clone())
+        .with_diagnostics(shapes.mandatory_diagnostics.clone());
+    if let Some(outcome) = outcome {
+        report.conforms &= outcome.conforms();
+    }
+    report
 }
 
 fn validate_with_plan_and_focus_filter<F>(
@@ -1442,14 +1472,20 @@ fn validate_with_plan_and_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    let outcome = crate::recursion::evidence::ReportOutcome::default();
+    let capture = shapes
+        .validation_options
+        .recursion
+        .as_ref()
+        .map(|_| &outcome);
     let results = validate_results_with_plan_and_focus_filter(
-        LegacyReporting,
+        LegacyReporting(capture),
         data,
         shapes,
         bound,
         include_focus,
     )?;
-    Ok(finish_report(results, shapes))
+    Ok(finish_report(results, shapes, capture))
 }
 
 fn validate_results_with_plan_and_focus_filter<R: ShapeReporting, F>(
@@ -1465,8 +1501,10 @@ where
     // This orchestration-thread scope covers target resolution; each focus chunk
     // installs the same SHACL-AF function and custom-aggregate registries on its
     // worker.
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut all_results = Vec::new();
 
@@ -1478,8 +1516,9 @@ where
             data,
             &shape.id,
             &shape.targets,
-            bound.binding(),
-            bound.classes(),
+            bound
+                .lowered
+                .target_binding(bound.binding(), bound.classes(), shape.owner.as_ref()),
         )?;
         // `FnMut` is intentionally applied serially in canonical focus order, so
         // existing callers observe the same calls even when evaluation dispatches
@@ -1583,14 +1622,26 @@ impl CompletePreparedValidator {
     ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
     {
         self.validator.run_request(|| {
-            let records = self.validator.collect_records(profile, evaluate)?;
+            let outcome = crate::recursion::evidence::ReportOutcome::default();
+            let recursion = self
+                .validator
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| &outcome);
+            let records = self
+                .validator
+                .collect_records(profile, evaluate, recursion)?;
             self.context.admit_result_sources(&records)?;
-            Ok(crate::report::CompleteValidationReport::from_records(
+            crate::report::CompleteValidationReport::from_records(
                 records,
                 &self.validator.shapes,
                 Arc::clone(&self.context),
                 profile,
-            ))
+            )
+            .with_recursion(&outcome)
+            .map_err(crate::report::CompleteValidationError::Shapes)
         })
     }
 
@@ -1699,6 +1750,10 @@ pub fn validate_complete_dataset_with_governors(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ValidationOptions {
+    /// An explicit recursive law and finite work limits. No selection is made
+    /// for the default request. Shared so copying request configuration never
+    /// copies a recursive evaluation workspace.
+    pub recursion: Option<crate::recursion::RecursionOptions>,
     /// The exact SHACL law requested by this operation. Legacy is the default;
     /// dated selections also require their native XPath bundle.
     pub shacl_profile: crate::profile::ShaclProfile,
@@ -1737,7 +1792,49 @@ pub struct ValidationOptions {
     pub subclass_of_in_shapes_graph: bool,
 }
 
+/// Shared request law. The canonical default needs no per-request allocation;
+/// non-default payloads are retained once and borrowed by every nested binding.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ValidationRequest(Option<Arc<ValidationOptions>>);
+
+impl ValidationRequest {
+    pub(crate) fn is_default(&self) -> bool {
+        self.0.is_none()
+    }
+
+    pub(crate) fn same_options(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
+}
+
+impl From<ValidationOptions> for ValidationRequest {
+    fn from(options: ValidationOptions) -> Self {
+        Self((options != ValidationOptions::default()).then(|| Arc::new(options)))
+    }
+}
+
+impl std::ops::Deref for ValidationRequest {
+    type Target = ValidationOptions;
+
+    fn deref(&self) -> &Self::Target {
+        static DEFAULT: std::sync::LazyLock<ValidationOptions> =
+            std::sync::LazyLock::new(ValidationOptions::default);
+        self.0.as_deref().unwrap_or(&DEFAULT)
+    }
+}
+
 impl ValidationOptions {
+    /// Select recursive semantics and finite work for this request.
+    #[must_use]
+    pub fn with_recursion(mut self, options: crate::recursion::RecursionOptions) -> Self {
+        self.recursion = Some(options);
+        self
+    }
+
     /// Select one exact SHACL law, retaining other request options.
     #[must_use]
     pub const fn with_profile(mut self, profile: crate::profile::ShaclProfile) -> Self {
@@ -1787,24 +1884,20 @@ impl ValidationOptions {
 #[derive(Debug, Clone)]
 pub struct PreparedShapes {
     shapes: Arc<Shapes>,
-    classes: Arc<ClassCatalog>,
+    /// Complete analysis or the original admission refusal. A refused walk never
+    /// supplies a placeholder class catalog to binding or product writing.
+    classes: Result<Arc<ClassCatalog>, crate::error::PreparationRefusal>,
     /// The stage-0 lowering of these shapes: their structure with every
     /// shape-constant derivation already made, shared with every binding.
     ///
-    /// Derived on first BIND rather than in a constructor, and that is the whole
-    /// point of the cell. [`Self::with_carried_analysis`] is the prepared-product
-    /// admit seam, and a restore is promised "no RDF reparsing, no shape
-    /// extraction, no repeated shared analysis" — a lowering built in
-    /// [`Self::with_provenance`] only would either be absent on a restored
-    /// preparation (leaving every `sh:in`, `sh:hasValue` and `sh:class` on it
-    /// unable to constrain, silently) or would have to be rebuilt at admit, which
-    /// is the repeated analysis the promise rules out. Deriving it here, once, on
-    /// whichever bind comes first, is the only placement that is correct for both
-    /// constructors.
+    /// Locally parsed shapes are lowered in [`Self::with_provenance`]. A restored
+    /// product keeps its carried class catalog and derives lowering on first bind,
+    /// so admission neither reparses RDF nor repeats the shared analysis.
     ///
-    /// Shared by `Arc` so a clone of a preparation shares the memoized lowering
-    /// rather than deriving a second one.
-    lowered: OnceLock<Arc<LoweredShapes>>,
+    /// Shared by `Arc` on success; the original refusal is memoized on failure.
+    /// Bind and product-write entry points return that refusal. Preparing afresh
+    /// on a larger stack makes a new attempt instead of reusing a failed walk.
+    lowered: OnceLock<Result<Arc<LoweredShapes>, crate::error::PreparationRefusal>>,
     /// Successful native pattern slots, allocated only by an explicit selection.
     xpath_caches: OnceLock<crate::xpath::Caches>,
     /// Where this preparation came from, recorded by the expression that built it.
@@ -1930,6 +2023,10 @@ impl PreparedShapes {
     /// artifact. That is stated HERE, at the construction site, rather than left for
     /// a caller to assert later — see [`ValidatorProvenance`] for why an accessor
     /// with an "unknown" answer would be worse than none.
+    ///
+    /// Stack admission failure is retained as [`ShapesError::Preparation`]; bind
+    /// and product-write operations return the original refusal rather than using
+    /// a partial analysis. To retry with more stack, construct a fresh preparation.
     #[must_use]
     pub fn new(shapes: Arc<Shapes>) -> Self {
         Self::with_provenance(shapes, ValidatorProvenance::Parsed)
@@ -1949,8 +2046,11 @@ impl PreparedShapes {
         // traversal beside it. The lowering is retained rather than discarded, so a
         // locally parsed preparation reaches its first bind with the memo already
         // filled and pays for the walk exactly as many times as a restored one.
-        let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
-        let classes = Arc::clone(lowered.classes());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).map(Arc::new);
+        let classes = lowered
+            .as_ref()
+            .map(|lowered| Arc::clone(lowered.classes()))
+            .map_err(Clone::clone);
         let prepared = Self::with_carried_analysis(shapes, provenance, classes);
         let _ = prepared.lowered.set(lowered);
         prepared
@@ -1977,7 +2077,7 @@ impl PreparedShapes {
     pub(crate) fn with_carried_analysis(
         shapes: Arc<Shapes>,
         provenance: ValidatorProvenance,
-        classes: Arc<ClassCatalog>,
+        classes: Result<Arc<ClassCatalog>, crate::error::PreparationRefusal>,
     ) -> Self {
         Self {
             shapes,
@@ -1993,12 +2093,10 @@ impl PreparedShapes {
     /// Idempotent and shared: the walk runs at most once per preparation however
     /// many datasets it is bound to, and a preparation restored from a prepared
     /// product reaches it by exactly the same route a locally parsed one does.
-    fn lowered(&self) -> Arc<LoweredShapes> {
-        Arc::clone(
-            self.lowered.get_or_init(|| {
-                Arc::new(crate::plan::lower_shapes(self.shapes.node_shapes.iter()))
-            }),
-        )
+    fn lowered(&self) -> Result<Arc<LoweredShapes>, crate::error::PreparationRefusal> {
+        self.lowered
+            .get_or_init(|| crate::plan::lower_shapes(self.shapes.node_shapes.iter()).map(Arc::new))
+            .clone()
     }
 
     /// Where this preparation came from: parsed in this process, or restored from a
@@ -2024,8 +2122,10 @@ impl PreparedShapes {
     /// restore does not have to walk the shape tree again, and
     /// `crate::product::identity`, which digests it so what a product carried can be
     /// checked against the digest the same product pinned.
-    pub(crate) fn class_catalog(&self) -> Arc<ClassCatalog> {
-        Arc::clone(&self.classes)
+    pub(crate) fn class_catalog(
+        &self,
+    ) -> Result<Arc<ClassCatalog>, crate::error::PreparationRefusal> {
+        self.classes.clone()
     }
 
     /// The parsed shapes this preparation analyzed.
@@ -2063,7 +2163,7 @@ impl PreparedShapes {
     /// options it was bound with.
     #[must_use]
     pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
-        Arc::make_mut(&mut self.shapes).validation_options = options;
+        Arc::make_mut(&mut self.shapes).validation_options = options.into();
         // A copy-on-write shape tree has a new declaration ownership domain.
         // Existing bindings/configurations retain the old tree and its caches.
         self.xpath_caches = OnceLock::new();
@@ -2415,6 +2515,7 @@ impl PreparedValidator {
 
     fn bind(data: ShaclData, prepared: &PreparedShapes) -> Result<Self, ShapesError> {
         let shapes = Arc::clone(&prepared.shapes);
+        admit_native_shapes(&shapes)?;
         check_links(&data, &shapes)?;
         // The rules entailment regime applies to every validation this binding answers.
         let data = match entailed_for_validation(&data, &shapes)? {
@@ -2426,16 +2527,16 @@ impl PreparedValidator {
             None => data,
         };
         let _function_scope = crate::sparql::enter_function_scope(
-            crate::sparql::bind_in_current_env(&shapes.functions)?,
+            crate::sparql::bind_in_current_env(&shapes, data.shapes_graph_iri())?,
         );
         let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
         data.prepare_class_membership();
         let bound = BoundShapes::bind(
             &data,
             &shapes.node_shapes,
-            prepared.lowered(),
-            Arc::clone(&prepared.classes),
-            &shapes.validation_options.conformance_disallows,
+            prepared.lowered()?,
+            prepared.class_catalog()?,
+            &shapes.validation_options,
         )?;
         Ok(Self {
             data,
@@ -2548,6 +2649,7 @@ impl PreparedValidator {
             Vec<crate::report::ResultRecord>,
             crate::report::CompleteValidationError,
         >,
+        recursion: Option<&crate::recursion::evidence::ReportOutcome>,
     ) -> Result<Vec<crate::report::ResultRecord>, crate::report::CompleteValidationError> {
         let sources = match self
             .request
@@ -2559,7 +2661,8 @@ impl PreparedValidator {
             None => self.shapes.report_sources_with_profile(profile)?,
         };
         let capture =
-            crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources));
+            crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources))
+                .with_recursion(recursion);
         let query_scope = crate::query_law::enter(profile, Some(&sources));
         let mut outcome = evaluate(&capture);
         if let Some(state) = crate::sparql::current_governors()
@@ -2606,29 +2709,67 @@ impl PreparedValidator {
     /// # Errors
     ///
     /// Returns an error when a constraint evaluation hard-fails.
-    pub fn validate(&self) -> Result<ValidationReport, String> {
+    pub fn validate(&self) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.validate_request(None::<fn(&Shape, &Term) -> bool>)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn validate_request<F: FnMut(&Shape, &Term) -> bool>(
         &self,
         include_focus: Option<F>,
     ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
+        self.validate_request_outcome(
+            include_focus,
+            &crate::recursion::evidence::ReportOutcome::default(),
+        )
+    }
+
+    /// Validate the prepared native model with its original cycle evidence.
+    /// Unlike complete RDF-source reporting, this also supports programmatically
+    /// constructed catalogs with no retained RDF shapes document.
+    /// # Errors
+    /// Returns the same admission and execution failures as ordinary validation;
+    /// a failed run never publishes a partial verdict or certificate.
+    pub fn validate_with_recursion_evidence(
+        &self,
+    ) -> Result<crate::recursion::RecursiveValidationReport, crate::report::CompleteValidationError>
+    {
+        let outcome = crate::recursion::evidence::ReportOutcome::default();
+        let report = self.validate_request_outcome(None::<fn(&Shape, &Term) -> bool>, &outcome)?;
+        Ok(crate::recursion::RecursiveValidationReport {
+            report,
+            cycles: outcome.take_cycles()?,
+        })
+    }
+
+    fn validate_request_outcome<F: FnMut(&Shape, &Term) -> bool>(
+        &self,
+        include_focus: Option<F>,
+        outcome: &crate::recursion::evidence::ReportOutcome,
+    ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.run_request(|| {
+            let recursion = self
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| outcome);
             let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
-                self.validate_results_using(LegacyReporting, include_focus)
+                self.validate_results_using(LegacyReporting(recursion), include_focus)
                     .map_err(crate::report::CompleteValidationError::execution)?
             } else {
-                self.collect_records(self.profile(), |capture| {
-                    self.validate_results_using(EvidenceReporting(capture), include_focus)
-                        .map_err(crate::report::CompleteValidationError::execution)
-                })?
+                self.collect_records(
+                    self.profile(),
+                    |capture| {
+                        self.validate_results_using(EvidenceReporting(capture), include_focus)
+                            .map_err(crate::report::CompleteValidationError::execution)
+                    },
+                    recursion,
+                )?
                 .into_iter()
                 .map(|record| record.value)
                 .collect()
             };
-            Ok(finish_report(results, &self.shapes))
+            Ok(finish_report(results, &self.shapes, recursion))
         })
     }
 
@@ -2720,9 +2861,9 @@ impl PreparedValidator {
     ///
     /// `CHANGE_PATH_CONSTANT` is the entry cost the zero-growth cases already pin.
     /// `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, by
-    /// `crates/shapes/tests/sparql_path_alloc.rs`: **40** for a `sh:sparql` SELECT
-    /// constraint, **77** for a custom `sh:ask` component over a two-valued path,
-    /// **48** for a custom `sh:select` component, and **79** for a
+    /// `crates/shapes/tests/sparql_path_alloc.rs`: **43** for a `sh:sparql` SELECT
+    /// constraint, **99** for a custom `sh:ask` component over a two-valued path,
+    /// **55** for a custom `sh:select` component, and **97** for a
     /// `sh:expression` function call over two argument tuples.
     ///
     /// The term is FLAT in the data graph — a fixed focus count costs the same over
@@ -2807,7 +2948,7 @@ impl PreparedValidator {
     /// FIRST-PARTY one: `sh:sparql`, a custom component's `sh:ask`/`sh:select`
     /// validator and a SHACL-AF `sh:expression` call each run one query per focus
     /// node and so carry a real per-focus-node term, pinned in closed form at
-    /// 40 / 77 / 48 / 79 allocations by
+    /// 43 / 99 / 55 / 97 allocations by
     /// `crates/shapes/tests/sparql_path_alloc.rs`. See
     /// [`Self::validate_focus_nodes`] for that closed form, for what the term is
     /// made of, and for the two third-party residuals the guarantee also excludes.
@@ -2853,12 +2994,7 @@ impl PreparedValidator {
         let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
         for &focus in focus_node_ids {
             if focus.dataset != dataset {
-                return Err(ShapesError::Invalid(format!(
-                    "focus node TermId {} was minted against a different dataset binding than the \
-                     one this validator is bound to; TermIds are dataset-local, so an in-range id \
-                     from another binding resolves to a different term",
-                    focus.id.index()
-                )));
+                return Err(BindingRefusal::ForeignFocus { id: focus.id }.into());
             }
             // Unreachable through the public surface — an id minted by this
             // binding indexes this binding's table — and kept because the mint is
@@ -2868,11 +3004,11 @@ impl PreparedValidator {
             if u64::try_from(focus.id.index()).expect("local id fits u64")
                 >= self.data.core_view().term_count()
             {
-                return Err(ShapesError::Invalid(format!(
-                    "focus node TermId {} is outside the prepared dataset's {}-term table",
-                    focus.id.index(),
-                    self.data.core_view().term_count()
-                )));
+                return Err(BindingRefusal::FocusOutOfRange {
+                    id: focus.id,
+                    terms: self.data.core_view().term_count(),
+                }
+                .into());
             }
             if seen.insert(focus.id) {
                 focus_nodes.push(FocusNode::Interned(focus.id));
@@ -2965,25 +3101,21 @@ impl PreparedValidator {
     pub fn affected_focus_node_ids(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
-    ) -> Result<FocusExpansion, String> {
+    ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
         self.affected_focus_request(delta)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn affected_focus_request(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
-        self.run_request(|| {
-            self.affected_focus_raw(delta)
-                .map_err(crate::report::CompleteValidationError::Execution)
-        })
+        self.run_request(|| self.affected_focus_raw(delta))
     }
 
     fn affected_focus_raw(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
-    ) -> Result<FocusExpansion, String> {
+    ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
         // The rules entailment regime replaces the bound data with the entailed dataset
         // (`entailed_for_validation`), which carries no mutation snapshot, and a rule
         // derives triples from any read the rules make, so no bounded superset exists:
@@ -2995,9 +3127,9 @@ impl PreparedValidator {
         }
         let core = self.data.core_view();
         let bound = core.delta_source().ok_or_else(|| {
-            "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
-             has no change to expand; bind through PreparedShapes::bind_delta_with_shapes_graph"
-                .to_owned()
+            crate::report::CompleteValidationError::Shapes(
+                BindingRefusal::MissingMutationBinding.into(),
+            )
         })?;
         // The third precondition, and the one that is a property of the BINDING
         // rather than of the argument: the change set names every row that joins
@@ -3010,23 +3142,10 @@ impl PreparedValidator {
         // no suppressed stream. The expansion would be short by exactly it, and a
         // short answer here is indistinguishable from "nothing changed".
         if !core.statements_projected() {
-            return Err(
-                "affected_focus_node_ids: this validator is bound to a mutation snapshot through a \
-                 view that does not project the RDF 1.2 statement layer, so it reads the plain \
-                 table alone; a row the overlay demotes onto the annotation table would leave that \
-                 read surface without appearing in the change set, and the expansion would silently \
-                 omit the focus nodes it moves; bind through \
-                 PreparedShapes::bind_delta_with_shapes_graph, which projects statements"
-                    .to_owned(),
-            );
+            return Err(ShapesError::from(BindingRefusal::UnprojectedStatements).into());
         }
         if !std::ptr::eq(Arc::as_ptr(bound), std::ptr::from_ref(delta)) {
-            return Err(
-                "affected_focus_node_ids: the supplied mutation snapshot is not the one this \
-                 validator was bound to, and the ids it would produce would index this \
-                 validator's term table while naming the other snapshot's terms"
-                    .to_owned(),
-            );
+            return Err(ShapesError::from(BindingRefusal::WrongSnapshot).into());
         }
         if let Some(reason) = self.bound.footprint().opaque() {
             return Ok(FocusExpansion::Everything { reason });
@@ -3045,11 +3164,11 @@ impl PreparedValidator {
         for quad in delta.changed_quads() {
             let ids = [quad.s, quad.p, quad.o].map(|id| core.local_delta_id(id));
             let [Some(s), Some(p), Some(o)] = ids else {
-                return Err(format!(
-                    "internal change-path defect: a changed row of the bound mutation snapshot \
-                     names a term the binding's own {}-term view does not map",
-                    core.term_count()
-                ));
+                return Err(ShapesError::from(BindingRefusal::UnmappedChangedRow {
+                    row: quad,
+                    terms: core.term_count(),
+                })
+                .into());
             };
             changed.push(::purrdf_rdf::QuadIds { s, p, o, g: None });
         }
@@ -3107,9 +3226,14 @@ impl PreparedValidator {
                         }
                     }
                     Some(path) => {
-                        for id in
-                            crate::path::eval_planned_ids_from_id(core, read_node, path, binding)
-                                .map_err(|error| error.to_string())?
+                        for id in crate::path::eval_planned_ids_with_paths(
+                            core,
+                            read_node,
+                            path,
+                            binding,
+                            self.bound.footprint().paths(),
+                        )
+                        .map_err(crate::report::CompleteValidationError::Shapes)?
                         {
                             if seen.insert(id) {
                                 affected.push(FocusId::new(dataset, id));
@@ -3139,11 +3263,12 @@ impl PreparedValidator {
             }
             broadcast_shapes.push(broadcast.shape);
             let targets = self.bound.targets.get(broadcast.shape).ok_or_else(|| {
-                format!(
-                    "internal change-path defect: a cross-focus read names top-level shape {} of \
-                     a binding indexing {}",
-                    broadcast.shape,
-                    self.bound.targets.len()
+                crate::report::CompleteValidationError::Shapes(
+                    BindingRefusal::UnknownBroadcast {
+                        shape: broadcast.shape,
+                        shapes: self.bound.targets.len(),
+                    }
+                    .into(),
                 )
             })?;
             for focus in targets.resolve_all(&self.data) {
@@ -3233,19 +3358,30 @@ impl PreparedValidator {
         focus_nodes: &FocusSet,
     ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.run_request(|| {
+            let outcome = crate::recursion::evidence::ReportOutcome::default();
+            let recursion = self
+                .shapes
+                .validation_options
+                .recursion
+                .as_ref()
+                .map(|_| &outcome);
             let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
-                self.validate_bounded_results(LegacyReporting, focus_nodes)
+                self.validate_bounded_results(LegacyReporting(recursion), focus_nodes)
                     .map_err(crate::report::CompleteValidationError::Shapes)?
             } else {
-                self.collect_records(self.profile(), |capture| {
-                    self.validate_bounded_results(EvidenceReporting(capture), focus_nodes)
-                        .map_err(crate::report::CompleteValidationError::Shapes)
-                })?
+                self.collect_records(
+                    self.profile(),
+                    |capture| {
+                        self.validate_bounded_results(EvidenceReporting(capture), focus_nodes)
+                            .map_err(crate::report::CompleteValidationError::Shapes)
+                    },
+                    recursion,
+                )?
                 .into_iter()
                 .map(|record| record.value)
                 .collect()
             };
-            Ok(finish_report(results, &self.shapes))
+            Ok(finish_report(results, &self.shapes, recursion))
         })
     }
 
@@ -3573,7 +3709,7 @@ pub struct GovernedChangeValidation {
 pub fn validate_change(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
-) -> Result<ChangeValidation, String> {
+) -> Result<ChangeValidation, crate::report::CompleteValidationError> {
     let (scope, report) = change_pass(validator, delta)?;
     report.map(|report| ChangeValidation { report, scope })
 }
@@ -3603,7 +3739,7 @@ pub fn validate_change_with_governors(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
     governors: &QueryGovernors,
-) -> Result<GovernedChangeValidation, String> {
+) -> Result<GovernedChangeValidation, crate::report::CompleteValidationError> {
     let state = Arc::new(GovernorState::new(governors));
     let pass = {
         let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
@@ -3626,7 +3762,13 @@ pub fn validate_change_with_governors(
 fn change_pass(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
-) -> Result<(ChangeScope, Result<ValidationReport, String>), String> {
+) -> Result<
+    (
+        ChangeScope,
+        Result<ValidationReport, crate::report::CompleteValidationError>,
+    ),
+    crate::report::CompleteValidationError,
+> {
     let expansion = validator.affected_focus_node_ids(delta)?;
     Ok(match &expansion {
         FocusExpansion::Bounded(ids) => (
@@ -3638,7 +3780,7 @@ fn change_pass(
             // reach this call; its refusals are the binding's and the constraints'.
             validator
                 .validate_focus_node_ids(ids)
-                .map_err(|error| error.to_string()),
+                .map_err(crate::report::CompleteValidationError::Shapes),
         ),
         FocusExpansion::Everything { reason } => {
             (ChangeScope::Everything { reason }, validator.validate())
@@ -3729,12 +3871,29 @@ fn validate_linked_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    admit_native_shapes(shapes)?;
     let entailed = entailed_for_validation(data, shapes)?;
     let data = entailed.as_ref().unwrap_or(data);
     match with_shapes_graph_subclasses(data, shapes)? {
         Some(supplemented) => validate_data_with_focus_filter(&supplemented, shapes, include_focus),
         None => validate_data_with_focus_filter(data, shapes, include_focus),
     }
+}
+
+fn admit_native_shapes(shapes: &Shapes) -> Result<(), ShapesError> {
+    let semantics = shapes
+        .validation_options
+        .recursion
+        .as_ref()
+        .map(|options| options.semantics);
+    if let Some(source) = &shapes.recursion_source {
+        source.admit(&shapes.owner, semantics)?;
+    }
+    shapes.owner.admit_recursion(semantics)?;
+    for shape in &shapes.node_shapes {
+        crate::recursion::model::admit_shape(shape, semantics)?;
+    }
+    Ok(())
 }
 
 /// Validate a DOCUMENT against a fixed oracle shapes graph, reading none of its
@@ -3770,7 +3929,10 @@ pub(crate) fn validate_dataset_as_document(
 ///
 /// A rules-engine failure: validation of a graph whose rules could not be executed
 /// has no answer.
-fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
+fn entailed_for_validation(
+    data: &ShaclData,
+    shapes: &Shapes,
+) -> Result<Option<ShaclData>, ShapesError> {
     // `sh:RulesEntailment` executes the default rule set, which holds every rule of the
     // shapes graph, so a rule set named beside it adds nothing; rule sets alone execute
     // together as a single rule set.
@@ -3789,7 +3951,7 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
         crate::srl::eval::Reexecution::Incremental,
     )
     .map(|inference| Arc::clone(inference.dataset()))
-    .map_err(|e| format!("the sh:entailment regime could not execute the rules: {e}"))?;
+    .map_err(|error| ShapesError::RulesEntailment(Box::new(error)))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
 }
 
@@ -3805,22 +3967,23 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
 ///
 /// # Errors
 /// The supplemented views exceed the default view limits.
-fn with_shapes_graph_subclasses(
+pub(crate) fn with_shapes_graph_subclasses(
     data: &ShaclData,
     shapes: &Shapes,
 ) -> Result<Option<ShaclData>, ShapesError> {
+    request_subclasses(shapes)
+        .map(|supplement| supplement.apply(data))
+        .transpose()
+}
+
+pub(crate) fn request_subclasses(shapes: &Shapes) -> Option<Box<crate::data::ClassSupplement>> {
     if !shapes.validation_options.subclass_of_in_shapes_graph {
-        return Ok(None);
+        return None;
     }
     let graph = shapes.shapes_dataset.as_ref();
-    let Some(subclass_of) = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF) else {
-        return Ok(None);
-    };
-    let supplement = shapes_graph_subclass_pairs(graph, subclass_of);
-    if supplement.is_empty() {
-        return Ok(None);
-    }
-    data.with_class_supplement(&supplement).map(Some)
+    let predicate = graph.term_id_by_iri(crate::model::rdfs::SUB_CLASS_OF)?;
+    let pairs = shapes_graph_subclass_pairs(graph, predicate);
+    (!pairs.is_empty()).then(|| Box::new(crate::data::ClassSupplement::new(pairs)))
 }
 
 /// The `(subclass, superclass)` IRI pairs SHACL type follows from `graph`'s
@@ -4005,14 +4168,9 @@ fn validate_data_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
-    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter()));
+    let lowered = Arc::new(crate::plan::lower_shapes(shapes.node_shapes.iter())?);
     let classes = Arc::clone(lowered.classes());
-    let bound = BoundShapes::bind_untargeted(
-        data,
-        lowered,
-        classes,
-        &shapes.validation_options.conformance_disallows,
-    );
+    let bound = BoundShapes::bind_untargeted(data, lowered, classes, &shapes.validation_options);
     validate_with_plan_and_focus_filter(data, shapes, &bound, &mut include_focus)
 }
 
@@ -4073,7 +4231,7 @@ pub fn validate_projected_dataset(
 /// SHACL-SPARQL under it, exactly as [`validate_projected_dataset_with_shapes_graph`]
 /// exposes it with no override. A `Shapes` that carries the IRI is never validated as if
 /// it did not: `$shapesGraph` would silently be unbound.
-fn projected_data(projected: Arc<RdfDataset>, shapes: &Shapes) -> Result<ShaclData, String> {
+fn projected_data(projected: Arc<RdfDataset>, shapes: &Shapes) -> Result<ShaclData, ShapesError> {
     if shapes.shapes_graph.is_some() {
         return build_projected_data(projected, shapes, None);
     }
@@ -4106,7 +4264,7 @@ pub(crate) fn build_projected_data(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,
-) -> Result<ShaclData, String> {
+) -> Result<ShaclData, ShapesError> {
     let core = Arc::new(ShaclDatasetView::native(Arc::clone(&data)));
     let (sparql, graph) = build_sparql_view(
         ::purrdf_rdf::ir::CompositeSource::new(data),
@@ -4186,7 +4344,7 @@ fn complete_data(
     };
     let composite = Arc::new(
         CompositeDatasetView::from_bound_sources(sources(), ViewLimits::default())
-            .map_err(|error| error.to_string())?,
+            .map_err(crate::data_view::ViewAdmissionError::composite)?,
     );
     for index in 0..data.term_count() {
         let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"))
@@ -4232,7 +4390,7 @@ fn complete_data(
     );
     let composite = Arc::new(
         CompositeDatasetView::from_bound_sources(sparql_sources, ViewLimits::default())
-            .map_err(|error| error.to_string())?,
+            .map_err(crate::data_view::ViewAdmissionError::composite)?,
     );
     let sparql = Arc::new(
         ShaclDatasetView::composite(composite, false, ViewLimits::default())?
@@ -4247,7 +4405,7 @@ fn build_sparql_view(
     shapes: &Shapes,
     override_graph: Option<&str>,
     limits: ::purrdf_rdf::ir::ViewLimits,
-) -> Result<(Arc<ShaclDatasetView>, Option<String>), String> {
+) -> Result<(Arc<ShaclDatasetView>, Option<String>), ShapesError> {
     let graph_iri = override_graph
         .map(str::to_owned)
         .or_else(|| shapes.shapes_graph.clone());
@@ -4267,7 +4425,7 @@ fn build_sparql_view(
         ],
         limits,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(crate::data_view::ViewAdmissionError::composite)?;
     let view = ShaclDatasetView::composite(Arc::new(composite), false, limits)?
         .with_statement_projection();
     Ok((Arc::new(view), Some(graph_iri)))
@@ -4362,7 +4520,11 @@ pub(crate) fn shacl_dataset_from_dataset(
 ///
 /// [`ShapesError::Imports`] when the `owl:imports` closure is not in hand;
 /// [`ShapesError::Invalid`] if the shapes Turtle fails to parse (including a relative
-/// IRI reference with no base in scope) or contains unsupported SHACL constructs.
+/// IRI reference with no base in scope), contains unsupported SHACL constructs,
+/// expands a cyclic shape reference, or exhausts the parsing stack margin.
+/// Recursive shape references are refused, not replaced with unconstrained shapes;
+/// shared acyclic references are accepted. SHACL Core leaves recursion behavior
+/// to processors (section 6.6.3).
 pub fn parse_shapes(shapes_ttl: &str, base: Option<&str>) -> Result<Shapes, ShapesError> {
     parse_shapes_with_config(shapes_ttl, base, None, &ShapesImports::new())
 }
@@ -4503,7 +4665,7 @@ pub fn parse_shapes_with_options(
         prefixes: doc_prefixes,
         base: document_base,
     } = crate::text_ingest::parse_turtle_document(shapes_ttl, base).map_err(|errors| {
-        crate::report::CompleteValidationError::Shapes(ShapesError::Invalid(errors.join("\n")))
+        crate::report::CompleteValidationError::Shapes(ShapesError::Text(errors))
     })?;
 
     // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
@@ -4639,8 +4801,7 @@ pub(crate) fn parse_graphs_with_shapes_graph(
     options: &ValidationOptions,
     imports: &ShapesImports,
 ) -> Result<(Arc<RdfDataset>, Shapes), ShapesError> {
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
     let imports = linked_imports(data.as_ref(), imports)?;
     let shapes = parse_shapes_with_options(
         shapes_ttl,
@@ -4690,8 +4851,7 @@ pub fn validate_graphs_with_config(
     // Parse the data graph via the native codecs. Every independently malformed
     // N-Triples line is reported in one pass, matching `parse_shapes`' complete
     // syntax-diagnostic contract.
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
 
     let imports = linked_imports(data.as_ref(), imports)?;
     let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, &imports)?;
@@ -4762,8 +4922,7 @@ pub fn entail_graphs_with_shapes_graph(
     shapes_graph: Option<&str>,
     imports: &ShapesImports,
 ) -> Result<Arc<RdfDataset>, ShapesError> {
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
     let shapes = parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, imports)?;
     crate::rules::entail_dataset(data.as_ref(), &shapes)
 }
@@ -4956,11 +5115,17 @@ mod tests {
         let capacity = purrdf_datalog::id::TermId::from_index(u64::MAX)
             .expect_err("the terminal term slot cannot be minted");
         let error = validator
-            .collect_records(crate::profile::ShaclProfile::LEGACY, |capture| {
-                capture
-                    .semantic_failure(&Term::NamedNode(NamedNode::new_unchecked(TARGET_NS)), None);
-                Err(ShapesError::Storage(StorageError::Capacity(capacity)).into())
-            })
+            .collect_records(
+                crate::profile::ShaclProfile::LEGACY,
+                |capture| {
+                    capture.semantic_failure(
+                        &Term::NamedNode(NamedNode::new_unchecked(TARGET_NS)),
+                        None,
+                    );
+                    Err(ShapesError::Storage(StorageError::Capacity(capacity)).into())
+                },
+                None,
+            )
             .expect_err("storage refusal must stop report publication");
         assert!(matches!(
             error,
@@ -5146,8 +5311,11 @@ mod tests {
                 &validator.data,
                 &declared.id,
                 &declared.targets,
-                validator.bound.binding(),
-                validator.bound.classes(),
+                validator.bound.lowered.target_binding(
+                    validator.bound.binding(),
+                    validator.bound.classes(),
+                    declared.owner.as_ref(),
+                ),
             )
             .expect("fixture targets resolve")
             .iter()
@@ -5232,7 +5400,10 @@ mod tests {
                     .unwrap();
             let data = project_dataset(&data).unwrap();
             let binding = prepared.bind_projected_dataset(Arc::clone(&data)).unwrap();
-            assert!(Arc::ptr_eq(&prepared.classes, &binding.bound.classes));
+            assert!(Arc::ptr_eq(
+                prepared.classes.as_ref().unwrap(),
+                &binding.bound.classes
+            ));
             assert!(Arc::ptr_eq(
                 &data,
                 &binding.data.core_arc().expect("bound native data")
@@ -5901,7 +6072,7 @@ mod tests {
              <http://example.org/ns#Leaf> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/ns#Value> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).unwrap();
         let classes = lowered.classes();
         let binding = lowered.bind(data.as_ref(), classes);
 
@@ -5947,7 +6118,7 @@ mod tests {
             "<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Root> .\n",
         );
         let shapes = load_shapes_ttl(&shapes_ttl);
-        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter());
+        let lowered = crate::plan::lower_shapes(shapes.node_shapes.iter()).unwrap();
         let classes = lowered.classes();
         let binding = lowered.bind(data.as_ref(), classes);
 
@@ -7519,10 +7690,10 @@ mod tests {
                 })
                 .expect_err("an unregistered IRI under a declared namespace is refused");
             assert!(
-                error.contains("neverRegistered"),
+                error.to_string().contains("neverRegistered"),
                 "{label}: the refusal names the offending IRI: {error}"
             );
-            messages.push(error);
+            messages.push(error.to_string());
         }
         assert_eq!(
             messages[0], messages[1],

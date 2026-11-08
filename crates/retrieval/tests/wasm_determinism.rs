@@ -32,7 +32,7 @@
 //! pinned the stronger way, by writing out the **bytes** it is a digest of, which
 //! is a claim about the layout that no digest alone can make.
 //!
-//! The comparison is on the **decimal lexical**, not on the raw `i128`, because
+//! The comparison is on the **decimal lexical**, not on the raw `u128`, because
 //! the lexical is what a consumer receives and what a serializer writes.
 //!
 //! # What else crosses the target boundary
@@ -51,13 +51,14 @@
 //!   exhaustion, so a target whose finality test read one rank further would hand
 //!   back a different terminal report for identical streams.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::{BTreeMap, VecDeque};
 
 use purrdf_retrieval::{
     CandidateDepths, CandidateDomains, CandidateExecutionResult, DecayRule, DomainTag,
-    DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, ExclusionBasis, ExclusionVerdict, Fixed,
-    FusionProfile, IndexGeneration, Iri, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
-    ProtocolError, RankFidelity, RankedRow, RankedStream, RankedStreamImpl, ReadStratum, RowBlock,
+    DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, ExclusionBasis, ExclusionVerdict, FusionProfile,
+    IndexGeneration, Iri, PfAttestation, PlanId, ProducerReceipt, ProducerStatus, ProtocolError,
+    RankFidelity, RankedRow, RankedStream, RankedStreamImpl, ReadStratum, RowBlock, Score,
     ScoreExactness, ServiceLevel, StreamContract, StreamEnding, Term, TopK, contribution, fuse,
     union,
 };
@@ -79,13 +80,13 @@ const STRATUM_ONE: &str = "http://example.org/stratum/wasm1";
 const STRATUM_TWO: &str = "http://example.org/stratum/wasm2";
 
 /// `trunc(10^12 / 61)`, the contribution of a unit weight at rank 1.
-const RANK_1: i128 = 16_393_442_622;
+const RANK_1: u128 = 16_393_442_622;
 
 /// `trunc(10^12 / 62)`, the contribution of a unit weight at rank 2.
-const RANK_2: i128 = 16_129_032_258;
+const RANK_2: u128 = 16_129_032_258;
 
 /// `trunc(10^12 / 63)`, the contribution of a unit weight at rank 3.
-const RANK_3: i128 = 15_873_015_873;
+const RANK_3: u128 = 15_873_015_873;
 
 /// The fusion profile's identity, as hex.
 ///
@@ -93,7 +94,7 @@ const RANK_3: i128 = 15_873_015_873;
 /// canonical encoding, and no hand arithmetic produces one. It is pinned so that
 /// a target which framed an integer or ordered the weight map differently would
 /// fail here rather than silently name a different law.
-const PROFILE_ID_HEX: &str = "9b34ccfc3361417c90cbc70a6fc2685ef8c73b5270255b706e6a84c551720290";
+const PROFILE_ID_HEX: &str = "30c588a7f216cca41d8b7adfacc0bfa69648080dfdbea73c63bf1fed402c2160";
 
 // ---------------------------------------------------------------------------
 // A single-threaded executor. No thread parking: `wasm32-unknown-unknown` has
@@ -178,7 +179,8 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
             // absence must read identically on every target.
             RankedRow::new(
                 rank,
-                contribution(Fixed::ONE, rank, K).expect("the contribution fits"),
+                contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K)
+                    .expect("the contribution fits"),
                 Term::new(*candidate),
                 RowBlock::Undeclared,
             )
@@ -197,18 +199,19 @@ fn scripted(candidates: [&str; 3]) -> ScriptedStream {
 fn profile() -> FusionProfile {
     FusionProfile::with_decay(
         BTreeMap::from([
-            (iri(STRATUM_ONE), Fixed::ONE),
-            (iri(STRATUM_TWO), Fixed::ONE),
+            (iri(STRATUM_ONE), PRECISION_12.score(PRECISION_12.scale())),
+            (iri(STRATUM_TWO), PRECISION_12.score(PRECISION_12.scale())),
         ]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }
 
 /// The decimal lexical of a raw fixed-point integer, for an expectation written
 /// as the sum of two hand-computed contributions.
-fn decimal(raw: i128) -> String {
-    Fixed::from_raw(raw).to_decimal_lexical()
+fn decimal(raw: u128) -> String {
+    Score::from_raw(raw, PRECISION_12).to_decimal_lexical()
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +222,8 @@ fn decimal(raw: i128) -> String {
 /// truncating toward zero, at exactly the values computed in this file's header.
 fn a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets() {
     for (rank, expected) in [(1_u64, RANK_1), (2, RANK_2), (3, RANK_3)] {
-        let value = contribution(Fixed::ONE, rank, K).expect("the contribution fits");
+        let value = contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K)
+            .expect("the contribution fits");
         assert_eq!(
             value.to_decimal_lexical(),
             decimal(expected),
@@ -349,13 +353,14 @@ fn a_fusion_profile_names_the_same_identity_on_both_targets() {
 /// Two ranks, deliberately: the collision is reachable at the shortest possible
 /// stream, so this costs nothing to run under Node.
 fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
-    const COLLIDED: i128 = 16;
+    const COLLIDED: u128 = 16;
 
     let stratum = iri(STRATUM_ONE);
-    let weight = Fixed::from_raw(1_000);
+    let weight = Score::from_raw(1_000, PRECISION_12);
     let profile = FusionProfile::with_decay(
         BTreeMap::from([(stratum.clone(), weight)]),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile");
 
@@ -375,13 +380,13 @@ fn a_collided_pair_fuses_to_the_same_order_on_both_targets() {
         steps: VecDeque::from([
             RankedRow::new(
                 1,
-                Fixed::from_raw(COLLIDED),
+                Score::from_raw(COLLIDED, PRECISION_12),
                 Term::new("alpha"),
                 RowBlock::Undeclared,
             ),
             RankedRow::new(
                 2,
-                Fixed::from_raw(COLLIDED),
+                Score::from_raw(COLLIDED, PRECISION_12),
                 Term::new("beta"),
                 RowBlock::Undeclared,
             ),
@@ -459,7 +464,8 @@ fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
             let rank = u64::try_from(index + 1).expect("the fixture ranks fit");
             RankedRow::new(
                 rank,
-                contribution(Fixed::ONE, rank, K).expect("the contribution fits"),
+                contribution(PRECISION_12.score(PRECISION_12.scale()), rank, K)
+                    .expect("the contribution fits"),
                 Term::new(*candidate),
                 // A restricted stream owes a block on every row, and this is the
                 // block the row is really in. An absence here would be an
@@ -472,6 +478,7 @@ fn scripted_in(candidates: &[&str], block: &str) -> ScriptedStream {
         steps,
         emitted: 0,
         contract: StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::within([domain(block)]),
@@ -655,7 +662,7 @@ fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
         assert_eq!(
             result.trailer.statuses.get(&iri(stratum)),
             Some(&ProducerStatus::CeilingReached {
-                bound: Fixed::from_raw(RANK_2)
+                bound: Score::from_raw(RANK_2, PRECISION_12)
             }),
             "a stream the bound stopped is closed at the contribution of the last \
              rank read from it, never drained into an exhaustion it did not earn"
@@ -669,6 +676,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     let depths = CandidateDepths::new([(stratum.clone(), 3)]).unwrap();
     let plan_id = PlanId::from_canonical(b"candidate-portable-fixture");
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Allowed,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
@@ -734,7 +742,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
         [3]
     );
     let mut expected = Vec::new();
-    expected.extend_from_slice(&1_u16.to_le_bytes());
+    expected.extend_from_slice(&3_u16.to_le_bytes());
     framed(&mut expected, "candidate-union");
     expected.extend_from_slice(&32_u64.to_le_bytes());
     expected.extend_from_slice(plan_id.as_bytes());
@@ -754,6 +762,7 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     framed(&mut expected, STRATUM_ONE);
     expected.extend_from_slice(&3_u32.to_le_bytes()); // explicit requested depth
     expected.extend_from_slice(&3_u64.to_le_bytes()); // original rows pulled
+    expected.extend_from_slice(&3_u64.to_le_bytes()); // last original rank
     for _ in 0..2 {
         // known materialised/emitted rows
         expected.push(1);
@@ -761,7 +770,9 @@ fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
     }
     expected.extend_from_slice(&[1, 1, 1]); // verified receipt, complete prefix, exhausted
     expected.extend_from_slice(&3_u64.to_le_bytes());
-    expected.extend_from_slice(&[1, 0, 0, 0, 0]); // contract; allowed, complete, faithful, unrestricted
+    expected.push(1); // declared contract
+    framed(&mut expected, "ordinal");
+    expected.extend_from_slice(&[0, 0, 0, 0]); // allowed, complete, faithful, unrestricted
     framed(&mut expected, "unavailable");
     expected.push(1); // an announcement, explicitly undeclared
     let mut announced = Vec::new();

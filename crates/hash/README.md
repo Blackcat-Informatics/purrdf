@@ -583,26 +583,46 @@ source on every run.
 | `b"phase:syntax"` | `SYNTAX_PHASE` | `crates/slice/src/cache.rs` |
 | `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
 | `b"purrdf-core/accepted-row/v1"` | `ACCEPTANCE_DOMAIN` | `crates/rdf-core/src/evidence/accepted.rs` |
+| `b"purrdf-core/composite-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/composite.rs` |
+| `b"purrdf-core/content-alias-revision/v1"` | `REVISION_DOMAIN` | `crates/rdf-core/src/content_alias.rs` |
 | `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
+| `b"purrdf-core/delta-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
 | `b"purrdf-core/evidence-aggregate-column/v1"` | `(inline)` | `crates/rdf-core/src/evidence.rs` |
 | `b"purrdf-core/evidence-annotation/v1"` | `ANNOTATION_DOMAIN` | `crates/rdf-core/src/evidence/ledger/row.rs` |
 | `b"purrdf-core/evidence-frame/v1"` | `FRAME_DOMAIN` | `crates/rdf-core/src/evidence/frame.rs` |
 | `b"purrdf-core/evidence-reason/v1"` | `REASON_DOMAIN` | `crates/rdf-core/src/evidence/reason.rs` |
 | `b"purrdf-core/evidence-record/v1"` | `RECORD_DOMAIN` | `crates/rdf-core/src/evidence/record.rs` |
+| `b"purrdf-core/paged-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/mod.rs` |
+| `b"purrdf-core/paged-stack-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/stack.rs` |
+| `b"purrdf-core/residue-snapshot/v1"` | `RESIDUE` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
+| `b"purrdf-core/segmented-stack-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/segmented/stack.rs` |
+| `b"purrdf-core/snapshot/dictionary/v1"` | `(inline)` | `crates/rdf-core/src/ir/frozen_terms.rs` |
+| `b"purrdf-core/snapshot/graphs/v1"` | `GRAPHS` | `crates/rdf-core/src/source.rs` |
+| `b"purrdf-core/snapshot/rows/v1"` | `ROWS` | `crates/rdf-core/src/source.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-guarded-dl-clause-ir-v1"` | `GUARDED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-guarded-dl-clause-ir-v2"` | `NATIVE_GUARDED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-guarded-triple-clause-ir-v1"` | `GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-guarded-triple-clause-ir-v2"` | `NATIVE_GUARDED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-ordered-dl-clause-ir-v3"` | `ORDERED_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-ordered-triple-clause-ir-v3"` | `ORDERED_TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-datalog-partial-model-v1"` | `PARTIAL_MODEL_DOMAIN` | `crates/datalog/src/seminaive/session.rs` |
 | `b"purrdf-datalog-plan-identity-v1"` | `PLAN_IDENTITY_TAG` | `crates/datalog/src/cache.rs` |
-| `b"purrdf-datalog-proof-v1"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog-proof-v2"` | `PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
 | `b"purrdf-datalog-scheduled-contract-v1"` | `SCHEDULED_CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-triple-clause-ir-v1"` | `TRIPLE_CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
-| `b"purrdf-datalog-triple-proof-v1"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog-triple-proof-v2"` | `TRIPLE_PROOF_ENCODING_TAG` | `crates/datalog/src/proof.rs` |
+| `b"purrdf-datalog/demand-predicates/v1"` | `NAMESPACE` | `crates/datalog/src/demand/transform.rs` |
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-dl-service-proof-v3"` | `PREPARATION_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
+| `b"purrdf-entail-refutation-native-canonical-proof-v1"` | `REFUTATION_EVIDENCE` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-no-guards-v1"` | `REFUTATION_GUARDS` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-scenario-v1"` | `REFUTATION_SCENARIO` | `crates/entail/src/engine.rs` |
+| `b"purrdf-entail-refutation-source-v1"` | `REFUTATION_SOURCE` | `crates/entail/src/engine.rs` |
 | `b"purrdf-geo-kernel/carrier-bindings/v1"` | `PROFILE_BINDING_DOMAIN` | `crates/geo-kernel/src/binding.rs` |
 | `b"purrdf-geo-kernel/continuous-image-law/v1"` | `IMAGE_LAW_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
 | `b"purrdf-geo-kernel/continuous-image-source/v1"` | `IMAGE_SOURCE_DOMAIN` | `crates/geo-kernel/src/operation/geometry.rs` |
@@ -651,23 +671,39 @@ source on every run.
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-requests-v2\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-snapshot-v1\0"` | `SEGMENTED_SNAPSHOT_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+| `b"purrdf-shapes/class-membership-snapshot/v1"` | `(inline)` | `crates/shapes/src/class_membership.rs` |
+| `b"purrdf-shapes/data-view-snapshot/v1"` | `(inline)` | `crates/shapes/src/data_view.rs` |
 | `b"purrdf-shapes/product/class-catalog"` | `CLASS_CATALOG_DOMAIN` | `crates/shapes/src/product/identity.rs` |
+| `b"purrdf-shapes/rule-execution/v1"` | `(inline)` | `crates/shapes/src/sparql/coordinates.rs` |
+| `b"purrdf-shapes/rule-program/v1"` | `(inline)` | `crates/shapes/src/srl/identity.rs` |
 | `b"purrdf-shapes/schema-compilation-key/v1"` | `SCHEMA_KEY_SALT` | `crates/shapes/src/json_schema.rs` |
+| `b"purrdf-sparql-algebra/node-identity/v1"` | `NODE` | `crates/sparql-algebra/src/identity.rs` |
+| `b"purrdf-sparql-algebra/query-identity/v1"` | `QUERY` | `crates/sparql-algebra/src/identity.rs` |
+| `b"purrdf-sparql-algebra/update-identity/v1"` | `UPDATE` | `crates/sparql-algebra/src/identity.rs` |
 | `b"purrdf-sparql-eval/aggregate-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/agg_fn.rs` |
+| `b"purrdf-sparql-eval/bound-request/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/embedding-space-generation/v1"` | `SPACE_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
 | `b"purrdf-sparql-eval/embedding-space-vectors-generation/v1"` | `VECTORS_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
+| `b"purrdf-sparql-eval/execution-coordinates/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/extension-env"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/extension_env.rs` |
 | `b"purrdf-sparql-eval/property-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/property_fn_plan.rs` |
+| `b"purrdf-sparql-eval/update-context/v1"` | `(inline)` | `crates/sparql-eval/src/update.rs` |
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |
 | `b"purrdf-text-analysis-profile-v2\0"` | `PROFILE_DOMAIN` | `crates/text/src/profile.rs` |
 | `b"purrdf-text/dictionary-lattice/v2"` | `DICTIONARY_DOMAIN` | `crates/text/src/segment.rs` |
-| `b"purrdf-text/index/v4"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/index/v6"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
 | `b"purrdf-text/resolved-analyzer/v4\0"` | `ANALYZER_DOMAIN` | `crates/text/src/analysis.rs` |
-| `b"purrdf-text/source/v1"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
-| `b"purrdf-text/surface-generation/v1\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
+| `b"purrdf-text/source/v2"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/surface-generation/v2\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
 | `b"purrdf-text/surface-literal/v1\0"` | `LITERAL_DOMAIN` | `crates/text/src/surface.rs` |
-| `b"purrdf-text/triples/index/v1"` | `TRIPLE_INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
-| `b"purrdf-text/triples/source/v1"` | `TRIPLE_SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/surface-source/v1\0"` | `SOURCE_DOMAIN` | `crates/text/src/surface.rs` |
+| `b"purrdf-text/triples/index/v3"` | `TRIPLE_INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-text/triples/source/v2"` | `TRIPLE_SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+| `b"purrdf-toml-document-v1"` | `DOCUMENT_DOMAIN` | `crates/toml/src/profile.rs` |
+| `b"purrdf-toml-profile-v1"` | `PROFILE_DOMAIN` | `crates/toml/src/profile.rs` |
+| `b"purrdf-xsd/date-time-representation/v1"` | `(inline)` | `crates/xsd/src/temporal.rs` |
+| `b"purrdf-yaml-profile-v1"` | `PROFILE_DOMAIN` | `crates/yaml/src/profile.rs` |
+| `b"purrdf-yaml-stream-v1"` | `STREAM_DOMAIN` | `crates/yaml/src/profile.rs` |
 | `b"purrdf.pipeline-root.v1"` | `PIPELINE_ROOT_DOMAIN` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
 | `b"purrdf.purremb.v1.artifact\0"` | `D_ARTIFACT` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.chunking\0"` | `D_CHUNKING` | `crates/rdf-core/src/ir/embedding/identity.rs` |
@@ -689,8 +725,13 @@ source on every run.
 | `b"purrdf/direct-geodesic-certificate/v1"` | `DIRECT_CERTIFICATE` | `crates/geo-kernel/src/geodesic/direct.rs` |
 | `b"purrdf/inverse-geodesic-certificate/v1"` | `INVERSE_CERTIFICATE` | `crates/geo-kernel/src/geodesic/inverse.rs` |
 | `b"purrdf/point-distance-certificate/v1"` | `POINT_CERTIFICATE` | `crates/geo-kernel/src/metric.rs` |
+| `b"purrdf/source-record/v1"` | `RECORD` | `crates/rdf-core/src/source.rs` |
+| `b"purrdf/source-row/v1"` | `ROW` | `crates/rdf-core/src/source.rs` |
+| `b"purrdf/source-version/v1"` | `SOURCE_VERSION` | `crates/rdf-core/src/source.rs` |
+| `b"purrdf/triples/source-row/v1"` | `TRIPLE_ROW` | `crates/rdf-core/src/source.rs` |
 | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
+| `b"purrdf:order-catalog:v1"` | `(inline)` | `crates/retrieval/src/ordering.rs` |
 | `b"purrdf:plan:v1"` | `PLAN_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
 | `b"references-once-emoji-protect-caseless-scoped-accents-v3"` | `ORDERED_LAW` | `crates/text/src/profile.rs` |
 | `b"section"` | `SECTION_KIND` | `crates/markdown/src/identity.rs` |
@@ -703,4 +744,11 @@ source on every run.
 
 ## License
 
-`MIT OR Apache-2.0 OR MulanPSL-2.0`.
+Independently written code: `MIT OR Apache-2.0 OR MulanPSL-2.0`.
+The frozen word alphabet preserves EFF's `CC-BY-4.0` grant in addition; see
+[`data/word-id/PROVENANCE.md`](data/word-id/PROVENANCE.md).
+
+`word_id` supplies reversible full word identities and checked lexical prefixes
+over `hex::Digest32`, with caller-buffer, fallible owned and ordered batch APIs.
+Its exact scheme and conversion commands are specified in
+[`purrdf-word-identities.md`](../../docs/design/purrdf-word-identities.md).

@@ -59,14 +59,30 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
         (u32::MAX, true),
     ] {
         let dataset = ontology(count, asserted);
-        let constructed = Reasoner::with_proofs(&dataset);
+        let constructed = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         if count == u32::MAX {
-            let Err(EntailError::Parse(detail)) = constructed else {
+            let Err(EntailError::OwlSyntax(error)) = constructed else {
                 panic!("an unrepresentable count must retain the typed native refusal");
             };
-            assert!(
-                detail.contains("4294967295") && detail.contains("4294967294"),
-                "{detail}"
+            let purrdf_entail::OwlSyntaxError::CardinalityRange {
+                literal,
+                value,
+                maximum,
+            } = error.as_ref()
+            else {
+                panic!("the native count range refusal must survive: {error:?}");
+            };
+            assert_eq!(*value, u32::MAX);
+            assert_eq!(*maximum, u32::MAX - 1);
+            assert_eq!(
+                literal,
+                &TermValue::typed_literal(count.to_string(), XSD_NON_NEGATIVE_INTEGER)
             );
             continue;
         }
@@ -114,7 +130,14 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
                         })
                 );
             }
-            let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
+            let mut consumer = Reasoner::with_proofs(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
             consumer
                 .prepare(proof.question())
                 .expect("query preparation");
@@ -125,6 +148,10 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
                     proof.question(),
                     Some(answer.certificate()),
                     &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .expect("independently check every necessary bound and inhabitance premise");
             assert_eq!(replay.checks().unattested(), 0);

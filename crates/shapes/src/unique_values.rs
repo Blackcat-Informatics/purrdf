@@ -48,7 +48,7 @@ use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::data_view::ShaclRead;
-use crate::plan::{ClassCatalog, DatasetBinding, TermSlot};
+use crate::plan::TermSlot;
 use crate::shapes::Target;
 use crate::term::Term;
 
@@ -56,6 +56,8 @@ use crate::term::Term;
 /// its grouping is built from.
 #[derive(Debug)]
 pub(crate) struct UniqueSpec {
+    /// The original declaration domain used by computed targets.
+    pub(crate) owner: Option<std::sync::Arc<crate::shapes::ModelOwner>>,
     /// The node of the shape that declares the constraint, which the data
     /// graph's `sh:shape` declarations name.
     pub(crate) shape: Term,
@@ -101,9 +103,9 @@ impl UniqueGroups {
     pub(crate) fn build(
         data: &ShaclData,
         spec: &UniqueSpec,
-        binding: &DatasetBinding,
-        classes: &ClassCatalog,
+        target_binding: crate::plan::TargetBinding<'_>,
     ) -> Result<Self, crate::error::ShapesError> {
+        let binding = target_binding.binding;
         let predicates = spec
             .properties
             .iter()
@@ -121,7 +123,7 @@ impl UniqueGroups {
         }
         let ds = data.core_view();
         let targets =
-            crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, binding, classes)?;
+            crate::engine::resolve_focus_nodes(data, &spec.shape, &spec.targets, target_binding)?;
         // The first target seen with each tuple, and whether a second one has
         // been seen since — so the first is marked colliding exactly once.
         let mut first: ::purrdf_rdf::FastMap<ValueKey, (TermId, bool)> =

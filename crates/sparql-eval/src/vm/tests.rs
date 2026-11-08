@@ -1315,10 +1315,81 @@ fn exists_link_refuses_a_different_expression_owner() {
         linked.ebv(Some(&expr), &[], &schema, &mut ctx).unwrap(),
         Some(true)
     );
-    assert!(matches!(
-        linked.ebv(Some(&other), &[], &schema, &mut ctx),
-        Err(EvalError::Internal(_))
-    ));
+    let error = linked
+        .ebv(Some(&other), &[], &schema, &mut ctx)
+        .unwrap_err();
+    let captured = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(
+        captured.child("cause").code,
+        "eval-invariant-exists-expression-owner-changed"
+    );
+    assert_eq!(error.code(), Some(EvalError::INTERNAL_CODE));
+    assert_eq!(
+        error.to_string(),
+        "internal evaluator error: an EXISTS link was run with a different expression owner"
+    );
+}
+
+#[test]
+fn native_stack_refusals_keep_the_original_expected_category() {
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_testkit::error_capture::Capture;
+
+    let mut stack: super::ValStack<purrdf_core::TermId> = vec![super::Val::Ebv(Some(true))];
+    let window = CurrentThreadWindow::open();
+    let error = super::pop_term(&mut stack).unwrap_err();
+    let copy = error.clone();
+    let underflow = super::pop_term(&mut stack).unwrap_err();
+    let measured = window.close();
+    assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+    drop(error);
+    drop(stack);
+
+    let captured = Capture::read(&copy);
+    assert_eq!(captured.code, "sparql-eval-invariant");
+    assert_eq!(
+        captured.child("cause").child("expected").code,
+        "vm-stack-term"
+    );
+    assert_eq!(copy.code(), Some(EvalError::INTERNAL_CODE));
+    assert_eq!(
+        crate::protocol::FailureCode::from(&copy).code(),
+        "native-sparql-evaluation"
+    );
+    assert_eq!(
+        std::error::Error::source(&copy)
+            .unwrap()
+            .downcast_ref::<crate::EvaluatorInvariant>(),
+        Some(&crate::EvaluatorInvariant::UnexpectedStackValue {
+            expected: crate::StackExpectation::Term,
+        })
+    );
+    assert_eq!(
+        copy.to_string(),
+        "internal evaluator error: an expression program found a stack entry that is not a term"
+    );
+    assert_eq!(
+        Capture::read(&underflow).child("cause").code,
+        "eval-invariant-vm-stack-underflow"
+    );
+    assert_eq!(
+        underflow.to_string(),
+        "internal evaluator error: an expression program popped an empty stack"
+    );
+
+    let mut stack: super::ValStack<purrdf_core::TermId> = vec![super::Val::Term(None)];
+    let window = CurrentThreadWindow::open();
+    let error = super::pop_ebv(&mut stack).unwrap_err();
+    let measured = window.close();
+    assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+    assert_eq!(
+        Capture::read(&error).child("cause").child("expected").code,
+        "vm-stack-boolean"
+    );
+    stack.push(super::Val::Ebv(Some(true)));
+    assert_eq!(super::pop_ebv(&mut stack).unwrap(), Some(true));
+    stack.push(super::Val::Term(None));
+    assert_eq!(super::pop_term(&mut stack).unwrap(), None);
 }
 
 #[test]
@@ -1351,7 +1422,9 @@ fn copied_filter_exists_resolves_through_its_retained_pattern_owner() {
     let other = expr.clone();
     assert!(matches!(
         linked.ebv(Some(&other), &[], &schema, &mut ctx),
-        Err(EvalError::Internal(_))
+        Err(EvalError::Invariant(
+            crate::EvaluatorInvariant::ExistsExpressionOwnerChanged
+        ))
     ));
 }
 

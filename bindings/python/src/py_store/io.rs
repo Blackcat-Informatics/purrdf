@@ -20,10 +20,10 @@ use pyo3::types::{PyBytes, PyString};
 use super::query::{PyQueryQuads, PyQueryTriples};
 use super::term::PyQuad;
 use crate::{
-    NativeRdfFormat, ParseOptions, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SerializeGraph,
-    SerializeOptions, StatementLayer, TermValue, empty_named_graphs_dropped,
-    flat_dataset_from_quads, flat_dataset_from_quads_declaring, flat_rdf_quads_from_dataset,
-    parse_dataset, parse_dataset_with, serialize_dataset_to_format, serialize_dataset_with,
+    NativeRdfFormat, RdfDataset, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions,
+    StatementLayer, TermValue, empty_named_graphs_dropped, flat_dataset_from_quads,
+    flat_dataset_from_quads_declaring, flat_rdf_quads_from_dataset, serialize_dataset_to_format,
+    serialize_dataset_with,
 };
 
 // ── RDF serialization format enum ───────────────────────────────────────────────
@@ -32,7 +32,7 @@ use crate::{
 ///
 /// Exposed to Python as `RdfFormat`; the members keep the SCREAMING_SNAKE Python
 /// spelling (`RdfFormat.TURTLE`).
-#[pyclass(name = "RdfFormat", eq, eq_int, skip_from_py_object)]
+#[pyclass(name = "RdfFormat", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 #[allow(
@@ -124,7 +124,7 @@ impl PyRdfFormat {
 /// `SerializeOutcome` field the C ABI's `out_statement_rows_dropped` and the wasm
 /// `statementRowsDropped` read, so a caller comparing hosts is comparing one number,
 /// and a future statement-layer ingress on this lane needs no new surface.
-#[pyclass(name = "SerializeLoss", frozen, skip_from_py_object)]
+#[pyclass(name = "SerializeLoss", frozen)]
 #[derive(Debug)]
 pub(crate) struct PySerializeLoss {
     bytes: Vec<u8>,
@@ -234,18 +234,26 @@ pub(super) fn dump_quads_with_loss(
 /// resolved against a fabricated one. A document may still establish its own base
 /// (Turtle `@base`, `xml:base`, JSON-LD `@context.@base`), which wins over this one.
 #[pyfunction]
-#[pyo3(signature = (input, format, *, base=None))]
+#[pyo3(signature = (input, format, *, base=None, input_options=None))]
 pub(crate) fn parse(
     py: Python<'_>,
     input: &Bound<'_, PyAny>,
     format: PyRdfFormat,
     base: Option<String>,
+    input_options: Option<String>,
 ) -> PyResult<Vec<Py<PyQuad>>> {
     let data = read_input(Some(input), None)?;
     // The native parse runs detached (GIL released); the Quad objects are
     // built after reacquiring.
     let quads = py
-        .detach(move || parse_quads(&data, format.to_native(), base.as_deref()))
+        .detach(move || {
+            parse_quads(
+                &data,
+                format.to_native(),
+                base.as_deref(),
+                input_options.as_deref(),
+            )
+        })
         .map_err(|e| super::presentation::value_error(format!("parse error: {e}"), &e))?;
     quads
         .into_iter()
@@ -343,7 +351,7 @@ fn write_all_to(py: Python<'_>, output: &Bound<'_, PyAny>, bytes: &[u8]) -> PyRe
 // ── Pure-Rust cores (PyO3-free, exercised through the pytest suite) ─────────────
 
 /// Parse RDF bytes into owned quads via the native codec with no blank-node
-/// renaming. Routes through [`parse_dataset`] → IR → the flat
+/// renaming. Routes through [`purrdf_validate::rdf_input::parse`] → IR → the flat
 /// quad un-fold ([`flat_rdf_quads_from_dataset`]) so the `rdf:reifies` / annotation
 /// rows of the RDF 1.2 statement layer reappear in the quad stream exactly as a flat
 /// parse would yield them. Private-use language tags such as `@x-purrdf-*` are valid
@@ -352,8 +360,15 @@ pub(crate) fn parse_quads(
     data: &[u8],
     format: NativeRdfFormat,
     base: Option<&str>,
+    input_options: Option<&str>,
 ) -> Result<Vec<RdfQuad>, RdfDiagnostic> {
-    let dataset = parse_dataset(data, format.media_type(), base)?;
+    let dataset = purrdf_validate::rdf_input::parse(
+        data,
+        format.media_type(),
+        base,
+        input_options.map(str::as_bytes),
+    )?
+    .dataset;
     Ok(flat_rdf_quads_from_dataset(&dataset))
 }
 
@@ -371,8 +386,14 @@ pub(crate) fn parse_quads_and_prefixes(
     data: &[u8],
     format: NativeRdfFormat,
     base: Option<&str>,
+    input_options: Option<&str>,
 ) -> Result<LoadedDocument, RdfDiagnostic> {
-    let outcome = parse_dataset_with(data, format.media_type(), base, &ParseOptions::default())?;
+    let outcome = purrdf_validate::rdf_input::parse(
+        data,
+        format.media_type(),
+        base,
+        input_options.map(str::as_bytes),
+    )?;
     // The graphs a format that names a graph only on a row would drop are exactly the
     // ones the document declared with no row; N-Quads is that format.
     let declared_empty = empty_named_graphs_dropped(

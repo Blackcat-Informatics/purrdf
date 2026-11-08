@@ -2569,10 +2569,8 @@ fn parse_facet_value(
             );
         }
     };
-    parse_xsd(&lexical, datatype).map_err(|error| {
-        ProjectionError::integrity(format!("invalid CSVW datatype facet: {error}"))
-            .at_path(resource)
-    })
+    parse_xsd(&lexical, datatype)
+        .map_err(|error| ProjectionError::csvw_facet(error).at_path(resource))
 }
 
 fn expand_annotation_key(key: &str, context: &CsvwContext) -> Result<String, ()> {

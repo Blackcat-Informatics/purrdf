@@ -513,7 +513,7 @@ _SPELLED = {
     1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
     14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
-    19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four", 25: "twenty-five",
+    19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four", 25: "twenty-five", 26: "twenty-six", 27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine", 33: "thirty-three", 34: "thirty-four", 35: "thirty-five",
 }
 
 # The same table read backwards, for `_int`. Derived rather than written out, so a
@@ -525,7 +525,7 @@ _CARDINAL = {word: value for value, word in _SPELLED.items()}
 # from the one cardinal table rather than written out a second time.
 _IRREGULAR_ORDINAL = {1: "first", 2: "second", 3: "third", 5: "fifth", 8: "eighth",
                       9: "ninth", 12: "twelfth", 20: "twentieth",
-                      21: "twenty-first", 22: "twenty-second", 23: "twenty-third", 25: "twenty-fifth"}
+                      21: "twenty-first", 22: "twenty-second", 23: "twenty-third", 25: "twenty-fifth", 28: "twenty-eighth", 29: "twenty-ninth", 33: "thirty-third", 35: "thirty-fifth"}
 
 
 def _ordinal(value: int) -> str | None:
@@ -3163,7 +3163,7 @@ def jsonld_lens_claims() -> list[Claim]:
 
 
 _SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
-_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "shacl12.rs"
+_SHACL12_CORPUS = _REPO / "crates" / "shacl-conformance" / "src" / "shacl12.rs"
 _SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
 _BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
 
@@ -3260,7 +3260,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
     pins = (
         "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
-        "crates/shapes/src/shacl_corpora/shacl12.rs"
+        "crates/shacl-conformance/src/shacl12.rs"
     )
     catsrc = f"the category pins in {_SHACL12_HARNESS.relative_to(_REPO)}"
     if counts["total"] != listed + cats["unlisted"]:
@@ -3367,7 +3367,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
         Claim(
             "the root README's SHACL 1.2 scoreboard row",
             _README,
-            r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
+            r"\| SHACL 1\.2 \| W3C `shacl12-test-suite` \(`vectors/shacl12/`\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · "
             r"(?P<ledgered>\d+) ledgered expected failures, (?P<spec>\d+) "
             r"spec-contradicted \(`hasLang-example`\); (?P<unlisted>\d+) unlisted vendored files "

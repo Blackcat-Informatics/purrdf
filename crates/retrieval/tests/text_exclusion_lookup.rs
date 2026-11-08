@@ -37,6 +37,7 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture
 //! configuration, never a minted vocabulary.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,9 +46,9 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDomains, DecayRule, EVIDENCE_VERSION, EvidenceId,
-    ExclusionVerdict, Fixed, FusionError, FusionProfile, Iri, ProtocolError, RECIP_K, RankFidelity,
-    RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, StratumStream, Term,
-    TopK, compile, execute, plan, search,
+    ExclusionVerdict, FusionError, FusionProfile, Iri, ProtocolError, RECIP_K, RankFidelity,
+    RequestTerm, RetrievalRequest, Score, SearchError, SearchResult, Statistics, StratumStream,
+    Term, TopK, compile, execute, plan, search,
 };
 use purrdf_sparql_eval::{
     EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfAttestation, PfCursor, PfRow,
@@ -475,9 +476,14 @@ fn fixture_statistics() -> FixtureStatistics {
 fn fixture_profile() -> FusionProfile {
     let weights = SIDES
         .into_iter()
-        .map(|side| (iri(&side.stratum()), Fixed::ONE))
+        .map(|side| {
+            (
+                iri(&side.stratum()),
+                PRECISION_12.score(PRECISION_12.scale()),
+            )
+        })
         .collect();
-    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
+    FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
         .expect("the fixture profile is valid")
 }
 
@@ -538,7 +544,7 @@ fn registry_rebuilding(
 
 /// One row of a fused answer, reduced to the part a reader compares: the
 /// candidate, its fused score, and which stratum contributed what at which rank.
-type AnswerRow = (Term, Fixed, Vec<(Iri, u64, Fixed)>);
+type AnswerRow = (Term, Score, Vec<(Iri, u64, Score)>);
 
 /// What one run cost and what it answered.
 struct Measured {

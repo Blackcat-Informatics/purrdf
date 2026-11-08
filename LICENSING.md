@@ -187,6 +187,17 @@ identifies the exact Chinese source and the comparison performed. It is not
 human or legal review.
 The complete controlling bilingual MulanPSL text remains the recipient’s license.
 
+## EFF word data compiled into the hash crate
+
+The hash crate also compiles the EFF-derived checked word alphabet under
+Creative Commons Attribution 4.0 International. Its package expression is
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0`: the chosen first-party
+grant applies to the independently written codec, and Attribution 4.0 applies
+to inherited word data. The original EFF attribution, precise policy evidence,
+source digest and reproducible selection law are preserved in
+[`crates/hash/data/word-id/PROVENANCE.md`](crates/hash/data/word-id/PROVENANCE.md).
+Recipient inventories carry its original notice and complete license.
+
 ## Unicode data compiled into published crates
 
 Five published crates compile tables generated from the Unicode Character
@@ -274,3 +285,14 @@ Agreement may be required before substantial contributions are merged. See
 
 > Copyright © 2026 Blackcat Informatics® Inc. All rights reserved, except as
 > expressly granted under the licenses above.
+
+## Inherited native hash table engine
+
+`crates/rdf-core/src/hash/table/` contains modified source derived from
+`hashbrown` 0.17.1. Original material retains Amanieu d’Antras’s copyright and
+its MIT OR Apache-2.0 grant. Local changes to inherited engine files are
+explicitly attributed in their central `NOTICE` under that same dual grant;
+new wrapper and regression code retains its own first-party source headers.
+The original license texts, modification notice and source provenance accompany
+Core source and generated recipient notices through `license-inventory.toml`.
+This inherited engine is not relabeled under the first-party three-license offer.

@@ -23,10 +23,9 @@
 //! conclusion is never an input to that computation. A step the rule does not license
 //! cannot be made to check by writing a nicer record of it.
 //!
-//! [`explain_conclusion`] is that machinery pointed at a materialized triple. It rebuilds
-//! the very store the closure was produced from — the engine's seeding is a pure function
-//! of `(dataset, regime, program, graph)` — evaluates the declared program, and lifts the
-//! target fact's derivation out as a proof term. **The proof is checked before it is
+//! [`prepare_explanations`] seeds and evaluates one immutable snapshot; its borrowed
+//! [`ExplanationSession`] indexes the recorded derivations once for repeated queries.
+//! [`explain_conclusion`] delegates through that same path for one target. **The proof is checked before it is
 //! returned**, so an unresolvable antecedent is a hard error at construction rather than a
 //! surprise at the caller's first `check()`; there is no path by which an unchecked
 //! `ChaseProof` exists.
@@ -73,21 +72,28 @@
 //! through ordered sets throughout. Two runs over one input produce byte-identical digests,
 //! on native targets and on `wasm32` alike.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::id::ProofId;
-use purrdf_datalog::proof::{EvaluationProofs, ProofArena, ProofContext, ProofError};
-use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
-use purrdf_datalog::seminaive::{compile, evaluate};
+use purrdf_datalog::proof::{
+    EvaluationProofIndex, ProofArena, ProofContext, ProofError, ProofIndexWork,
+};
+use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal_rdf};
+use purrdf_datalog::seminaive::{
+    BudgetReport, DerivationMode, EvalOptions, Evaluation, WorkReport, compile,
+};
+use purrdf_datalog::stop::StopSignal;
 use purrdf_datalog::store::{Fact, RelationStore};
+use purrdf_lex::allocation::{Shared, StorageError};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
-use crate::engine::{seed, surface_of};
+use crate::engine::{Terms, seed, surface_of};
 use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
-use crate::reasoner::{DlAxiom, Reasoner, Verdict};
+use crate::reasoner::{DlAxiom, DlCompleteness, Reasoner, Verdict};
 use crate::rules::RuleId;
 use crate::{EntailError, Regime};
 
@@ -122,13 +128,6 @@ pub enum ExplainError {
     /// of it does either, and the shrinking search would return the empty set — an answer
     /// that reads as "nothing is needed" and means the opposite.
     NotEntailed,
-    /// The tableau could not DECIDE the axiom within its step cap, so neither a positive nor
-    /// a negative answer is available to shrink against.
-    ///
-    /// Distinct from [`Self::NotEntailed`]: that one is a decided `no`, this is no decision.
-    /// Shrinking against an undecided answer would produce a subset whose minimality claim
-    /// rests on decisions that were never made.
-    Undecided,
     /// The lane is evaluated by the RESTRICTED CHASE, whose derivations are not checkable
     /// proof terms.
     ///
@@ -148,6 +147,8 @@ pub enum ExplainError {
     /// wrong answer carrying a proof that fails to check is a gate failure, where a wrong
     /// answer carrying a panic is a crash report.
     Unchecked(ProofError),
+    /// Original source, construction or storage refusal in the backward cross-check.
+    Backward(purrdf_datalog::resolve_fol::FolError),
 }
 
 impl std::fmt::Display for ExplainError {
@@ -171,11 +172,6 @@ impl std::fmt::Display for ExplainError {
                     "the ontology does not entail the axiom, so it has no justification"
                 )
             }
-            Self::Undecided => write!(
-                f,
-                "the tableau did not decide the axiom within its step cap, so there is no \
-                 answer to justify"
-            ),
             Self::Existential(regime) => write!(
                 f,
                 "the {regime:?} lane is evaluated by the restricted chase, whose existential \
@@ -183,6 +179,7 @@ impl std::fmt::Display for ExplainError {
             ),
             Self::Entail(error) => write!(f, "the explained run failed: {error}"),
             Self::Unchecked(error) => write!(f, "the proof term did not check: {error}"),
+            Self::Backward(error) => write!(f, "the backward cross-check failed: {error}"),
         }
     }
 }
@@ -197,19 +194,31 @@ impl std::error::Error for ExplainError {
     ///
     /// The rest return `None`, and none of them is a wrapper. `Existential` carries a
     /// [`Regime`] — not an error but the NAME of the lane whose rules have existential
-    /// heads. `NotDerived`, `BackwardDisagreement`, `NotEntailed` and `Undecided` are
+    /// heads. `NotDerived`, `BackwardDisagreement` and `NotEntailed` are
     /// findings ABOUT the conclusion rather than failures of some subsystem beneath
     /// this one: each is the whole statement, and there is nothing further in to walk.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Entail(inner) => Some(inner.as_ref()),
             Self::Unchecked(inner) => Some(inner),
+            Self::Backward(inner) => Some(inner),
             Self::Existential(_)
             | Self::NotDerived { .. }
             | Self::BackwardDisagreement { .. }
-            | Self::NotEntailed
-            | Self::Undecided => None,
+            | Self::NotEntailed => None,
         }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ExplainError {
+    purrdf_hash::error_visit! {
+        NotDerived { conclusion } => "explanation-not-derived" { "conclusion" => Text(conclusion) },
+        BackwardDisagreement { conclusion } => "explanation-backward-disagreement" { "conclusion" => Text(conclusion) },
+        NotEntailed => "explanation-not-entailed" {},
+        Existential(regime) => "explanation-existential" { "regime" => Code(regime.token()) },
+        Entail(cause) => "explanation-run" { "cause" => Cause(cause.as_ref()) },
+        Unchecked(cause) => "explanation-unchecked" { "cause" => Cause(cause) },
+        Backward(cause) => "explanation-backward" { "cause" => Cause(cause) },
     }
 }
 
@@ -236,25 +245,14 @@ impl From<EntailError> for ExplainError {
 /// write code that treats a tableau answer as though a rule had fired.
 #[derive(Debug, Clone)]
 pub struct ChaseProof {
-    /// The lane whose calculus drew the conclusion.
-    regime: Regime,
-    /// The graph whose closure drew it; `None` is the default graph.
-    graph: Option<TermValue>,
+    /// Shared original program, seed, model and recorded evaluation inventory.
+    context: Shared<ExplanationContext>,
     /// The explained triple.
     conclusion: (TermValue, TermValue, TermValue),
-    /// The hash-consed proof term — exactly the sub-DAG of this conclusion, re-interned
-    /// from its own canonical encoding so nothing of the wider evaluation rides along.
+    /// Exactly the requested proof sub-DAG; the shared context pins the full evaluation.
     arena: ProofArena,
-    /// The proof's root in [`Self::arena`].
+    /// The proof's root in its arena.
     root: ProofId,
-    /// The clause program the proof cites, by index.
-    program: Vec<DlClause>,
-    /// Clause index → the rule that clause states, for [`Self::rules`].
-    attribution: Vec<ChaseRule>,
-    /// The seeded store an axiom leaf must appear in.
-    edb: RelationStore,
-    /// The saturated store a negated body atom is re-decided against.
-    model: RelationStore,
     /// What the independent backward re-derivation concluded.
     backward: BackwardCheck,
 }
@@ -262,14 +260,14 @@ pub struct ChaseProof {
 impl ChaseProof {
     /// The lane whose calculus drew the conclusion.
     #[must_use]
-    pub const fn regime(&self) -> Regime {
-        self.regime
+    pub fn regime(&self) -> Regime {
+        self.context.regime
     }
 
     /// The graph whose closure drew the conclusion; `None` is the default graph.
     #[must_use]
-    pub const fn graph(&self) -> Option<&TermValue> {
-        self.graph.as_ref()
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.context.graph.as_ref()
     }
 
     /// The explained triple, as `(subject, predicate, object)`.
@@ -315,7 +313,7 @@ impl ChaseProof {
     /// conclusion cites none.
     #[must_use]
     pub fn rules(&self) -> Vec<RuleId> {
-        let owl = matches!(self.regime, Regime::OwlRl);
+        let owl = matches!(self.context.regime, Regime::OwlRl);
         let mut cited: BTreeSet<usize> = BTreeSet::new();
         let mut stack = vec![self.root];
         let mut seen: BTreeSet<ProofId> = BTreeSet::new();
@@ -330,7 +328,7 @@ impl ChaseProof {
         }
         let ids: BTreeSet<RuleId> = cited
             .into_iter()
-            .filter_map(|clause| self.attribution.get(clause))
+            .filter_map(|clause| self.context.attribution.get(clause))
             .map(|rule| rule.rule_id(owl))
             .collect();
         RuleId::ALL
@@ -378,7 +376,11 @@ impl ChaseProof {
     /// the seeded store, a premise the cited clause's body does not match, a head the
     /// premises do not bind, or a conclusion that differs from the one re-derived.
     pub fn check(&self) -> Result<Fact, ExplainError> {
-        let ctx = ProofContext::new(&self.program, &self.edb, &self.model);
+        let ctx = ProofContext::new(
+            &self.context.program,
+            &self.context.seeded,
+            self.context.evaluation.facts(),
+        );
         self.arena
             .check(self.root, &ctx)
             .map_err(ExplainError::Unchecked)
@@ -467,6 +469,7 @@ fn confirm_backward(
     regime: Regime,
     program: &[DlClause],
     seeded: &RelationStore,
+    terms: &Terms,
     goal: &Fact,
 ) -> Result<BackwardCheck, ExplainError> {
     if matches!(regime, Regime::Rdfs | Regime::OwlRl) {
@@ -494,16 +497,30 @@ fn confirm_backward(
         max_steps: BACKWARD_CROSS_CHECK_STEPS,
     };
     // A program this resolver cannot lower is an abstention, not a disagreement.
-    let Ok((_dag, control)) = solve_datalog_goal(&clauses, &atom, &budget) else {
-        return Ok(BackwardCheck::Abstained);
+    let (mut dag, control) = match solve_datalog_goal_rdf(&clauses, &atom, &budget, terms) {
+        Ok(result) => result,
+        Err(purrdf_datalog::resolve_fol::FolError::Clause(_)) => {
+            return Ok(BackwardCheck::Abstained);
+        }
+        Err(error) => return Err(ExplainError::Backward(error)),
     };
     let FolControl::Decided(outcome) = control else {
         return Ok(BackwardCheck::Abstained);
     };
-    if !outcome.answers.is_empty() {
+    if let Some(answer) = outcome.answers.first() {
+        purrdf_datalog::resolve_fol::check_fol_proof(
+            &mut dag,
+            answer.proof(),
+            outcome.checking_evidence(),
+        )
+        .map_err(|cause| {
+            ExplainError::Backward(purrdf_datalog::resolve_fol::FolError::Proof(Box::new(
+                cause,
+            )))
+        })?;
         return Ok(BackwardCheck::Confirmed);
     }
-    if outcome.status == FolStatus::Complete {
+    if outcome.status() == FolStatus::Complete {
         return Err(ExplainError::BackwardDisagreement {
             conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
         });
@@ -521,9 +538,10 @@ fn confirm_backward(
 ///
 /// # Errors
 ///
-/// [`ExplainError::Existential`] for `RDF` and `RDFS`, whose four blank-node-minting rules
-/// have no checkable proof term; [`ExplainError::NotDerived`] if the triple is neither
-/// asserted in the seed nor derived by the closure — a hard error, because there is nothing
+/// [`ExplainError::Existential`] when the triple is unavailable in the checkable Datalog
+/// fragment of a regime with existential rules (`RDF` or `RDFS`); those rules have no
+/// checkable proof term. Other regimes return [`ExplainError::NotDerived`] if the triple is
+/// neither asserted in the seed nor derived by the closure — a hard error, because there is nothing
 /// to explain and an empty answer would read as though there were; [`ExplainError::Entail`]
 /// if the run itself fails; [`ExplainError::Unchecked`] if the constructed proof does not
 /// re-derive, which is an engine defect made visible rather than shipped.
@@ -566,6 +584,25 @@ pub fn explain_conclusion(
     predicate: &TermValue,
     object: &TermValue,
 ) -> Result<ChaseProof, ExplainError> {
+    prepare_explanations(ds, regime, graph, &EvalOptions::default(), None)?
+        .session()?
+        .explain(subject, predicate, object)
+}
+
+/// Prepare one immutable snapshot for repeated checked explanation queries.
+///
+/// Seeding, compilation and shared context construction use resident allocation.
+/// The existing evaluator uses all caller options and cancellation, forcing only
+/// derivation recording. No mutable source or replacement program enters a session.
+/// # Errors
+/// Preserves native seeding, compilation, evaluation and shared allocation refusals.
+pub fn prepare_explanations(
+    ds: &RdfDataset,
+    regime: Regime,
+    graph: Option<&TermValue>,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+) -> Result<PreparedExplanations, ExplainError> {
     let (full_program, attribution) = program_with_attribution(regime);
     // An existential head has no Datalog semantics — there is no head for the checker to
     // instantiate — so those clauses cannot appear in a checkable proof. They are dropped
@@ -585,75 +622,246 @@ pub fn explain_conclusion(
         .cloned()
         .collect();
 
-    let (edb, _terms) = seed(ds, regime, &program, graph)?;
-    let goal = Fact {
-        subject: surface_of(subject),
-        predicate: surface_of(predicate),
-        object: surface_of(object),
-        graph: RelationStore::DEFAULT_GRAPH.to_owned(),
-    };
-    // The seeded store is what an AXIOM leaf checks against, so it has to outlive the
-    // evaluation that consumes it.
+    let (edb, terms) = seed(ds, regime, &program, graph)?;
     let seeded = edb.clone();
     let executable = compile(program.clone()).map_err(EntailError::Evaluate)?;
-    let evaluation = evaluate(&executable, edb).map_err(EntailError::Evaluate)?;
-
-    let proofs = EvaluationProofs::of(&evaluation).map_err(EntailError::from)?;
-    // Re-intern through the canonical encoding, so the returned arena is EXACTLY this
-    // conclusion's sub-DAG rather than a handle into the whole evaluation's.
-    let (arena, root) = match proofs.root_for(&goal) {
-        Some(id) => {
-            ProofArena::decode(&proofs.arena().encode(id)).map_err(ExplainError::Unchecked)?
-        }
-        None => {
-            // Not derived. It may still be GIVEN, which is an explanation in its own right
-            // and a checkable one — and if it is neither, that is the unresolvable
-            // antecedent, refused by name.
-            if !seeded.contains(&goal.subject, &goal.predicate, &goal.object, &goal.graph) {
-                // The Datalog subset did not reach it. If the regime HAS existential rules,
-                // one of them may be what derives it, and this checker cannot produce a term
-                // for such a step — so the refusal is named rather than reported as
-                // "not entailed", which would be a different and false answer.
-                if existential_present {
-                    return Err(ExplainError::Existential(regime));
-                }
-                return Err(ExplainError::NotDerived {
-                    conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
-                });
-            }
-            let mut arena = ProofArena::default();
-            let root = arena.axiom(goal.clone()).map_err(EntailError::from)?;
-            (arena, root)
-        }
-    };
-
-    // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
-    // resolution over the same clause program — is asked the same question.
-    let backward = confirm_backward(regime, &program, &seeded, &goal)?;
-
-    let proof = ChaseProof {
-        regime,
-        graph: graph.cloned(),
-        conclusion: (subject.clone(), predicate.clone(), object.clone()),
-        arena,
-        root,
+    let evaluation = purrdf_datalog::seminaive::evaluate_guarded(
+        &executable,
+        edb,
+        &purrdf_datalog::guard::NoGuards,
+        &options.with_derivation_mode(DerivationMode::Record),
+        stop,
+    )
+    .map_err(EntailError::Evaluate)?;
+    let context = Shared::try_new(ExplanationContext {
         program,
         attribution,
-        edb: seeded,
-        model: evaluation.into_facts(),
-        backward,
-    };
-    // CHECKED BEFORE IT ESCAPES. There is no constructor that skips this, so a `ChaseProof`
-    // a caller holds is one whose conclusion has been re-derived at least once.
-    let derived = proof.check()?;
-    if derived != goal {
-        return Err(ExplainError::Unchecked(ProofError::GoalMismatch {
-            rule: usize::MAX,
-            derived: Box::new(derived),
-            stated: Box::new(goal),
-        }));
+        seeded,
+        terms,
+        evaluation: Shared::try_new(evaluation)
+            .map_err(|_| EntailError::from(StorageError::AllocationFailed))?,
+        regime,
+        graph: graph.cloned(),
+        existential_present,
+    })
+    .map_err(|_| EntailError::from(StorageError::AllocationFailed))?;
+    Ok(PreparedExplanations { context })
+}
+
+#[derive(Debug)]
+struct ExplanationContext {
+    program: Vec<DlClause>,
+    attribution: Vec<ChaseRule>,
+    seeded: RelationStore,
+    terms: Terms,
+    evaluation: Shared<Evaluation>,
+    regime: Regime,
+    graph: Option<TermValue>,
+    existential_present: bool,
+}
+
+/// One immutable forward preparation shared by sessions and returned proofs.
+///
+/// Each proof pins the entire original context, including its recorded evaluation
+/// inventory, until the last owner drops. Only its requested proof DAG is separate.
+/// Cloning this handle shares the context; it never copies the program or stores.
+#[derive(Debug, Clone)]
+pub struct PreparedExplanations {
+    context: Shared<ExplanationContext>,
+}
+
+impl PreparedExplanations {
+    /// The exact regime used to prepare this immutable snapshot.
+    #[must_use]
+    pub fn regime(&self) -> Regime {
+        self.context.regime
     }
-    Ok(proof)
+
+    /// The original named graph, or the default graph when absent.
+    #[must_use]
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.context.graph.as_ref()
+    }
+
+    /// Actual work of the one forward evaluation, unchanged by proof queries.
+    #[must_use]
+    pub fn work(&self) -> WorkReport {
+        self.context.evaluation.work()
+    }
+
+    /// Native budget report of the original forward evaluation.
+    #[must_use]
+    pub fn budget(&self) -> BudgetReport {
+        self.context.evaluation.budget()
+    }
+
+    /// Build one resident derivation index for repeated queries over this owner.
+    /// The session borrows this snapshot and cannot be rebound to another source.
+    /// # Errors
+    /// Preserves the native index allocation or recording refusal.
+    pub fn session(&self) -> Result<ExplanationSession<'_>, ExplainError> {
+        Ok(ExplanationSession {
+            prepared: Cow::Borrowed(self),
+            proofs: EvaluationProofIndex::of(&self.context.evaluation).map_err(proof_error)?,
+        })
+    }
+
+    /// Own this immutable preparation and one reusable resident proof index.
+    /// The session has no borrow of this handle or of the original source dataset.
+    /// # Errors
+    /// Preserves shared-owner overflow and native index allocation/recording refusals.
+    pub fn into_session(self) -> Result<ExplanationSession<'static>, ExplainError> {
+        let evaluation = self
+            .context
+            .evaluation
+            .try_clone()
+            .map_err(|_| EntailError::from(StorageError::SizeOverflow))?;
+        Ok(ExplanationSession {
+            proofs: EvaluationProofIndex::of_shared(evaluation).map_err(proof_error)?,
+            prepared: Cow::Owned(self),
+        })
+    }
+}
+
+/// An immutable snapshot, borrowed or owned, and one reusable resident derivation index.
+///
+/// Index and returned proof arenas retain their existing resident allocation
+/// contracts. Each query still checks its proof and performs the existing
+/// independent backward confirmation. Where enabled, that confirmation copies the
+/// program and scans/copies seeded facts per query; extraction is not a claim that
+/// the whole explanation operation scales only with its requested subtree.
+#[derive(Debug)]
+pub struct ExplanationSession<'a> {
+    prepared: Cow<'a, PreparedExplanations>,
+    proofs: EvaluationProofIndex<'a>,
+}
+
+impl ExplanationSession<'_> {
+    /// The exact regime retained by this session.
+    #[must_use]
+    pub fn regime(&self) -> Regime {
+        self.prepared.regime()
+    }
+
+    /// The original graph selection, including its term scope.
+    #[must_use]
+    pub fn graph(&self) -> Option<&TermValue> {
+        self.prepared.graph()
+    }
+
+    /// Actual work of building this session's index once.
+    #[must_use]
+    pub fn preparation_work(&self) -> ProofIndexWork {
+        self.proofs.preparation_work()
+    }
+
+    /// Extract, independently confirm and check one conclusion over the frozen context.
+    /// # Errors
+    /// Preserves the one-shot explanation's missing, existential and checking refusals.
+    pub fn explain(
+        &self,
+        subject: &TermValue,
+        predicate: &TermValue,
+        object: &TermValue,
+    ) -> Result<ChaseProof, ExplainError> {
+        self.explain_counted(subject, predicate, object, &mut ProofIndexWork::default())
+    }
+
+    /// Explain while reporting native proof-index traversal work.
+    ///
+    /// Resets `work` before extraction, preserving completed counts on refusal.
+    /// These counts exclude the checker and independent backward confirmation;
+    /// allocation measurements around this complete call include both operations.
+    /// # Errors
+    /// Preserves the same original refusals as [`Self::explain`].
+    pub fn explain_counted(
+        &self,
+        subject: &TermValue,
+        predicate: &TermValue,
+        object: &TermValue,
+        work: &mut ProofIndexWork,
+    ) -> Result<ChaseProof, ExplainError> {
+        let context = &*self.prepared.context;
+        let goal = Fact {
+            subject: surface_of(subject),
+            predicate: surface_of(predicate),
+            object: surface_of(object),
+            graph: RelationStore::DEFAULT_GRAPH.to_owned(),
+        };
+        // Construct only this conclusion's sub-DAG through the original proof arena.
+        let (arena, root) = match self
+            .proofs
+            .extract_counted(&goal, work)
+            .map_err(proof_error)?
+        {
+            Some(proof) => proof,
+            None => {
+                // Not derived. It may still be GIVEN, which is an explanation in its own right
+                // and a checkable one — and if it is neither, that is the unresolvable
+                // antecedent, refused by name.
+                if !context.seeded.contains(
+                    &goal.subject,
+                    &goal.predicate,
+                    &goal.object,
+                    &goal.graph,
+                ) {
+                    // The Datalog subset did not reach it. If the regime HAS existential rules,
+                    // one of them may be what derives it, and this checker cannot produce a term
+                    // for such a step — so the refusal is named rather than reported as
+                    // "not entailed", which would be a different and false answer.
+                    if context.existential_present {
+                        return Err(ExplainError::Existential(context.regime));
+                    }
+                    return Err(ExplainError::NotDerived {
+                        conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
+                    });
+                }
+                let mut arena = ProofArena::default();
+                let root = arena.axiom(goal.clone()).map_err(EntailError::from)?;
+                (arena, root)
+            }
+        };
+
+        // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
+        // resolution over the same clause program — is asked the same question.
+        let backward = confirm_backward(
+            context.regime,
+            &context.program,
+            &context.seeded,
+            &context.terms,
+            &goal,
+        )?;
+
+        let proof = ChaseProof {
+            context: self
+                .prepared
+                .context
+                .try_clone()
+                .map_err(|_| EntailError::from(StorageError::SizeOverflow))?,
+            conclusion: (subject.clone(), predicate.clone(), object.clone()),
+            arena,
+            root,
+            backward,
+        };
+        // CHECKED BEFORE IT ESCAPES. There is no constructor that skips this, so a `ChaseProof`
+        // a caller holds is one whose conclusion has been re-derived at least once.
+        let derived = proof.check()?;
+        if derived != goal {
+            return Err(ExplainError::Unchecked(ProofError::GoalMismatch {
+                rule: usize::MAX,
+                derived: Box::new(derived),
+                stated: Box::new(goal),
+            }));
+        }
+        Ok(proof)
+    }
+}
+
+fn proof_error(error: ProofError) -> ExplainError {
+    match error {
+        ProofError::Storage(cause) => ExplainError::from(EntailError::from(cause)),
+        other => ExplainError::Unchecked(other),
+    }
 }
 
 // ── The tableau lane: a minimal entailing subset ────────────────────────────────
@@ -723,16 +931,28 @@ impl Justification {
     /// A CONTENT digest, never an IRI. Two justifications holding the same axioms have the
     /// same 32 bytes whatever order they were found in, because canonical N-Quads is a
     /// statement about a quad set rather than about an emission sequence.
-    #[must_use]
-    pub fn digest(&self) -> [u8; 32] {
-        *purrdf_hash::blake3::hash(purrdf_core::canonicalize(&self.ontology).nquads.as_bytes())
-            .as_bytes()
+    ///
+    /// # Errors
+    /// Returns the original canonicalization refusal without minting an identity.
+    pub fn digest(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<[u8; 32], purrdf_core::CanonError> {
+        purrdf_core::try_canonical_blake3_view(
+            &*self.ontology,
+            purrdf_core::CanonHash::Sha256,
+            control,
+        )
     }
 
-    /// [`Self::digest`] as lowercase hex.
-    #[must_use]
-    pub fn digest_hex(&self) -> String {
-        purrdf_hash::hex::encode(&self.digest())
+    /// The justification identity as lowercase hexadecimal, retaining execution evidence.
+    /// # Errors
+    /// Returns the original canonicalization refusal from [`Self::digest`].
+    pub fn digest_hex(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<String, purrdf_core::CanonError> {
+        Ok(purrdf_hash::hex::encode(&self.digest(control)?))
     }
 
     /// SUFFICIENCY, re-decided: does the justification alone still entail the axiom?
@@ -745,14 +965,16 @@ impl Justification {
     ///
     /// [`EntailError::Parse`] if the justification is not a well-formed OWL graph, or
     /// [`EntailError::Unsatisfiable`] if it has no model at all.
+    /// [`EntailError::Decision`] retains the native certificate if an undecided
+    /// search or an incomplete ontology prevents an exact negative answer.
     pub fn is_sufficient(&self) -> Result<bool, EntailError> {
-        entails(&self.ontology, &self.axiom).map(|verdict| matches!(verdict, Verdict::True))
+        entails(&self.ontology, &self.axiom)
     }
 
     /// MINIMALITY, re-decided: does dropping any ONE axiom lose the entailment?
     ///
     /// The second half. For each axiom of the justification it re-decides over the
-    /// justification without it and requires the answer to be anything but `True`. A `false`
+    /// justification without it and requires an exact `False` answer. A `false`
     /// here means the justification is entailing but not minimal — it carries an axiom the
     /// entailment does not need — which is a weaker answer rather than a wrong one, and is
     /// why this is a QUESTION rather than an invariant baked into the type.
@@ -773,7 +995,7 @@ impl Justification {
                 .filter_map(|(index, _)| (index != dropped).then_some(index))
                 .collect();
             let subset = axioms.emit(&kept)?;
-            if matches!(entails(&subset, &self.axiom)?, Verdict::True) {
+            if entails(&subset, &self.axiom)? {
                 return Ok(false);
             }
         }
@@ -793,9 +1015,10 @@ impl Justification {
 /// [`ExplainError::NotEntailed`] if `ds` does not entail `axiom` — a hard error, because a
 /// subset of a non-entailing ontology does not entail either and the search would return the
 /// empty set, which reads as "nothing is needed" and means the opposite.
-/// [`ExplainError::Undecided`] if the tableau ran out of step budget deciding the axiom over
-/// the whole ontology, so there is no answer to shrink against. [`ExplainError::Entail`] for
-/// a malformed ontology or one with no model.
+/// [`ExplainError::Entail`] retains the original native refusal for the whole
+/// ontology or any candidate subset. An undecided or incomplete negative answer
+/// carries [`EntailError::Decision`] with its original certificate; it never
+/// establishes minimality. Malformed or inconsistent subsets are also refusals.
 ///
 /// ```
 /// use purrdf_core::{RdfDatasetBuilder, TermValue};
@@ -824,16 +1047,13 @@ impl Justification {
 /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 pub fn justify(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Justification, ExplainError> {
-    match entails(ds, axiom)? {
-        Verdict::True => {}
-        Verdict::False => return Err(ExplainError::NotEntailed),
-        Verdict::Unknown => return Err(ExplainError::Undecided),
+    if !entails(ds, axiom)? {
+        return Err(ExplainError::NotEntailed);
     }
 
-    // An unsatisfiable subset entails everything, which would let the search drop an axiom
-    // for the wrong reason; it is not a `True` verdict, so `entails` reporting it as an
-    // error keeps the candidate.
-    let mut holds = |subset: &RdfDataset| Ok(matches!(entails(subset, axiom), Ok(Verdict::True)));
+    // Only an exact negative decision justifies keeping a candidate axiom as
+    // necessary. Native failures must stop the search rather than certify it.
+    let mut holds = |subset: &RdfDataset| entails(subset, axiom);
     // The tableau lane spends whatever the ontology costs and REPORTS it rather than
     // capping it; `Justification::decisions` is that number. A cap here would produce a
     // subset whose minimality claim quietly stopped being true partway through.
@@ -930,14 +1150,21 @@ where
     })
 }
 
-/// Whether `ds` entails `axiom`, as the reasoner's own verdict.
+/// Whether `ds` entails `axiom`, requiring complete evidence for a negative.
 ///
 /// An UNSATISFIABLE ontology is an error rather than `True`: it entails every axiom
 /// vacuously, and letting that count as entailment would make the shrinking search drop
 /// axioms because the remainder was inconsistent rather than because they were unneeded.
-fn entails(ds: &RdfDataset, axiom: &DlAxiom) -> Result<Verdict, EntailError> {
+fn entails(ds: &RdfDataset, axiom: &DlAxiom) -> Result<bool, EntailError> {
     let mut reasoner = Reasoner::new(ds)?;
-    Ok(*reasoner.entails(axiom)?.answer())
+    let (answer, certificate) = reasoner.entails(axiom)?.into_parts();
+    match answer {
+        Verdict::True => Ok(true),
+        Verdict::False if matches!(certificate.completeness(), DlCompleteness::Decided) => {
+            Ok(false)
+        }
+        Verdict::False | Verdict::Unknown => Err(EntailError::Decision(Box::new(certificate))),
+    }
 }
 
 /// The ontology split into AXIOMS and the scaffolding they carry.
@@ -1106,11 +1333,18 @@ mod tests {
         assert!(justification.is_minimal().expect("well formed"));
 
         // Named, not merely counted: the chain, and not the sibling or the instance.
-        let lines: BTreeSet<String> = purrdf_core::canonicalize(justification.ontology())
-            .nquads
-            .lines()
-            .map(ToOwned::to_owned)
-            .collect();
+        let lines: BTreeSet<String> = purrdf_core::try_canonicalize(
+            justification.ontology(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads()
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect();
         assert_eq!(
             lines,
             [
@@ -1120,6 +1354,65 @@ mod tests {
             .into_iter()
             .collect::<BTreeSet<String>>()
         );
+    }
+
+    #[test]
+    fn justification_checks_preserve_incomplete_negative_certificates() {
+        use purrdf_iri::vocab::owl::IMPORTS;
+
+        let axiom = cat_is_an_animal();
+        let target = (CAT, SUB, ANIMAL);
+        let import = (
+            "http://example.org/ontology",
+            IMPORTS,
+            "http://example.org/unresolved",
+        );
+        let ontology = dataset(&[target, import]);
+        let mut original = Reasoner::new(&ontology).unwrap();
+        assert_eq!(*original.entails(&axiom).unwrap().answer(), Verdict::True);
+
+        let subset = dataset(&[import]);
+        let mut reasoner = Reasoner::new(&subset).unwrap();
+        let (answer, expected) = reasoner.entails(&axiom).unwrap().into_parts();
+        assert_eq!(answer, Verdict::False);
+        assert_eq!(
+            expected.completeness(),
+            DlCompleteness::DecidedWithinBoundaries
+        );
+
+        let error = justify(&ontology, &axiom).unwrap_err();
+        let ExplainError::Entail(cause) = error else {
+            panic!("the original native decision must survive shrinking");
+        };
+        let EntailError::Decision(certificate) = *cause else {
+            panic!("the candidate subset was not completely decided");
+        };
+        assert_eq!(*certificate, expected);
+        for ontology in [subset, ontology] {
+            let candidate = Justification {
+                axiom: axiom.clone(),
+                axioms: ontology.quads().count(),
+                ontology,
+                decisions: 0,
+            };
+            let error = if candidate.axioms == 1 {
+                candidate.is_sufficient().unwrap_err()
+            } else {
+                candidate.is_minimal().unwrap_err()
+            };
+            let EntailError::Decision(certificate) = error else {
+                panic!("a negative check must retain its native certificate");
+            };
+            assert_eq!(*certificate, expected);
+        }
+
+        // The same positive evidence remains usable when the unsupported import
+        // can be removed first, followed by an exact negative on the empty set.
+        let adjacent = dataset(&[import, target]);
+        let justification = justify(&adjacent, &axiom).unwrap();
+        assert_eq!(justification.axioms(), 1);
+        assert!(justification.is_sufficient().unwrap());
+        assert!(justification.is_minimal().unwrap());
     }
 
     /// MINIMALITY IS A CHECK, NOT A CLAIM — so a NON-minimal subset must fail it.
@@ -1210,11 +1503,45 @@ mod tests {
     fn the_justification_digest_addresses_its_content() {
         let first = justify(&chain(), &cat_is_an_animal()).expect("entailed");
         let second = justify(&chain(), &cat_is_an_animal()).expect("entailed");
-        assert_eq!(first.digest(), second.digest());
-        assert_eq!(first.digest_hex().len(), 64);
         assert_eq!(
-            purrdf_hash::hex::encode(&first.digest()),
-            first.digest_hex()
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            second
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
+        assert_eq!(
+            first
+                .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            purrdf_hash::hex::encode(
+                &first
+                    .digest(&mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ))
+                    .unwrap()
+            ),
+            first
+                .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
         );
 
         // The SAME two axioms reached from a different ontology digest identically: the
@@ -1226,7 +1553,20 @@ mod tests {
             (MAMMAL, SUB, ANIMAL),
         ]);
         let other = justify(&bigger, &cat_is_an_animal()).expect("entailed");
-        assert_eq!(other.digest(), first.digest());
+        assert_eq!(
+            other
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
 
         // A DIFFERENT justification digests differently.
         let assertion = justify(
@@ -1237,7 +1577,58 @@ mod tests {
             },
         )
         .expect("entailed");
-        assert_ne!(assertion.digest(), first.digest());
+        assert_ne!(
+            assertion
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap(),
+            first
+                .digest(&mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ))
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn justification_identity_preserves_the_original_canonicalization_refusal() {
+        let ontology = dataset(&[(CAT, SUB, purrdf_core::RESERVED_NAMESPACE)]);
+        let axiom = DlAxiom::SubClassOf {
+            sub: TermValue::iri(CAT),
+            sup: TermValue::iri(purrdf_core::RESERVED_NAMESPACE),
+        };
+        let justification = justify(&ontology, &axiom).expect("the stated axiom is entailed");
+        let original = purrdf_core::try_canonicalize(
+            justification.ontology(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            &original,
+            purrdf_core::CanonError::ReservedVocabulary(_)
+        ));
+        let digest_refusal = justification
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap_err();
+        let text_refusal = justification
+            .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
+            .unwrap_err();
+        drop(justification);
+        drop(ontology);
+        assert_eq!(digest_refusal, original);
+        assert_eq!(text_refusal, original);
     }
 
     /// The shrinking cost is REPORTED: one decision per candidate axiom, plus the one that
@@ -1254,6 +1645,207 @@ mod tests {
     }
 
     // ── The chase proof ─────────────────────────────────────────────────────────
+
+    /// Repeated extraction preserves the eager arena's canonical order and shares
+    /// the original checker context, even after every preparation handle is gone.
+    #[test]
+    fn prepared_queries_share_context_and_match_eager_proofs() {
+        use purrdf_datalog::proof::EvaluationProofs;
+
+        let source = chain();
+        let prepared =
+            prepare_explanations(&source, Regime::OwlRl, None, &EvalOptions::default(), None)
+                .unwrap();
+        let forward_work = prepared.work();
+        let forward_budget = prepared.budget();
+        let session = prepared.session().unwrap();
+        let index_work = session.preparation_work();
+        let eager = EvaluationProofs::of(&prepared.context.evaluation).unwrap();
+        let mut retained = Vec::new();
+        for (subject, predicate, object) in [
+            (TOM, TYPE, ANIMAL),
+            (CAT, SUB, ANIMAL),
+            (CAT, SUB, MAMMAL),
+            (TOM, TYPE, ANIMAL),
+        ] {
+            let proof = session
+                .explain(
+                    &TermValue::iri(subject),
+                    &TermValue::iri(predicate),
+                    &TermValue::iri(object),
+                )
+                .unwrap();
+            let fact = proof.check().unwrap();
+            if let Some(root) = eager.root_for(&fact) {
+                assert_eq!(proof.encode(), eager.arena().encode(root));
+            } else {
+                assert!(proof.is_asserted());
+                assert_eq!(proof.steps(), 1);
+            }
+            assert!(std::ptr::eq(
+                &raw const *prepared.context,
+                &raw const *proof.context
+            ));
+            assert_eq!(proof.backward(), BackwardCheck::Skipped);
+            retained.push(proof);
+        }
+        assert_eq!(prepared.context.strong_count(), 1 + retained.len());
+        assert_eq!(prepared.work(), forward_work);
+        assert_eq!(prepared.budget(), forward_budget);
+        assert_eq!(session.preparation_work(), index_work);
+        assert_eq!(retained[0].encode(), retained[3].encode());
+        drop(eager);
+        drop(session);
+        let owned = prepared.into_session().unwrap();
+        drop(source);
+        let proof = owned
+            .explain(
+                &TermValue::iri(TOM),
+                &TermValue::iri(TYPE),
+                &TermValue::iri(ANIMAL),
+            )
+            .unwrap();
+        assert_eq!(proof.encode(), retained[0].encode());
+        retained.push(proof);
+        drop(owned);
+        for proof in &retained {
+            assert!(proof.check().is_ok());
+            assert_eq!(proof.context.strong_count(), retained.len());
+        }
+    }
+
+    /// Refused preparations publish no context, and independent successful snapshots
+    /// retain their source and regime rather than adopting another query's inputs.
+    #[test]
+    fn prepared_refusals_do_not_poison_fresh_or_existing_snapshots() {
+        let source = chain();
+        #[derive(Debug)]
+        struct Stopped;
+        impl StopSignal for Stopped {
+            fn stopped(&self) -> bool {
+                true
+            }
+        }
+        let stopped = Stopped;
+        let options = EvalOptions::default();
+        assert!(matches!(
+            prepare_explanations(&source, Regime::OwlRl, None, &options, Some(&stopped)),
+            Err(ExplainError::Entail(cause)) if matches!(*cause, EntailError::Evaluate(
+                purrdf_datalog::seminaive::EvalError::Stopped { .. }
+            ))
+        ));
+        assert!(matches!(
+            prepare_explanations(
+                &source,
+                Regime::OwlRl,
+                None,
+                &options.with_max_stored_facts(0),
+                None
+            ),
+            Err(ExplainError::Entail(cause)) if matches!(*cause, EntailError::Evaluate(
+                purrdf_datalog::seminaive::EvalError::BudgetExhausted { .. }
+            ))
+        ));
+        let prepared = prepare_explanations(&source, Regime::OwlRl, None, &options, None).unwrap();
+        let empty = dataset(&[]);
+        let other = prepare_explanations(&empty, Regime::OwlRl, None, &options, None).unwrap();
+        let rdfs = prepare_explanations(&source, Regime::Rdfs, None, &options, None).unwrap();
+        let subject = TermValue::iri(TOM);
+        let predicate = TermValue::iri(TYPE);
+        let object = TermValue::iri(ANIMAL);
+        let session = prepared.session().unwrap();
+        assert!(session.explain(&subject, &predicate, &object).is_ok());
+        assert!(matches!(
+            other
+                .session()
+                .unwrap()
+                .explain(&subject, &predicate, &object),
+            Err(ExplainError::NotDerived { .. })
+        ));
+        assert!(matches!(
+            rdfs.session().unwrap().explain(
+                &TermValue::iri(FISH),
+                &TermValue::iri(SUB),
+                &TermValue::iri(CAT)
+            ),
+            Err(ExplainError::Existential(Regime::Rdfs))
+        ));
+        assert!(session.explain(&subject, &predicate, &object).is_ok());
+    }
+
+    /// Whole-call allocation includes checking and backward confirmation. Only the
+    /// last owner releases the resident inventory; query count does not rebuild it.
+    #[test]
+    fn prepared_query_growth_and_last_owner_release_are_measured() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_datalog::seminaive::RoundExecution;
+
+        let source = chain();
+        let subject = TermValue::iri(TOM);
+        let predicate = TermValue::iri(TYPE);
+        let options = EvalOptions::default().with_round_execution(RoundExecution::Sequential);
+        for regime in [Regime::OwlRl, Regime::Simple] {
+            let object = TermValue::iri(if regime == Regime::Simple {
+                CAT
+            } else {
+                ANIMAL
+            });
+            let mut measurements = [(0, 0, ProofIndexWork::default()); 3];
+            // Warm any process-wide tables before measuring this owner's lifetime.
+            drop(prepare_explanations(&source, regime, None, &options, None).unwrap());
+            let lifetime = CurrentThreadWindow::open();
+            let prepared = prepare_explanations(&source, regime, None, &options, None).unwrap();
+            let forward_work = prepared.work();
+            let session = prepared.clone().into_session().unwrap();
+            let index_work = session.preparation_work();
+            let mut prior = None;
+            for (measurement, targets) in measurements.iter_mut().zip([1, 4, 16]) {
+                let mut counts = ProofIndexWork::default();
+                let before = lifetime.sample();
+                for _ in 0..targets {
+                    let proof = session
+                        .explain_counted(&subject, &predicate, &object, &mut counts)
+                        .unwrap();
+                    assert_eq!(
+                        proof.backward(),
+                        if regime == Regime::Simple {
+                            BackwardCheck::Confirmed
+                        } else {
+                            BackwardCheck::Skipped
+                        }
+                    );
+                    assert!(std::ptr::eq(
+                        &raw const *proof.context,
+                        &raw const *prepared.context
+                    ));
+                }
+                let after = lifetime.sample();
+                let bytes = after.requested_bytes - before.requested_bytes;
+                let allocations = after.allocations - before.allocations;
+                assert_eq!(after.retained_bytes, before.retained_bytes);
+                if let Some((previous_bytes, previous_allocations, previous_counts)) = prior {
+                    assert_eq!(bytes, previous_bytes * 4);
+                    assert_eq!(allocations, previous_allocations * 4);
+                    assert_eq!(counts, previous_counts);
+                }
+                prior = Some((bytes, allocations, counts));
+                *measurement = (bytes, allocations, counts);
+                assert_eq!(prepared.work(), forward_work);
+                assert_eq!(session.preparation_work(), index_work);
+            }
+            let survivor = session.explain(&subject, &predicate, &object).unwrap();
+            drop(session);
+            drop(prepared);
+            assert_eq!(survivor.context.strong_count(), 1);
+            assert!(lifetime.sample().retained_bytes > 0);
+            assert!(survivor.check().is_ok());
+            drop(survivor);
+            assert_eq!(lifetime.close().retained_bytes, 0);
+            eprintln!(
+                "{regime:?}: forward={forward_work:?}; index={index_work:?}; whole-call (bytes, allocations, per-query extraction) for 1, 4, 16 queries={measurements:?}"
+            );
+        }
+    }
 
     /// A DERIVED triple is explained by the rules that derived it, and the proof RE-DERIVES.
     #[test]
@@ -1417,31 +2009,50 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         let graph = TermValue::iri("http://example.org/g");
-        let proof = explain_conclusion(
+        let prepared = prepare_explanations(
             &ds,
             Regime::OwlRl,
             Some(&graph),
-            &TermValue::iri(TOM),
-            &TermValue::iri(TYPE),
-            &TermValue::iri(MAMMAL),
+            &EvalOptions::default(),
+            None,
         )
-        .expect("the named graph's closure derives it");
+        .unwrap();
+        let default =
+            prepare_explanations(&ds, Regime::OwlRl, None, &EvalOptions::default(), None).unwrap();
+        assert_eq!(prepared.graph(), Some(&graph));
+        assert!(default.graph().is_none());
+        let session = prepared.session().unwrap();
+        let proof = session
+            .explain(
+                &TermValue::iri(TOM),
+                &TermValue::iri(TYPE),
+                &TermValue::iri(MAMMAL),
+            )
+            .expect("the named graph's closure derives it");
         assert_eq!(proof.graph(), Some(&graph));
         assert!(proof.rules().contains(&RuleId::CaxSco));
         assert!(proof.check().is_ok());
 
         // The DEFAULT graph's run has no instance, so it has no explanation to give.
         assert!(matches!(
-            explain_conclusion(
-                &ds,
-                Regime::OwlRl,
-                None,
+            default.session().unwrap().explain(
                 &TermValue::iri(TOM),
                 &TermValue::iri(TYPE),
                 &TermValue::iri(MAMMAL),
             ),
             Err(ExplainError::NotDerived { .. })
         ));
+        assert_eq!(
+            session
+                .explain(
+                    &TermValue::iri(TOM),
+                    &TermValue::iri(TYPE),
+                    &TermValue::iri(MAMMAL),
+                )
+                .unwrap()
+                .encode(),
+            proof.encode()
+        );
     }
 
     /// THE CHECKER RE-DERIVES RATHER THAN RE-READS, and it closes circularity too.

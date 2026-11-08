@@ -263,6 +263,11 @@ mod identity;
 mod model;
 mod profile;
 mod split;
+pub mod syntax;
+pub use syntax::{
+    AuthoringDocument, CodeSpanLimits, SyntaxDocument, SyntaxError, SyntaxLimits, authoring,
+    replace_code_spans, syntax,
+};
 
 use purrdf_core::{BaseIri, parse_iri};
 
@@ -438,32 +443,70 @@ pub fn analyze<'a>(
     doc: &SourceDocument<'a>,
     profile: &Profile,
 ) -> Result<Document<'a>, MarkdownError> {
+    analyze_with_limits(doc, profile, SyntaxLimits::unbounded())
+}
+
+/// Analyze through the shared native syntax scanner with explicit caller limits.
+/// The source-syntax model can also be retained and projected with `analyze_syntax`.
+pub fn analyze_with_limits<'a>(
+    doc: &SourceDocument<'a>,
+    profile: &Profile,
+    limits: SyntaxLimits,
+) -> Result<Document<'a>, MarkdownError> {
     let canon = profile::validate_profile(profile)?;
-    if doc.id.is_empty() {
+    validate_source_id(doc.id)?;
+    let text = std::str::from_utf8(doc.bytes).map_err(|e| MarkdownError::InvalidUtf8 {
+        valid_up_to: e.valid_up_to(),
+    })?;
+    let syntax = syntax(text, limits).map_err(MarkdownError::Syntax)?;
+    analyze_syntax_validated(doc.id, &syntax, profile, canon.as_ref())
+}
+
+/// Project an already admitted syntax model without parsing Markdown again.
+/// Source bytes come from that model, so ranges cannot be paired with another input.
+pub fn analyze_syntax<'a>(
+    id: &'a str,
+    syntax: &SyntaxDocument<'a>,
+    profile: &Profile,
+) -> Result<Document<'a>, MarkdownError> {
+    let canon = profile::validate_profile(profile)?;
+    validate_source_id(id)?;
+    analyze_syntax_validated(id, syntax, profile, canon.as_ref())
+}
+
+fn validate_source_id(id: &str) -> Result<(), MarkdownError> {
+    if id.is_empty() {
         return Err(MarkdownError::EmptySourceId);
     }
-    if let Some(found) = doc.id.chars().find(|c| claims::iri_forbids(*c)) {
+    if let Some(found) = id.chars().find(|c| claims::iri_forbids(*c)) {
         return Err(MarkdownError::InvalidSourceId { found });
     }
-    if let Err(defect) = profile::absolute_iri(doc.id) {
+    if let Err(defect) = profile::absolute_iri(id) {
         return Err(match defect {
-            profile::NotAbsolute::SchemeLess => MarkdownError::RelativeSourceId {
-                id: doc.id.to_owned(),
-            },
+            profile::NotAbsolute::SchemeLess => {
+                MarkdownError::RelativeSourceId { id: id.to_owned() }
+            }
             profile::NotAbsolute::Malformed(cause) => MarkdownError::MalformedSourceId {
-                id: doc.id.to_owned(),
+                id: id.to_owned(),
                 cause,
             },
         });
     }
-    let text = std::str::from_utf8(doc.bytes).map_err(|e| MarkdownError::InvalidUtf8 {
-        valid_up_to: e.valid_up_to(),
-    })?;
-    let reading = dialect::markdown::read(text);
-    if let Some(base) = &canon {
+    Ok(())
+}
+
+fn analyze_syntax_validated<'a>(
+    id: &'a str,
+    syntax: &SyntaxDocument<'a>,
+    profile: &Profile,
+    canon: Option<&BaseIri>,
+) -> Result<Document<'a>, MarkdownError> {
+    let text = syntax.source();
+    let reading = dialect::markdown::read(syntax);
+    if let Some(base) = canon {
         validate_anchors(&reading, base)?;
     }
-    let document = Document::assemble(doc.id, text, &reading, profile);
+    let document = Document::assemble(id, text, &reading, profile);
     // The write side of the codec, held in every build: a document is
     // admitted only if the spans its projection will emit decode back
     // to these very bytes under the kernel's cover law. A defect here
@@ -481,7 +524,7 @@ pub fn analyze<'a>(
 /// come in document order: the document node first, then sections,
 /// units and structure nodes interleaved as they occur.
 ///
-/// Every refusal is stated before a byte of the document is read, and
+/// Every refusal is stated before any claims are published, and
 /// nothing is ever dropped quietly: a document either slices whole or
 /// names why it could not. A caller who wants more of the document than
 /// the graph carries — the containment lattice, a unit's content anchor,

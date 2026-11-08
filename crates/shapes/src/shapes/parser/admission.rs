@@ -135,6 +135,12 @@ impl Parser<'_> {
                     },
                 ) && refusal.requires_parse_failure()
                 {
+                    if self.profile == ShaclProfile::LEGACY {
+                        self.constraint_refusals
+                            .borrow_mut()
+                            .insert(select.clone(), refusal);
+                        return Ok(select);
+                    }
                     return Err(self.refuse_query(
                         format!("sh:sparql constraint {constraint} on shape {owner}"),
                         refusal,
@@ -510,13 +516,21 @@ mod tests {
             &shapes.report_sources_with_profile(DATED[1]).unwrap()
         ));
         let prepared = PreparedShapes::new(Arc::new(shapes));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let restored = ShapesProduct::open(&bytes)
             .unwrap()
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
             .unwrap();
         assert!(restored.shapes().sparql_sources.get().is_none());
-        let original_classes = restored.class_catalog();
+        let original_classes = restored.class_catalog().unwrap();
         let source_dataset = Arc::clone(&restored.shapes().shapes_dataset);
         let provenance = restored.shapes().provenance();
         let mut parser = Parser::new(
@@ -528,12 +542,17 @@ mod tests {
             provenance.shapes_graph().map(ToOwned::to_owned),
             DATED[1],
         );
-        parser
+        let (occurrences, _) = parser
             .prepare_with_expressions(&[], &[], Preparation::SourceOccurrences)
             .unwrap();
+        assert_eq!(
+            occurrences.owner.definitions().count(),
+            restored.shapes().owner.definitions().count(),
+            "occurrence admission retains the same complete original definition domain"
+        );
         assert!(
-            parser.node_shape_index.get().is_none(),
-            "occurrence admission must not install the shared model index"
+            !Arc::ptr_eq(&occurrences.owner, &restored.shapes().owner),
+            "source readmission must not mutate or relink the restored model"
         );
         assert!(!parser.sparql_sources.borrow().constraints.is_empty());
         let sources = restored
@@ -550,8 +569,22 @@ mod tests {
             &source_dataset,
             &restored.shapes().shapes_dataset
         ));
-        assert!(Arc::ptr_eq(&original_classes, &restored.class_catalog()));
-        assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+        assert!(Arc::ptr_eq(
+            &original_classes,
+            &restored.class_catalog().unwrap()
+        ));
+        assert_eq!(
+            restored
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+            bytes
+        );
         let rejected = restored
             .shapes()
             .report_sources_with_profile(DATED[0])
@@ -967,13 +1000,21 @@ mod tests {
         let options = crate::rules::RuleOptions::default();
         let warm = crate::rules::shacl_rule_set(prepared.shapes(), &options).unwrap();
         assert!(matches!(warm.rules[0].body, IrRuleBody::Elements(_)));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let restored = ShapesProduct::open(&bytes)
             .unwrap()
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
             .unwrap();
         for prepared in [&prepared, &restored] {
-            let classes = prepared.class_catalog();
+            let classes = prepared.class_catalog().unwrap();
             for profile in DATED {
                 let sources = prepared
                     .shapes()
@@ -1010,8 +1051,19 @@ mod tests {
                     IrRuleBody::Elements(_)
                 ));
             }
-            assert!(Arc::ptr_eq(&classes, &prepared.class_catalog()));
-            assert_eq!(prepared.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+            assert!(Arc::ptr_eq(&classes, &prepared.class_catalog().unwrap()));
+            assert_eq!(
+                prepared
+                    .to_product(
+                        &ShapesProfile::CORE,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap(),
+                bytes
+            );
         }
     }
 

@@ -31,14 +31,23 @@
 //! the bidirectional RDF 1.2 dataset↔OKF profile, the bidirectional RDF↔LPG
 //! semantic lowering, and the OBO Graphs/SKOS views;
 //! [`loss_matrix_json`] renders that same enumerable registry.
+//!
+//! Callers extend [`LossProfile::builtin`] with their own [`LossDefinition`]
+//! rows and pass the resulting profile explicitly to [`check_ledger_sound_in`]
+//! and [`LossLedger::render_json_in`]. Custom meanings never mutate the builtin
+//! registry or another caller's profile.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::collections::BTreeSet;
 
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::RdfLocation;
+
+mod completeness;
+mod profile;
+pub use completeness::LossCompletenessError;
+pub use profile::{LossDefinition, LossProfile, LossProfileError, LossSoundnessError};
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
 /// an `rdf:reifies` triple pattern) but whose template drops that reifier — the
@@ -164,6 +173,33 @@ impl LossLedger {
         self.entries.push(entry);
     }
 
+    /// Append a runtime loss through the caller's storage admission.
+    ///
+    /// The entry's owned fields must already belong to this memory or an
+    /// independent owner. Existing entries preserve their insertion order.
+    ///
+    /// # Errors
+    /// Returns the original storage refusal before changing the ledger.
+    pub fn record_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        entry: LossEntry,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.push(&mut self.entries, entry)
+    }
+
+    /// Move actual runtime losses into this ledger without relabeling fields.
+    /// Admission completes before either ledger's entries are appended.
+    pub fn append_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        other: Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.reserve(&mut self.entries, other.entries.len())?;
+        self.entries.extend(other.entries);
+        Ok(())
+    }
+
     /// The ledger entries.
     ///
     /// For a [`Self::contract`] ledger this is sorted by `code` (the
@@ -191,6 +227,13 @@ impl LossLedger {
     /// JSON-array shape instead (no `schema_version`), so the committed
     /// `generated/*.json` matrix artifacts stay unchanged.
     pub fn render_json(&self) -> String {
+        self.render_json_in(&LossProfile::builtin())
+    }
+
+    /// Render using the caller's explicit profile to judge each entry's intent.
+    /// Ordering and schema are identical to [`Self::render_json`]; occurrence
+    /// notes and locations are retained independently of code descriptions.
+    pub fn render_json_in(&self, profile: &LossProfile) -> String {
         let mut sorted = self.entries.clone();
         sorted.sort_by(|a, b| {
             a.from
@@ -199,7 +242,7 @@ impl LossLedger {
                 .then_with(|| a.code.cmp(&b.code))
                 .then_with(|| a.location.cmp(&b.location))
         });
-        render_versioned(&sorted)
+        render_versioned(&sorted, profile)
     }
 }
 
@@ -244,6 +287,33 @@ const RDF_TO_GTS_PROFILE: &[(&str, &str)] = &[(
      destination GTS carries the reference; the payload bytes are streamed \
      origin->destination on demand (deferred materialization).",
 )];
+
+/// Closed loss profile for explicit GTS inline-payload admission to columnar v1.
+/// This describes blob admission only, not the GTS envelope as a whole.
+pub fn gts_to_columnar_loss_ledger() -> LossLedger {
+    contract_profile(
+        "gts",
+        "columnar-v1",
+        &[
+            (
+                "blob-byte-budget",
+                "An inline blob occurrence was not admitted under the caller's explicit byte ceilings; an unverified digest remains a container claim.",
+            ),
+            (
+                "blob-metadata-budget",
+                "An inline blob occurrence was not admitted under the caller's explicit public-metadata ceiling.",
+            ),
+            (
+                "blob-capability-unavailable",
+                "An inline blob occurrence could not be decoded because a recognized codec, key or decryptor capability is unavailable.",
+            ),
+            (
+                "blob-inline-payload-unavailable",
+                "A declared blob reference had no admitted inline payload at the end of the source.",
+            ),
+        ],
+    )
+}
 
 const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[(
     "bnode-scope-flatten",
@@ -1101,6 +1171,13 @@ fn transcode_and_shapes_entries() -> Vec<LossEntry> {
 /// depends on the `shapes` crate. The note text is behavioral (what is
 /// dropped and why), never an issue/PR reference or a minted IRI.
 const SHACL_JSON_SCHEMA_PROFILE: &[(&str, &str)] = &[
+    (
+        "plain:ieee-representability",
+        "The plain numeric carrier preserves finite IEEE values as exact mathematical JSON \
+         numbers, but unrestricted number membership does not establish single or double precision \
+         representability. Original SHACL datatype validation remains mandatory. A finite \
+         admitted enumeration or scalar constant proves this obligation and records no loss.",
+    ),
     (
         "rdfs:range",
         "A predicate's rdfs:range names a value-vocabulary class that conflicts with (or is \
@@ -2111,26 +2188,6 @@ fn schema_shacl_entries(source: &'static str) -> Vec<LossEntry> {
         .collect()
 }
 
-/// Extract the `&'static str` payload of a **contract**-discipline
-/// [`LossEntry`] field (one built via [`Cow::Borrowed`]).
-///
-/// The registry only ever enumerates contract entries (the direction ledgers
-/// and [`pair_loss_ledger`]); a `Cow::Owned` reaching here would mean a
-/// runtime `record`-discipline entry leaked into the static registry, which is
-/// a programming error — hard-fail, per the no-optionality doctrine.
-///
-/// Takes `&Cow<'static, str>` rather than `&str` on purpose (this is NOT the
-/// usual over-indirection `clippy::ptr_arg` warns about): the whole point is
-/// to inspect which *variant* the caller built, which a plain `&str` cannot
-/// distinguish.
-#[allow(clippy::ptr_arg)]
-fn static_str(cow: &Cow<'static, str>) -> &'static str {
-    match cow {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(_) => unreachable!("registry codes are always static contract literals"),
-    }
-}
-
 /// The single source of truth every enumerable-registry consumer reads: the
 /// RDF↔GTS direction ledgers ([`rdf_to_gts_loss_ledger`] /
 /// [`gts_to_rdf_loss_ledger`]), RDF↔OKF direction ledgers
@@ -2146,7 +2203,7 @@ fn static_str(cow: &Cow<'static, str>) -> &'static str {
 /// ([`empty_named_graph_entries`]), and the standalone JSON Schema emitter profiles.
 ///
 /// [`loss_matrix_json`] renders these rows (with their `note` text intact) and
-/// [`registry`] folds them into a `(from, to) -> codes` lookup table — both
+/// [`LossProfile::builtin`] indexes their pair-scoped code descriptions — both
 /// derive from this ONE function, so the rendered matrix and the
 /// `registered_pairs()`/`profile_for()` contract can never drift apart. Order
 /// is unspecified; callers sort as needed.
@@ -2154,6 +2211,7 @@ fn registry_entries() -> Vec<LossEntry> {
     let mut entries: Vec<LossEntry> = Vec::new();
     entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
+    entries.extend_from_slice(gts_to_columnar_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_okf_loss_ledger().entries());
     entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_lpg_loss_ledger().entries());
@@ -2205,39 +2263,11 @@ pub fn loss_matrix_json() -> String {
     render(&entries, false)
 }
 
-/// The single source of truth backing [`registered_pairs`] and [`profile_for`]
-/// — built by folding [`registry_entries`] (the same rows [`loss_matrix_json`]
-/// renders) down to a `(from, to) -> codes` lookup, dropping the `note` text —
-/// mapping every `(from, to)` pair this crate knows a loss profile for to the
-/// closed set of codes that pair's conversion may drop.
-///
-/// [`registry_entries`] is pure, compile-time-derived data (the same rows on
-/// every call), so the folded map is built once behind a [`OnceLock`] and
-/// reused for the process lifetime — `profile_for` sits on the soundness
-/// check's hot path (once per code checked), and `registered_pairs`/
-/// [`loss_matrix_json`]'s registry rendering both want the same table, so
-/// rebuilding a fresh `BTreeMap` on every call was pure wasted allocation.
-fn registry() -> &'static BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> {
-    static REGISTRY: OnceLock<BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>>> =
-        OnceLock::new();
-    REGISTRY.get_or_init(|| {
-        let mut table: BTreeMap<(&'static str, &'static str), BTreeSet<&'static str>> =
-            BTreeMap::new();
-        for entry in &registry_entries() {
-            table
-                .entry((static_str(&entry.from), static_str(&entry.to)))
-                .or_default()
-                .insert(static_str(&entry.code));
-        }
-        table
-    })
-}
-
 /// Every `(from, to)` pair with a registered loss profile: the RDF↔GTS
 /// directions, graph/tabular/view profiles, every non-identity syntax/projection
 /// transcode pair, the shapes projection, and schema-language emitter profiles.
 pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    registry().keys().copied()
+    profile::builtin_pairs()
 }
 
 /// The closed set of loss codes a `from -> to` conversion may drop, per the
@@ -2247,10 +2277,7 @@ pub fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> 
 /// has no declared profile for) — never a panic, since callers may probe
 /// arbitrary pairs to check whether a profile is known.
 pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
-    registry()
-        .iter()
-        .find(|((f, t), _)| *f == from && *t == to)
-        .map_or_default(|(_, codes)| codes.clone())
+    profile::builtin_codes(from, to).collect()
 }
 
 // ── Sound + complete verification surface ────────────────────────────────────
@@ -2292,25 +2319,26 @@ pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
 ///
 /// Returns `Err` naming every code missing from `ledger` and/or every code
 /// `ledger` recorded that is not in `expected_codes`, when the two sets
-/// differ.
-pub fn check_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) -> Result<(), String> {
+/// differ. The owned refusal retains both distinct code lists in lexical order
+/// and remains inspectable after the ledger and expected inputs are dropped.
+pub fn check_ledger_complete(
+    ledger: &LossLedger,
+    expected_codes: &[&str],
+) -> Result<(), LossCompletenessError> {
     let present: BTreeSet<&str> = ledger.entries().iter().map(|e| e.code.as_ref()).collect();
     let expected: BTreeSet<&str> = expected_codes.iter().copied().collect();
-    let missing: Vec<&str> = expected.difference(&present).copied().collect();
-    let unexpected: Vec<&str> = present.difference(&expected).copied().collect();
+    let missing: Vec<String> = expected
+        .difference(&present)
+        .map(|code| (*code).to_owned())
+        .collect();
+    let unexpected: Vec<String> = present
+        .difference(&expected)
+        .map(|code| (*code).to_owned())
+        .collect();
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
-    let mut reasons = Vec::new();
-    if !missing.is_empty() {
-        reasons.push(format!("expected code(s) {missing:?} were never recorded"));
-    }
-    if !unexpected.is_empty() {
-        reasons.push(format!(
-            "ledger recorded unexpected code(s) {unexpected:?} not in expected_codes"
-        ));
-    }
-    Err(format!("loss ledger incomplete: {}", reasons.join("; ")))
+    Err(LossCompletenessError::new(missing, unexpected))
 }
 
 /// Panicking wrapper over [`check_ledger_complete`]: the set of codes
@@ -2333,25 +2361,49 @@ pub fn assert_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) {
 ///
 /// # Errors
 ///
-/// Returns `Err` naming every offending code (and the declared profile) when
-/// `ledger` carries at least one code outside `profile_for(from, to)`.
-pub fn check_ledger_sound(ledger: &LossLedger, from: &str, to: &str) -> Result<(), String> {
-    let profile = profile_for(from, to);
-    let offenders: BTreeSet<&str> = ledger
-        .entries()
-        .iter()
-        .map(|e| e.code.as_ref())
-        .filter(|code| !profile.contains(code))
-        .collect();
-    if offenders.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "loss ledger unsound for (\"{from}\", \"{to}\"): code(s) {offenders:?} were \
-             recorded but are not in the declared profile {profile:?} — a recorded code outside \
-             the profile is an undeclared, unintentional loss (a bug), not an accepted contract"
-        ))
+/// Returns `Err` naming the first offending code when an entry has a different
+/// conversion pair or a code outside `profile_for(from, to)`. The refusal
+/// borrows its original operands from the ledger and requested pair, independently
+/// of the temporary built-in profile. Use `into_owned()` to retain it beyond
+/// those inputs.
+pub fn check_ledger_sound<'a>(
+    ledger: &'a LossLedger,
+    from: &'a str,
+    to: &'a str,
+) -> Result<(), LossSoundnessError<&'a str>> {
+    check_ledger_sound_in(&LossProfile::builtin(), ledger, from, to)
+}
+
+/// Check each original entry's pair and code against an explicit profile.
+///
+/// The first refusal borrows its original code and pair operands; it allocates
+/// nothing and does not borrow the profile. Empty ledgers remain sound,
+/// including for unregistered pairs.
+pub fn check_ledger_sound_in<'a>(
+    profile: &LossProfile,
+    ledger: &'a LossLedger,
+    from: &'a str,
+    to: &'a str,
+) -> Result<(), LossSoundnessError<&'a str>> {
+    for entry in ledger.entries() {
+        if entry.from != from || entry.to != to {
+            return Err(LossSoundnessError::PairMismatch {
+                code: &entry.code,
+                actual_from: &entry.from,
+                actual_to: &entry.to,
+                expected_from: from,
+                expected_to: to,
+            });
+        }
+        if profile.description(from, to, &entry.code).is_none() {
+            return Err(LossSoundnessError::UnregisteredCode {
+                code: &entry.code,
+                from: &entry.from,
+                to: &entry.to,
+            });
+        }
     }
+    Ok(())
 }
 
 /// Panicking wrapper over [`check_ledger_sound`]: every code `ledger`
@@ -2378,6 +2430,10 @@ pub fn assert_ledger_sound(ledger: &LossLedger, from: &str, to: &str) {
 /// entries never carry a location anyway); [`LossLedger::render_json`] passes
 /// `true` so a runtime `record`-discipline location is visible.
 fn render(entries: &[LossEntry], emit_location: bool) -> String {
+    render_in(entries, emit_location, &LossProfile::builtin())
+}
+
+fn render_in(entries: &[LossEntry], emit_location: bool, profile: &LossProfile) -> String {
     let mut out = String::from("[\n");
     for (i, entry) in entries.iter().enumerate() {
         out.push_str("  {\n");
@@ -2389,7 +2445,9 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
         // iff it is a member of the declared profile for its `(from, to)` pair.
         // Deriving here (rather than trusting a caller-set bool) makes the two
         // impossible to drift apart.
-        let intentional = profile_for(&entry.from, &entry.to).contains(entry.code.as_ref());
+        let intentional = profile
+            .description(&entry.from, &entry.to, &entry.code)
+            .is_some();
         push_bool_field(&mut out, "intentional", intentional);
         let location = emit_location.then_some(entry.location.as_deref()).flatten();
         push_field(&mut out, "note", entry.note.as_ref(), location.is_none());
@@ -2410,8 +2468,8 @@ fn render(entries: &[LossEntry], emit_location: bool) -> String {
 /// in the versioned envelope `{ "schema_version": 1, "losses": [ ... ] }` —
 /// the schema [`LossLedger::render_json`] exposes. `schema_version` is a plain
 /// integer bumped only on a breaking shape change to this envelope.
-fn render_versioned(entries: &[LossEntry]) -> String {
-    let array = render(entries, true);
+fn render_versioned(entries: &[LossEntry], profile: &LossProfile) -> String {
+    let array = render_in(entries, true, profile);
     let mut out = String::from("{\n  \"schema_version\": 1,\n  \"losses\": ");
     for (i, line) in array.lines().enumerate() {
         if i > 0 {
@@ -3217,15 +3275,40 @@ mod tests {
 
     #[test]
     fn check_ledger_complete_flags_missing_code() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
         let mut ledger = LossLedger::new();
         ledger.record(owned_entry("a", "x", "y"));
-        let err =
-            check_ledger_complete(&ledger, &["a", "b"]).expect_err("code `b` was never recorded");
-        assert!(err.contains('b'), "error must name the missing code: {err}");
+        let err = check_ledger_complete(&ledger, &["c", "a", "b", "b"])
+            .expect_err("codes were never recorded");
+        drop(ledger);
+        let retained = err.clone();
+        drop(err);
+        assert_eq!(retained.missing(), ["b", "c"]);
+        assert_eq!(retained.unexpected(), &[] as &[String]);
+        assert_eq!(
+            retained.to_string(),
+            "loss ledger incomplete: expected code(s) [\"b\", \"c\"] were never recorded"
+        );
+        let fields = Capture::read(&retained);
+        assert_eq!(fields.code, "loss-ledger-incomplete");
+        assert!(matches!(
+            fields.events.as_slice(),
+            [
+                Event::BeginList(Some("missing"), 2),
+                Event::Value(None, ErrorValue::Code("b")),
+                Event::Value(None, ErrorValue::Code("c")),
+                Event::EndList,
+                Event::BeginList(Some("unexpected"), 0),
+                Event::EndList,
+            ]
+        ));
     }
 
     #[test]
     fn check_ledger_complete_flags_unexpected_extra_code() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
         // The other incompleteness direction: `ledger` recorded a real code
         // that the caller's `expected_codes` never declared — a silently
         // drifted contract, not merely a silently dropped construct.
@@ -3235,9 +3318,31 @@ mod tests {
         let err = check_ledger_complete(&ledger, &["a"])
             .expect_err("code `b` was recorded but not declared in expected_codes");
         assert!(
-            err.contains('b'),
+            err.to_string().contains('b'),
             "error must name the unexpected code: {err}"
         );
+        assert_eq!(err.unexpected(), ["b"]);
+        let both = check_ledger_complete(&ledger, &["c", "c"]).unwrap_err();
+        drop(ledger);
+        assert_eq!(both.missing(), ["c"]);
+        assert_eq!(both.unexpected(), ["a", "b"]);
+        assert_eq!(
+            both.to_string(),
+            "loss ledger incomplete: expected code(s) [\"c\"] were never recorded; ledger recorded unexpected code(s) [\"a\", \"b\"] not in expected_codes"
+        );
+        let fields = Capture::read(&both);
+        assert!(matches!(
+            fields.events.as_slice(),
+            [
+                Event::BeginList(Some("missing"), 1),
+                Event::Value(None, ErrorValue::Code("c")),
+                Event::EndList,
+                Event::BeginList(Some("unexpected"), 2),
+                Event::Value(None, ErrorValue::Code("a")),
+                Event::Value(None, ErrorValue::Code("b")),
+                Event::EndList,
+            ]
+        ));
     }
 
     #[test]
@@ -3266,7 +3371,7 @@ mod tests {
         let err = check_ledger_sound(&ledger, "shacl", "json-schema")
             .expect_err("`not-a-real-code` is outside the declared profile");
         assert!(
-            err.contains("not-a-real-code"),
+            err.to_string().contains("not-a-real-code"),
             "error must name the offending code: {err}"
         );
     }

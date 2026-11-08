@@ -12,7 +12,7 @@
 //! * syntax tests → parse success/failure matches the kind.
 //!
 //! Blank-node equality reuses the same RDFC-1.0 canonicalizer the
-//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::canonicalize`]):
+//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::try_canonicalize`]):
 //! the **entire** result set is encoded as ONE synthetic dataset (a distinct
 //! solution blank node per row, one quad `(solution, var-predicate, value)` per
 //! bound cell) and canonicalized once, so a single bijection must map every
@@ -21,6 +21,7 @@
 //! and their variable positions — still compare exactly. See
 //! the private `encode_solution_set`.
 
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,12 +34,56 @@ use purrdf_sparql_results::ParsedSolutions;
 use crate::manifest::{ExpectedResult, SparqlTestCase, TestKind};
 use crate::run::RunOutcome;
 
+/// A comparison found different results or could not establish an identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompareError {
+    /// The completed comparison's human-readable mismatch report.
+    Mismatch(String),
+    /// Original canonicalization failure; no equality verdict was established.
+    Canonicalization(purrdf_core::CanonError),
+}
+
+impl purrdf_hash::error::StructuredError for CompareError {
+    purrdf_hash::error_visit! {
+        Mismatch(message) => "sparql-comparison-mismatch" { "message" => Text(message) },
+        Canonicalization(cause) => "sparql-comparison-canonicalization" { "cause" => Cause(cause) },
+    }
+}
+
+impl fmt::Display for CompareError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mismatch(message) => fmt::Display::fmt(message, f),
+            Self::Canonicalization(cause) => fmt::Display::fmt(cause, f),
+        }
+    }
+}
+
+impl std::error::Error for CompareError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mismatch(_) => None,
+            Self::Canonicalization(cause) => Some(cause),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(CompareError {
+    Mismatch(String),
+    Canonicalization(purrdf_core::CanonError),
+});
+
 /// Compare `outcome` against `case`'s expected result.
 ///
 /// # Errors
 ///
 /// Returns a human-readable mismatch description; `Ok(())` means the case passed.
-pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String> {
+pub fn compare(
+    case: &SparqlTestCase,
+    outcome: &RunOutcome,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
     // A case that expects a hard failure produced an outcome instead. Checked here,
     // before any kind-specific comparison, so the verdict is the same sentence
     // whether the case was a query, an update, or a syntax test — and so the
@@ -47,30 +92,38 @@ pub fn compare(case: &SparqlTestCase, outcome: &RunOutcome) -> Result<(), String
         return Err(format!(
             "expected a hard failure matching {} — the case ran to completion instead",
             path.display()
-        ));
+        )
+        .into());
     }
     match outcome {
         RunOutcome::Syntax { parsed_ok } => match case.kind {
             TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax if *parsed_ok => Ok(()),
             TestKind::PositiveSyntax | TestKind::PositiveUpdateSyntax => {
-                Err("positive-syntax test failed to parse".to_owned())
+                Err("positive-syntax test failed to parse".to_owned().into())
             }
             TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax if !*parsed_ok => Ok(()),
             TestKind::NegativeSyntax | TestKind::NegativeUpdateSyntax => {
-                Err("negative-syntax test parsed but should have failed".to_owned())
+                Err("negative-syntax test parsed but should have failed"
+                    .to_owned()
+                    .into())
             }
-            other => Err(format!("syntax outcome for non-syntax kind {other:?}")),
+            other => Err(format!("syntax outcome for non-syntax kind {other:?}").into()),
         },
-        RunOutcome::Eval { result, ordered } => {
-            compare_eval(case, EvalRef::from(result), *ordered, result.query_form())
-        }
+        RunOutcome::Eval { result, ordered } => compare_eval(
+            case,
+            EvalRef::from(result),
+            *ordered,
+            result.query_form(),
+            control,
+        ),
         RunOutcome::RetainedEval { result, ordered } => compare_eval(
             case,
             EvalRef::retained(result)?,
             *ordered,
             result.query_form(),
+            control,
         ),
-        RunOutcome::Update(actual) => compare_update(case, actual),
+        RunOutcome::Update(actual) => compare_update(case, actual, control),
     }
 }
 
@@ -135,11 +188,12 @@ pub fn compare_results(
     left: &SparqlResult,
     right: &SparqlResult,
     ordered: bool,
-) -> Result<(), String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
     match (left, right) {
         (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) if l == r => Ok(()),
         (SparqlResult::Boolean(l), SparqlResult::Boolean(r)) => {
-            Err(format!("ASK mismatch: {l} vs {r}"))
+            Err(format!("ASK mismatch: {l} vs {r}").into())
         }
         (
             SparqlResult::Solutions {
@@ -154,7 +208,7 @@ pub fn compare_results(
             },
         ) => {
             if l_vars != r_vars {
-                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}"));
+                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}").into());
             }
             compare_solutions(
                 l_vars,
@@ -164,22 +218,26 @@ pub fn compare_results(
                     rows: r_rows.clone(),
                 },
                 ordered,
+                control,
             )
         }
         (SparqlResult::Graph(l), SparqlResult::Graph(r)) => {
-            let l_canon = purrdf_core::canonicalize(l).nquads;
-            let r_canon = purrdf_core::canonicalize(r).nquads;
-            if l_canon == r_canon {
+            let l_canon = purrdf_core::try_canonicalize(l, control)?;
+            let r_canon = purrdf_core::try_canonicalize(r, control)?;
+            if l_canon.nquads() == r_canon.nquads() {
                 Ok(())
             } else {
-                Err("graph results differ (canonical N-Quads mismatch)".to_owned())
+                Err("graph results differ (canonical N-Quads mismatch)"
+                    .to_owned()
+                    .into())
             }
         }
         (l, r) => Err(format!(
             "result kind mismatch: {} vs {}",
             l.query_form(),
             r.query_form()
-        )),
+        )
+        .into()),
     }
 }
 
@@ -188,20 +246,29 @@ pub fn compare_results(
 /// The mutated dataset and the expected dataset are compared graph-preservingly
 /// by RDFC-1.0 canonical N-Quads — the same equality CONSTRUCT graphs use — so a
 /// differing default graph OR any named graph surfaces as a mismatch.
-fn compare_update(case: &SparqlTestCase, actual: &Arc<RdfDataset>) -> Result<(), String> {
+fn compare_update(
+    case: &SparqlTestCase,
+    actual: &Arc<RdfDataset>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
     let ExpectedResult::DatasetState { data, graph_data } = &case.expected else {
         return Err(format!(
             "update case {} has no DatasetState expected result",
             case.iri
-        ));
+        )
+        .into());
     };
     let expected = crate::run::build_dataset(&case.base, data, graph_data)?;
-    let actual_canon = purrdf_core::canonicalize(actual).nquads;
-    let expected_canon = purrdf_core::canonicalize(&expected).nquads;
-    if actual_canon == expected_canon {
+    let actual_canon = purrdf_core::try_canonicalize(actual, control)?;
+    let expected_canon = purrdf_core::try_canonicalize(&expected, control)?;
+    if actual_canon.nquads() == expected_canon.nquads() {
         Ok(())
     } else {
-        Err("UPDATE post-state differs from expected (canonical N-Quads mismatch)".to_owned())
+        Err(
+            "UPDATE post-state differs from expected (canonical N-Quads mismatch)"
+                .to_owned()
+                .into(),
+        )
     }
 }
 
@@ -254,14 +321,15 @@ fn compare_eval(
     result: EvalRef<'_>,
     ordered: bool,
     query_form: &str,
-) -> Result<(), String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
     match (&case.expected, result) {
         (ExpectedResult::Srx(path) | ExpectedResult::Srj(path), EvalRef::Boolean(actual)) => {
             let expected = read_boolean(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
             if expected == actual {
                 Ok(())
             } else {
-                Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                Err(format!("ASK mismatch: expected {expected}, got {actual}").into())
             }
         }
         (
@@ -271,7 +339,7 @@ fn compare_eval(
             },
         ) => {
             let expected = read_solutions(path, matches!(case.expected, ExpectedResult::Srj(_)))?;
-            compare_case_solutions(case, variables, rows, &expected, ordered)
+            compare_case_solutions(case, variables, rows, &expected, ordered, control)
         }
         (ExpectedResult::ResultSetRdf(path), result) => {
             let expected = crate::rs_resultset::parse_result(
@@ -285,7 +353,7 @@ fn compare_eval(
                     if expected == actual {
                         Ok(())
                     } else {
-                        Err(format!("ASK mismatch: expected {expected}, got {actual}"))
+                        Err(format!("ASK mismatch: expected {expected}, got {actual}").into())
                     }
                 }
                 (
@@ -296,8 +364,10 @@ fn compare_eval(
                     EvalRef::Solutions {
                         variables, rows, ..
                     },
-                ) => compare_case_solutions(case, variables, rows, &solutions, indexed),
-                _ => Err("DAWG RDF result kind differs from the query result".to_owned()),
+                ) => compare_case_solutions(case, variables, rows, &solutions, indexed, control),
+                _ => Err("DAWG RDF result kind differs from the query result"
+                    .to_owned()
+                    .into()),
             }
         }
         (ExpectedResult::Graph(path), EvalRef::Graph(actual)) => {
@@ -306,22 +376,28 @@ fn compare_eval(
             let media = crate::run::data_media_type(path);
             let expected = purrdf::parse_dataset(&expected_bytes, media, None)
                 .map_err(|e| format!("parse expected graph {}: {e}", path.display()))?;
-            let actual_canon = purrdf_core::canonicalize(actual).nquads;
-            let expected_canon = purrdf_core::canonicalize(&expected).nquads;
-            if actual_canon == expected_canon {
+            let actual_canon = purrdf_core::try_canonicalize(actual, control)?;
+            let expected_canon = purrdf_core::try_canonicalize(&expected, control)?;
+            if actual_canon.nquads() == expected_canon.nquads() {
                 Ok(())
             } else {
-                Err("CONSTRUCT graph differs from expected (canonical N-Quads mismatch)".to_owned())
+                Err(
+                    "CONSTRUCT graph differs from expected (canonical N-Quads mismatch)"
+                        .to_owned()
+                        .into(),
+                )
             }
         }
-        (ExpectedResult::Unsupported(path), _) => Err(format!(
-            "unsupported expected-result format: {}",
-            path.display()
-        )),
-        (ExpectedResult::None, _) => Err("evaluation case has no expected result".to_owned()),
+        (ExpectedResult::Unsupported(path), _) => {
+            Err(format!("unsupported expected-result format: {}", path.display()).into())
+        }
+        (ExpectedResult::None, _) => {
+            Err("evaluation case has no expected result".to_owned().into())
+        }
         (expected, _) => Err(format!(
             "result-kind mismatch: expected {expected:?}, got a {query_form} result"
-        )),
+        )
+        .into()),
     }
 }
 
@@ -332,9 +408,10 @@ fn compare_case_solutions(
     rows: &[Vec<Option<TermValue>>],
     expected: &ParsedSolutions,
     ordered: bool,
-) -> Result<(), String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
     if !case.lax_cardinality {
-        return compare_solutions(variables, rows, expected, ordered);
+        return compare_solutions(variables, rows, expected, ordered, control);
     }
     // The W3C test-case rules require each solution at least once and no more
     // often than its expected multiplicity. Match distinct rows with ONE global
@@ -344,7 +421,9 @@ fn compare_case_solutions(
     let actual = row_multiplicities(rows);
     let wanted = row_multiplicities(&expected.rows);
     if actual.len() != wanted.len() {
-        return Err("REDUCED result has missing or extra distinct solutions".to_owned());
+        return Err("REDUCED result has missing or extra distinct solutions"
+            .to_owned()
+            .into());
     }
     let actual_rows: Vec<_> = actual.iter().map(|(row, _)| (*row).clone()).collect();
     let mut pending = vec![Vec::<usize>::new()];
@@ -366,14 +445,22 @@ fn compare_case_solutions(
                 variables: expected.variables.clone(),
                 rows: paired,
             };
-            if compare_solutions(variables, &actual_rows[..=at], &paired, true).is_ok() {
-                let mut next = selected.clone();
-                next.push(candidate);
-                pending.push(next);
+            match compare_solutions(variables, &actual_rows[..=at], &paired, true, control) {
+                Ok(()) => {
+                    let mut next = selected.clone();
+                    next.push(candidate);
+                    pending.push(next);
+                }
+                Err(CompareError::Mismatch(_)) => {}
+                Err(error) => return Err(error),
             }
         }
     }
-    Err("REDUCED multiplicities or global blank-node correspondence differ".to_owned())
+    Err(
+        "REDUCED multiplicities or global blank-node correspondence differ"
+            .to_owned()
+            .into(),
+    )
 }
 
 /// Group equal rows without changing the identity of their value blank nodes.
@@ -403,15 +490,17 @@ fn compare_solutions(
     rows: &[Vec<Option<TermValue>>],
     expected: &ParsedSolutions,
     ordered: bool,
-) -> Result<(), String> {
-    let actual_canon = encode_solution_set(variables, rows, ordered, Literals::ByValue)?;
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
+    let actual_canon = encode_solution_set(variables, rows, ordered, Literals::ByValue, control)?;
     let expected_canon = encode_solution_set(
         &expected.variables,
         &expected.rows,
         ordered,
         Literals::ByValue,
+        control,
     )?;
-    if actual_canon == expected_canon {
+    if actual_canon.nquads() == expected_canon.nquads() {
         Ok(())
     } else {
         let mode = if ordered {
@@ -424,14 +513,15 @@ fn compare_solutions(
             expected.rows.len(),
             rows.len(),
             actual_canon
+                .nquads()
                 .lines()
-                .zip(expected_canon.lines())
+                .zip(expected_canon.nquads().lines())
                 .find(|(actual, expected)| actual != expected)
                 .map_or_else(
                     || "one result's canonical graph ends earlier".to_owned(),
                     |(actual, expected)| format!("expected {expected} / actual {actual}")
                 )
-        ))
+        ).into())
     }
 }
 
@@ -485,7 +575,8 @@ fn encode_solution_set(
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
     literals: Literals,
-) -> Result<String, String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<purrdf_core::Canonicalized, CompareError> {
     let mut builder = RdfDatasetBuilder::new();
     let index_predicate = builder
         .intern_iri(&format!("{CONFORMANCE_NS}index"))
@@ -536,9 +627,7 @@ fn encode_solution_set(
     let dataset = builder
         .freeze()
         .map_err(|e| format!("encode solution set for comparison: {e}"))?;
-    purrdf_core::try_canonicalize(&dataset)
-        .map(|canonical| canonical.nquads)
-        .map_err(|error| format!("canonicalize solution set for comparison: {error}"))
+    purrdf_core::try_canonicalize(&dataset, control).map_err(CompareError::from)
 }
 
 /// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
@@ -557,10 +646,11 @@ pub fn canonical_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
-) -> Result<String, String> {
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<purrdf_core::Canonicalized, CompareError> {
     // Exact: a trace that records this string must see the lexical forms the
     // evaluator produced, so a change in how it spells a number still moves it.
-    encode_solution_set(variables, rows, ordered, Literals::Exact)
+    encode_solution_set(variables, rows, ordered, Literals::Exact, control)
 }
 
 /// How [`encode_solution_set`] spells a literal.
@@ -672,6 +762,85 @@ mod tests {
     use super::*;
     use crate::manifest::TestKind;
 
+    /// Identity refusal survives input disposal and is distinct from inequality.
+    #[test]
+    fn graph_comparison_retains_the_original_canonicalization_refusal() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        let mut builder = RdfDatasetBuilder::new();
+        let node = builder.intern_iri("http://example.org/node").unwrap();
+        let reserved = builder.intern_iri(purrdf_core::RESERVED_NAMESPACE).unwrap();
+        builder.push_quad(node, reserved, node, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let original = purrdf_core::try_canonicalize(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            &original,
+            purrdf_core::CanonError::ReservedVocabulary(_)
+        ));
+        let result = SparqlResult::Graph(dataset.into());
+        let refusal = compare_results(&result, &result, false, &mut control).unwrap_err();
+        drop(result);
+        assert_eq!(refusal, CompareError::Canonicalization(original));
+        let captured = purrdf_testkit::error_capture::Capture::read(&refusal);
+        assert_eq!(captured.code, "sparql-comparison-canonicalization");
+        assert!(
+            std::error::Error::source(&refusal)
+                .unwrap()
+                .is::<purrdf_core::CanonError>()
+        );
+
+        let healthy = SparqlResult::Graph(RdfDatasetBuilder::new().freeze().unwrap().into());
+        assert!(compare_results(&healthy, &healthy, false, &mut control).is_ok());
+    }
+
+    #[test]
+    fn solution_comparison_never_treats_a_refusal_as_a_reduced_mismatch() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        let variables = vec!["x".to_owned()];
+        let rows = vec![vec![Some(TermValue::iri(purrdf_core::RESERVED_NAMESPACE))]];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: rows.clone(),
+        };
+        let refusal = canonical_solutions(&variables, &rows, false, &mut control).unwrap_err();
+        assert!(matches!(
+            &refusal,
+            CompareError::Canonicalization(purrdf_core::CanonError::ReservedVocabulary(_))
+        ));
+        assert_eq!(
+            compare_solutions(&variables, &rows, &expected, false, &mut control).unwrap_err(),
+            refusal
+        );
+        let mut case = case_with(ExpectedResult::None);
+        for lax in [false, true] {
+            case.lax_cardinality = lax;
+            assert_eq!(
+                compare_case_solutions(&case, &variables, &rows, &expected, false, &mut control)
+                    .unwrap_err(),
+                refusal
+            );
+        }
+        let healthy = vec![vec![Some(TermValue::iri("https://example.org/value"))]];
+        let expected = ParsedSolutions {
+            variables: variables.clone(),
+            rows: healthy.clone(),
+        };
+        assert!(
+            compare_case_solutions(&case, &variables, &healthy, &expected, false, &mut control)
+                .is_ok()
+        );
+    }
+
     /// A minimal case whose `mf:result` is the given expectation.
     fn case_with(expected: ExpectedResult) -> SparqlTestCase {
         SparqlTestCase {
@@ -734,6 +903,9 @@ mod tests {
 
     #[test]
     fn an_expected_failure_is_not_satisfied_by_a_run_that_succeeded() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let case = case_with(ExpectedResult::EvalError(suite_error_file(
             "infeasible-chain.err",
         )));
@@ -743,9 +915,13 @@ mod tests {
                 result: SparqlResult::Boolean(true),
                 ordered: false,
             },
+            &mut control,
         )
         .expect_err("an expected refusal cannot be met by a completed run");
-        assert!(error.contains("ran to completion instead"), "{error}");
+        assert!(
+            matches!(&error, CompareError::Mismatch(message) if message.contains("ran to completion instead")),
+            "{error}"
+        );
     }
 
     fn lit(lexical_form: &str, datatype: &str) -> TermValue {
@@ -765,12 +941,16 @@ mod tests {
     }
 
     /// Encode a one-variable, one-row set (unordered) to its canonical form.
-    fn one(term: TermValue) -> String {
+    fn one(
+        term: TermValue,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> purrdf_core::Canonicalized {
         encode_solution_set(
             &["x".to_owned()],
             &[vec![Some(term)]],
             false,
             Literals::Exact,
+            control,
         )
         .expect("encode")
     }
@@ -791,9 +971,12 @@ mod tests {
     /// `"lex"^^<iri>` framing verbatim, and that is what this pins.
     #[test]
     fn literal_field_boundaries_do_not_collide() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         assert_ne!(
-            one(lit("a", DT_B)),
-            one(lit(&format!("a\"^^<{DT_B}>"), DT_X)),
+            one(lit("a", DT_B), &mut control).nquads(),
+            one(lit(&format!("a\"^^<{DT_B}>"), DT_X), &mut control).nquads(),
             "a lexical form that spells the datatype framing must not encode as that \
              framing"
         );
@@ -801,26 +984,35 @@ mod tests {
 
     #[test]
     fn iri_cannot_collide_with_literal() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         assert_ne!(
-            one(TermValue::Iri("L:something".to_owned())),
-            one(lit("something", DT_X)),
+            one(TermValue::Iri("L:something".to_owned()), &mut control).nquads(),
+            one(lit("something", DT_X), &mut control).nquads(),
             "IRI and Literal encodings must stay distinct"
         );
     }
 
     #[test]
     fn blank_node_relabelling_is_isomorphic() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         // A single-column row bound to a blank node must encode identically
         // regardless of the blank's original label — the core isomorphism fix.
         assert_eq!(
-            one(blank("b0")),
-            one(blank("totally-different")),
+            one(blank("b0"), &mut control).nquads(),
+            one(blank("totally-different"), &mut control).nquads(),
             "blank-node label must not affect equality"
         );
     }
 
     #[test]
     fn equal_labels_from_different_source_scopes_remain_distinct() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let variables = vec!["x".to_owned(), "y".to_owned()];
         let scoped = |scope| TermValue::Blank {
             label: "same".to_owned(),
@@ -831,81 +1023,109 @@ mod tests {
             variables: variables.clone(),
             rows: vec![vec![Some(blank("a")), Some(blank("b"))]],
         };
-        assert!(compare_solutions(&variables, &actual, &distinct, false).is_ok());
+        assert!(compare_solutions(&variables, &actual, &distinct, false, &mut control).is_ok());
         let aliased = ParsedSolutions {
             variables: variables.clone(),
             rows: vec![vec![Some(blank("a")), Some(blank("a"))]],
         };
-        assert!(compare_solutions(&variables, &actual, &aliased, false).is_err());
+        assert!(compare_solutions(&variables, &actual, &aliased, false, &mut control).is_err());
     }
 
     #[test]
     fn unbound_solution_multiplicity_is_observable() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let variables = vec!["x".to_owned()];
         let expected = ParsedSolutions {
             variables: variables.clone(),
             rows: vec![vec![None]],
         };
-        assert!(compare_solutions(&variables, &[], &expected, false).is_err());
-        assert!(compare_solutions(&variables, &[vec![None]], &expected, false).is_ok());
+        assert!(compare_solutions(&variables, &[], &expected, false, &mut control).is_err());
         assert!(
-            compare_solutions(&variables, &[vec![None], vec![None]], &expected, false).is_err()
+            compare_solutions(&variables, &[vec![None]], &expected, false, &mut control).is_ok()
+        );
+        assert!(
+            compare_solutions(
+                &variables,
+                &[vec![None], vec![None]],
+                &expected,
+                false,
+                &mut control
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn shared_blank_across_columns_is_distinguished_from_two_distinct_blanks() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         // ?x and ?y bound to the SAME blank (coreference) must differ from ?x
         // and ?y bound to two independent blanks, even though both relabel away.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let shared = encode_solution_set(
+        let shared_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), Some(blank("b0"))]],
             false,
             Literals::Exact,
+            &mut control,
         )
         .expect("encode");
-        let distinct = encode_solution_set(
+        let shared = shared_owner.nquads();
+        let distinct_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), Some(blank("b1"))]],
             false,
             Literals::Exact,
+            &mut control,
         )
         .expect("encode");
+        let distinct = distinct_owner.nquads();
         assert_ne!(
             shared, distinct,
             "coreference between two variables is observable, not just blank count"
         );
         // ...but relabelling the SAME coreference must still collapse.
-        let shared_relabelled = encode_solution_set(
+        let shared_relabelled_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("zzz")), Some(blank("zzz"))]],
             false,
             Literals::Exact,
+            &mut control,
         )
         .expect("encode");
+        let shared_relabelled = shared_relabelled_owner.nquads();
         assert_eq!(shared, shared_relabelled);
     }
 
     #[test]
     fn term_position_is_not_normalized_away() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         // The same blank bound to ?x vs to ?y is a different row (position
         // matters); only blank *identity* is bijection-normalized.
         let vars = ["x".to_owned(), "y".to_owned()];
-        let a = encode_solution_set(
+        let a_owner = encode_solution_set(
             &vars,
             &[vec![Some(blank("b0")), None]],
             false,
             Literals::Exact,
+            &mut control,
         )
         .expect("encode");
-        let b = encode_solution_set(
+        let a = a_owner.nquads();
+        let b_owner = encode_solution_set(
             &vars,
             &[vec![None, Some(blank("b0"))]],
             false,
             Literals::Exact,
+            &mut control,
         )
         .expect("encode");
+        let b = b_owner.nquads();
         assert_ne!(a, b, "variable position must still compare exactly");
     }
 
@@ -915,12 +1135,19 @@ mod tests {
     /// global bijection exists, so they MUST be unequal.
     #[test]
     fn cross_row_bijection_rejects_row_local_relabelling() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let vars = ["x".to_owned()];
         let two_distinct = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
         let one_shared = &[vec![Some(blank("z"))], vec![Some(blank("z"))]];
         assert_ne!(
-            encode_solution_set(&vars, two_distinct, false, Literals::Exact).expect("encode"),
-            encode_solution_set(&vars, one_shared, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, two_distinct, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, one_shared, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "two distinct blanks must NOT equal the same blank repeated (no global bijection)"
         );
     }
@@ -929,12 +1156,19 @@ mod tests {
     /// `[{?x=_:a},{?x=_:b}]` vs `[{?x=_:p},{?x=_:q}]` — one bijection a↦p, b↦q.
     #[test]
     fn cross_row_global_relabelling_is_equal() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let vars = ["x".to_owned()];
         let ab = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
         let pq = &[vec![Some(blank("p"))], vec![Some(blank("q"))]];
         assert_eq!(
-            encode_solution_set(&vars, ab, false, Literals::Exact).expect("encode"),
-            encode_solution_set(&vars, pq, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, ab, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, pq, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "a global bijection over all rows must compare equal"
         );
     }
@@ -943,6 +1177,9 @@ mod tests {
     /// rows in a different order must NOT be equal; the identical order must be.
     #[test]
     fn ordered_comparison_is_position_sensitive() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let vars = ["x".to_owned()];
         let forward = &[
             vec![Some(lit("1", XSD_INTEGER))],
@@ -953,19 +1190,31 @@ mod tests {
             vec![Some(lit("1", XSD_INTEGER))],
         ];
         assert_ne!(
-            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
-            encode_solution_set(&vars, reverse, true, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, reverse, true, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "ordered: a different row order must compare unequal"
         );
         assert_eq!(
-            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
-            encode_solution_set(&vars, forward, true, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, forward, true, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "ordered: identical order must compare equal"
         );
         // The SAME two orders compare EQUAL when unordered (multiset).
         assert_eq!(
-            encode_solution_set(&vars, forward, false, Literals::Exact).expect("encode"),
-            encode_solution_set(&vars, reverse, false, Literals::Exact).expect("encode"),
+            encode_solution_set(&vars, forward, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
+            encode_solution_set(&vars, reverse, false, Literals::Exact, &mut control)
+                .expect("encode")
+                .nquads(),
             "unordered: row order must not matter"
         );
     }
@@ -974,14 +1223,17 @@ mod tests {
     /// passes an equal set either way.
     #[test]
     fn compare_solutions_ordered_flag_threads_through() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let vars = vec!["x".to_owned()];
         let rows = vec![vec![Some(lit("1", XSD_INTEGER))]];
         let expected = ParsedSolutions {
             variables: vars.clone(),
             rows: rows.clone(),
         };
-        assert!(compare_solutions(&vars, &rows, &expected, true).is_ok());
-        assert!(compare_solutions(&vars, &rows, &expected, false).is_ok());
+        assert!(compare_solutions(&vars, &rows, &expected, true, &mut control).is_ok());
+        assert!(compare_solutions(&vars, &rows, &expected, false, &mut control).is_ok());
 
         let reversed_expected = ParsedSolutions {
             variables: vars.clone(),
@@ -994,14 +1246,23 @@ mod tests {
             vec![Some(lit("1", XSD_INTEGER))],
             vec![Some(lit("2", XSD_INTEGER))],
         ];
-        let err = compare_solutions(&vars, &two_rows, &reversed_expected, true).unwrap_err();
-        assert!(err.contains("ordered sequence"), "message: {err}");
+        let err = compare_solutions(&vars, &two_rows, &reversed_expected, true, &mut control)
+            .unwrap_err();
+        assert!(
+            matches!(&err, CompareError::Mismatch(message) if message.contains("ordered sequence")),
+            "message: {err}"
+        );
         // Same rows, opposite order, compare EQUAL when unordered.
-        assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
+        assert!(
+            compare_solutions(&vars, &two_rows, &reversed_expected, false, &mut control).is_ok()
+        );
     }
 
     #[test]
     fn lax_cardinality_accepts_only_the_declared_multiplicity_range() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let mut case = case_with(ExpectedResult::None);
         case.lax_cardinality = true;
         let variables = vec!["x".to_owned()];
@@ -1014,7 +1275,10 @@ mod tests {
         for count in 1..=3 {
             let mut rows = vec![a.clone(); count];
             rows.push(b.clone());
-            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_ok());
+            assert!(
+                compare_case_solutions(&case, &variables, &rows, &expected, false, &mut control)
+                    .is_ok()
+            );
         }
         for rows in [
             vec![a.clone()],
@@ -1022,12 +1286,18 @@ mod tests {
             vec![a.clone(), b.clone(), b.clone()],
             vec![a, b, vec![None]],
         ] {
-            assert!(compare_case_solutions(&case, &variables, &rows, &expected, false).is_err());
+            assert!(
+                compare_case_solutions(&case, &variables, &rows, &expected, false, &mut control)
+                    .is_err()
+            );
         }
     }
 
     #[test]
     fn lax_cardinality_preserves_global_blank_coreference_and_count_correspondence() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         let mut case = case_with(ExpectedResult::None);
         case.lax_cardinality = true;
         let variables = vec!["x".to_owned(), "y".to_owned()];
@@ -1045,14 +1315,22 @@ mod tests {
                 &variables,
                 &[first.clone(), first.clone(), second],
                 &expected,
-                false
+                false,
+                &mut control,
             )
             .is_ok()
         );
         let inconsistent = vec![Some(blank("other")), Some(blank("two"))];
         assert!(
-            compare_case_solutions(&case, &variables, &[first, inconsistent], &expected, false)
-                .is_err()
+            compare_case_solutions(
+                &case,
+                &variables,
+                &[first, inconsistent],
+                &expected,
+                false,
+                &mut control
+            )
+            .is_err()
         );
         // Pin row identities with a ground cell so a valid bijection cannot swap
         // the expected multiplicities between otherwise symmetric blank rows.
@@ -1074,9 +1352,27 @@ mod tests {
             actual_rows[1].clone(),
         ];
         assert!(
-            compare_case_solutions(&case, &variables, &swapped_counts, &expected, false).is_err()
+            compare_case_solutions(
+                &case,
+                &variables,
+                &swapped_counts,
+                &expected,
+                false,
+                &mut control
+            )
+            .is_err()
         );
-        assert!(compare_case_solutions(&case, &variables, &actual_rows, &expected, false).is_ok());
+        assert!(
+            compare_case_solutions(
+                &case,
+                &variables,
+                &actual_rows,
+                &expected,
+                false,
+                &mut control
+            )
+            .is_ok()
+        );
     }
 }
 
@@ -1190,17 +1486,24 @@ mod numeric_value_tests {
     }
 
     /// Whether the actual cell `a` matches the expected cell `e` in a one-row result.
-    fn matches(a: TermValue, e: TermValue) -> bool {
+    fn matches(
+        a: TermValue,
+        e: TermValue,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> bool {
         let variables = vec!["x".to_owned()];
         let expected = ParsedSolutions {
             variables: variables.clone(),
             rows: vec![vec![Some(e)]],
         };
-        compare_solutions(&variables, &[vec![Some(a)]], &expected, false).is_ok()
+        compare_solutions(&variables, &[vec![Some(a)]], &expected, false, control).is_ok()
     }
 
     #[test]
     fn same_datatype_value_equal_numerics_match() {
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
         for (a, e, local) in [
             ("2", "2.0", "decimal"),
             ("1.05E3", "1050", "double"),
@@ -1213,7 +1516,7 @@ mod numeric_value_tests {
             ("INF", "INF", "float"),
         ] {
             assert!(
-                matches(xsd(a, local), xsd(e, local)),
+                matches(xsd(a, local), xsd(e, local), &mut control),
                 "{a} vs {e} ^^{local}"
             );
         }
@@ -1221,36 +1524,95 @@ mod numeric_value_tests {
 
     #[test]
     fn a_different_datatype_still_mismatches() {
-        assert!(!matches(xsd("2", "integer"), xsd("2.0", "decimal")));
-        assert!(!matches(xsd("2", "decimal"), xsd("2", "integer")));
-        assert!(!matches(xsd("1.0E0", "double"), xsd("1.0E0", "float")));
-        assert!(!matches(xsd("1", "int"), xsd("1", "integer")));
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        assert!(!matches(
+            xsd("2", "integer"),
+            xsd("2.0", "decimal"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("2", "decimal"),
+            xsd("2", "integer"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("1.0E0", "double"),
+            xsd("1.0E0", "float"),
+            &mut control
+        ));
+        assert!(!matches(xsd("1", "int"), xsd("1", "integer"), &mut control));
     }
 
     #[test]
     fn a_different_value_still_mismatches() {
-        assert!(!matches(xsd("2", "decimal"), xsd("2.5", "decimal")));
-        assert!(!matches(xsd("1.05E3", "double"), xsd("1051", "double")));
-        assert!(!matches(xsd("NaN", "double"), xsd("INF", "double")));
-        assert!(!matches(xsd("0", "double"), xsd("NaN", "double")));
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        assert!(!matches(
+            xsd("2", "decimal"),
+            xsd("2.5", "decimal"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("1.05E3", "double"),
+            xsd("1051", "double"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("NaN", "double"),
+            xsd("INF", "double"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("0", "double"),
+            xsd("NaN", "double"),
+            &mut control
+        ));
     }
 
     #[test]
     fn a_non_numeric_lexical_difference_still_mismatches() {
-        assert!(!matches(xsd("true", "boolean"), xsd("1", "boolean")));
-        assert!(!matches(xsd("2.0", "string"), xsd("2", "string")));
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+        assert!(!matches(
+            xsd("true", "boolean"),
+            xsd("1", "boolean"),
+            &mut control
+        ));
+        assert!(!matches(
+            xsd("2.0", "string"),
+            xsd("2", "string"),
+            &mut control
+        ));
         assert!(!matches(
             xsd("2002-10-10T17:00:00Z", "dateTime"),
-            xsd("2002-10-10T17:00:00+00:00", "dateTime")
+            xsd("2002-10-10T17:00:00+00:00", "dateTime"),
+            &mut control,
         ));
         assert!(!matches(
             literal("2.0", "http://example.org/num"),
-            literal("2", "http://example.org/num")
+            literal("2", "http://example.org/num"),
+            &mut control,
         ));
         // An ill-typed numeric literal keeps its spelling.
-        assert!(!matches(xsd("two", "decimal"), xsd("2", "decimal")));
+        assert!(!matches(
+            xsd("two", "decimal"),
+            xsd("2", "decimal"),
+            &mut control
+        ));
         // And exact neighbours still match.
-        assert!(matches(xsd("true", "boolean"), xsd("true", "boolean")));
-        assert!(matches(xsd("two", "decimal"), xsd("two", "decimal")));
+        assert!(matches(
+            xsd("true", "boolean"),
+            xsd("true", "boolean"),
+            &mut control
+        ));
+        assert!(matches(
+            xsd("two", "decimal"),
+            xsd("two", "decimal"),
+            &mut control
+        ));
     }
 }

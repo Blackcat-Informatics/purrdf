@@ -7,6 +7,7 @@
 #include "purrdf.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,6 +93,34 @@ static int contains_bytes(const uint8_t *haystack, size_t haystack_len,
     return 0;
 }
 
+/* Read the request's separate canonical evidence and release only owned buffers.
+ * Failure JSON is borrowed from the original error and lives until error_free. */
+static int consume_canonicalization(int32_t status, PurrdfBuffer **evidence,
+                                    const PurrdfError *error) {
+    int valid = 0;
+    if (status == PURRDF_STATUS_OK) {
+        const uint8_t *bytes = NULL;
+        size_t length = 0;
+        if (*evidence != NULL &&
+            purrdf_buffer_data(*evidence, &bytes, &length) == PURRDF_STATUS_OK) {
+            valid = length >= 2 && bytes[0] == '[' && bytes[length - 1] == ']';
+        }
+    } else {
+        const char *borrowed = purrdf_error_canonicalization_json(error);
+        if (*evidence == NULL && borrowed != NULL) {
+            size_t length = strlen(borrowed);
+            valid = length >= 2 && borrowed[0] == '[' && borrowed[length - 1] == ']';
+        }
+    }
+    purrdf_buffer_free(*evidence);
+    *evidence = NULL;
+    if (!valid) {
+        fprintf(stderr, "C smoke FAILED: canonical receipt ownership or JSON array\n");
+        return 1;
+    }
+    return 0;
+}
+
 /* ── The entailment golden vector, walked through the C ABI ──────────────────
  *
  * `crates/validate/tests/fixtures/regime-boundary.vectors` is the ONE artifact
@@ -140,6 +169,7 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     char *report_s = dup_slice(report);
     PurrdfBuffer *nquads = NULL;
     PurrdfBuffer *rendered = NULL;
+    PurrdfBuffer *canonical_evidence = NULL;
     PurrdfError *error = NULL;
     int failed = 1;
 
@@ -147,12 +177,18 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
         report_s == NULL) {
         goto done;
     }
-    /* NULL limits: this native library's defaults, which are the limits the
-     * artifact is written under. */
-    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
-                                            0, NULL, 0, NULL, NULL,
-                                            &nquads, &rendered,
-                                            &error) != PURRDF_STATUS_OK) {
+    /* Match the shared artifact's three explicit finite capacities. */
+    const uint64_t max_facts = 4194304;
+    const uint64_t max_steps = 1048576;
+    const uint64_t max_arena = 16777216;
+    int32_t canonical_status = purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
+                                            0, NULL, 0, &max_facts, &max_steps, &max_arena,
+                                            &nquads, &rendered, "unlimited", NULL, &canonical_evidence,
+                                            &error);
+    if (consume_canonicalization(canonical_status, &canonical_evidence, error) != 0) {
+        goto done;
+    }
+    if (canonical_status != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
         goto done;
@@ -177,7 +213,8 @@ done:
     if (error != NULL) {
         purrdf_error_free(error);
     }
-    /* Two buffers out, two frees — the ownership contract the header states. */
+    purrdf_buffer_free(canonical_evidence);
+    /* The raw result buffers and canonical receipt have independent owners. */
     if (rendered != NULL) {
         purrdf_buffer_free(rendered);
     }
@@ -291,7 +328,7 @@ static char *rdfxml_file_to_nquads(const char *path) {
     PurrdfBuffer *serialized = NULL;
     PurrdfError *error = NULL;
     char *out = NULL;
-    if (purrdf_parse(source, source_len, "application/rdf+xml", NULL, NULL, &parsed,
+    if (purrdf_parse(source, source_len, "application/rdf+xml", NULL, NULL, NULL, 0, &parsed,
                      &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "cannot parse %s: %s\n", path,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -359,7 +396,7 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                    import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                     &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
@@ -384,7 +421,7 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                      import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                       &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
@@ -402,7 +439,7 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                        import_documents, 1, NULL, 0, NULL, NULL, NULL, &answer,
                                         &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
@@ -422,7 +459,7 @@ static int check_vendored_imports(const char *premise_path,
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
         goto done;
@@ -444,7 +481,7 @@ static int check_vendored_imports(const char *premise_path,
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
-                                    NULL, NULL, &answer, &certificate,
+                                    NULL, NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");
         goto done;
@@ -525,11 +562,12 @@ static int check_shapes_graph_iri(void) {
  * with `*status` and hands back an error and no rows, -2 on a broken contract. */
 static int count_regex_rows(const PurrdfDataset *dataset, const char *query,
                             const char *profile, int32_t *status) {
+    PurrdfBuffer *receipt = NULL;
     int32_t kind = -1;
     PurrdfRowCursor *rows = NULL;
     PurrdfError *error = NULL;
-    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, &kind, &rows, NULL, NULL,
-                                       &error);
+    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, NULL, NULL, &receipt, &kind, &rows, NULL, NULL,
+                                       &error); purrdf_buffer_free(receipt); receipt = NULL;
     if (*status != PURRDF_STATUS_OK) {
         if (error == NULL || rows != NULL || purrdf_error_code(error) != *status) {
             return -2;
@@ -709,7 +747,7 @@ static int check_xpath_regex(void) {
     const char *media = "application/n-triples";
     PurrdfDataset *dataset = NULL;
     PurrdfError *error = NULL;
-    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, &dataset, &error) ==
+    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, NULL, 0, &dataset, &error) ==
               PURRDF_STATUS_OK,
           "parse the regex fixture");
     const char *non_capturing =
@@ -817,6 +855,7 @@ static int check_srl_rules(void) {
  * past i128 answers its exact lexical form, and each refusal sits beside the valid
  * neighbour it must keep. */
 static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     const char *xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
     const char *xsd_decimal = "http://www.w3.org/2001/XMLSchema#decimal";
     const char *xsd_double = "http://www.w3.org/2001/XMLSchema#double";
@@ -879,7 +918,7 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT ?n WHERE { BIND(170141183460469231731687303715884105727 + 1 "
                            "AS ?n) }",
-                           NULL, NULL, NULL, &results, &error);
+                           NULL, NULL, NULL, NULL, NULL, &receipt, &results, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && results != NULL, "a SPARQL sum past i128");
     purrdf_buffer_data(results, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"170141183460469231731687303715884105728\""),
@@ -895,6 +934,7 @@ static int check_xsd_exact_numerics(PurrdfDataset *dataset) {
  * changes nothing, and a governed 1/0 is counted at PURRDF_EXPRESSION_ERROR_CODE_FOAR0001
  * while its valid neighbour counts nothing. The policy is restored before returning. */
 static int check_division_policy(PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     PurrdfError *error = NULL;
     PurrdfBuffer *buffer = NULL;
     const uint8_t *bytes = NULL;
@@ -909,7 +949,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (1/1048576 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default terminating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.00000095367431640625\""),
@@ -918,7 +958,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "default repeating quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.666666666666666667\""),
@@ -929,7 +969,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_query_json(dataset,
                            "SELECT (SECONDS(\"2024-01-02T03:04:05.123456789012345678901Z\"^^"
                            "<http://www.w3.org/2001/XMLSchema#dateTime>) AS ?x) {}",
-                           NULL, NULL, NULL, &buffer, &error);
+                           NULL, NULL, NULL, NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact temporal seconds answer");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"05.123456789012345678901\""),
@@ -945,16 +985,16 @@ static int check_division_policy(PurrdfDataset *dataset) {
     error = NULL;
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (1/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "exact 1/8 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.125\""), "exact 1/8 is 0.125");
     purrdf_buffer_free(buffer);
 
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (1/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL,
           "the refused policy left exact in force: 1/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
@@ -964,8 +1004,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "5:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 5:half-even");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "5:half-even 2/3 answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66667\""), "5:half-even 2/3 is 0.66667");
@@ -974,8 +1014,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
     rc = purrdf_dataset_set_division_policy(dataset, "2:half-even", &error);
     CHECK(rc == PURRDF_STATUS_OK, "set 2:half-even for an exact tie");
     buffer = NULL;
-    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, &buffer,
-                           &error);
+    rc = purrdf_query_json(dataset, "SELECT (3/8 AS ?x) {}", NULL, NULL, NULL, NULL, NULL, &receipt, &buffer,
+                           &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "half-even tie answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.38\""), "3/8 ties upward to an even cent");
@@ -985,7 +1025,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
     CHECK(rc == PURRDF_STATUS_OK, "set bare scale policy");
     buffer = NULL;
     rc = purrdf_query_json(dataset, "SELECT (2/3 AS ?x) {}", NULL, NULL, NULL,
-                           &buffer, &error);
+                           NULL, NULL, &receipt, &buffer, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && buffer != NULL, "bare scale quotient answers");
     purrdf_buffer_data(buffer, &bytes, &len);
     CHECK(contains_bytes(bytes, len, "\"0.66\""), "bare scale truncates toward zero");
@@ -1002,8 +1042,8 @@ static int check_division_policy(PurrdfDataset *dataset) {
         PurrdfGovernorEvidence evidence;
         PurrdfPartialCertificate partial;
         rc = purrdf_query_governed(dataset, queries[query], NULL, NULL, &governors,
-                                   &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
-                                   &error);
+                                   NULL, NULL, &receipt, &outcome, &kind, &rows, NULL, NULL, &evidence, &partial,
+                                   &error); purrdf_buffer_free(receipt); receipt = NULL;
         CHECK(rc == PURRDF_STATUS_OK && outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
               "a governed division completes");
         for (size_t code = 0; code < PURRDF_EXPRESSION_ERROR_CODE_COUNT; code += 1) {
@@ -1024,6 +1064,7 @@ static int check_division_policy(PurrdfDataset *dataset) {
 /* Opaque geographic handles must work from the installed C declaration, including
  * the distinct semantic/operational error channels and a retained child index. */
 static int check_geo_handles(const PurrdfDataset *dataset) {
+    PurrdfBuffer *receipt = NULL;
     const char *distance =
         "{\"version\":1,\"operation\":\"distance\","
         "\"a\":{\"longitude\":\"0\",\"latitude\":\"0\"},"
@@ -1103,10 +1144,10 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
     uint8_t boolean = 0;
     int32_t kind = -1;
     CHECK(purrdf_query_with_geo(NULL, dataset, axes_query, NULL, NULL,
-              &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
+              NULL, NULL, &receipt, &kind, &rows, &graph, &boolean, &error) != PURRDF_STATUS_OK &&
               error != NULL && rows == NULL && graph == NULL &&
               strstr(purrdf_error_message(error), "unregistered") != NULL,
-          "C query refuses undeclared geographic axes");
+          "C query refuses undeclared geographic axes"); purrdf_buffer_free(receipt); receipt = NULL;
     purrdf_error_free(error);
     error = NULL;
     CHECK(purrdf_geo_session_create(
@@ -1116,16 +1157,17 @@ static int check_geo_handles(const PurrdfDataset *dataset) {
               &session, &error) == PURRDF_STATUS_OK && error == NULL,
           "C query geographic profile creation");
     CHECK(purrdf_query_with_geo(session, dataset, axes_query, NULL, NULL,
-              &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
+              NULL, NULL, &receipt, &kind, &rows, &graph, &boolean, &error) == PURRDF_STATUS_OK &&
               error == NULL && rows == NULL && graph == NULL &&
               kind == PURRDF_RESULT_KIND_BOOLEAN && boolean == 1,
-          "C query forwards the declared geographic axes");
+          "C query forwards the declared geographic axes"); purrdf_buffer_free(receipt); receipt = NULL;
     purrdf_geo_session_free(session);
     printf("geo: session, typed refusals, retained index and query profile passed\n");
     return 0;
 }
 
 int main(int argc, char **argv) {
+    PurrdfBuffer *receipt = NULL;
     CHECK(argc == 7,
           "shared OKF fixture, OKF config, entailment golden vector, and the three "
           "vendored webont-imports-011 documents");
@@ -1139,7 +1181,7 @@ int main(int argc, char **argv) {
      * needs no edit here, while a library/header mismatch — the exact condition
      * that silently mis-binds arguments — still fails loudly. The prototype list
      * behind this triple is frozen in tests/abi_signatures.snapshot, and the
-     * literal `0.11.0` is pinned in tests/abi.rs. */
+     * literal `0.16.0` is pinned in tests/abi.rs. */
     CHECK(version.major == PURRDF_ABI_MAJOR && version.minor == PURRDF_ABI_MINOR &&
               version.patch == PURRDF_ABI_PATCH,
           "linked library reports the header's ABI version");
@@ -1148,8 +1190,9 @@ int main(int argc, char **argv) {
     const char *doc = "<http://a> <http://b> <http://c> .";
     PurrdfDataset *dataset = NULL;
     PurrdfError *error = NULL;
+    PurrdfBuffer *canonical_evidence = NULL;
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle", NULL,
-                          NULL, &dataset, &error);
+                          NULL, NULL, 0, &dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && dataset != NULL, "parse");
     CHECK(check_geo_handles(dataset) == 0, "geographic C handles");
 
@@ -1257,7 +1300,7 @@ int main(int argc, char **argv) {
                             "<http://s2> <http://p> <http://o2> <http://g2> .\n";
     PurrdfDataset *graph_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)graph_doc, strlen(graph_doc),
-                      "application/n-quads", NULL, NULL, &graph_dataset, &error);
+                      "application/n-quads", NULL, NULL, NULL, 0, &graph_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && graph_dataset != NULL,
           "parse an all-named-graph n-quads document");
 
@@ -1336,7 +1379,7 @@ int main(int argc, char **argv) {
                                "_:bg { }\n";
     PurrdfDataset *declared_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)declared_doc, strlen(declared_doc),
-                      "application/trig", NULL, NULL, &declared_dataset, &error);
+                      "application/trig", NULL, NULL, NULL, 0, &declared_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && declared_dataset != NULL,
           "parse a trig document declaring empty graphs");
     const char *lossy_targets[] = {"application/n-quads", "application/x-hextuples",
@@ -1471,7 +1514,7 @@ int main(int argc, char **argv) {
     uint8_t *okf_config = read_file(argv[2], &okf_config_len);
     CHECK(okf_source != NULL && okf_config != NULL, "read shared OKF fixtures");
     PurrdfDataset *okf_dataset = NULL;
-    rc = purrdf_parse(okf_source, okf_source_len, "application/trig", NULL, NULL,
+    rc = purrdf_parse(okf_source, okf_source_len, "application/trig", NULL, NULL, NULL, 0,
                       &okf_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && okf_dataset != NULL, "parse shared OKF source");
     PurrdfBuffer *okf_projection = NULL;
@@ -1498,19 +1541,21 @@ int main(int argc, char **argv) {
 
     /* SPARQL JSON */
     PurrdfBuffer *json = NULL;
-    rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL,
-                           NULL, &json, &error);
+    const uint64_t query_seed = 0;
+    const char *query_now = "2020-01-02T03:04:05.123456789+05:30";
+    rc = purrdf_query_json(dataset, "SELECT ?s (NOW() AS ?clock) WHERE { ?s ?p ?o }", NULL, NULL,
+                           NULL, query_now, &query_seed, &receipt, &json, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && json != NULL, "query_json");
     const uint8_t *jbytes = NULL;
     size_t jlen = 0;
     purrdf_buffer_data(json, &jbytes, &jlen);
-    CHECK(jlen > 0, "sparql-json bytes present");
+    CHECK(contains_bytes(jbytes, jlen, query_now), "query time crosses the linked C boundary");
     purrdf_buffer_free(json);
 
     /* `provenance_prefix`/`provenance_iri` anchor the additive purrdf extension. */
     PurrdfBuffer *prov_json = NULL;
     rc = purrdf_query_json(dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, "prov",
-                           "https://example.org/ns/prov#", &prov_json, &error);
+                           "https://example.org/ns/prov#", NULL, NULL, &receipt, &prov_json, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && prov_json != NULL, "query_json with provenance");
     const uint8_t *pbytes = NULL;
     size_t plen = 0;
@@ -1537,8 +1582,8 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate partial_certificate;
     rc = purrdf_query_governed(
         dataset, "SELECT ?s WHERE { ?s ?p ?o }", NULL, NULL, &governors,
-        &query_outcome, &result_kind, &partial_rows, &partial_graph,
-        &partial_boolean, &query_evidence, &partial_certificate, &error);
+        NULL, NULL, &receipt, &query_outcome, &result_kind, &partial_rows, &partial_graph,
+        &partial_boolean, &query_evidence, &partial_certificate, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed query outcome");
     CHECK(query_outcome == PURRDF_QUERY_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed query is typed exhaustion");
@@ -1567,7 +1612,7 @@ int main(int argc, char **argv) {
         "<http://www.w3.org/2001/XMLSchema#integer> .\n";
     PurrdfDataset *median_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)median_doc, strlen(median_doc), "text/turtle",
-                      NULL, NULL, &median_dataset, &error);
+                      NULL, NULL, NULL, 0, &median_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && median_dataset != NULL,
           "median fixture parses");
 
@@ -1582,9 +1627,9 @@ int main(int argc, char **argv) {
         median_dataset,
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?v) AS ?m) "
         "WHERE { ?s <http://example.org/value> ?v }",
-        NULL, "https://example.org/agg#", &governors, &median_outcome,
+        NULL, "https://example.org/agg#", &governors, NULL, NULL, &receipt, &median_outcome,
         &median_kind, &median_rows, NULL, NULL, &median_evidence,
-        &median_partial, &error);
+        &median_partial, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "aggregate_namespace query runs");
     CHECK(median_outcome == PURRDF_QUERY_OUTCOME_KIND_COMPLETE,
           "aggregate_namespace query completes");
@@ -1613,10 +1658,10 @@ int main(int argc, char **argv) {
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
         dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
-        0, NULL, NULL, NULL, &governors,
-        &entailment_outcome, &entailment_kind, NULL, NULL,
+        0, NULL, NULL, NULL, NULL, &governors,
+        NULL, NULL, &receipt, &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
-        &entailment_report, &error);
+        &entailment_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
           "governed entailment query outcome");
     CHECK(entailment_outcome == PURRDF_ENTAILMENT_QUERY_OUTCOME_KIND_COMPLETE &&
@@ -1650,7 +1695,7 @@ int main(int argc, char **argv) {
         "<http://www.w3.org/2001/XMLSchema#integer> .\n";
     PurrdfDataset *entailed_median_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)entailed_median_doc,
-                      strlen(entailed_median_doc), "text/turtle", NULL, NULL,
+                      strlen(entailed_median_doc), "text/turtle", NULL, NULL, NULL, 0,
                       &entailed_median_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
               entailed_median_dataset != NULL,
@@ -1668,11 +1713,11 @@ int main(int argc, char **argv) {
         "PREFIX ex: <http://example.org/> "
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
-        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, "https://example.org/agg#",
+        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, NULL, "https://example.org/agg#",
         &governors,
-        &entailed_median_outcome, &entailed_median_kind,
+        NULL, NULL, &receipt, &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
-        &entailed_median_partial, &entailed_median_report, &error);
+        &entailed_median_partial, &entailed_median_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL,
           "aggregate_namespace query over an entailed closure runs");
     CHECK(entailed_median_outcome ==
@@ -1689,8 +1734,49 @@ int main(int argc, char **argv) {
     CHECK(entailed_median_view.lexical.len == 3 &&
               memcmp(entailed_median_view.lexical.ptr, "2.0", 3) == 0,
           "MEDIAN of the entailed {1, 2, 3} is the computed decimal 2.0");
+    const uint8_t *arena_report_bytes = NULL;
+    size_t arena_report_len = 0;
+    purrdf_buffer_data(entailed_median_report, &arena_report_bytes, &arena_report_len);
+    char *arena_report = dup_slice((Slice){(const char *)arena_report_bytes, arena_report_len});
+    CHECK(arena_report != NULL, "copy the baseline arena report");
+    const char *arena_prefix = "\nbudget term-arena-bytes ";
+    const char *arena_line = strstr(arena_report, arena_prefix);
+    CHECK(arena_line != NULL, "the baseline reports its original arena count");
+    char *arena_end = NULL;
+    const uint64_t arena_needed = strtoull(arena_line + strlen(arena_prefix), &arena_end, 10);
+    CHECK(arena_needed > 0 && *arena_end == '\n', "the arena count is exact");
+    free(arena_report);
+    char arena_counts[128];
+    snprintf(arena_counts, sizeof(arena_counts), "%" PRIu64 " observed, %" PRIu64 " permitted",
+             arena_needed, arena_needed - 1);
     purrdf_buffer_free(entailed_median_report);
     purrdf_rowcursor_free(entailed_median_rows);
+    entailed_median_report = NULL;
+    const uint64_t arena_limits[2] = {arena_needed - 1, arena_needed};
+    for (size_t arena_case = 0; arena_case < 2; ++arena_case) {
+        rc = purrdf_query_entailment_governed(
+            entailed_median_dataset, "ASK { ?s ?p ?o }", NULL, "rdfs", "",
+            NULL, NULL, 0, NULL, 0, NULL, NULL, &arena_limits[arena_case], NULL,
+            &governors, NULL, NULL, &receipt, &entailment_outcome, &entailment_kind, NULL, NULL,
+            &entailment_boolean, &entailment_evidence, &entailment_partial,
+            &entailed_median_report, &error); purrdf_buffer_free(receipt); receipt = NULL;
+        if (arena_case == 0) {
+            CHECK(rc != PURRDF_STATUS_OK && error != NULL &&
+                      entailed_median_report == NULL,
+                  "term-arena refusal returns no closure report");
+            CHECK(strstr(purrdf_error_message(error), "term arena bytes limit:") != NULL &&
+                      strstr(purrdf_error_message(error), arena_counts) != NULL &&
+                      strstr(purrdf_error_message(error), "purrdf_query_entailment_governed's max_term_arena_bytes") != NULL,
+                  "term-arena refusal preserves counts and names the actual C parameter");
+            purrdf_error_free(error);
+            error = NULL;
+        } else {
+            CHECK(rc == PURRDF_STATUS_OK && error == NULL && entailment_boolean == 1,
+                  "raising the actual C arena parameter completes the same query");
+            purrdf_buffer_free(entailed_median_report);
+            entailed_median_report = NULL;
+        }
+    }
     purrdf_dataset_free(entailed_median_dataset);
 
     /* C cancellation is a shareable monotone handle. */
@@ -1718,7 +1804,7 @@ int main(int argc, char **argv) {
     rc = purrdf_update_governed(
         dataset,
         "INSERT DATA { <http://new> <http://predicate> <http://value> }", NULL,
-        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, &update_outcome, &update_evidence, &error);
+        NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_OK && error == NULL, "governed update outcome");
     CHECK(update_outcome == PURRDF_UPDATE_OUTCOME_KIND_BUDGET_EXHAUSTED,
           "governed update is typed exhaustion");
@@ -1729,6 +1815,89 @@ int main(int argc, char **argv) {
                   PURRDF_STATUS_OK &&
               after_update_count == 1,
           "exhausted update applied no mutation");
+
+    /* Supplied coordinates cross the actual linked UPDATE ABI. */
+    PurrdfDataset *coordinate_dataset = NULL;
+    CHECK(purrdf_parse((const uint8_t *)"", 0, "text/turtle", NULL, NULL, NULL, 0,
+                      &coordinate_dataset, &error) == PURRDF_STATUS_OK,
+          "empty coordinate dataset");
+    CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
+          "coordinate governor initializer");
+    rc = purrdf_update_governed(coordinate_dataset,
+        "INSERT { <urn:s> <urn:clock> ?clock; <urn:random> ?random } "
+        "WHERE { BIND(NOW() AS ?clock) BIND(RAND() AS ?random) }",
+        NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
+        query_now, &query_seed, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
+    CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
+              update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
+          "supplied UPDATE coordinates apply");
+    PurrdfBuffer *coordinate_json = NULL;
+    rc = purrdf_query_json(coordinate_dataset,
+        "SELECT ?clock ?random WHERE { "
+        "<urn:s> <urn:clock> ?clock; <urn:random> ?random FILTER(?random = RAND()) }",
+        NULL, NULL, NULL, NULL, &query_seed, &receipt, &coordinate_json, &error); purrdf_buffer_free(receipt); receipt = NULL;
+    CHECK(rc == PURRDF_STATUS_OK && coordinate_json != NULL,
+          "read inserted coordinate values");
+    const uint8_t *coordinate_bytes = NULL;
+    size_t coordinate_len = 0;
+    purrdf_buffer_data(coordinate_json, &coordinate_bytes, &coordinate_len);
+    CHECK(contains_bytes(coordinate_bytes, coordinate_len, query_now),
+          "UPDATE time and seed cross the linked C boundary");
+    purrdf_buffer_free(coordinate_json);
+    purrdf_dataset_free(coordinate_dataset);
+
+    /* Every rule coordinate prototype is exercised through the linked library. */
+    const char *coordinate_shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> . "
+        "@prefix ex: <http://example.org/> . "
+        "ex:S a sh:NodeShape; sh:targetNode ex:s; sh:rule [ a sh:SPARQLRule; "
+        "sh:runOnce true; sh:construct \"\"\"CONSTRUCT { "
+        "<http://example.org/s> <http://example.org/time> ?t; "
+        "<http://example.org/id> ?u } WHERE { BIND(NOW() AS ?t) "
+        "BIND(UUID() AS ?u) }\"\"\" ] .";
+    const char *coordinate_srl =
+        "PREFIX : <http://example.org/> RULE { :s :time ?t; :id ?u } "
+        "WHERE { SET(?t := NOW()) SET(?u := UUID()) }";
+    for (int entry = 0; entry < 4; ++entry) {
+        PurrdfBuffer *rule_result = NULL;
+        PurrdfBuffer *rule_proof = NULL;
+        PurrdfBuffer *rule_diagnostics = NULL;
+        if (entry == 0) {
+            rc = purrdf_shacl_entail_to_ntriples(coordinate_shapes, NULL, NULL, "",
+                NULL, NULL, 0, NULL, NULL, NULL, NULL, query_now, &query_seed, &receipt,
+                &rule_result, &rule_diagnostics, "unlimited", NULL, &canonical_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
+            CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+                  "purrdf_shacl_entail_to_ntriples canonical receipt ownership");
+        } else if (entry == 1) {
+            rc = purrdf_shacl_entail_to_ntriples_xpath_regex(coordinate_shapes,
+                NULL, NULL, "", NULL, NULL, 0, NULL, NULL, NULL, NULL,
+                "xpath-3.1-2017-03-21", query_now, &query_seed, &receipt,
+                &rule_result, &rule_diagnostics, "unlimited", NULL, &canonical_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
+            CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+                  "purrdf_shacl_entail_to_ntriples_xpath_regex canonical receipt ownership");
+        } else if (entry == 2) {
+            rc = purrdf_shacl_apply_rules("", coordinate_shapes, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, query_now, &query_seed, &receipt,
+                &rule_result, &rule_proof, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
+        } else {
+            rc = purrdf_shacl_apply_rules_xpath_regex("", NULL, NULL, NULL,
+                coordinate_srl, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0,
+                "xpath-3.1-2017-03-21", query_now, &query_seed, &receipt,
+                &rule_result, &rule_proof, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
+        }
+        CHECK(rc == PURRDF_STATUS_OK && error == NULL,
+              "supplied coordinates cross each linked rule entry");
+        const uint8_t *rule_bytes = NULL;
+        size_t rule_len = 0;
+        CHECK(purrdf_buffer_data(rule_result, &rule_bytes, &rule_len) == PURRDF_STATUS_OK,
+              "read coordinate rule result");
+        CHECK(contains_bytes(rule_bytes, rule_len, query_now) &&
+                  contains_bytes(rule_bytes, rule_len, "urn:uuid:"),
+              "rule outputs retain exact time and generated values");
+        purrdf_buffer_free(rule_result);
+        purrdf_buffer_free(rule_proof);
+        purrdf_buffer_free(rule_diagnostics);
+    }
 
     /* All three governed UPDATE doors carry the explicit graph lifetime. These calls
      * compile against the generated public header and use the shared library. */
@@ -1744,7 +1913,7 @@ int main(int argc, char **argv) {
             PurrdfDataset *lifetime_dataset = NULL;
             CHECK(purrdf_parse((const uint8_t *)lifetime_document,
                                strlen(lifetime_document), "application/n-quads",
-                               NULL, NULL, &lifetime_dataset, &error) == PURRDF_STATUS_OK,
+                               NULL, NULL, NULL, 0, &lifetime_dataset, &error) == PURRDF_STATUS_OK,
                   "lifetime source");
             PurrdfGraph *branch = NULL;
             CHECK(purrdf_graph_from_dataset(lifetime_dataset, -1, &branch) ==
@@ -1760,17 +1929,17 @@ int main(int argc, char **argv) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
                     NULL, NULL, "xpath-3.1-2017-03-21", lifetime_modes[mode_index],
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "CLEAR GRAPH <http://example.org/g>",
-                    NULL, NULL, lifetime_modes[mode_index], &governors,
-                    &update_outcome, &update_evidence, &error);
+                    NULL, NULL, lifetime_modes[mode_index], &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             }
             CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
                       update_outcome == PURRDF_UPDATE_OUTCOME_KIND_APPLIED,
@@ -1784,17 +1953,17 @@ int main(int argc, char **argv) {
             if (entry == 2) {
                 rc = purrdf_update_governed_with_geo(
                     NULL, lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors,
-                    &update_outcome, &update_evidence, &error);
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else if (entry == 1) {
                 rc = purrdf_update_governed_xpath_regex(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL,
-                    "xpath-3.1-2017-03-21", 2, &governors,
-                    &update_outcome, &update_evidence, &error);
+                    "xpath-3.1-2017-03-21", 2, &governors, NULL, NULL, &receipt,
+                    &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             } else {
                 rc = purrdf_update_governed(
                     lifetime_dataset, "DELETE WHERE {", NULL, NULL, 2,
-                    &governors, &update_outcome, &update_evidence, &error);
+                    &governors, NULL, NULL, &receipt, &update_outcome, &update_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
             }
             CHECK(rc == PURRDF_STATUS_INVALID_ARGUMENT && error != NULL &&
                       update_outcome == -1 &&
@@ -1814,7 +1983,7 @@ int main(int argc, char **argv) {
     const char *bad = "<http://a> <http://b> @@@";
     PurrdfDataset *bad_dataset = NULL;
     PurrdfError *bad_error = NULL;
-    rc = purrdf_parse((const uint8_t *)bad, strlen(bad), "text/turtle", NULL, NULL,
+    rc = purrdf_parse((const uint8_t *)bad, strlen(bad), "text/turtle", NULL, NULL, NULL, 0,
                       &bad_dataset, &bad_error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "malformed parse error");
     CHECK(bad_dataset == NULL && bad_error != NULL, "error set");
@@ -1831,7 +2000,7 @@ int main(int argc, char **argv) {
     const char *bad_iri = "<http://example.org/%zz> <http://example.org/p> <http://example.org/o> .";
     bad_error = NULL;
     rc = purrdf_parse((const uint8_t *)bad_iri, strlen(bad_iri), "application/n-triples",
-                      NULL, NULL, &bad_dataset, &bad_error);
+                      NULL, NULL, NULL, 0, &bad_dataset, &bad_error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR && bad_error != NULL,
           "IRI producer refuses invalid percent escape");
     const char *iri_record = purrdf_error_presentation_json(bad_error);
@@ -1849,8 +2018,8 @@ int main(int argc, char **argv) {
     PurrdfDataset *parse_graph = NULL;
     uint8_t parse_boolean = 0;
     bad_error = NULL;
-    rc = purrdf_query(dataset, "ASK {", NULL, &parse_kind, &parse_rows,
-                      &parse_graph, &parse_boolean, &bad_error);
+    rc = purrdf_query(dataset, "ASK {", NULL, NULL, NULL, &receipt, &parse_kind, &parse_rows,
+                      &parse_graph, &parse_boolean, &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed query refused");
     const char *query_record = purrdf_error_presentation_json(bad_error);
@@ -1863,8 +2032,8 @@ int main(int argc, char **argv) {
 
     bad_error = NULL;
     rc = purrdf_query(dataset, "SELECT * WHERE { <http://example.org/%zz> ?p ?o }",
-                      NULL, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
-                      &bad_error);
+                      NULL, NULL, NULL, &receipt, &parse_kind, &parse_rows, &parse_graph, &parse_boolean,
+                      &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "query with a malformed IRI refused");
     query_record = purrdf_error_presentation_json(bad_error);
@@ -1881,8 +2050,8 @@ int main(int argc, char **argv) {
     int32_t parse_outcome = -1;
     PurrdfGovernorEvidence parse_evidence;
     bad_error = NULL;
-    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors,
-                                &parse_outcome, &parse_evidence, &bad_error);
+    rc = purrdf_update_governed(dataset, "DELETE WHERE {", NULL, NULL, PURRDF_GRAPH_EXISTENCE_IMPLICIT, &governors, NULL, NULL, &receipt,
+                                &parse_outcome, &parse_evidence, &bad_error); purrdf_buffer_free(receipt); receipt = NULL;
     CHECK(rc == PURRDF_STATUS_QUERY_ERROR && bad_error != NULL,
           "malformed governed update refused");
     const char *update_record = purrdf_error_presentation_json(bad_error);
@@ -1964,7 +2133,9 @@ int main(int argc, char **argv) {
     size_t clen = 0;
 
     rc = purrdf_entail_consistency(taxonomy, NULL, NULL, 0, NULL, 0, 0, 0, &answer,
-                                   &certificate, &error);
+                                   &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
           "entail_consistency");
     purrdf_buffer_data(answer, &abytes, &alen);
@@ -1978,7 +2149,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails true\n") &&
@@ -1989,8 +2162,10 @@ int main(int argc, char **argv) {
 
     /* a narrowed step cap answers `unknown`, never `false`: the third
      * completeness state, reachable through the C ABI. */
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, 0, &answer, &certificate,
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed cap");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails unknown\n") &&
@@ -2005,8 +2180,10 @@ int main(int argc, char **argv) {
     /* the SECOND cap, narrowed the same way. A round is a pass rather than a
      * unit of cost, so this one bounds the work done inside a round — and it
      * reaches the same three-valued answer through the C ABI. */
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 1, &answer, &certificate,
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 1, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed work cap");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails unknown\n") &&
@@ -2019,7 +2196,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_classify(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_classify(taxonomy, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_classify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_classify");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(contains_bytes(abytes, alen, "subclass <http://example.org/A> <http://example.org/C>\n"),
@@ -2027,13 +2206,17 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_realize(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_realize(taxonomy, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_realize canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_realize");
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
     rc = purrdf_entail_instances(taxonomy, "<http://example.org/C>", 0, 0, &answer,
-                                 &certificate, &error);
+                                 &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_instances");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen == strlen("instance <http://example.org/x>\n") &&
@@ -2054,7 +2237,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(answer);
 
     rc = purrdf_entail_extract_module(taxonomy, "<http://example.org/A>\n", "bot",
-                                      &answer, &certificate, &error);
+                                      &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_extract_module canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_extract_module");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "method BOT\n"),
@@ -2062,7 +2247,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_justify(taxonomy, chain_axiom, &answer, &certificate, &error);
+    rc = purrdf_entail_justify(taxonomy, chain_axiom, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_justify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_justify");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "sufficient true\n") &&
@@ -2087,8 +2274,10 @@ int main(int argc, char **argv) {
     PurrdfError *dl_error = NULL;
     answer = NULL;
     certificate = NULL;
-    rc = purrdf_entail_instances(taxonomy, "not a term", 0, 0, &answer, &certificate,
+    rc = purrdf_entail_instances(taxonomy, "not a term", 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                  &dl_error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, dl_error) == 0,
+          "purrdf_entail_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "a malformed class term is refused");
     CHECK(answer == NULL && certificate == NULL, "a failing DL call frees nothing");
     CHECK(dl_error != NULL && purrdf_error_message(dl_error) != NULL,
@@ -2111,25 +2300,33 @@ int main(int argc, char **argv) {
     PurrdfBuffer *s_answer = NULL;
     PurrdfBuffer *s_cert = NULL;
 
-    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency");
     purrdf_buffer_data(s_answer, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "consistency true"), "the session decides");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
-    rc = purrdf_reasoner_classify(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_classify(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_classify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_classify");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
-    rc = purrdf_reasoner_realize(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_realize(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_realize canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_realize");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
     rc = purrdf_reasoner_instances(session, "<http://example.org/C>", &s_answer,
-                                   &s_cert, &error);
+                                   &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_instances");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
@@ -2138,7 +2335,9 @@ int main(int argc, char **argv) {
         "<http://example.org/A> "
         "<http://www.w3.org/2000/01/rdf-schema#subClassOf> "
         "<http://example.org/C> .\n",
-        &s_answer, &s_cert, &error);
+        &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_entails");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
@@ -2149,14 +2348,18 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(s_cert);
 
     rc = purrdf_reasoner_extract_module(session, "<http://example.org/C>", "star",
-                                        &s_answer, &s_cert, &error);
+                                        &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_extract_module canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_extract_module");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
     /* The SAME question the first call answered, now after six siblings ran on
        this handle: the session must still say `consistency true`. */
-    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency after siblings");
     purrdf_buffer_data(s_answer, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "consistency true"),
@@ -2168,8 +2371,10 @@ int main(int argc, char **argv) {
     PurrdfError *sess_error = NULL;
     s_answer = NULL;
     s_cert = NULL;
-    rc = purrdf_reasoner_instances(session, "not a term", &s_answer, &s_cert,
+    rc = purrdf_reasoner_instances(session, "not a term", &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence,
                                    &sess_error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, sess_error) == 0,
+          "purrdf_reasoner_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "the session refuses a malformed term");
     CHECK(s_answer == NULL && s_cert == NULL, "a failing session call frees nothing");
     purrdf_error_free(sess_error);

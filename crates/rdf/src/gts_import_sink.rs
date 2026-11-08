@@ -90,6 +90,11 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
 }
 
 impl ResolvedSink for SinkImporter<'_> {
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        self.blobs.as_mut().and_then(BlobCollector::frame_scratch)
+    }
     type Id = TermId;
     type Error = RdfDiagnostic;
 
@@ -303,6 +308,11 @@ impl ResolvedSink for SinkImporter<'_> {
         meta: Option<&Value>,
     ) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &self.blobs {
+            // Export consumes only the RDF dataset and admitted payloads. Avoid
+            // copying unrestricted blob metadata into an unused lookaside.
+            if blobs.is_inline_export() {
+                return Ok(());
+            }
             blobs.check_metadata_before_retention(digest, meta)?;
         }
         let metadata = match meta.map(metadata_value_from_cbor) {
@@ -339,7 +349,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn frame(&mut self, ctx: FrameContext<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.frame(ctx);
+            blobs.frame(ctx)?;
         }
         Ok(())
     }
@@ -365,12 +375,21 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn blob_refused(&mut self, refusal: BlobRefusal<'_>) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.refused(refusal);
+            blobs.refused(refusal)?;
         }
         Ok(())
     }
 
     fn opaque(&mut self, _segment_index: u64, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
+        if self
+            .blobs
+            .as_ref()
+            .is_some_and(BlobCollector::is_inline_export)
+        {
+            // The export does not return an envelope; diagnostics still decide
+            // whether this frame loss is admissible immediately afterward.
+            return Ok(());
+        }
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
             id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
@@ -397,7 +416,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn segment_head(&mut self, segment_index: u64, head: &[u8]) -> Result<(), RdfDiagnostic> {
         if let Some(blobs) = &mut self.blobs {
-            blobs.segment_head(segment_index, head);
+            blobs.segment_head(segment_index, head)?;
         }
         // Grow/patch the per-segment record with its head id.
         self.ensure_segment_record(segment_index).head = Some(hex::encode(head));
@@ -417,6 +436,9 @@ impl ResolvedSink for SinkImporter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+        if let Some(purrdf_gts::model::DiagnosticCause::Storage(error)) = &diagnostic.cause {
+            return Err((*error).into());
+        }
         // A selected import's byte budget names what *this import will retain*,
         // not what the container is allowed to contain. A payload refused by that
         // budget is therefore not a fold failure: the archive is intact and its
@@ -430,13 +452,18 @@ impl ResolvedSink for SinkImporter<'_> {
         // fact: its rows are gone, so the dataset no longer matches what the
         // authoritative importer would build, and returning Ok would hand back
         // a silently truncated graph. That falls through to the hard failure.
-        if self.blobs.is_some() && is_blob_budget_refusal(diagnostic) {
-            return Ok(());
+        if let Some(blobs) = &mut self.blobs
+            && (is_blob_budget_refusal(diagnostic)
+                || (blobs.expects_capability_refusal()
+                    && purrdf_gts::reader::blob_refusal_kind(diagnostic)
+                        == Some(purrdf_gts::reader::BlobRefusalKind::UnavailableCapability)))
+        {
+            return blobs.refusal_diagnostic(diagnostic);
         }
         // Any other reader diagnostic is a hard fold failure on the IR path (the
         // IR is the authority, no degraded fold). The `SegmentResolver` latches
         // the first one returned here.
-        Err(RdfDiagnostic::error(
+        let failure = RdfDiagnostic::error(
             "rdf-ir-gts-fold-diagnostic",
             format!(
                 "GTS fold diagnostic {}: {}",
@@ -449,7 +476,16 @@ impl ResolvedSink for SinkImporter<'_> {
                 Some(frame_index) => location.with_gts_frame(frame_index),
                 None => location,
             }
-        }))
+        });
+        match &diagnostic.cause {
+            Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+                Err(failure.with_native_cause(cause.clone(), &mut memory)?)
+            }
+            Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
+            None => Err(failure),
+        }
     }
 }
 
@@ -505,6 +541,8 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
 /// emitted only by the reader's own byte ceilings, which no input can spoof.
 fn is_blob_budget_refusal(diagnostic: &Diagnostic) -> bool {
     diagnostic.code == purrdf_gts::reader::BLOB_BUDGET_DIAGNOSTIC
+        && purrdf_gts::reader::blob_refusal_kind(diagnostic)
+            == Some(purrdf_gts::reader::BlobRefusalKind::ByteBudget)
 }
 
 pub(crate) fn import_with_collector<'a>(
@@ -544,6 +582,8 @@ fn sink_term_error(diagnostic: RdfDiagnostic, segment_index: u64, gts_id: usize)
 }
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -832,16 +872,16 @@ mod tests {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
 
         // Segment 0: term 0 = ex:s, term 1 = ex:p, term 2 = _:b1, quad (s p b1).
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &blank_term("b1"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(blank_term("b1")));
         resolver.quad(0, (0, 1, 2, None));
 
         // Segment 1: term 0 = ex:s (same IRI value), term 1 = ex:p2, term 2 = _:b1
         // (SAME label, DIFFERENT node), quad (s p2 b1).
-        resolver.term(1, 0, &iri_term("http://example.org/s"));
-        resolver.term(1, 1, &iri_term("http://example.org/p2"));
-        resolver.term(1, 2, &blank_term("b1"));
+        resolver.term(1, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(1, 1, Arc::new(iri_term("http://example.org/p2")));
+        resolver.term(1, 2, Arc::new(blank_term("b1")));
         resolver.quad(1, (0, 1, 2, None));
 
         let (mut resolver, error) = finish_direct(resolver);
@@ -889,8 +929,8 @@ mod tests {
     #[test]
     fn gate2_unknown_term_reference_is_err_direct() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         // Object id 9 was never introduced.
         resolver.quad(0, (0, 1, 9, None));
         let (_resolver, error) = finish_direct(resolver);
@@ -949,12 +989,12 @@ mod tests {
     #[test]
     fn directional_literal_lexical_lang_survive_sink_path() {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Literal,
                 value: Some("Bonjour".to_owned()),
                 datatype: None,
@@ -962,7 +1002,7 @@ mod tests {
                 direction: None,
                 reifier: None,
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1002,12 +1042,12 @@ mod tests {
     #[test]
     fn directional_literal_rtl_survives_sink_path() {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Literal,
                 value: Some("مرحبا".to_owned()),
                 datatype: None,
@@ -1015,7 +1055,7 @@ mod tests {
                 direction: Some("rtl".to_owned()),
                 reifier: None,
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1051,16 +1091,16 @@ mod tests {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
         // Inner triple (ex:a ex:p ex:b) reified by reifier r0; outer triple
         // (ex:a ex:asserts <<inner>>) reified by reifier r1.
-        resolver.term(0, 0, &iri_term("http://example.org/a"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &iri_term("http://example.org/b"));
-        resolver.term(0, 3, &iri_term("http://example.org/r0"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/a")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(iri_term("http://example.org/b")));
+        resolver.term(0, 3, Arc::new(iri_term("http://example.org/r0")));
         resolver.reifier(0, (3, (0, 1, 2), None));
         // Inner triple TERM bound to reifier r0 (gts id 3).
         resolver.term(
             0,
             4,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1068,15 +1108,15 @@ mod tests {
                 direction: None,
                 reifier: Some(3),
                 triple: None,
-            },
+            }),
         );
-        resolver.term(0, 5, &iri_term("http://example.org/asserts"));
-        resolver.term(0, 6, &iri_term("http://example.org/r1"));
+        resolver.term(0, 5, Arc::new(iri_term("http://example.org/asserts")));
+        resolver.term(0, 6, Arc::new(iri_term("http://example.org/r1")));
         resolver.reifier(0, (6, (0, 5, 4), None));
         resolver.term(
             0,
             7,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1084,7 +1124,7 @@ mod tests {
                 direction: None,
                 reifier: Some(6),
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 5, 7, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1107,11 +1147,11 @@ mod tests {
     #[test]
     fn multiple_reifiers_for_one_triple_survive_sink_path() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &iri_term("http://example.org/o"));
-        resolver.term(0, 3, &iri_term("http://example.org/r1"));
-        resolver.term(0, 4, &iri_term("http://example.org/r2"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(iri_term("http://example.org/o")));
+        resolver.term(0, 3, Arc::new(iri_term("http://example.org/r1")));
+        resolver.term(0, 4, Arc::new(iri_term("http://example.org/r2")));
         resolver.reifier(0, (3, (0, 1, 2), None));
         resolver.reifier(0, (4, (0, 1, 2), None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1262,7 +1302,9 @@ mod tests {
                 assert_eq!(iri_of(p), "http://example.org/b");
                 assert_eq!(iri_of(o), "http://example.org/c");
             }
-            other => panic!("outer triple object must be the inner triple, got {other:?}"),
+            other => {
+                panic!("outer triple object must be the inner triple, got {other:?}")
+            }
         }
     }
 
@@ -1273,13 +1315,13 @@ mod tests {
     #[test]
     fn dangling_reifier_binding_is_err_after_all_events() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/asserts"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/asserts")));
         // Triple term bound to reifier id 99, which NO `reifies` event ever supplies.
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1287,7 +1329,7 @@ mod tests {
                 direction: None,
                 reifier: Some(99),
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (_resolver, error) = finish_direct(resolver);

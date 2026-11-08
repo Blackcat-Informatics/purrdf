@@ -12,7 +12,7 @@ use purrdf_core::RdfDataset;
 use purrdf_lex::json::{self, Object, Value};
 use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
 use purrdf_shapes::report::{CompleteValidationError, CompleteValidationReport};
-use purrdf_shapes::{ShaclProfile, ShapesImports, UnsupportedProfile};
+use purrdf_shapes::{ShaclProfile, ShapesError, ShapesImports, UnsupportedProfile};
 
 use crate::{SarifOptions, ShapesImportList};
 
@@ -67,21 +67,25 @@ pub fn complete_validation_status(
     outcome: &Result<CompleteValidationReport, CompleteValidationError>,
 ) -> CompleteValidationStatus {
     use CompleteValidationStatus as Status;
-    match outcome {
-        Ok(report) if report.legacy().conforms => Status::Conforms,
-        Ok(_) => Status::Nonconforms,
-        Err(CompleteValidationError::Admission(_) | CompleteValidationError::XPathProfile(_)) => {
+    let mut error = match outcome {
+        Ok(report) if report.legacy().conforms => return Status::Conforms,
+        Ok(_) => return Status::Nonconforms,
+        Err(error) => error,
+    };
+    while let CompleteValidationError::RuleExecution { cause, .. } = error {
+        error = cause;
+    }
+    match error {
+        CompleteValidationError::Admission(_) | CompleteValidationError::XPathProfile(_) => {
             Status::AdmissionRefused
         }
-        Err(
-            CompleteValidationError::SourceConstraint(_)
-            | CompleteValidationError::QuerySource(_)
-            | CompleteValidationError::SourceContext(_),
-        ) => Status::SourceRefused,
-        Err(CompleteValidationError::Semantic(_)) => Status::SemanticFailure,
-        Err(CompleteValidationError::Resource(_)) => Status::ResourceRefused,
-        Err(CompleteValidationError::Preparation(_)) => Status::ProductRefused,
-        Err(CompleteValidationError::XPath(error)) => match error.as_ref() {
+        CompleteValidationError::SourceConstraint(_)
+        | CompleteValidationError::QuerySource(_)
+        | CompleteValidationError::SourceContext(_) => Status::SourceRefused,
+        CompleteValidationError::Semantic(_) => Status::SemanticFailure,
+        CompleteValidationError::Resource(_) => Status::ResourceRefused,
+        CompleteValidationError::Preparation(_) => Status::ProductRefused,
+        CompleteValidationError::XPath(error) => match error.as_ref() {
             purrdf_shapes::xpath::XPathValidationError::Pattern(
                 purrdf_core::xsd_regex::xpath::Error::Resource(_)
                 | purrdf_core::xsd_regex::xpath::Error::Allocation { .. },
@@ -104,7 +108,7 @@ pub fn complete_validation_status(
             }
             _ => Status::NativeXPathRefused,
         },
-        Err(_) => Status::ExecutionFailure,
+        _ => Status::ExecutionFailure,
     }
 }
 
@@ -129,20 +133,20 @@ pub fn complete_profile(
 /// `xpath_regex` here, before parsing or execution can substitute another law.
 ///
 /// # Errors
-/// The message of an id no law has, led by its `unsupported-profile` status label, or of
-/// an `xpath_regex` that names a law other than the one the selected dated law requires.
+/// Retains the original unsupported profile or native XPath-law conflict.
+/// Display keeps the shared host wording, including the `unsupported-profile` label.
 pub fn requested_shacl_profile(
     id: Option<&str>,
     xpath_regex: Option<purrdf_core::xsd_regex::xpath::Profile>,
-) -> Result<Option<ShaclProfile>, String> {
+) -> Result<Option<ShaclProfile>, purrdf_shapes::profile::ProfileRequestError> {
     let Some(id) = id else {
         return Ok(None);
     };
-    let profile =
-        complete_profile(id).map_err(|(status, error)| format!("{}: {error}", status.label()))?;
+    let profile = complete_profile(id)
+        .map_err(|(_, error)| purrdf_shapes::profile::ProfileRequestError::from(error))?;
     profile
         .resolve_xpath(xpath_regex.map(|law| (law, purrdf_core::xsd_regex::xpath::Limits::new())))
-        .map_err(|conflict| conflict.to_string())?;
+        .map_err(purrdf_shapes::profile::ProfileRequestError::from)?;
     Ok(Some(profile))
 }
 
@@ -176,7 +180,7 @@ pub fn validate_complete_documents(
         .resolve_xpath(options.xpath_regex)
         .map_err(CompleteValidationError::XPathProfile)?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| CompleteValidationError::Execution(errors.join("\n")))?;
+        .map_err(|errors| CompleteValidationError::Shapes(ShapesError::Text(errors)))?;
     let mut table = ShapesImports::from_turtle(imports)
         .map_err(|error| CompleteValidationError::Shapes(error.into()))?;
     table
@@ -212,7 +216,7 @@ pub fn validate_complete_product(
         rebuild,
     )?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| CompleteValidationError::Execution(errors.join("\n")))?;
+        .map_err(|errors| CompleteValidationError::Shapes(ShapesError::Text(errors)))?;
     prepared.bind_complete_shared_dataset(data)?.validate()
 }
 
@@ -225,7 +229,7 @@ pub fn complete_report_payload(
     report: &CompleteValidationReport,
 ) -> Result<Value, purrdf_core::RdfDiagnostic> {
     let graph = report.to_graph().map_err(|error| match error {
-        purrdf_shapes::ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(error),
+        ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(error),
         error => purrdf_core::RdfDiagnostic::error("shacl-report-emission", error.to_string()),
     })?;
     let context = graph.source_context();

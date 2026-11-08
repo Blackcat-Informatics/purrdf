@@ -354,9 +354,8 @@ impl Arm {
 fn a_named_inner_shape_is_evaluated_once_for_a_shared_value_node() {
     let _guard = measure_lock();
     let _relations = enter_property_function_scope(counting_relations());
-    let data = parse_ntriples_to_dataset(DATA).unwrap_or_else(|errors| {
-        panic!("the fixture data graph must parse: {}", errors.join("\n"))
-    });
+    let data = parse_ntriples_to_dataset(DATA)
+        .unwrap_or_else(|errors| panic!("the fixture data graph must parse: {errors}"));
     let named_arm = Arm::prepare(&data, &named_shapes(), "named");
     let inline_arm = Arm::prepare(&data, &inline_shapes(), "inline");
 
@@ -425,7 +424,7 @@ fn an_or_stops_at_its_first_conforming_member_unless_a_deactivation_expression_i
         "{DATA}<{FOCUS_IRI}> <http://example.org/purrdf/memo#muted> \
          \"false\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n"
     ))
-    .unwrap_or_else(|errors| panic!("the fixture data graph must parse: {}", errors.join("\n")));
+    .unwrap_or_else(|errors| panic!("the fixture data graph must parse: {errors}"));
     let shapes = |first: &str, second: &str, deactivation: &str| {
         format!(
             "{PREFIXES}\

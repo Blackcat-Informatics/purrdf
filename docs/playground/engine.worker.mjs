@@ -16,6 +16,19 @@ import {
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
+function canonicalValue(result, receipts) {
+  try { receipts.push(result.canonicalizationJson); return result.value; }
+  finally { result.free(); }
+}
+
+function errorRecord(error) {
+  const cause = error?.nativeCause;
+  try {
+    return { error: String(error?.message ?? error), code: error?.code,
+      canonicalizationJson: error?.canonicalizationJson, nativeCauseJson: cause?.json };
+  } finally { cause?.free(); }
+}
+
 /** The 9 codecs that can PARSE — every format the engine registers. */
 const PARSE_FORMATS = [
   "turtle",
@@ -143,8 +156,9 @@ const HANDLERS = {
     return { size: current.size, rows: quadsToRows(current) };
   },
 
-  serializeAll({ jsonldOptions = null } = {}) {
+  serializeAll({ jsonldOptions = null, canonicalSearch } = {}) {
     const ds = requireCurrent();
+    const receipts = [];
     const quoted = hasQuotedObject(ds);
     const formats = {};
     for (const f of SERIALIZE_FORMATS) {
@@ -171,9 +185,12 @@ const HANDLERS = {
         // Honest round-trip fidelity: re-parse and confirm graph identity.
         try {
           const back = Dataset.parse(text, f);
-          entry.roundtrips = ds.isomorphic(back);
-        } catch {
-          entry.roundtrips = false;
+          try {
+            entry.roundtrips = canonicalValue(ds.isomorphic(back, canonicalSearch), receipts);
+          } finally { back.free(); }
+        } catch (error) {
+          entry.roundtrips = null;
+          entry.roundtripError = errorRecord(error);
         }
       } else {
         entry.roundtrips = false;
@@ -182,50 +199,57 @@ const HANDLERS = {
     }
     return {
       formats,
-      canonical: ds.canonicalize(),
+      canonical: canonicalValue(ds.canonicalize(canonicalSearch), receipts),
+      canonicalizationJson: receipts,
       hasQuotedObject: quoted,
       size: ds.size,
     };
   },
 
-  query({ sparql }) {
+  query({ sparql, now, entropySeed }) {
     const ds = requireCurrent();
-    const out = ds.query(sparql); // throws on SERVICE/LOAD/parse/eval error
+    const out = ds.query(sparql, undefined, undefined, now, entropySeed); // throws on SERVICE/LOAD/parse/eval error
     let parsed = null;
     try {
-      parsed = JSON.parse(out);
+      parsed = JSON.parse(out.body);
     } catch {
       parsed = null;
     }
     if (parsed && (Object.hasOwn(parsed, "head") || Object.hasOwn(parsed, "boolean"))) {
-      return { kind: "srj", srj: parsed };
+      return { kind: "srj", srj: parsed, executionReceipt: out.executionReceipt };
     }
     // CONSTRUCT / DESCRIBE → Turtle text, or TriG when the result carries a named
     // graph (a quad template — a first-party extension, not a SPARQL 1.2 feature):
     // Turtle has no `GRAPH` construct, so the
     // engine widens to Turtle's dataset superset rather than rendering the answer as
     // an empty document. Both are Turtle-family text and display identically.
-    return { kind: "turtle", turtle: out };
+    return { kind: "turtle", turtle: out.body, executionReceipt: out.executionReceipt };
   },
 
-  shaclValidate({ shapes }) {
+  shaclValidate({ shapes, now, entropySeed }) {
+    if (now != null || entropySeed != null) {
+      const error = new TypeError("now and entropySeed apply only to rule execution");
+      error.code = "purrdf-wasm-options";
+      throw error;
+    }
     const ds = requireCurrent();
     const dataNt = ds.serialize("ntriples");
     const sarif = JSON.parse(shaclValidateToSarif(shapes, dataNt));
     return { sarif };
   },
 
-  shaclEntail({ shapes }) {
+  shaclEntail({ shapes, xpathRegex, now, entropySeed, canonicalSearch }) {
     const ds = requireCurrent();
     const dataNt = ds.serialize("ntriples");
-    const entailed = shaclEntail(shapes, dataNt);
-    const ntriples = entailed.ntriples;
-    const diagnostics = entailed.diagnostics;
-    entailed.free();
-    return { ntriples, diagnostics };
+    const entailed = shaclEntail(shapes, dataNt, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, xpathRegex, now, entropySeed, canonicalSearch);
+    try {
+      return { ntriples: entailed.ntriples, diagnostics: entailed.diagnostics,
+        canonicalizationJson: entailed.canonicalizationJson };
+    } finally { entailed.free(); }
   },
 
-  identity({ aText, aFormat, bText, bFormat }) {
+  identity({ aText, aFormat, bText, bFormat, canonicalSearch }) {
     if (!PARSE_FORMATS.includes(aFormat)) {
       throw new Error(`unknown parse format "${aFormat}" for graph A`);
     }
@@ -233,12 +257,18 @@ const HANDLERS = {
       throw new Error(`unknown parse format "${bFormat}" for graph B`);
     }
     const a = Dataset.parse(aText, aFormat);
-    const b = Dataset.parse(bText, bFormat);
-    return {
-      isomorphic: a.isomorphic(b),
-      canonicalA: a.canonicalize(),
-      canonicalB: b.canonicalize(),
-    };
+    try {
+      const b = Dataset.parse(bText, bFormat);
+      try {
+        const receipts = [];
+        return {
+          isomorphic: canonicalValue(a.isomorphic(b, canonicalSearch), receipts),
+          canonicalA: canonicalValue(a.canonicalize(canonicalSearch), receipts),
+          canonicalB: canonicalValue(b.canonicalize(canonicalSearch), receipts),
+          canonicalizationJson: receipts,
+        };
+      } finally { b.free(); }
+    } finally { a.free(); }
   },
 
   quads() {
@@ -274,6 +304,6 @@ self.addEventListener("message", async (event) => {
     self.postMessage({ id, ok: true, result });
   } catch (e) {
     // HARD FAIL, surfaced — never swallow, never a silent empty result.
-    self.postMessage({ id, ok: false, error: String(e?.message ?? e) });
+    self.postMessage({ id, ok: false, ...errorRecord(e) });
   }
 });

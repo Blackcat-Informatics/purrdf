@@ -393,7 +393,7 @@ impl CompositeSource {
         match &self.carrier {
             Carrier::Native(ds) => ds.term_id_by_iri(iri).map(LocalId::Base),
             Carrier::Delta(ds) => ds.lookup_iri(iri),
-            Carrier::Selected(selection) => selection.lookup(&TermValue::iri(iri)),
+            Carrier::Selected(selection) => selection.lookup_iri(iri),
         }
     }
     fn lookup_blank(&self, label: &str, scope: BlankScope) -> Option<LocalId> {
@@ -690,7 +690,7 @@ impl CompositeSource {
 #[derive(Debug, Default)]
 struct ReboundLiterals {
     values: FastMap<LocalId, String>,
-    index: hashbrown::HashTable<LocalId>,
+    index: crate::hash::table::HashTable<LocalId>,
 }
 
 /// A probe translated into the retained composite's handles: the three term
@@ -909,8 +909,18 @@ impl SelectedGraphs {
     /// Resolve a term value against the retained view, admitting it only when the
     /// selection actually holds the resulting handle.
     fn lookup(&self, value: &TermValue) -> Option<LocalId> {
+        if let TermValue::Iri(iri) = value {
+            return self.lookup_iri(iri);
+        }
         self.view
             .term_id_if_ready(value)
+            .and_then(|id| self.index.get(&id).copied())
+            .map(LocalId::Base)
+    }
+
+    fn lookup_iri(&self, iri: &str) -> Option<LocalId> {
+        self.view
+            .lookup_iri(iri)
             .and_then(|id| self.index.get(&id).copied())
             .map(LocalId::Base)
     }
@@ -1037,6 +1047,7 @@ impl ViewTermId for CompositeViewId {
 /// identities. Graph projection is explicit. No pointer or work counter affects RDF.
 #[derive(Debug, Clone)]
 pub struct CompositeDatasetView {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     sources: Arc<[CompositeSource]>,
     mappings: Arc<[Arc<AliasMap>]>,
     reverse: Arc<[Arc<ReverseMap>]>,
@@ -1074,6 +1085,68 @@ struct PrefixState {
 }
 
 impl CompositeDatasetView {
+    fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, RdfDiagnostic> {
+        const SNAPSHOT: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/composite-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(SNAPSHOT.as_bytes());
+        hash.update(&(self.sources.len() as u64).to_le_bytes());
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        for (source, scopes) in self.sources.iter().zip(self.scopes.iter()) {
+            match &source.carrier {
+                Carrier::Native(dataset) => {
+                    hash.update(&[0]);
+                    hash.update(dataset.frozen_snapshot_identity().as_bytes());
+                }
+                Carrier::Delta(view) => {
+                    hash.update(&[1]);
+                    hash.update(view.frozen_snapshot_identity().as_bytes());
+                }
+                Carrier::Selected(selection) => {
+                    hash.update(&[2]);
+                    hash.update(selection.view.snapshot_identity.as_bytes());
+                    hash.update(&(selection.names.len() as u64).to_le_bytes());
+                    for name in selection.names.iter() {
+                        name.visit_canonical_bytes_with_memory(
+                            |bytes| {
+                                hash.update(bytes);
+                            },
+                            &mut memory,
+                        )?;
+                    }
+                }
+            }
+            hash.update(&[match source.binding {
+                ScopeBinding::Independent => 0,
+                ScopeBinding::Shared => 1,
+            }]);
+            hash.update(&(scopes.len() as u64).to_le_bytes());
+            for (original, assigned) in scopes {
+                hash.update(&original.ordinal().to_le_bytes());
+                hash.update(&assigned.ordinal().to_le_bytes());
+            }
+            match &source.placement {
+                GraphPlacement::Preserve => {
+                    hash.update(&[0]);
+                }
+                GraphPlacement::Default => {
+                    hash.update(&[1]);
+                }
+                GraphPlacement::Named(name) => {
+                    hash.update(&[2]);
+                    name.visit_canonical_bytes_with_memory(
+                        |bytes| {
+                            hash.update(bytes);
+                        },
+                        &mut memory,
+                    )?;
+                }
+            }
+        }
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+
     /// Compose independently parsed documents, standardizing blanks apart.
     /// # Errors
     /// Refuses invalid graph names, exhausted scope IDs or retention ceilings.
@@ -1248,6 +1321,16 @@ impl CompositeDatasetView {
     #[must_use]
     pub fn term_value(&self, id: CompositeViewId) -> TermValue {
         owned_value(self, id)
+    }
+    /// Look up a borrowed IRI through the retained dictionaries, returning the
+    /// same first-source canonical handle as the owned-value lookup.
+    #[must_use]
+    pub fn lookup_iri(&self, iri: &str) -> Option<CompositeViewId> {
+        self.sources.iter().enumerate().find_map(|(index, source)| {
+            source
+                .lookup_iri(iri)
+                .map(|local| self.map_id(index, local))
+        })
     }
     /// Retained dimensions and successful work shared by clones.
     #[must_use]
@@ -1676,6 +1759,7 @@ impl Prefix {
             unique_terms += alias_last(&sources, &scopes, &mut mappings, &mut reverse, &mut work)?;
         }
         let mut view = CompositeDatasetView {
+            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
             sources: sources.into(),
             mappings: mappings.into(),
             reverse: reverse.into(),
@@ -1708,6 +1792,7 @@ impl Prefix {
             });
         }
         view.placement = placement.into();
+        view.snapshot_identity = view.seal_content_identity()?;
         // One charge, and it already includes the derived dictionary's freeze.
         view.work.add(work);
         Ok(view)
@@ -1796,6 +1881,9 @@ fn alias_last(
 }
 
 impl DatasetView for CompositeDatasetView {
+    fn retained_view_stats(&self) -> Option<ViewStats> {
+        Some(self.stats())
+    }
     type Id = CompositeViewId;
     type ReadError = Infallible;
     type TermGuard<'a>
@@ -1803,6 +1891,17 @@ impl DatasetView for CompositeDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
     /// The widest bound any retained source vouches for.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         crate::dataset_view::widest_nesting_bound(
@@ -1824,6 +1923,9 @@ impl DatasetView for CompositeDatasetView {
         })
     }
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+        if let TermValue::Iri(iri) = value {
+            return Ok(self.lookup_iri(iri));
+        }
         Ok({
             (0..self.sources.len()).find_map(|index| {
                 self.lookup_value(index, value)

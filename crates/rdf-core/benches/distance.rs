@@ -141,7 +141,7 @@ fn batch<A: Arithmetic, Q: Scalar, T: Scalar>(
     rows: &[T],
 ) {
     let view = RowsRef::new(rows, ROWS, dims, &[]).expect("the matrix is rectangular");
-    let mut out = vec![None; ROWS];
+    let mut out = vec![Ok(0.0); ROWS];
     group.throughput(Throughput::Elements((ROWS * dims) as u64));
     for measure in BATCH_MEASURES {
         let id = format!("{}/{}/{pair}/d{dims}", law.label, measure_name(measure));
@@ -165,7 +165,7 @@ fn indexed<A: Arithmetic, Q: Scalar, T: Scalar>(
 ) {
     let dims = fixture.dims;
     let view = RowsRef::new(rows, ROWS, dims, &[]).expect("the matrix is rectangular");
-    let mut out = vec![None; fixture.ids.len()];
+    let mut out = vec![Ok(0.0); fixture.ids.len()];
     group.throughput(Throughput::Elements((fixture.ids.len() * dims) as u64));
     for measure in BATCH_MEASURES {
         let id = format!("{}/{}/{pair}/d{dims}", law.label, measure_name(measure));

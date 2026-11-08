@@ -80,13 +80,18 @@
 //! it on `function-registry`, `aggregate-registry` or `property-function-registry`,
 //! and the caller learns which. Rust is the surface for those products.
 
+//! Execution entries require writable `out_receipt` storage. A successful call
+//! transfers an owned JSON buffer to it; release that buffer with `purrdf_buffer_free`.
+//! On failure, the error owns any observed receipt and exposes it through
+//! `purrdf_error_execution_receipt_json` until the error is freed.
+
 use std::os::raw::c_char;
 
 use purrdf_validate::{
     ChangeScope, ConformanceDisallows, EntailOutcome, EntailRequest, ExprSelector, LintReport,
     NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, SelectedProductError,
     ShapesError, ShapesProductRefusal, ValidationOptions, XPathValidationError,
-    apply_rules_to_ntriples_with_xpath_regex, check_rules, entail_to_ntriples_with_xpath_regex,
+    apply_rules_to_ntriples_with_coordinates, check_rules, entail_to_ntriples_with_coordinates,
     eval_node_expr_with_xpath_regex, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
     validate_changes_to_sarif_string_with_shapes_graph,
     validate_changes_to_sarif_string_with_xpath_regex, validate_to_sarif_string_with_shapes_graph,
@@ -416,11 +421,19 @@ unsafe fn validate_entry(
         let graph = opt_cstr_to_str(shapes_graph_iri)?;
         let regex = decode_regex_profile(regex_profile)?;
         let law = purrdf_validate::requested_shacl_profile(opt_cstr_to_str(shacl_profile)?, regex)
-            .map_err(|message| {
-                PurrdfError::new(
-                    PurrdfStatus::InvalidArgument,
-                    format!("shacl_profile {message}, or NULL for the compatibility law"),
-                )
+            .map_err(|cause| {
+                let message = format!("shacl_profile {cause}, or NULL for the compatibility law");
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+                if diagnostic.storage_error().is_some() {
+                    PurrdfError::from_owned_diagnostic(PurrdfStatus::InvalidArgument, diagnostic)
+                } else {
+                    PurrdfError::from_owned_diagnostic_with_message(
+                        PurrdfStatus::InvalidArgument,
+                        diagnostic,
+                        &message,
+                    )
+                }
             })?;
         let bytes = match (regex, law) {
             (None, None) => validate_to_sarif_bytes(
@@ -446,7 +459,7 @@ unsafe fn validate_entry(
                 .into_bytes()
             }
         };
-        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -497,7 +510,7 @@ fn validate_changes_to_sarif_bytes(
     conformance_disallows: &[&str],
     imports: &[(&str, &str)],
     subclass_of_in_shapes_graph: bool,
-) -> Result<(Vec<u8>, ChangeScope), ShapesError> {
+) -> Result<(Vec<u8>, ChangeScope), purrdf_rs::shapes::report::CompleteValidationError> {
     let (sarif, scope) = validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
@@ -746,7 +759,7 @@ unsafe fn validate_changes_entry(
                 &imports,
                 subclass_of_in_shapes_graph,
             )
-            .map_err(PurrdfError::shapes)?,
+            .map_err(PurrdfError::complete)?,
             Some(profile) => {
                 let (sarif, scope) = validate_changes_to_sarif_string_with_xpath_regex(
                     shapes,
@@ -775,10 +788,10 @@ unsafe fn validate_changes_entry(
             ChangeScope::Everything { reason } => {
                 *out_scope = PurrdfShaclChangeScopeKind::Everything as i32;
                 *out_focus_nodes = 0;
-                *out_reason = into_handle(PurrdfBuffer(reason.as_bytes().to_vec()));
+                *out_reason = into_handle(PurrdfBuffer::from(reason.as_bytes().to_vec()));
             }
         }
-        *out_buffer = into_handle(PurrdfBuffer(bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -787,9 +800,13 @@ unsafe fn validate_changes_entry(
 /// (base graph plus every SHACL-AF rule inference) as canonical N-Triples, and the shapes
 /// graph's mandatory diagnostics. Native-testable, pointer-free core.
 ///
-/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_xpath_regex`],
+/// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_coordinates`],
 /// under the caller's dated XPath law or (`None`) the compatibility regular expressions;
 /// the exported symbols only add the C-ABI buffer framing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entailment inputs, passed through to the shared native request"
+)]
 fn entail_outcome(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -798,8 +815,10 @@ fn entail_outcome(
     imports: &[(&str, &str)],
     limits: RuleLimits,
     regex: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<EntailOutcome, PurrdfError> {
-    entail_to_ntriples_with_xpath_regex(
+    entail_to_ntriples_with_coordinates(
         &EntailRequest {
             shapes_ttl,
             shapes_base,
@@ -813,6 +832,8 @@ fn entail_outcome(
             host: purrdf_validate::RulesHost::CAbi,
         },
         regex,
+        coordinates,
+        control,
     )
     .map_err(law_error)
 }
@@ -873,6 +894,18 @@ fn diagnostic_text(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Stri
 /// `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
 /// readable; `out_buffer` must be a writable pointer; `out_diagnostics` and `out_error`
 /// must each be null or writable.
+///
+/// `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+/// time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+/// The seed selects the reproducible sequence of the rule execution's queries.
+/// Omitted inputs retain native defaults. Invalid time returns
+/// `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+/// Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+/// XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+/// Successful buffers own their values after input storage is released.
+///
+/// The coordinate pointers must be null or live for this call: `now` points to a
+/// NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     shapes_ttl: *const c_char,
@@ -886,32 +919,59 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     max_generated_terms: *const u64,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
-        ffi_try!(out_error, {
-            entail_entry(
-                "purrdf_shacl_entail_to_ntriples",
-                shapes_ttl,
-                shapes_base_iri,
-                shapes_graph_iri,
-                data_nt,
-                import_iris,
-                import_documents,
-                import_count,
-                [
-                    max_term_generating_rounds,
-                    max_generated_terms,
-                    max_stored_facts,
-                    max_join_steps,
-                ],
-                std::ptr::null(),
-                out_buffer,
-                out_diagnostics,
-            )
-        })
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_receipt, out_buffer],
+            control,
+            {
+                crate::canonical::check_optional_output(
+                    out_diagnostics as usize,
+                    &[
+                        out_receipt as usize,
+                        out_buffer as usize,
+                        out_canonicalization_json as usize,
+                        out_error as usize,
+                    ],
+                )?;
+                entail_entry(
+                    "purrdf_shacl_entail_to_ntriples",
+                    shapes_ttl,
+                    shapes_base_iri,
+                    shapes_graph_iri,
+                    data_nt,
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    [
+                        max_term_generating_rounds,
+                        max_generated_terms,
+                        max_stored_facts,
+                        max_join_steps,
+                    ],
+                    std::ptr::null(),
+                    now,
+                    entropy_seed,
+                    out_receipt,
+                    out_buffer,
+                    out_diagnostics,
+                    control,
+                )
+            }
+        )
     }
 }
 
@@ -944,32 +1004,59 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples_xpath_regex(
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
-        ffi_try!(out_error, {
-            entail_entry(
-                "purrdf_shacl_entail_to_ntriples_xpath_regex",
-                shapes_ttl,
-                shapes_base_iri,
-                shapes_graph_iri,
-                data_nt,
-                import_iris,
-                import_documents,
-                import_count,
-                [
-                    max_term_generating_rounds,
-                    max_generated_terms,
-                    max_stored_facts,
-                    max_join_steps,
-                ],
-                regex_profile,
-                out_buffer,
-                out_diagnostics,
-            )
-        })
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_receipt, out_buffer],
+            control,
+            {
+                crate::canonical::check_optional_output(
+                    out_diagnostics as usize,
+                    &[
+                        out_receipt as usize,
+                        out_buffer as usize,
+                        out_canonicalization_json as usize,
+                        out_error as usize,
+                    ],
+                )?;
+                entail_entry(
+                    "purrdf_shacl_entail_to_ntriples_xpath_regex",
+                    shapes_ttl,
+                    shapes_base_iri,
+                    shapes_graph_iri,
+                    data_nt,
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    [
+                        max_term_generating_rounds,
+                        max_generated_terms,
+                        max_stored_facts,
+                        max_join_steps,
+                    ],
+                    regex_profile,
+                    now,
+                    entropy_seed,
+                    out_receipt,
+                    out_buffer,
+                    out_diagnostics,
+                    control,
+                )
+            }
+        )
     }
 }
 
@@ -1007,11 +1094,19 @@ unsafe fn entail_entry(
     import_count: usize,
     limits: [*const u64; 4],
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_buffer: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<PurrdfStatus, PurrdfError> {
     unsafe {
-        if shapes_ttl.is_null() || data_nt.is_null() || out_buffer.is_null() {
+        if shapes_ttl.is_null()
+            || data_nt.is_null()
+            || out_buffer.is_null()
+            || out_receipt.is_null()
+        {
             return Err(PurrdfError::new(
                 PurrdfStatus::NullPointer,
                 format!("null pointer argument to {entry}"),
@@ -1024,13 +1119,27 @@ unsafe fn entail_entry(
         let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
         let limits = rule_limits(limits);
         let regex = decode_regex_profile(regex_profile)?;
-        let outcome = entail_outcome(shapes, base, shapes_graph, data, &imports, limits, regex)?;
+        let coordinates = crate::query::decode_coordinates(now, entropy_seed)?;
+        let outcome = entail_outcome(
+            shapes,
+            base,
+            shapes_graph,
+            data,
+            &imports,
+            limits,
+            regex,
+            coordinates,
+            control,
+        )?;
         if !out_diagnostics.is_null() {
-            *out_diagnostics = into_handle(PurrdfBuffer(
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
-        *out_buffer = into_handle(PurrdfBuffer(outcome.ntriples.into_bytes()));
+        *out_receipt = into_handle(PurrdfBuffer::from(
+            purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
+        ));
+        *out_buffer = into_handle(PurrdfBuffer::from(outcome.ntriples));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1041,13 +1150,14 @@ unsafe fn entail_entry(
 
 /// Run a rule set over a data graph. Native-testable, pointer-free core of
 /// [`purrdf_shacl_apply_rules`] and its `_xpath_regex` twin: the work is
-/// [`apply_rules_to_ntriples_with_xpath_regex`], under the caller's dated XPath law or
+/// [`apply_rules_to_ntriples_with_coordinates`], under the caller's dated XPath law or
 /// (`None`) the compatibility regular expressions.
 fn apply_rules_outcome(
     request: &RulesRequest<'_>,
     regex: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
 ) -> Result<RulesOutcome, PurrdfError> {
-    apply_rules_to_ntriples_with_xpath_regex(request, regex).map_err(law_error)
+    apply_rules_to_ntriples_with_coordinates(request, regex, coordinates).map_err(law_error)
 }
 
 /// Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
@@ -1109,6 +1219,18 @@ fn apply_rules_outcome(
 /// Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
 /// space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
 /// second, the field order every host's structured value (`{rule, shape}`) carries.
+///
+/// `now` and `entropy_seed` are independently nullable execution inputs. A supplied
+/// time retains the exact native `xsd:dateTime` value; a pointed zero is a seed.
+/// The seed selects the reproducible sequence of the rule execution's queries.
+/// Omitted inputs retain native defaults. Invalid time returns
+/// `PURRDF_STATUS_INVALID_ARGUMENT`; invalid UTF-8 returns `PURRDF_STATUS_INVALID_UTF8`.
+/// Coordinate decoding follows the existing pointer, UTF-8, import-array, limit and
+/// XPath checks and precedes document parsing. Failure leaves non-error output slots untouched.
+/// Successful buffers own their values after input storage is released.
+///
+/// The coordinate pointers must be null or live for this call: `now` points to a
+/// NUL-terminated string and `entropy_seed` to a readable, aligned `uint64_t`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     data_nt: *const c_char,
@@ -1124,6 +1246,9 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1151,6 +1276,9 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules(
                 import_documents,
                 import_count,
                 std::ptr::null(),
+                now,
+                entropy_seed,
+                out_receipt,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1189,6 +1317,9 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
     import_documents: *const *const c_char,
     import_count: usize,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     out_inferred: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
     out_diagnostics: *mut *mut PurrdfBuffer,
@@ -1216,6 +1347,9 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
                 import_documents,
                 import_count,
                 regex_profile,
+                now,
+                entropy_seed,
+                out_receipt,
                 [out_inferred, out_proof, out_diagnostics],
             )
         })
@@ -1239,6 +1373,9 @@ unsafe fn apply_rules_entry(
     import_documents: *const *const c_char,
     import_count: usize,
     regex_profile: *const c_char,
+    now: *const c_char,
+    entropy_seed: *const u64,
+    out_receipt: *mut *mut PurrdfBuffer,
     outputs: [*mut *mut PurrdfBuffer; 3],
 ) -> Result<PurrdfStatus, PurrdfError> {
     let [
@@ -1251,7 +1388,7 @@ unsafe fn apply_rules_entry(
     ] = documents;
     let [out_inferred, out_proof, out_diagnostics] = outputs;
     unsafe {
-        if data_nt.is_null() || out_inferred.is_null() {
+        if data_nt.is_null() || out_inferred.is_null() || out_receipt.is_null() {
             return Err(PurrdfError::new(
                 PurrdfStatus::NullPointer,
                 format!("null pointer argument to {entry}"),
@@ -1275,16 +1412,20 @@ unsafe fn apply_rules_entry(
             host: purrdf_validate::RulesHost::CAbi,
         };
         let regex = decode_regex_profile(regex_profile)?;
-        let outcome = apply_rules_outcome(&request, regex)?;
+        let coordinates = crate::query::decode_coordinates(now, entropy_seed)?;
+        let outcome = apply_rules_outcome(&request, regex, coordinates)?;
         if let Some(proof) = outcome.proof {
-            *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
+            *out_proof = into_handle(PurrdfBuffer::from(proof.into_bytes()));
         }
         if !out_diagnostics.is_null() {
-            *out_diagnostics = into_handle(PurrdfBuffer(
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
                 diagnostic_text(&outcome.diagnostics).into_bytes(),
             ));
         }
-        *out_inferred = into_handle(PurrdfBuffer(outcome.inferred_ntriples.into_bytes()));
+        *out_receipt = into_handle(PurrdfBuffer::from(
+            purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates).into_bytes(),
+        ));
+        *out_inferred = into_handle(PurrdfBuffer::from(outcome.inferred_ntriples.into_bytes()));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1393,7 +1534,7 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
                 &imports,
             )
             .map_err(PurrdfError::shapes)?;
-            *out_summary = into_handle(PurrdfBuffer(summary.into_bytes()));
+            *out_summary = into_handle(PurrdfBuffer::from(summary.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1633,10 +1774,11 @@ unsafe fn eval_node_expr_entry(
             regex,
         )?;
         if !out_diagnostics.is_null() {
-            *out_diagnostics =
-                into_handle(PurrdfBuffer(diagnostic_text(&diagnostics).into_bytes()));
+            *out_diagnostics = into_handle(PurrdfBuffer::from(
+                diagnostic_text(&diagnostics).into_bytes(),
+            ));
         }
-        *out_terms = into_handle(PurrdfBuffer(bytes));
+        *out_terms = into_handle(PurrdfBuffer::from(bytes));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -1730,7 +1872,7 @@ pub unsafe extern "C" fn purrdf_shacl_lint_shapes(
             .map_err(PurrdfError::shapes)?;
             *out_clean = i32::from(report.is_clean());
             *out_findings = report.findings();
-            *out_report = into_handle(PurrdfBuffer(report.render().into_bytes()));
+            *out_report = into_handle(PurrdfBuffer::from(report.render().into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -1747,7 +1889,7 @@ fn product_error(refusal: &ShapesProductRefusal) -> PurrdfError {
     if let Some(error) = refusal.import_error() {
         return PurrdfError::shapes_import(error);
     }
-    PurrdfError::product(refusal.dimension_label(), refusal.to_string())
+    PurrdfError::product(refusal.dimension_label(), refusal.to_string()).retaining_cause(refusal)
 }
 
 /// Borrow `len` bytes at `product`, refusing a null pointer by name.
@@ -1781,12 +1923,14 @@ fn encode_product_bytes(
     shapes_base: Option<&str>,
     shapes_graph: Option<&str>,
     imports: &[(&str, &str)],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
     purrdf_validate::pack_shapes_product_with_shapes_graph(
         shapes_ttl,
         shapes_base,
         shapes_graph,
         imports,
+        control,
     )
 }
 
@@ -1832,30 +1976,41 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode(
     import_documents: *const *const c_char,
     import_count: usize,
     out_buffer: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
-        ffi_try!(out_error, {
-            if shapes_ttl.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_shapes_product_encode",
-                ));
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [out_buffer],
+            control,
+            {
+                if shapes_ttl.is_null() || out_buffer.is_null() {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "null pointer argument to purrdf_shapes_product_encode",
+                    ));
+                }
+                let shapes = cstr_to_str(shapes_ttl)?;
+                let base = opt_cstr_to_str(shapes_base_iri)?;
+                let imports = import_pairs(
+                    import_iris,
+                    import_documents,
+                    import_count,
+                    "purrdf_shapes_product_encode",
+                )?;
+                let graph = opt_cstr_to_str(shapes_graph_iri)?;
+                let bytes = encode_product_bytes(shapes, base, graph, &imports, control)
+                    .map_err(|refusal| product_error(&refusal))?;
+                *out_buffer = into_handle(PurrdfBuffer::from(bytes));
+                Ok(PurrdfStatus::Ok)
             }
-            let shapes = cstr_to_str(shapes_ttl)?;
-            let base = opt_cstr_to_str(shapes_base_iri)?;
-            let imports = import_pairs(
-                import_iris,
-                import_documents,
-                import_count,
-                "purrdf_shapes_product_encode",
-            )?;
-            let graph = opt_cstr_to_str(shapes_graph_iri)?;
-            let bytes = encode_product_bytes(shapes, base, graph, &imports)
-                .map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
-            Ok(PurrdfStatus::Ok)
-        })
+        )
     }
 }
 
@@ -1901,7 +2056,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_open(
             }
             let bytes = product_bytes(product, product_len, "purrdf_shapes_product_open")?;
             let described = open_product_bytes(bytes).map_err(|refusal| product_error(&refusal))?;
-            *out_buffer = into_handle(PurrdfBuffer(described));
+            *out_buffer = into_handle(PurrdfBuffer::from(described));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -2081,7 +2236,7 @@ unsafe fn product_entry(
                 .into_bytes()
             }
         };
-        *out_buffer = into_handle(PurrdfBuffer(sarif));
+        *out_buffer = into_handle(PurrdfBuffer::from(sarif));
         Ok(PurrdfStatus::Ok)
     }
 }
@@ -2413,8 +2568,10 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting_xpath_regex(
 /// `purrdf_shapes_product_admit` already verifies every section digest and the whole
 /// container.
 ///
-/// There is no out-buffer: the answer is the status. `PURRDF_STATUS_OK` means the product's
-/// dataset canonicalizes to the digest it claims.
+/// The answer is the status: `PURRDF_STATUS_OK` means the product's dataset
+/// canonicalizes to the digest it claims. The separate required
+/// `out_canonicalization_json` buffer records the actual search and must be freed
+/// with `purrdf_buffer_free`.
 ///
 /// # Safety
 /// `product` must be valid for reads of `product_len` bytes; `out_error` must be null
@@ -2423,15 +2580,26 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting_xpath_regex(
 pub unsafe extern "C" fn purrdf_shapes_product_certify(
     product: *const u8,
     product_len: usize,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
-        ffi_try!(out_error, {
-            let bytes = product_bytes(product, product_len, "purrdf_shapes_product_certify")?;
-            purrdf_validate::certify_shapes_product(bytes)
-                .map_err(|error| product_error(&ShapesProductRefusal::from(error)))?;
-            Ok(PurrdfStatus::Ok)
-        })
+        ffi_canonical_try!(
+            out_error,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            [],
+            control,
+            {
+                let bytes = product_bytes(product, product_len, "purrdf_shapes_product_certify")?;
+                purrdf_validate::certify_shapes_product(bytes, control)
+                    .map_err(|error| product_error(&ShapesProductRefusal::from(error)))?;
+                Ok(PurrdfStatus::Ok)
+            }
+        )
     }
 }
 
@@ -3154,9 +3322,15 @@ ex:StatusShape a sh:NodeShape ;
             &[],
             RuleLimits::default(),
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .expect("entailment produced");
-        let text = bytes.ntriples;
+        let text_owner = bytes.ntriples;
+        let text = text_owner.nquads();
         assert_eq!(bytes.diagnostics, []);
         assert!(text.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
@@ -3177,6 +3351,11 @@ ex:StatusShape a sh:NodeShape ;
                 &[],
                 RuleLimits::default(),
                 None,
+                purrdf_validate::query::CoordinateInputs::default(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             )
             .is_err()
         );
@@ -3184,8 +3363,25 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn a_product_round_trips_to_the_same_verdict() {
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
-        purrdf_validate::certify_shapes_product(&product).expect("certified");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
+        purrdf_validate::certify_shapes_product(
+            &product,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("certified");
         let described = String::from_utf8(open_product_bytes(&product).expect("opened"))
             .expect("the description is UTF-8");
         assert!(described.contains("stage-known true\n"));
@@ -3205,8 +3401,17 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn a_refused_product_carries_its_dimension_through_the_error_handle() {
-        let mut wrong_magic =
-            encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let mut wrong_magic = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         wrong_magic[0] = b'X';
 
         let refusal = admit_product_bytes(&wrong_magic, DATA).expect_err("a foreign magic refuses");
@@ -3234,7 +3439,17 @@ ex:StatusShape a sh:NodeShape ;
         }
 
         // The neighbouring VALID case still succeeds — a refusal is a claim too.
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         admit_product_bytes(&product, DATA).expect("the unmodified product still validates");
     }
 
@@ -3258,9 +3473,29 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn a_product_that_is_not_the_expected_one_is_refused() {
-        let held = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let held = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let wanted = rendered_selector(
-            &encode_product_bytes(OTHER_SHAPES, None, None, &[]).expect("encoded"),
+            &encode_product_bytes(
+                OTHER_SHAPES,
+                None,
+                None,
+                &[],
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("encoded"),
         );
         assert_ne!(wanted, rendered_selector(&held));
 
@@ -3284,7 +3519,17 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn a_product_required_to_be_itself_validates_identically() {
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let own = purrdf_validate::parse_identity_digest(&rendered_selector(&product))
             .expect("the rendering is accepted back");
 
@@ -3305,7 +3550,17 @@ ex:StatusShape a sh:NodeShape ;
     fn the_exported_entry_point_binds_a_restore_through_pointers() {
         use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
 
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let own = std::ffi::CString::new(rendered_selector(&product)).expect("no interior NUL");
         let data = std::ffi::CString::new(DATA).expect("no interior NUL");
 
@@ -3363,9 +3618,29 @@ ex:StatusShape a sh:NodeShape ;
     /// build knows and the unbound `rebuild` would otherwise happily re-derive it.
     #[test]
     fn a_rebuilt_product_that_is_not_the_expected_one_is_refused() {
-        let held = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let held = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let wanted = rendered_selector(
-            &encode_product_bytes(OTHER_SHAPES, None, None, &[]).expect("encoded"),
+            &encode_product_bytes(
+                OTHER_SHAPES,
+                None,
+                None,
+                &[],
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("encoded"),
         );
         assert_ne!(wanted, rendered_selector(&held));
 
@@ -3393,7 +3668,17 @@ ex:StatusShape a sh:NodeShape ;
     /// the bound `admit_expecting` both reach.
     #[test]
     fn a_rebuilt_product_required_to_be_itself_validates_identically() {
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let own = purrdf_validate::parse_identity_digest(&rendered_selector(&product))
             .expect("the rendering is accepted back");
 
@@ -3423,7 +3708,17 @@ ex:StatusShape a sh:NodeShape ;
     fn the_exported_rebuild_entry_point_binds_a_restore_through_pointers() {
         use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
 
-        let product = encode_product_bytes(SHAPES, None, None, &[]).expect("product encoded");
+        let product = encode_product_bytes(
+            SHAPES,
+            None,
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("product encoded");
         let own = std::ffi::CString::new(rendered_selector(&product)).expect("no interior NUL");
         let data = std::ffi::CString::new(DATA).expect("no interior NUL");
 
@@ -3647,8 +3942,14 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut entailed,
                     &raw mut entail_diagnostics,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
@@ -3666,6 +3967,9 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     &raw mut rules_diagnostics,
@@ -3740,8 +4044,14 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                     pointer(&limits[1]),
                     pointer(&limits[2]),
                     pointer(&limits[3]),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 if status == PurrdfStatus::Ok as i32 {
@@ -3832,6 +4142,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -3861,8 +4174,14 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 assert_eq!(status, PurrdfStatus::Ok as i32, "{}", take_error(error));
@@ -3932,6 +4251,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     if explain {
                         &raw mut proof
@@ -4012,6 +4334,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4068,6 +4393,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4155,6 +4483,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     iris.as_ptr(),
                     documents.as_ptr(),
                     count,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut inferred,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -4296,6 +4627,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     0,
                     &raw mut buffer,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 assert_eq!(status, PurrdfStatus::Ok as i32);
@@ -4940,6 +5274,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 purrdf_shapes_import_error_iri(error, usize::MAX).is_null(),
                 "an out-of-range index reads NULL"
             );
+            let native = text(crate::error::purrdf_error_native_cause_json(error))
+                .expect("specialized import errors retain native fields");
+            assert!(native.contains(&kind), "{native}");
             purrdf_error_free(error);
             (status, kind, iris)
         }
@@ -5048,8 +5385,14 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 if supplied {
@@ -5073,6 +5416,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_iris,
                     import_documents,
                     import_count,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut buffer,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -5144,6 +5490,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_documents,
                     import_count,
                     &raw mut buffer,
+                    c"1000000".as_ptr(),
+                    std::ptr::null(),
+                    &mut crate::receipt::Output::default().0,
                     &raw mut error,
                 );
                 if supplied {

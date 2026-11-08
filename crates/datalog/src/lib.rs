@@ -28,32 +28,25 @@
 //! accurate report of what the run consumed — never a truncated model presented as a
 //! complete one. Five limits exist:
 //!
-//! * the **stored-fact** and **join-step** limits bound what a run holds and how many
-//!   candidate solutions it may enumerate. They are the caller's, on
-//!   [`EvalOptions`](seminaive::EvalOptions)
-//!   ([`with_max_stored_facts`](seminaive::EvalOptions::with_max_stored_facts),
-//!   [`with_max_join_steps`](seminaive::EvalOptions::with_max_join_steps)), with a default
-//!   sized for the target: 131,072 facts on `wasm32`, where the store lives in one linear
-//!   memory, and 4,194,304 facts everywhere else
-//!   ([`seminaive::DEFAULT_MAX_STORED_FACTS`], chosen at compile time from the target
-//!   architecture, never by a Cargo feature), and 1,048,576 join steps on every target
-//!   ([`seminaive::DEFAULT_MAX_JOIN_STEPS`]). The join-step default does not grow
-//!   natively because a body's candidates are materialised before it is checked, so a
-//!   Cartesian body under a larger default exhausts memory before it is refused; see
-//!   [`seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS`]. A program that needs more work states it.
-//! * the **term-arena** ceiling ([`seminaive::MAX_TERM_ARENA_BYTES`]) bounds the bytes of
-//!   interned term surfaces. It is a constant, the same on every target.
+//! * the **stored-fact** and **join-step** limits bound retained facts and enumerated
+//!   candidates when the caller selects them through [`seminaive::EvalOptions`].
+//! * the **term-arena** ceiling bounds retained term surfaces when selected through
+//!   [`seminaive::EvalOptions::with_max_term_arena_bytes`]. These three capacity
+//!   settings are unlimited when unstated on every target. Physical admission
+//!   and counter representation still apply.
 //! * the **term-generating round** limit and the **generated-term** budget bound a guarded
 //!   program that keeps computing new terms; see below.
 //!
 //! A limit a caller can set could make the answer the caller's choice, and it does not
 //! here, for one reason: a limit can only REFUSE. A run inside its limits returns the
 //! program's least model, which is the same model under every limit that admits it and on
-//! every target; a run past one returns no model at all. Every caller passing the same
+//! every target. Complete-only entry points return no model past a limit;
+//! [`seminaive::EvaluationSession`] retains a separately typed certified partial
+//! model and the original continuation. Every caller passing the same
 //! options gets the same answer or the same refusal, and the effective values of the
 //! limits in force are folded into the result's contract hash
 //! ([`cache::contract_hash_with`]), so a result computed under one set of limits — or on
-//! one target under its defaults — never claims the identity of another.
+//! another target with the same options — never claims a different calculus.
 //!
 //! What the limits do NOT promise is that a refusal is stable across releases. A
 //! join-step count is an artifact of the evaluator's plan as well as of the program, so a
@@ -79,11 +72,11 @@
 //! **answer-blind**: it carries no number, prices nothing, and cannot be asked *where* to
 //! stop — only whether to. An
 //! unstopped run returns precisely what it would have returned with no signal attached,
-//! and a stopped one returns **nothing at all** — a typed refusal, never a truncated
-//! model. Because there is no third outcome, there is no schedule to version, no profile
-//! to pin and no partial closure a consumer could mistake for a complete one. The whole
-//! surface is a two-line trait polled at round boundaries the fixpoint was going to reach
-//! anyway; see [`stop`] for the contract an implementation is bound by.
+//! and a stopped complete-only call returns a typed refusal. A retained
+//! [`seminaive::EvaluationSession`] exposes certified facts through
+//! [`seminaive::PartialModel`] and can resume with a fresh signal. It cannot yield
+//! an [`Evaluation`](seminaive::Evaluation) before completion. Signals are polled
+//! at round boundaries and session entry; see [`stop`] for their contract.
 //!
 //! ## The wall clock, stated accurately
 //!
@@ -143,7 +136,7 @@
 //! - [`store`] — the columnar [`RelationStore`](store::RelationStore): ONE arity-4
 //!   relation `triple(subject, predicate, object, graph)` over one term dictionary,
 //!   physically partitioned by its `(predicate, graph)` positions. Each partition is a
-//!   shared arrangement held as sorted immutable batches plus a mutable tail, deduped by a
+//!   shared arrangement held as sorted sealed batches plus a mutable tail, deduped by a
 //!   galloping probe rather than by hashing, and generic over an abelian
 //!   [`Weight`](store::Weight) monoid so signed (Z-set) multiplicities — and hence
 //!   retraction — are a compiled property of the representation. A constant predicate
@@ -288,14 +281,17 @@
 // caller.
 pub use purrdf_core::binding_pattern;
 pub mod admission;
+mod allocation;
 pub mod cache;
 pub mod chase;
 pub mod clause;
 pub mod cursor;
+pub mod demand;
 pub mod dictionary;
 pub mod evidence;
 pub mod guard;
 pub mod id;
+pub mod maintenance;
 pub(crate) mod paths;
 pub mod plan;
 pub mod proof;

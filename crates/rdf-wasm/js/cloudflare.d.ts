@@ -112,6 +112,10 @@ export interface EndpointCors {
 }
 
 export interface SparqlEndpointOptions {
+  /** Exact time supplied to each query or complete UPDATE request. */
+  readonly now?: string | null;
+  /** Execution seed: unsigned 64-bit bigint or non-negative safe integral number. */
+  readonly entropySeed?: bigint | number | null;
   readonly engine: QueryEngine;
   readonly dataset: Dataset;
   readonly governors: EndpointGovernors;

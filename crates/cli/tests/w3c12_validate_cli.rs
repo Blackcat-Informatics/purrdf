@@ -5,7 +5,7 @@
 //! --shacl-profile shacl-ed-2026-10-16` binary — the production entry point, not the library
 //! harness — and graded against its approved expectation.
 //!
-//! Discovery is the library harness's own corpus reader (`purrdf_shapes::shacl_corpora`)
+//! Discovery is the library harness's own corpus reader (`purrdf_shacl_conformance`)
 //! with its drift guards. Grading is the one `sht:Validate` grader
 //! (`shacl_corpora::report_grading::grade`) applied to the report graph the binary wrote:
 //! `shacl_corpora::report_graph_outcome` reduces that N-Triples report to `sh:conforms` and
@@ -21,9 +21,9 @@
 
 use std::process::Command;
 
-use purrdf_shapes::shacl_corpora::report_grading::grade;
-use purrdf_shapes::shacl_corpora::shacl12::{Body, shacl12_cases};
-use purrdf_shapes::shacl_corpora::{Expected, Multiset, W3cCase, file_iri, report_graph_outcome};
+use purrdf_shacl_conformance::report_grading::grade;
+use purrdf_shacl_conformance::shacl12::{Body, shacl12_cases};
+use purrdf_shacl_conformance::{Expected, Multiset, W3cCase, file_iri, report_graph_outcome};
 
 /// The law the 1.2 suite is graded under.
 const ED: &str = "shacl-ed-2026-10-16";

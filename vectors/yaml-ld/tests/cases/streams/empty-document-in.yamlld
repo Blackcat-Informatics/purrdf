@@ -1,0 +1,10 @@
+"@context":
+  "@vocab": https://example.org/
+"@id": https://example.org/first
+value: first
+---
+---
+"@context":
+  "@vocab": https://example.org/
+"@id": https://example.org/second
+value: second

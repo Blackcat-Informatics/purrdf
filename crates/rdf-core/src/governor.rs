@@ -103,6 +103,7 @@ impl std::fmt::Display for StopCause {
 /// [`Pages`]: ResourceDimension::Pages
 /// [`Bytes`]: ResourceDimension::Bytes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ResourceDimension {
     /// Abstract execution steps charged at the evaluator's counting points.
     Fuel,
@@ -151,7 +152,7 @@ impl purrdf_hash::error::StructuredError for ResourceDimension {
 impl ResourceDimension {
     /// Every governed dimension, in declaration order. Iterate this rather than
     /// hand-listing variants, so a new dimension reaches every consumer.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: &[Self] = &[
         Self::Fuel,
         Self::AnswerRows,
         Self::IntermediateCells,
@@ -162,7 +163,8 @@ impl ResourceDimension {
         Self::Bytes,
     ];
 
-    /// The number of governed dimensions, and the width of a [`ResourceVector`].
+    /// The number of governed dimensions in this build, and the width of a
+    /// [`ResourceVector`]. This is not a persisted-format or wire-contract width.
     pub const COUNT: usize = Self::ALL.len();
 
     /// A stable kebab-case label for this dimension.
@@ -184,8 +186,12 @@ impl ResourceDimension {
         }
     }
 
-    /// The dense slot this dimension occupies in a [`ResourceVector`].
-    const fn index(self) -> usize {
+    /// The dense slot this dimension occupies in this build's [`Self::ALL`] order.
+    ///
+    /// Use it for local counters and vectors, never as a persisted or wire identity.
+    /// Stable external identities use [`Self::label`] or an explicit host mapping.
+    #[must_use]
+    pub const fn index(self) -> usize {
         match self {
             Self::Fuel => 0,
             Self::AnswerRows => 1,
@@ -218,6 +224,18 @@ impl std::fmt::Display for ResourceDimension {
 /// [`ResourceVector::ZERO`] explicitly at every construction site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceVector([u64; ResourceDimension::COUNT]);
+
+impl purrdf_hash::error::StructuredError for ResourceVector {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant("governor-resource-vector");
+        for &dimension in ResourceDimension::ALL {
+            visitor.value(
+                Some(dimension.label()),
+                purrdf_hash::error::ErrorValue::Unsigned(u128::from(self.get(dimension))),
+            );
+        }
+    }
+}
 
 impl ResourceVector {
     /// Zero on every dimension. As a consumption vector this is "nothing spent yet"; as
@@ -593,6 +611,22 @@ pub struct SilencedInvocation {
     pub message: String,
 }
 
+impl purrdf_hash::error::StructuredError for SilencedInvocation {
+    purrdf_hash::error_visit! {
+        @record self { target, kind, message } => "governor-silenced-invocation" {
+            "target" => Record(&self.target), "kind" => Code(self.kind.label()),
+            "message" => Message(&self.message),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SilencedTarget {
+    purrdf_hash::error_visit! {
+        Service { endpoint } => "silenced-service" { "endpoint" => Text(endpoint) },
+        Load { iri } => "silenced-load" { "iri" => Iri(iri) },
+    }
+}
+
 impl SilencedInvocation {
     /// A record of `target` failing with `kind`, described by `message`.
     #[must_use]
@@ -621,6 +655,14 @@ struct SilencedPayload {
 #[derive(Debug, Clone, Default)]
 pub struct SilencedEvidence {
     payload: Option<crate::small::Shared<SilencedPayload>>,
+}
+
+impl purrdf_hash::error::StructuredError for SilencedEvidence {
+    purrdf_hash::error_visit! {
+        @record self { payload } => "governor-silenced-evidence" {
+            "invocations" => List(self.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
 }
 
 /// Actual allocation failure while freezing immutable invocation evidence.
@@ -896,6 +938,37 @@ pub struct GovernorEvidence {
     pub expression_errors: ExpressionErrorEvidence,
 }
 
+impl purrdf_hash::error::StructuredError for GovernorEvidence {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            consumed,
+            limits,
+            tripped,
+            silenced,
+            expression_errors,
+        } = self;
+        visitor.variant("governor-evidence");
+        visitor.value(Some("consumed"), ErrorValue::Record(consumed));
+        visitor.value(Some("limits"), ErrorValue::Record(limits));
+        visitor.value(
+            Some("tripped"),
+            tripped
+                .as_ref()
+                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+        );
+        visitor.value(Some("silenced"), ErrorValue::Record(silenced));
+        visitor.begin_list(Some("expression_errors"), expression_errors.len());
+        for (code, count) in expression_errors {
+            visitor.begin_record(None, "governor-expression-error");
+            visitor.value(Some("code"), ErrorValue::Code(code.qname()));
+            visitor.value(Some("count"), ErrorValue::Unsigned(u128::from(*count)));
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
+}
+
 impl GovernorEvidence {
     /// Owned capacity of the receipt's variable-sized invocation/error records.
     /// Fixed fields are included by the enclosing receipt's own layout.
@@ -979,7 +1052,7 @@ mod tests {
     #[test]
     fn resource_vector_unbounded_is_not_bounded_on_any_dimension() {
         let vector = ResourceVector::UNBOUNDED;
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             assert_eq!(vector.get(dimension), u64::MAX, "{}", dimension.label());
             assert!(!vector.is_bounded(dimension), "{}", dimension.label());
         }
@@ -995,7 +1068,7 @@ mod tests {
     #[test]
     fn resource_vector_zero_is_bounded_on_every_dimension() {
         let vector = ResourceVector::ZERO;
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             assert_eq!(vector.get(dimension), 0, "{}", dimension.label());
             assert!(vector.is_bounded(dimension), "{}", dimension.label());
         }
@@ -1085,7 +1158,7 @@ mod tests {
         }
         assert_eq!(labels[ResourceDimension::COUNT], "cancelled");
         assert_eq!(labels[ResourceDimension::COUNT + 1], "deadline-exceeded");
-        for &dimension in &ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             labels.push(
                 TrippedGovernor::Refused {
                     dimension,
@@ -1211,7 +1284,7 @@ mod tests {
         // Both stop causes outrank every budget and every refusal, on every dimension;
         // and a refusal — decided before the first charge — outranks the ceiling it was
         // decided against.
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             for cause in ALL_STOP_CAUSES {
                 assert!(
                     TrippedGovernor::Stopped { cause }.precedence_rank()

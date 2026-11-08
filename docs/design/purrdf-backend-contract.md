@@ -216,6 +216,22 @@ lazy backend whose storage can fail keeps the same shape but additionally implem
 becomes failed. Such a view is complete only through the guarded execution boundary
 described by G7, never from iterator exhaustion alone.
 
+`annotation_quads_for_range` accepts ordered XSD value bounds, independently
+inclusive or exclusive. These are semantic values, never ordered term IDs.
+Paged summaries and authenticated segmented block summaries reject disjoint
+annotation ranges before payload admission. Unknown or incomparable values remain
+candidates. The evaluator pushes conjunctive bounds from an immediate BGP FILTER,
+including its context's fixed `NOW()` value, and retains the exact FILTER as the
+final semantic decision. Graph selection, reifier ownership and ordinary asserted
+triples keep their existing semantics.
+
+`snapshot_identity` names immutable carrier content and graph declarations.
+Resident and pack carriers seal the identity when published or opened; paged and
+segmented compositions bind certified layers, chronology, removals and the visible
+head. Reading this identity does not enumerate payload pages. A custom carrier
+that cannot certify content returns `None`; statistics and process-local IDs are
+never substituted for a content identity.
+
 ### C4 — `DatasetMut` mutates by value, not by id
 
 `DatasetMut` is the write companion to `DatasetView` — the mutation surface a

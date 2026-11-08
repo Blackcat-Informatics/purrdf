@@ -17,6 +17,7 @@ impl fmt::Display for SourceLost {
 }
 impl std::error::Error for SourceLost {}
 
+#[derive(Default)]
 pub(crate) struct HostDictionary {
     pub(crate) surfaces: BTreeMap<u64, String>,
     pub(crate) extra_terms: u64,
@@ -25,6 +26,7 @@ pub(crate) struct HostDictionary {
     pub(crate) lookups: std::sync::atomic::AtomicUsize,
     pub(crate) lose_after_lookup: std::sync::atomic::AtomicBool,
     pub(crate) pins: std::sync::atomic::AtomicUsize,
+    pub(crate) refuse_after_interned: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) struct HostPin<'a> {
@@ -76,6 +78,13 @@ impl TermDictionary for HostDictionary {
             live: &self.pins,
         })
     }
+    fn compare_terms(
+        &self,
+        left: DictionaryTerm<'_, u64>,
+        right: DictionaryTerm<'_, u64>,
+    ) -> Result<core::cmp::Ordering, SourceLost> {
+        super::dictionary::compare_lexical_terms(self, left, right)
+    }
     fn with_interned<T, const N: usize>(
         &mut self,
         terms: [DictionaryTerm<'_, u64>; N],
@@ -87,7 +96,15 @@ impl TermDictionary for HostDictionary {
                 panic!("direct-ID operations must not mint substitutes")
             }
         });
-        validate(self, ids)
+        let result = validate(self, ids)?;
+        if self
+            .refuse_after_interned
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            Err(DictionaryError::Source(SourceLost(71)))
+        } else {
+            Ok(result)
+        }
     }
     fn check_read(&self) -> Result<(), SourceLost> {
         if self.lost.load(std::sync::atomic::Ordering::Relaxed) {

@@ -196,7 +196,7 @@ fn cached_rebinding_uses_each_exact_focus_in_optional_and_nested_modifiers() {
         ),
     ] {
         let mut prepared = engine
-            .prepare_execution(&body, None, &["this"], options)
+            .prepare_execution(&body, None, &["this"], &options)
             .expect("prepare");
         // Consecutive nodes of the same kind test memo replay; two passes also cross
         // IRI, blank, literal, directional and nested quoted value shapes repeatedly.
@@ -204,7 +204,7 @@ fn cached_rebinding_uses_each_exact_focus_in_optional_and_nested_modifiers() {
             let focus = dataset.term_value(item);
             prepared.bind(0, focus.clone()).expect("bind");
             let rows = engine
-                .execute(&mut prepared, &*dataset, options, |outcome| {
+                .execute(&mut prepared, &*dataset, &options, |outcome| {
                     let InternedOutcome::Solutions(solutions) = outcome else {
                         panic!("SELECT");
                     };
@@ -246,7 +246,7 @@ fn predicates_and_nested_predicates_rebind_and_non_iris_match_nothing() {
         ),
     ] {
         let mut prepared = engine
-            .prepare_execution(&query, None, &["this"], options)
+            .prepare_execution(&query, None, &["this"], &options)
             .expect("prepare");
         let bindings = [
             TermValue::iri(format!("{EX}{matching}")),
@@ -265,7 +265,7 @@ fn predicates_and_nested_predicates_rebind_and_non_iris_match_nothing() {
         {
             prepared.bind(0, focus.clone()).expect("bind");
             let count = engine
-                .execute(&mut prepared, &*dataset, options, |outcome| {
+                .execute(&mut prepared, &*dataset, &options, |outcome| {
                     let InternedOutcome::Solutions(solutions) = outcome else {
                         panic!("SELECT");
                     };
@@ -310,7 +310,7 @@ fn optional_and_minus_answer_alike_on_every_lane() {
                         base_iri: None,
                         substitutions: &substitutions,
                     },
-                    QueryOptions::EMPTY.with_prebinding(lane),
+                    &QueryOptions::EMPTY.with_prebinding(lane),
                 )
                 .expect("query");
             let SparqlResult::Solutions { rows, .. } = result else {
@@ -360,12 +360,12 @@ fn graph_name_only_bindings_are_local_in_optional_and_exists_scopes() {
         "SELECT $this WHERE { FILTER NOT EXISTS { OPTIONAL { GRAPH $this { ?s ?p ?v } } FILTER(BOUND(?v)) } }",
     ] {
         let mut prepared = engine
-            .prepare_execution(query, None, &["this"], options)
+            .prepare_execution(query, None, &["this"], &options)
             .expect("prepare");
         for focus in focuses.iter().chain(&focuses) {
             prepared.bind(0, focus.clone()).expect("bind");
             let rows = engine
-                .execute(&mut prepared, &dataset, options, |outcome| {
+                .execute(&mut prepared, &dataset, &options, |outcome| {
                     let InternedOutcome::Solutions(solutions) = outcome else {
                         panic!("SELECT");
                     };

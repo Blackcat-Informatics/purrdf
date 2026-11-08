@@ -577,6 +577,7 @@ impl PagedStack {
             PagedDataset::from_parts(dictionary, provider, PageGeneration::INITIAL, parts)
                 .map_err(PagedStackError::Freeze)?;
         let mut snapshot = PagedStackSnapshot {
+            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
             statistics_revision: 0,
             physical,
             origins,
@@ -606,6 +607,7 @@ impl PagedStack {
             &snapshot.removal_values,
             &snapshot.graph_declarations,
         ));
+        snapshot.snapshot_identity = snapshot.seal_content_identity()?;
         Self::check_sources(layers)?;
         Ok(snapshot)
     }
@@ -615,9 +617,13 @@ impl PagedStack {
     ///
     /// # Errors
     /// Source drift or head encoding failures publish no layer and retain the head.
-    pub fn seal_head(&mut self, page_rows: NonZeroUsize) -> Result<(), PagedStackError> {
+    pub fn seal_head(
+        &mut self,
+        page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<(), PagedStackError> {
         Self::check_sources(&self.layers)?;
-        let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows)
+        let dataset = canonical_paged_seal(self.frozen_head()?.as_ref(), page_rows, control)
             .map_err(PagedStackError::Seal)?;
         Self::check_sources(&self.layers)?;
         self.layers
@@ -643,11 +649,12 @@ impl PagedStack {
         &self,
         limits: PagedQueryLimits,
         page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
         let snapshot = self
             .snapshot()
             .map_err(|error| CanonicalPagedError::Construction(Box::new(error)))?;
-        snapshot.compact(limits, page_rows)
+        snapshot.compact(limits, page_rows, control)
     }
 }
 
@@ -727,6 +734,7 @@ impl PageProvider for StackProvider {
 /// Immutable metadata and copied head/removals, retained independently of its writer.
 #[derive(Debug)]
 pub struct PagedStackSnapshot {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     statistics_revision: u64,
     physical: PagedDataset,
     origins: Vec<StackPageOrigin>,
@@ -741,6 +749,51 @@ pub struct PagedStackSnapshot {
     head_bytes: u64,
 }
 impl PagedStackSnapshot {
+    fn seal_content_identity(
+        &self,
+    ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+        const SNAPSHOT: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/paged-stack-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(SNAPSHOT.as_bytes());
+        hash.update(self.physical.statistics.snapshot_identity.as_bytes());
+        hash.update(&(self.ranges.len() as u64).to_le_bytes());
+        for range in &self.ranges {
+            hash.update(&(range.start as u64).to_le_bytes());
+            hash.update(&(range.end as u64).to_le_bytes());
+        }
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        hash.update(&(self.removal_values.len() as u64).to_le_bytes());
+        for rows in self.removal_values.iter() {
+            hash.update(&(rows.len() as u64).to_le_bytes());
+            for row in rows.iter() {
+                let source = crate::source::SourceRowRef {
+                    subject: &row.s,
+                    predicate: &row.p,
+                    object: &row.o,
+                    graph: row.g.as_ref(),
+                };
+                hash.update(&source.hashes(&mut memory)?[0]);
+            }
+        }
+        hash.update(&(self.graph_declarations.len() as u64).to_le_bytes());
+        for graphs in self.graph_declarations.iter() {
+            hash.update(&(graphs.len() as u64).to_le_bytes());
+            for graph in graphs.iter() {
+                let mut term = purrdf_hash::blake3::Hasher::new();
+                graph.visit_canonical_bytes_with_memory(
+                    |bytes| {
+                        term.update(bytes);
+                    },
+                    &mut memory,
+                )?;
+                hash.update(term.finalize().as_bytes());
+            }
+        }
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+
     /// Start one operation sharing a single physical cache, budget and sticky latch.
     #[must_use]
     pub fn query_view(&self, limits: PagedQueryLimits) -> PagedStackQueryView<'_> {
@@ -767,8 +820,9 @@ impl PagedStackSnapshot {
         &self,
         limits: PagedQueryLimits,
         page_rows: NonZeroUsize,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<PagedDataset, CanonicalPagedError<PagedQueryError>> {
-        canonical_paged_seal(&self.query_view(limits), page_rows)
+        canonical_paged_seal(&self.query_view(limits), page_rows, control)
     }
 }
 
@@ -835,6 +889,18 @@ impl PagedStackQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
+        self.logical_rows_range(kind, s, p, o, g, None)
+    }
+
+    fn logical_rows_range<'a>(
+        &'a self,
+        kind: StatementKind,
+        s: Option<GlobalTermId>,
+        p: Option<GlobalTermId>,
+        o: Option<GlobalTermId>,
+        g: GraphMatch<GlobalTermId>,
+        values: Option<&'a crate::AnnotationValueRange<'a>>,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         let mut seen = FastSet::default();
         self.snapshot
             .ranges
@@ -845,7 +911,7 @@ impl PagedStackQueryView<'_> {
                     .into_iter()
                     .flat_map(move |stream| {
                         self.physical
-                            .stream_pattern_range(stream, s, p, o, g, range.clone())
+                            .stream_pattern_value_range(stream, (s, p, o, g), range.clone(), values)
                             .map(move |(page, row)| (stream, page, row))
                     })
             })
@@ -922,6 +988,13 @@ impl DatasetView for PagedStackQueryView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(self.snapshot.snapshot_identity))
+    }
+
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         self.read_error().is_none().then_some(self as _)
     }
@@ -1005,6 +1078,23 @@ impl DatasetView for PagedStackQueryView<'_> {
         g: GraphMatch<Self::Id>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.logical_rows(StatementKind::Annotation, None, None, None, g)
+    }
+
+    fn annotation_quads_for_range<'a>(
+        &'a self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+        range: &'a crate::AnnotationValueRange<'a>,
+    ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
+        self.logical_rows_range(
+            StatementKind::Annotation,
+            None,
+            predicate,
+            object,
+            graph,
+            Some(range),
+        )
     }
     fn annotations_of_with_graph(
         &self,
@@ -1203,6 +1293,7 @@ impl CanonicalRecord {
 pub fn canonical_paged_seal<D: FallibleDatasetView>(
     view: &D,
     page_rows: NonZeroUsize,
+    control: &mut crate::CanonicalizationControl<'_>,
 ) -> Result<PagedDataset, CanonicalPagedError<D::Error>> {
     checkpoint(view)?;
     let mut records = BTreeSet::new();
@@ -1255,7 +1346,7 @@ pub fn canonical_paged_seal<D: FallibleDatasetView>(
             record.replay(&mut builder)?;
         }
         let page = builder.freeze().map_err(CanonicalPagedError::Invalid)?;
-        let bytes = PackBuilder::build_bytes(&page).map_err(CanonicalPagedError::Pack)?;
+        let bytes = PackBuilder::build_bytes(&page, control).map_err(CanonicalPagedError::Pack)?;
         pages
             .try_reserve(1)
             .map_err(|_| CanonicalPagedError::Capacity)?;

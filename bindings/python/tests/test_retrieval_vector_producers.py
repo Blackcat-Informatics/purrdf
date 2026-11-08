@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 from purrdf import retrieval
-
+SCALE12 = 10**12
 EX = "https://example.org/"
 
 NOTE = f"{EX}note"
@@ -60,7 +60,7 @@ TRUNCATED = "reciprocal_rank"
 HNSW_PARAMS = (8, 16, 64, CORPUS)
 GUARD = (CORPUS, CORPUS)
 
-WEIGHTS = {TEXT_STRATUM: retrieval.SCALE, VECTOR_STRATUM: retrieval.SCALE}
+WEIGHTS = {TEXT_STRATUM: SCALE12, VECTOR_STRATUM: SCALE12}
 # Each stratum really holds the rows its producer declares; no selectivity is
 # measured.
 STATISTICS: dict[str, Any] = {
@@ -181,7 +181,7 @@ def _search(
         weights=WEIGHTS,
         statistics=STATISTICS,
         k=K,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=top_k,
         data_format="ntriples",
         **_vector_producers(kind, vector_domains),
@@ -412,7 +412,7 @@ def test_a_vector_producer_attests_its_space_and_a_host_generation_replaces_it(
         weights=WEIGHTS,
         statistics=STATISTICS,
         k=K,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=TOP_K,
         data_format="ntriples",
         **{next(iter(producers)): {producer: tuple(attested)}},

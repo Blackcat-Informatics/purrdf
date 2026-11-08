@@ -350,11 +350,7 @@ impl PositivePlan {
                     left.certain = left.certain.union_admitted(&right.certain, &workspace)?;
                     Summary {
                         certain: left.certain,
-                        estimate: PlanEstimate {
-                            rows,
-                            peak_rows,
-                            columns: left.schema.len() as u64,
-                        },
+                        estimate: PlanEstimate::new(rows, peak_rows, left.schema.len() as u64),
                         schema: left.schema,
                     }
                 }
@@ -386,11 +382,7 @@ impl PositivePlan {
                     }
                     Summary {
                         certain: certain.unwrap_or_default(),
-                        estimate: PlanEstimate {
-                            rows,
-                            peak_rows: peak_rows.max(rows),
-                            columns: schema.len() as u64,
-                        },
+                        estimate: PlanEstimate::new(rows, peak_rows.max(rows), schema.len() as u64),
                         schema,
                     }
                 }
@@ -789,14 +781,14 @@ impl PositivePlan {
                             .estimate_of(first)
                             .expect("first driver was surveyed");
                         let rows = first.rows.saturating_mul(second.rows);
-                        PlanEstimate {
+                        PlanEstimate::new(
                             rows,
-                            peak_rows: rows,
-                            columns: u64::try_from(
+                            rows,
+                            u64::try_from(
                                 crate::eval::syntactic_schema_admitted(node, &workspace)?.len(),
                             )
                             .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-                        }
+                        )
                     } else {
                         second.clone()
                     };
@@ -817,14 +809,7 @@ impl PositivePlan {
                         &*crate::eval::syntactic_schema_admitted(node, &workspace)?,
                         &seed.schema,
                     )?);
-                    survey.record(
-                        node,
-                        PlanEstimate {
-                            rows,
-                            peak_rows: rows,
-                            columns,
-                        },
-                    );
+                    survey.record(node, PlanEstimate::new(rows, rows, columns));
                 }
             }
         }

@@ -59,6 +59,12 @@ Several cases share one `(data, query)` pair — that is the point of the band
 matrix: the *only* thing that differs between `fuel-zero`, `fuel-boundary` and
 `fuel-over-bound` is the ceiling.
 
+The `udf-depth-*` bands share a tiny nested SPARQL function query and the
+`user-function` harness source. The existing Rust regeneration entry writes its
+input fixtures and seeds the three bands, then measures their limits and
+receipts. Ordinary verification uses the same bound function registry and
+checks the zero, inclusive boundary and over-bound outcomes.
+
 The `numeric-default-fuel-*` pair pins profile v17's exact-first division:
 `1 / 2^70` retains its full terminating decimal, while `1 / 6` rounds half to
 even at eighteen fractional digits. Its fuel ceiling is measured from the same

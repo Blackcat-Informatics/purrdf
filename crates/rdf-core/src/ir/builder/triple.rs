@@ -297,7 +297,8 @@ impl TripleDatasetBuilder {
             &self.reifiers.rows,
             &self.annotations.rows,
             false,
-        );
+            memory,
+        )?;
         let RdfDatasetBuilder {
             interner,
             used_scopes,
@@ -334,7 +335,13 @@ impl TripleDatasetBuilder {
             }),
             memory,
         )?;
+        let snapshot_identity = crate::source::resident_snapshot(
+            statistics.source_directory().content_records(),
+            purrdf_hash::multiset::Multiset256::default(),
+            dictionary.snapshot_fingerprint(memory)?,
+        );
         Ok(TripleDataset {
+            snapshot_identity,
             dictionary,
             statistics,
             triples: TripleTable::new(self.triples.freeze(memory)?),

@@ -61,6 +61,8 @@ pub fn analyze<'a>(
     source: SourceDocument<'a>,
     profile: &Profile,
 ) -> Result<Document<'a>, MimeError> {
+    #[cfg(test)]
+    crate::ownership_tests::record_analysis(source.bytes.len());
     BaseIri::parse(source.id)?;
     let limits = profile.limits();
     Limits::check(
@@ -87,7 +89,6 @@ pub fn analyze<'a>(
         cover,
         id,
         profile_id: profile.identity(),
-        profile: profile.clone(),
         parts: Vec::new(),
         headers: Vec::new(),
         structures: Vec::new(),
@@ -444,7 +445,7 @@ fn child_ranges(document: &mut Document<'_>, part: usize) -> Vec<(Range<usize>, 
     } else if !matches!(
         encoding,
         TransferEncoding::SevenBit | TransferEncoding::EightBit
-    ) && transfer::decode(&document.source.bytes[body.clone()], &encoding).is_err()
+    ) && transfer::visit(&document.source.bytes[body.clone()], &encoding, |_| {}).is_err()
     {
         problem(
             document,

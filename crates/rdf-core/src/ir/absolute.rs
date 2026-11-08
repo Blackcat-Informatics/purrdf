@@ -77,6 +77,27 @@ pub(crate) fn check_absolute(iri: &str) -> Result<(), IriError> {
     BaseScope::empty().check(iri)
 }
 
+/// The same no-base invariant under original diagnostic admission.
+pub(crate) fn check_absolute_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    iri: &str,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_iri::IriReadError> {
+    if iri.is_empty() {
+        return Err(IriError::NoBase {
+            reference: String::new(),
+        }
+        .into());
+    }
+    if purrdf_iri::is_absolute_with_memory(iri, memory)? {
+        Ok(())
+    } else {
+        Err(IriError::NoBase {
+            reference: memory.string_with_progress(iri)?,
+        }
+        .into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

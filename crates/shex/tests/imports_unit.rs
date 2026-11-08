@@ -69,7 +69,8 @@ fn transitive_import_merges_and_validates() {
             TermValue::iri("http://a.example/n1"),
             ShapeSelector::Label("http://a.example/S1".to_owned()),
         )],
-    );
+    )
+    .expect("validation finishes");
     assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);
 }
 

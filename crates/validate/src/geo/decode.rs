@@ -342,6 +342,29 @@ impl Decode<'_, '_, '_, '_> {
         DecodeError::custom_native(message, Some(self.allocation))
     }
 
+    pub(super) fn native(
+        &self,
+        cause: impl purrdf_hash::error::NativeError + 'static,
+    ) -> DecodeError {
+        DecodeError::native_with_allocation(cause, Some(self.allocation))
+    }
+
+    pub(super) fn native_fields(
+        &self,
+        cause: &dyn purrdf_hash::error::StructuredError,
+        admit: impl FnOnce(json::OutputLayout) -> Result<(), GeoError>,
+    ) -> Result<Value, GeoCallError> {
+        self.storage
+            .native(|memory| crate::native_error::to_json_with_admission(cause, memory, admit))
+            .map_err(|error| match error {
+                purrdf_lex::control::ControlledError::Control(error) => error.into(),
+                purrdf_lex::control::ControlledError::Native(error) => error
+                    .storage_error()
+                    .map_or_else(|| GeoError::native_source(error), GeoError::Storage)
+                    .into(),
+            })
+    }
+
     pub(super) fn invalid_type(&self, value: &Value, expected: &str) -> DecodeError {
         DecodeError::invalid_type_native(value, expected, Some(self.allocation))
     }

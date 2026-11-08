@@ -1696,10 +1696,17 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
         for claim in slice(GUIDE, profile) {
             let dataset = parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
                 .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
-            let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
-                .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+            let canonical = try_canonicalize_with(
+                &dataset,
+                CanonHash::Sha256,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
             assert_eq!(
-                canonical.nquads.lines().count(),
+                canonical.nquads().lines().count(),
                 claim.turtle.lines().count(),
                 "every line is one distinct triple"
             );
@@ -1717,15 +1724,15 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
 /// is the deliberate step that records which. They are the real values
 /// a report about a law change should quote.
 const DECLARED_CONTRACT_ID: &str =
-    "d4053c9d35631e2da17f7219349cf653397a7d946195552868890392230b2a55";
+    "21bad1db0c0f143581ab997b6a1cde919a031c67308f422004e0c960135e0014";
 const DECLARED_CHUNKING_ID: &str =
-    "40c979545ccb6e9a3007d38c93adb72c9735f39080a519e6d399bd6e0ed1e872";
+    "49163dedf627bb356d9561a880ba61320133c0c7a11eb6be6cc51a90a627a34c";
 
 /// The same profile with the byte bound widened to 4096 and nothing
 /// else touched: a split constant, so **both** ids move, and these are
 /// the values they move to.
-const WIDER_CONTRACT_ID: &str = "61436f7b876f9dc7927fa82d5b9cf26a7eeed047fe8e939bba57386376584e86";
-const WIDER_CHUNKING_ID: &str = "2a832603cbd4458673dc826e8b9018d0b489530fa46b31bc95a243927af9bc49";
+const WIDER_CONTRACT_ID: &str = "ddbf9ab60a3e1e2327335b5699156475d81aa90107bf151e1885d6d0e5ce365e";
+const WIDER_CHUNKING_ID: &str = "6057e22fad4e1aee6444ca130b0473bae3b9369d7eebaf6065403a3f3c9d859a";
 
 /// A second canon base, under another authority: the third profile of
 /// the split's central vector.
@@ -2634,7 +2641,7 @@ fn each_marker_the_law_names_is_read_behind_a_leading_run_of_spaces() {
 }
 
 #[test]
-fn nought_to_three_leading_spaces_open_a_marker_and_four_leave_an_ordinary_unit() {
+fn nought_to_three_leading_spaces_open_a_marker_and_four_open_code() {
     for indent in 0..=3_usize {
         let run = " ".repeat(indent);
         let text = format!("{run}# T\n\n{run}\u{2042} *m*\n\n{run}1. one\n");
@@ -2659,11 +2666,10 @@ fn nought_to_three_leading_spaces_open_a_marker_and_four_leave_an_ordinary_unit(
         );
     }
 
-    // Four spaces is where a marker stops being one, and nothing is
-    // refused: the three lines are ordinary content, they slice into
-    // ordinary units, and they carry no verse and open no section.
+    // Four spaces opens indented code outside an active paragraph;
+    // its lines carry no verse and open no section or ordinary unit.
     let deep = "    # T\n\n    \u{2042} *m*\n\n    1. one\n";
-    let claims = slice_of(deep, GUIDE_ID, &v1()).expect("four spaces is content, never a refusal");
+    let claims = slice_of(deep, GUIDE_ID, &v1()).expect("four spaces admits code");
     assert!(
         sections(&claims).is_empty(),
         "four spaces open neither a heading nor a movement"
@@ -2673,45 +2679,20 @@ fn nought_to_three_leading_spaces_open_a_marker_and_four_leave_an_ordinary_unit(
         None,
         "a document with no heading claims no title"
     );
-    let u = units(&claims);
-    assert_eq!(u.len(), 3, "one paragraph per line");
-    assert!(u.iter().all(|piece| object(piece, &v().verse).is_none()));
-    assert_eq!(
-        u.iter()
-            .map(|piece| unescape(&object(piece, &v().text).expect("text")))
-            .collect::<Vec<_>>(),
-        vec![
-            "    # T".to_owned(),
-            "    \u{2042} *m*".to_owned(),
-            "    1. one".to_owned()
-        ],
-        "each line is kept whole, its run among the bytes"
-    );
+    assert!(units(&claims).is_empty(), "code is structural cover");
 }
 
 #[test]
 fn a_tab_in_the_leading_run_opens_no_marker_because_it_reaches_the_fourth_column() {
     // CommonMark expands a tab to the next four-column tab stop, so a
     // run of nought to three spaces followed by a tab reaches column
-    // four exactly — at or past the bound above. The law states that
-    // outcome directly, on the line's bytes, and it is total: a tab
-    // anywhere in the leading run opens no marker.
+    // four exactly, opening indented code outside an active paragraph.
     for run in ["\t", " \t", "  \t", "   \t"] {
         let text = format!("{run}# T\n\n{run}\u{2042} *m*\n\n{run}1. one\n");
         let claims =
             slice_of(&text, GUIDE_ID, &v1()).expect("a leading tab is content, never a refusal");
         assert!(sections(&claims).is_empty(), "{run:?}");
-        let u = units(&claims);
-        assert_eq!(u.len(), 3, "{run:?}");
-        assert!(
-            u.iter().all(|piece| object(piece, &v().verse).is_none()),
-            "{run:?}"
-        );
-        assert_eq!(
-            unescape(&object(u[0], &v().text).expect("text")),
-            format!("{run}# T"),
-            "and the tab stays in the verbatim literal"
-        );
+        assert!(units(&claims).is_empty(), "{run:?} opens code");
     }
     // A tab *after* the marker is in no leading run at all, and it is
     // still the separator a heading and a verse are read by (§2.1).
@@ -2893,17 +2874,16 @@ fn a_heading_whose_title_is_empty_after_the_leading_run_states_that_empty_title(
         object(units(&claims)[0], &v().lineage).as_deref(),
         Some(&*format!("\"\"^^<{}>", v().dt_lineage))
     );
-    // One space further in and the same line is no heading at all — it
-    // is content, and content is what it stays.
+    // One space further in and the same line is indented code.
     let claims = slice_of("    #   \n\nbody\n", GUIDE_ID, &v1()).expect("slices");
     assert!(
         sections(&claims).is_empty(),
         "one space further in and the hashes open nothing"
     );
-    assert_eq!(units(&claims).len(), 2);
+    assert_eq!(units(&claims).len(), 1);
     assert_eq!(
         unescape(&object(units(&claims)[0], &v().text).expect("text")),
-        "    #   "
+        "body"
     );
 }
 
@@ -4895,10 +4875,17 @@ fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
     for claim in &claims {
         let dataset = parse_dataset(claim.turtle.as_bytes(), "text/turtle", None)
             .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
-        let canonical = try_canonicalize_with(&dataset, CanonHash::Sha256)
-            .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
+        let canonical = try_canonicalize_with(
+            &dataset,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:?}", claim.subject));
         assert_eq!(
-            canonical.nquads.lines().count(),
+            canonical.nquads().lines().count(),
             claim.turtle.lines().count()
         );
     }
@@ -5320,16 +5307,21 @@ fn the_dialect_grammar_of_section_two_recognizes_exactly_what_it_states() {
 
     // §2.2 — a blank line, a horizontal rule and a table row each close
     // the open unit and are part of no unit.
-    for separator in ["", "---", "***", "-----", "  ---  ", "| a |"] {
+    for separator in ["", "***", "- - -", "| a |"] {
         assert_eq!(
             unit_quotes(&format!("one\n{separator}\ntwo\n")),
             vec!["one".to_owned(), "two".to_owned()],
             "{separator:?} closes the unit and joins none"
         );
     }
-    // And the neighbours none of the three rules name run straight on: a
-    // rule is three or more characters, all `-` or all `*`.
-    for content in ["--", "**", "-*-", "- - -", "----x"] {
+    // Unspaced dashes immediately after a paragraph are Setext underlines.
+    for underline in ["---", "-----", "  ---  ", "--"] {
+        let source = format!("one\n{underline}\ntwo\n");
+        assert_eq!(unit_quotes(&source), vec!["two".to_owned()]);
+        assert_eq!(section_shape(&source), vec![(2, "one".to_owned(), false)]);
+    }
+    // Neighbours that form neither a rule nor a Setext underline stay prose.
+    for content in ["**", "-*-", "----x"] {
         assert_eq!(
             unit_quotes(&format!("one\n{content}\ntwo\n")),
             vec![format!("one\n{content}\ntwo")],
@@ -5946,10 +5938,10 @@ fn the_specification_still_states_every_clause_this_suite_pins_and_carries_no_pr
         // clause that keeps it total.
         "A line's **leading run** is its run of U+0020 SPACE characters",
         "leading run is **at most three** spaces",
-        "A leading run of **four or more** spaces opens no marker.",
-        "MUST NOT treat such a\nline as one",
-        "A **tab** (U+0009) in the leading run opens no marker either",
-        "MUST NOT expand a tab to do it",
+        "A leading run reaching **four columns** opens indented code",
+        "Tabs advance to four-column stops.",
+        "Code is structural\ncover and opens no heading, movement or verse.",
+        "the residual virtual indentation columns separately",
         "MUST NOT trim them from any of the three",
         "`## Concordance`",
         "lifts nothing here, and is not an error",
@@ -6155,4 +6147,293 @@ fn the_readmes_emission_examples_are_the_claims_the_law_emits() {
         "one of the three is the reified edge"
     );
     parses_whole(&slice_of(&with_rows, "urn:example:book", &profile).expect("slices"));
+}
+
+#[test]
+fn source_syntax_masks_literal_regions_and_preserves_container_content() {
+    use purrdf_markdown::syntax::{BlockKind, InlineKind, SyntaxLimits, syntax};
+    let text = "## Real\r\n```text\r\n## Literal\r\n[hidden](hidden.md)\r\n```\r\n<!-- [comment](comment.md) -->\r\n`[code](code.md)` [live](live.md)\r\n> ~~~rust\r\n> let value = 1;\r\n> ~~~\r\n\r\n    [indented](hidden.md)\r\n\r\nα [Unicode](é.md)\r\n";
+    let native = syntax(text, SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(
+        native
+            .blocks()
+            .iter()
+            .filter(|b| matches!(b.kind, BlockKind::Heading { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        native
+            .links()
+            .iter()
+            .map(|l| l.destination.decoded.as_ref())
+            .collect::<Vec<_>>(),
+        ["live.md", "é.md"]
+    );
+    let quoted = native.blocks().iter().find(|b| matches!(b.kind, BlockKind::FencedCode { info, .. } if native.spelling(info) == "rust")).unwrap();
+    assert!(matches!(
+        native.blocks()[quoted.parent.unwrap()].kind,
+        BlockKind::Quote
+    ));
+    let lines = native.content_lines(quoted);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(native.spelling(lines[0].content), "let value = 1;");
+    assert_eq!(native.spelling(lines[0].newline), "\r\n");
+    for prose in native.prose() {
+        assert!(
+            native
+                .inlines()
+                .iter()
+                .filter(|i| matches!(i.kind, InlineKind::Code | InlineKind::Comment))
+                .all(|i| !prose.intersects(i.source))
+        );
+    }
+    let unicode = native.links().last().unwrap().destination.source;
+    let position = native.position(unicode.start as usize).unwrap();
+    assert_eq!(position.column, 13);
+    assert_eq!(native.spelling(unicode), "é.md");
+    let profile = v1();
+    let model = purrdf_markdown::analyze_syntax(GUIDE_ID, &native, &profile).unwrap();
+    assert_eq!(
+        model.sections().len(),
+        1,
+        "the actual slicer consumes masked native headings"
+    );
+    let tabs = syntax(
+        ">\t  code\n\n> ~~~\n>\tinside\n> ~~~\n",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert!(
+        tabs.blocks()
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::IndentedCode))
+    );
+    let fence = tabs
+        .blocks()
+        .iter()
+        .find(|b| matches!(b.kind, BlockKind::FencedCode { .. }))
+        .unwrap();
+    let content = tabs.content_lines(fence);
+    assert_eq!(content[0].virtual_spaces, 2);
+    assert_eq!(tabs.spelling(content[0].content), "inside");
+    let unclosed = syntax("> - ~~~rust\n>   body\n", SyntaxLimits::unbounded()).unwrap();
+    assert!(
+        unclosed
+            .blocks()
+            .iter()
+            .any(|b| matches!(b.kind, BlockKind::FencedCode { closed: false, .. }))
+    );
+}
+
+#[test]
+fn source_syntax_resolves_decoded_multiline_links_and_refuses_exact_limits() {
+    use purrdf_markdown::syntax::{BlockKind, SyntaxError, SyntaxLimits, syntax};
+    let text = "[one][STRASSE]\n\n[straße]: <a\\(b\\).md>\n  \"a &amp; title\"\n[next]: other.md\n\n![pic](img.png 'two\nlines') <a disabled href='a&amp;b' src=raw.png>\n";
+    let native = syntax(text, SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(native.definitions().len(), 2);
+    let reference = &native.links()[0];
+    assert_eq!(reference.definition, Some(0));
+    assert_eq!(reference.destination.decoded, "a(b).md");
+    assert_eq!(reference.title.as_ref().unwrap().decoded, "a & title");
+    assert!(
+        native
+            .spelling(native.definitions()[0].source)
+            .contains('\n')
+    );
+    let nested = syntax(
+        "[outer [inner](i)](o) ![outer [inner](i)](img)",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(
+        nested
+            .links()
+            .iter()
+            .map(|l| l.destination.decoded.as_ref())
+            .collect::<Vec<_>>(),
+        ["i", "i", "img"]
+    );
+    let setext = syntax("alpha\nbeta\n---\n", SyntaxLimits::unbounded()).unwrap();
+    let heading = setext
+        .blocks()
+        .iter()
+        .find_map(|b| match b.kind {
+            BlockKind::Heading { text, .. } => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(setext.spelling(heading), "alpha\nbeta");
+    let setext_model = purrdf_markdown::analyze_syntax(GUIDE_ID, &setext, &v1()).unwrap();
+    assert_eq!(setext_model.sections()[0].heading(), "alpha\nbeta");
+    for prefix in ["<div-data>x", "<div:other>x"] {
+        let source = format!("{prefix}\n## real\n");
+        let native = syntax(&source, SyntaxLimits::unbounded()).unwrap();
+        assert!(
+            native
+                .blocks()
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::Heading { .. }))
+        );
+    }
+    let tail = syntax(
+        "before <!--\nhidden text\n--> after [live](tail)\n",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(tail.links()[0].destination.decoded, "tail");
+    let unfinished_inline = syntax("before <!-- [live](x)", SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(unfinished_inline.links()[0].destination.decoded, "x");
+    for source in [
+        "text <?pi [hidden](x)?> [live](y)",
+        "text <!NAME [hidden](x)> [live](y)",
+        "text <![CDATA[[hidden](x)]]> [live](y)",
+    ] {
+        let parsed = syntax(source, SyntaxLimits::unbounded()).unwrap();
+        assert_eq!(parsed.links().len(), 1);
+        assert_eq!(parsed.links()[0].destination.decoded, "y");
+        assert!(matches!(
+            parsed.inlines()[0].kind,
+            purrdf_markdown::syntax::InlineKind::Html { .. }
+        ));
+    }
+    let heading_link = syntax("alpha\n[beta](target)\n---\n", SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(heading_link.links()[0].destination.decoded, "target");
+    let short_heading = syntax("abc\n-\n", SyntaxLimits::unbounded()).unwrap();
+    assert!(
+        matches!(short_heading.blocks()[0].kind, BlockKind::Heading { level: 2, text } if short_heading.spelling(text) == "abc")
+    );
+
+    assert!(
+        tail.prose()
+            .iter()
+            .any(|s| tail.spelling(*s).contains("after"))
+    );
+    let raw_labels = syntax(
+        "[bar][foo\\!] [a][x\u{a0}y] [b][x y]\n\n[foo!]: /no\n[x y]: /yes\n",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(raw_labels.links().len(), 1);
+    assert_eq!(raw_labels.links()[0].destination.decoded, "/yes");
+    for (source, title, definitions) in [
+        ("[foo]: /url\nbar\n===\n[foo]", Some("bar"), 1),
+        ("[foo]: /url\n===\n[foo]", None, 1),
+        (
+            "[foo]: /url\n\n[foo]: /later\nbar\n===\n[foo]",
+            Some("bar"),
+            2,
+        ),
+    ] {
+        let parsed = syntax(source, SyntaxLimits::unbounded()).unwrap();
+        assert_eq!(parsed.definitions().len(), definitions);
+        assert_eq!(parsed.links().len(), 1);
+        assert_eq!(parsed.links()[0].destination.decoded, "/url");
+        let heading = parsed.blocks().iter().find_map(|block| match block.kind {
+            BlockKind::Heading { text, .. } => Some(parsed.spelling(text)),
+            _ => None,
+        });
+        assert_eq!(heading, title);
+        assert_eq!(
+            model(source, &v1()).sections().len(),
+            usize::from(title.is_some())
+        );
+    }
+    assert!(purrdf_lex::html::tag("<a\n\n href=x>").is_none());
+    assert!(purrdf_lex::html::tag("<a\u{c}href=x>").is_none());
+    let single_break = syntax("prefix <a\n href=x> tail", SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(single_break.html_attributes().len(), 1);
+    for malformed in ["prefix <a\n\n href=x> tail", "prefix <a\u{c}href=x> tail"] {
+        assert_eq!(
+            syntax(malformed, SyntaxLimits::unbounded())
+                .unwrap()
+                .html_attributes(),
+            []
+        );
+    }
+    let escaped = syntax(
+        r"[x](a\&amp;b) [y](a&#92;&amp;b)",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(escaped.links()[0].destination.decoded, "a&amp;b");
+    assert_eq!(escaped.links()[1].destination.decoded, r"a\&b");
+    let attributes = syntax(
+        "<a _x=y :x=y x.y=z href='value > text'>",
+        SyntaxLimits::unbounded(),
+    )
+    .unwrap();
+    assert_eq!(
+        attributes.html_attributes()[0].value.decoded,
+        "value > text"
+    );
+    let malformed = syntax("prefix <a !x=y> suffix", SyntaxLimits::unbounded()).unwrap();
+    assert_eq!(malformed.inlines(), []);
+    let image = native.links().iter().find(|l| l.image).unwrap();
+    assert_eq!(image.title.as_ref().unwrap().decoded, "two\nlines");
+    assert_eq!(
+        native
+            .html_attributes()
+            .iter()
+            .map(|a| a.value.decoded.as_ref())
+            .collect::<Vec<_>>(),
+        ["a&b", "raw.png"]
+    );
+    let mut limits = SyntaxLimits {
+        source_bytes: 8,
+        link_part_bytes: 4,
+        ..SyntaxLimits::unbounded()
+    };
+    assert!(syntax("[x](abcd)", limits).is_err());
+    limits.source_bytes = 9;
+    assert_eq!(
+        syntax("[x](abcd)", limits).unwrap().links()[0]
+            .destination
+            .decoded,
+        "abcd"
+    );
+    limits.link_part_bytes = 3;
+    assert!(matches!(
+        syntax("[x](abcd)", limits),
+        Err(SyntaxError::Limit {
+            resource: "link part bytes",
+            ..
+        })
+    ));
+    let nested = format!("{}x\n", "> ".repeat(64));
+    limits = SyntaxLimits {
+        containers: 64,
+        ..SyntaxLimits::unbounded()
+    };
+    assert!(syntax(&nested, limits).is_ok());
+    limits.containers = 63;
+    assert!(matches!(
+        syntax(&nested, limits),
+        Err(SyntaxError::Limit {
+            resource: "containers",
+            ..
+        })
+    ));
+    limits = SyntaxLimits {
+        work: 0,
+        ..SyntaxLimits::unbounded()
+    };
+    assert!(matches!(
+        syntax("α", limits),
+        Err(SyntaxError::Limit {
+            resource: "work",
+            ..
+        })
+    ));
+    limits = SyntaxLimits {
+        auxiliary_bytes: 0,
+        ..SyntaxLimits::unbounded()
+    };
+    assert!(matches!(
+        syntax("x", limits),
+        Err(SyntaxError::Limit {
+            resource: "auxiliary bytes",
+            ..
+        })
+    ));
 }

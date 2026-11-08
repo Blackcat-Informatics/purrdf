@@ -6,7 +6,14 @@
 //! ABI suite — they call the exact C entry points with C-shaped inputs and
 //! assert on status codes, out-params, and free ordering.
 
+use purrdf::buffer;
+#[path = "support/receipt.rs"]
+mod receipt;
+
 use std::ffi::CString;
+
+#[path = "abi/rule_coordinates.rs"]
+mod rule_coordinates;
 
 use sha2::{Digest, Sha256};
 
@@ -45,6 +52,579 @@ use purrdf::version::{
 
 const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
+
+#[test]
+fn document_operations_own_buffers_and_retain_native_refusals() {
+    use purrdf::document_expansion::{
+        purrdf_document_compact, purrdf_document_expand, purrdf_document_flatten,
+        purrdf_document_frame,
+    };
+    use purrdf::error::purrdf_error_native_cause_json;
+    const SOURCE: &[u8] = br#"{"urn:p":"c"}"#;
+    const REQUEST: &[u8] = br#"{"version":1,"format":"jsonld"}"#;
+    unsafe {
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        {
+            let source = SOURCE.to_vec();
+            let request = REQUEST.to_vec();
+            assert_eq!(
+                purrdf_document_expand(
+                    source.as_ptr(),
+                    source.len(),
+                    request.as_ptr(),
+                    request.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+        }
+        assert!(error.is_null());
+        assert_eq!(buffer_bytes(output), br#"[{"urn:p":[{"@value":"c"}]}]"#);
+        purrdf_buffer_free(output);
+        let refused = br#"{"version":1,"format":"jsonld","output":{"max_bytes":0}}"#;
+        output = std::ptr::dangling_mut();
+        assert_eq!(
+            purrdf_document_expand(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                refused.as_ptr(),
+                refused.len(),
+                &raw mut output,
+                &raw mut error
+            ),
+            PurrdfStatus::SerializeError as i32
+        );
+        assert!(output.is_null());
+        assert!(!error.is_null());
+        let cause = std::ffi::CStr::from_ptr(purrdf_error_native_cause_json(error))
+            .to_str()
+            .unwrap();
+        assert!(cause.contains("json-output-bytes"));
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        for (source, source_len, request, request_len) in [
+            (std::ptr::null(), 0, REQUEST.as_ptr(), REQUEST.len()),
+            (SOURCE.as_ptr(), SOURCE.len(), std::ptr::null(), 0),
+            (SOURCE.as_ptr(), usize::MAX, REQUEST.as_ptr(), REQUEST.len()),
+            (SOURCE.as_ptr(), SOURCE.len(), REQUEST.as_ptr(), usize::MAX),
+        ] {
+            output = std::ptr::dangling_mut();
+            assert_ne!(
+                purrdf_document_expand(
+                    source,
+                    source_len,
+                    request,
+                    request_len,
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(output.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        let mut aliased: *mut PurrdfBuffer = std::ptr::dangling_mut();
+        let slot = &raw mut aliased;
+        assert_eq!(
+            purrdf_document_expand(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                REQUEST.as_ptr(),
+                REQUEST.len(),
+                slot,
+                slot.cast()
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert_eq!(aliased, std::ptr::dangling_mut());
+        purrdf_buffer_free(std::ptr::null_mut());
+        type DocumentFunction = unsafe extern "C" fn(
+            *const u8,
+            usize,
+            *const u8,
+            usize,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfError,
+        ) -> i32;
+        for function in [
+            purrdf_document_compact as DocumentFunction,
+            purrdf_document_flatten,
+        ] {
+            {
+                let source = br#"{"@id":"urn:s","urn:p":"c"}"#.to_vec();
+                let request = br#"{"version":1,"format":"jsonld","output_context":{}}"#.to_vec();
+                assert_eq!(
+                    function(
+                        source.as_ptr(),
+                        source.len(),
+                        request.as_ptr(),
+                        request.len(),
+                        &raw mut output,
+                        &raw mut error
+                    ),
+                    PurrdfStatus::Ok as i32
+                );
+            }
+            assert!(error.is_null());
+            assert_eq!(
+                buffer_bytes(output),
+                br#"{"@context":{},"@id":"urn:s","urn:p":"c"}"#
+            );
+            purrdf_buffer_free(output);
+            let request =
+                br#"{"version":1,"format":"jsonld","output_context":{},"output":{"max_bytes":0}}"#;
+            output = std::ptr::dangling_mut();
+            assert_eq!(
+                function(
+                    SOURCE.as_ptr(),
+                    SOURCE.len(),
+                    request.as_ptr(),
+                    request.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::SerializeError as i32
+            );
+            assert!(output.is_null());
+            assert!(
+                std::ffi::CStr::from_ptr(purrdf_error_native_cause_json(error))
+                    .to_str()
+                    .unwrap()
+                    .contains("json-output-bytes")
+            );
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+            let malformed = br#"{"version":1,"format":"jsonld","output_context":false}"#;
+            assert_eq!(
+                function(
+                    [0xff].as_ptr(),
+                    1,
+                    malformed.as_ptr(),
+                    malformed.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::InvalidArgument as i32
+            );
+            assert!(output.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        {
+            let source = br#"{"@id":"urn:s","urn:p":"c"}"#.to_vec();
+            let frame = b"{}".to_vec();
+            let request = REQUEST.to_vec();
+            assert_eq!(
+                purrdf_document_frame(
+                    source.as_ptr(),
+                    source.len(),
+                    frame.as_ptr(),
+                    frame.len(),
+                    request.as_ptr(),
+                    request.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+        }
+        assert!(error.is_null());
+        assert_eq!(
+            buffer_bytes(output),
+            br#"{"@context":{},"@id":"urn:s","urn:p":"c"}"#
+        );
+        purrdf_buffer_free(output);
+        let request = br#"{"version":1,"format":"jsonld","output":{"max_bytes":0}}"#;
+        output = std::ptr::dangling_mut();
+        assert_eq!(
+            purrdf_document_frame(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                b"{}".as_ptr(),
+                2,
+                request.as_ptr(),
+                request.len(),
+                &raw mut output,
+                &raw mut error
+            ),
+            PurrdfStatus::SerializeError as i32
+        );
+        assert!(output.is_null());
+        assert!(
+            std::ffi::CStr::from_ptr(purrdf_error_native_cause_json(error))
+                .to_str()
+                .unwrap()
+                .contains("json-output-bytes")
+        );
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        for (frame, len) in [(std::ptr::null(), 0), (b"{}".as_ptr(), usize::MAX)] {
+            output = std::ptr::dangling_mut();
+            assert_ne!(
+                purrdf_document_frame(
+                    SOURCE.as_ptr(),
+                    SOURCE.len(),
+                    frame,
+                    len,
+                    REQUEST.as_ptr(),
+                    REQUEST.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(output.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        let malformed = br#"{"version":1,"format":"jsonld","frame_context":false}"#;
+        assert_eq!(
+            purrdf_document_frame(
+                [0xff].as_ptr(),
+                1,
+                [0xff].as_ptr(),
+                1,
+                malformed.as_ptr(),
+                malformed.len(),
+                &raw mut output,
+                &raw mut error
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(output.is_null());
+        purrdf_error_free(error);
+        assert_eq!(
+            purrdf_document_frame(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                b"{}".as_ptr(),
+                2,
+                REQUEST.as_ptr(),
+                REQUEST.len(),
+                slot,
+                slot.cast()
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert_eq!(aliased, std::ptr::dangling_mut());
+    }
+}
+
+#[test]
+fn yaml_source_pair_owns_outputs_and_retains_original_native_failures() {
+    use purrdf::error::{purrdf_error_canonicalization_json, purrdf_error_native_cause_json};
+    use purrdf::yaml_source::{purrdf_yaml_source_export, purrdf_yaml_source_reconstruct};
+    const CONFIG: &[u8] = br#"{"version":1,"name":"c-source","profile_version":1,"vocabulary":"https://example.org/yaml#"}"#;
+    const SOURCE: &[u8] = b"\xef\xbb\xbf# caller-owned bytes\r\nkey: [one, two]\r\n";
+    unsafe {
+        let mut dataset = std::ptr::null_mut();
+        let mut root = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        {
+            let source = SOURCE.to_vec();
+            let config = CONFIG.to_vec();
+            let iri = CString::new("https://example.org/source").unwrap();
+            assert_eq!(
+                purrdf_yaml_source_export(
+                    source.as_ptr(),
+                    source.len(),
+                    iri.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut dataset,
+                    &raw mut root,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+        }
+        assert!(error.is_null());
+        let root_bytes = buffer_bytes(root);
+        assert!(!root_bytes.ends_with(b"\n") && !root_bytes.ends_with(b"\0"));
+        let root_iri = CString::new(root_bytes).unwrap();
+        purrdf_buffer_free(root);
+        let mut restored = std::ptr::null_mut();
+        {
+            let config = CONFIG.to_vec();
+            assert_eq!(
+                purrdf_yaml_source_reconstruct(
+                    dataset,
+                    root_iri.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut restored,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+        }
+        let original_record = |error| {
+            let ptr = purrdf_error_native_cause_json(error);
+            assert!(!ptr.is_null());
+            purrdf_lex::json::read(std::ffi::CStr::from_ptr(ptr).to_str().unwrap()).unwrap()
+        };
+        let wrong_root = CString::new("https://example.org/missing").unwrap();
+        let mut absent = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_yaml_source_reconstruct(
+                dataset,
+                wrong_root.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut absent,
+                &raw mut error
+            ),
+            PurrdfStatus::ParseError as i32
+        );
+        assert!(absent.is_null());
+        assert_eq!(
+            original_record(error)["code"].as_str(),
+            Some("yaml-source-metadata")
+        );
+        assert!(purrdf_error_canonicalization_json(error).is_null());
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        purrdf_dataset_free(dataset);
+        assert_eq!(buffer_bytes(restored), SOURCE);
+        purrdf_buffer_free(restored);
+
+        let iri = CString::new("https://example.org/source").unwrap();
+        let mut dataset = std::ptr::null_mut();
+        let mut root = std::ptr::null_mut();
+        for (source, config, status, code) in [
+            (
+                b"[unterminated".as_slice(),
+                CONFIG.to_vec(),
+                PurrdfStatus::ParseError,
+                "yaml-source-syntax",
+            ),
+            (
+                SOURCE,
+                String::from_utf8(CONFIG.to_vec())
+                    .unwrap()
+                    .replace("\"profile_version\":1", "\"profile_version\":-1")
+                    .into_bytes(),
+                PurrdfStatus::InvalidArgument,
+                "json-record-decode",
+            ),
+            (
+                SOURCE,
+                String::from_utf8(CONFIG.to_vec())
+                    .unwrap()
+                    .replace(
+                        "\"vocabulary\":",
+                        "\"bounds\":{\"max_projection_bytes\":0},\"vocabulary\":",
+                    )
+                    .into_bytes(),
+                PurrdfStatus::StorageError,
+                "yaml-source-storage",
+            ),
+        ] {
+            assert_eq!(
+                purrdf_yaml_source_export(
+                    source.as_ptr(),
+                    source.len(),
+                    iri.as_ptr(),
+                    config.as_ptr(),
+                    config.len(),
+                    &raw mut dataset,
+                    &raw mut root,
+                    &raw mut error
+                ),
+                status as i32
+            );
+            assert!(dataset.is_null() && root.is_null());
+            drop(config);
+            let record = original_record(error);
+            assert_eq!(record["code"].as_str(), Some(code));
+            if code == "yaml-source-syntax" {
+                let cause = &record["fields"]["cause"]["value"];
+                assert_eq!(cause["code"].as_str(), Some("yaml-document"));
+                assert_eq!(cause["fields"]["line"]["value"].as_str(), Some("1"));
+                assert!(
+                    cause["fields"]["column"]["value"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap()
+                        > 0
+                );
+            } else if code == "json-record-decode" {
+                assert_eq!(
+                    record["fields"]["pointer"]["value"].as_str(),
+                    Some("/profile_version")
+                );
+            }
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        for (source, len, config, config_len, status) in [
+            (
+                std::ptr::null(),
+                0,
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                PurrdfStatus::NullPointer,
+            ),
+            (
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                std::ptr::null(),
+                1,
+                PurrdfStatus::NullPointer,
+            ),
+        ] {
+            assert_eq!(
+                purrdf_yaml_source_export(
+                    source,
+                    len,
+                    iri.as_ptr(),
+                    config,
+                    config_len,
+                    &raw mut dataset,
+                    &raw mut root,
+                    &raw mut error
+                ),
+                status as i32
+            );
+            assert!(dataset.is_null() && root.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        let oversized = vec![b' '; (16 << 10) + 1];
+        assert_eq!(
+            purrdf_yaml_source_export(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                iri.as_ptr(),
+                oversized.as_ptr(),
+                oversized.len(),
+                &raw mut dataset,
+                &raw mut root,
+                &raw mut error
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(dataset.is_null() && root.is_null());
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_yaml_source_export(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                iri.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                (&raw mut root).cast(),
+                &raw mut root,
+                &raw mut error
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(root.is_null());
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_yaml_source_export(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                iri.as_ptr(),
+                CONFIG.as_ptr(),
+                CONFIG.len(),
+                &raw mut dataset,
+                (&raw mut error).cast(),
+                &raw mut error
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert!(dataset.is_null() && error.is_null());
+    }
+}
+
+#[test]
+fn configured_yamlld_parse_abi_transports_options_and_native_diagnostics() {
+    let yaml = b"'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n";
+    let media = CString::new("application/ld+yaml").unwrap();
+    let base = CString::new("https://example.org/").unwrap();
+    let all = br#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#;
+    unsafe {
+        for (options, expected) in [(None, 1), (Some(all.as_slice()), 2)] {
+            let mut dataset = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            let status = purrdf_parse(
+                yaml.as_ptr(),
+                yaml.len(),
+                media.as_ptr(),
+                base.as_ptr(),
+                std::ptr::null(),
+                options.map_or(std::ptr::null(), <[u8]>::as_ptr),
+                options.map_or(0, <[u8]>::len),
+                &raw mut dataset,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            let mut count = 0;
+            assert_eq!(
+                purrdf_dataset_quad_count(dataset, &raw mut count),
+                PurrdfStatus::Ok as i32
+            );
+            assert_eq!(count, expected);
+            purrdf_dataset_free(dataset);
+        }
+        let limits = br#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#;
+        for (input, format, options, code) in [
+            (
+                yaml.as_slice(),
+                "application/ld+yaml",
+                limits.as_slice(),
+                "native-yaml-input-limit",
+            ),
+            (
+                b"42: value\n".as_slice(),
+                "application/ld+yaml",
+                all.as_slice(),
+                "mapping-key-error",
+            ),
+            (
+                b"".as_slice(),
+                "text/turtle",
+                all.as_slice(),
+                "yamlld-input-options-format",
+            ),
+        ] {
+            let format = CString::new(format).unwrap();
+            let mut dataset = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            assert_ne!(
+                purrdf_parse(
+                    input.as_ptr(),
+                    input.len(),
+                    format.as_ptr(),
+                    base.as_ptr(),
+                    std::ptr::null(),
+                    options.as_ptr(),
+                    options.len(),
+                    &raw mut dataset,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(dataset.is_null());
+            let record =
+                std::ffi::CStr::from_ptr(purrdf::error::purrdf_error_presentation_json(error))
+                    .to_str()
+                    .unwrap();
+            assert!(record.contains(code), "{record}");
+            if code != "yamlld-input-options-format" {
+                assert!(record.contains("location"), "{record}");
+            }
+            purrdf_error_free(error);
+        }
+    }
+}
 
 /// A zeroed output term view the cursor fills.
 fn out_view() -> PurrdfTermView {
@@ -129,6 +709,8 @@ unsafe fn parse(media: &str, doc: &str) -> *mut PurrdfDataset {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut dataset,
             &raw mut error,
         );
@@ -174,7 +756,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 11, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 20, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -1182,6 +1764,8 @@ fn parse_rejects_malformed_turtle_without_aborting() {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut dataset,
             &raw mut error,
         );
@@ -1528,10 +2112,14 @@ unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfR
         let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
         let mut boolean: u8 = 0;
         let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let mut receipt = receipt::Output::default();
         let status = purrdf_query(
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut receipt.0,
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1540,6 +2128,11 @@ unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfR
         );
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
+        assert!(
+            String::from_utf8(buffer_bytes(receipt.0))
+                .unwrap()
+                .contains("\"state\":\"started\"")
+        );
         assert_eq!(kind, 0, "expected a SELECT (Solutions) result");
         rows
     }
@@ -1673,6 +2266,9 @@ fn ask_returns_boolean() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1700,6 +2296,9 @@ fn construct_returns_graph() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1737,6 +2336,9 @@ fn construct_graph_result_keeps_its_graph_name() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -1802,6 +2404,9 @@ fn describe_graph_result_keeps_its_graph_name_on_every_layer() {
             dataset,
             cq.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut kind,
             &raw mut rows,
             &raw mut graph,
@@ -2018,6 +2623,9 @@ fn query_json_has_sparql_results_shape() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         );
@@ -2066,6 +2674,9 @@ fn query_json_construct_into_a_named_graph_keeps_the_graph() {
                 dataset,
                 cq.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut kind,
                 &raw mut rows,
                 &raw mut graph,
@@ -2116,6 +2727,9 @@ fn query_json_construct_into_a_named_graph_keeps_the_graph() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 &raw mut error,
             ),
@@ -2171,6 +2785,9 @@ fn query_json_describe_over_trig_keeps_every_layers_graph() {
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut buffer,
                 &raw mut error,
             ),
@@ -2215,6 +2832,9 @@ fn query_json_provenance_namespace_populates_and_round_trips() {
             std::ptr::null(),
             prefix.as_ptr(),
             iri.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         );
@@ -2254,6 +2874,9 @@ fn query_json_lone_provenance_half_is_refused() {
             std::ptr::null(),
             prefix.as_ptr(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         );
@@ -2545,11 +3168,30 @@ fn invalid_term_kind_yields_invalid_argument() {
 #[test]
 fn invalid_direction_yields_invalid_argument() {
     unsafe {
-        for (direction, language) in [
-            (99, "en"),
-            (purrdf::term::PurrdfDirection::Ltr as i32, ""),
-            (purrdf::term::PurrdfDirection::Rtl as i32, ""),
+        for (direction, language, expected) in [
+            (99, "en", PurrdfStatus::InvalidArgument),
+            (
+                purrdf::term::PurrdfDirection::Ltr as i32,
+                "",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::Rtl as i32,
+                "",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::None as i32,
+                "en us",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::Ltr as i32,
+                "en",
+                PurrdfStatus::Ok,
+            ),
         ] {
+            let language = language.to_owned();
             let lex = "hello";
             let dt = "http://www.w3.org/2001/XMLSchema#string";
             let view = PurrdfTermView {
@@ -2579,12 +3221,50 @@ fn invalid_direction_yields_invalid_argument() {
                 &raw mut error,
             );
             assert_eq!(
-                status,
-                PurrdfStatus::InvalidArgument as i32,
-                "expected InvalidArgument for direction {direction} and language {language:?}"
+                status, expected as i32,
+                "direction {direction} and language {language:?}"
             );
+            drop(language);
+            if expected == PurrdfStatus::Ok {
+                assert!(error.is_null());
+                assert!(!buffer.is_null());
+                purrdf_buffer_free(buffer);
+                continue;
+            }
             assert!(buffer.is_null());
             assert!(!error.is_null());
+            let native = purrdf::error::purrdf_error_native_cause_json(error);
+            if direction == 99 {
+                assert!(native.is_null());
+            } else {
+                assert!(!native.is_null());
+                let fields =
+                    purrdf_lex::json::read(std::ffi::CStr::from_ptr(native).to_str().unwrap())
+                        .unwrap();
+                let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                    .to_str()
+                    .unwrap();
+                if direction == purrdf::term::PurrdfDirection::None as i32 {
+                    assert_eq!(
+                        fields["code"].as_str(),
+                        Some("rdf-literal-component-language")
+                    );
+                    assert_eq!(
+                        fields["fields"]["cause"]["value"]["code"].as_str(),
+                        Some("langtag-terminal-primary-not-alpha")
+                    );
+                    assert_eq!(
+                        message,
+                        "first subtag of the `LANGTAG` terminal is not one or more ASCII letters"
+                    );
+                } else {
+                    assert_eq!(
+                        fields["code"].as_str(),
+                        Some("rdf-literal-component-direction-without-language")
+                    );
+                    assert_eq!(message, "a base direction requires a language tag");
+                }
+            }
             purrdf_error_free(error);
         }
     }
@@ -2754,6 +3434,9 @@ unsafe fn sha3_row_over_the_c_abi(spelling: impl Fn(&str) -> String) -> purrdf_l
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         );
@@ -2825,6 +3508,9 @@ fn a_spaced_sha3_hyphen_is_an_error_over_the_c_abi() {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut buffer,
             &raw mut error,
         );
@@ -2878,6 +3564,7 @@ fn the_status_enum_is_append_only() {
             PurrdfStatus::RegexResourceError => 13,
             PurrdfStatus::GeoError => 14,
             PurrdfStatus::StorageError => 15,
+            PurrdfStatus::CanonicalizationError => 16,
             PurrdfStatus::Panic => 100,
         }
     }
@@ -2901,6 +3588,7 @@ fn the_status_enum_is_append_only() {
         (PurrdfStatus::RegexResourceError, 13),
         (PurrdfStatus::GeoError, 14),
         (PurrdfStatus::StorageError, 15),
+        (PurrdfStatus::CanonicalizationError, 16),
         (PurrdfStatus::Panic, 100),
     ] {
         assert_eq!(status as i32, expected, "a status discriminant moved");
@@ -2986,6 +3674,9 @@ fn query_parse_refusals_carry_typed_presentations() {
                 dataset,
                 cq.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut kind,
                 &raw mut rows,
                 &raw mut graph,
@@ -3075,6 +3766,9 @@ fn governed_update_parse_refusals_carry_typed_presentations() {
                 std::ptr::null(),
                 purrdf::graph::PURRDF_GRAPH_EXISTENCE_IMPLICIT,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut outcome,
                 evidence.as_mut_ptr(),
                 &raw mut error,
@@ -3242,6 +3936,9 @@ unsafe fn governed_update_in(
                 c"xpath-3.1-2017-03-21".as_ptr(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -3255,6 +3952,9 @@ unsafe fn governed_update_in(
                 c"xpath-3.1-2017-03-21".as_ptr(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,
@@ -3267,6 +3967,9 @@ unsafe fn governed_update_in(
                 std::ptr::null(),
                 graph_existence,
                 &raw const governors,
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut outcome,
                 &raw mut evidence,
                 &raw mut error,

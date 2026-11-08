@@ -167,7 +167,7 @@ fn run(
     engine: &NativeSparqlEngine,
     execution: &mut PreparedExecution,
     dataset: &RdfDataset,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
 ) -> Result<usize, purrdf_core::RdfDiagnostic> {
     engine.execute(execution, dataset, options, |outcome| match outcome {
         InternedOutcome::Solutions(solutions) => solutions.len(),
@@ -198,7 +198,7 @@ fn the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free() {
     let env = environment(&registry);
     let options = QueryOptions::new().with_env(&env);
 
-    let undeclared = engine.prepare_execution(&free_subject_query(), None, &[], options);
+    let undeclared = engine.prepare_execution(&free_subject_query(), None, &[], &options);
     let diagnostic = undeclared.expect_err("a free subject reaches no declared mode");
     assert_eq!(
         diagnostic.code, "native-sparql-property-function",
@@ -210,7 +210,7 @@ fn the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free() {
     );
 
     let declared = engine
-        .prepare_execution(&free_subject_query(), None, &["subject"], options)
+        .prepare_execution(&free_subject_query(), None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible");
     assert_eq!(
         declared.slot("subject"),
@@ -242,9 +242,9 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
         base_iri: None,
         substitutions: &substitutions,
     };
-    let audit = engine.prepare_interned_request(request(), shacl).unwrap();
+    let audit = engine.prepare_interned_request(request(), &shacl).unwrap();
     let original = audit.query().clone();
-    let repeated = engine.prepare_interned_request(request(), shacl).unwrap();
+    let repeated = engine.prepare_interned_request(request(), &shacl).unwrap();
     assert!(Arc::ptr_eq(&audit, &repeated));
     assert_eq!(
         relation.bound_invocations(),
@@ -254,7 +254,7 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
     let before = engine.plan_cache_stats();
     let data = empty_dataset();
     let rows = engine
-        .query_interned_view(&*data, request(), shacl, |outcome| {
+        .query_interned_view(&*data, request(), &shacl, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("a SELECT must produce solution rows")
             };
@@ -278,7 +278,7 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
         before.hits + 1,
         "raw execution uses the inspected cache entry"
     );
-    let after_execution = engine.prepare_interned_request(request(), shacl).unwrap();
+    let after_execution = engine.prepare_interned_request(request(), &shacl).unwrap();
     assert!(Arc::ptr_eq(&audit, &after_execution));
     assert_eq!(
         after_execution.query(),
@@ -289,7 +289,7 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
     // Every lane takes the one pre-binding rewrite, so the ordinary lane admits the
     // bound request on the same cache entry.
     let ordinary_audit = engine
-        .prepare_interned_request(request(), ordinary)
+        .prepare_interned_request(request(), &ordinary)
         .unwrap();
     assert!(Arc::ptr_eq(&audit, &ordinary_audit));
 
@@ -299,7 +299,7 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
             base_iri: None,
             substitutions: &[],
         };
-        let diagnostic = engine.prepare_interned_request(free, options).unwrap_err();
+        let diagnostic = engine.prepare_interned_request(free, &options).unwrap_err();
         assert_eq!(diagnostic.code, "native-sparql-property-function");
         let free = InternedRequest {
             query: &text,
@@ -307,7 +307,7 @@ fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity
             substitutions: &[],
         };
         let diagnostic = engine
-            .query_interned_view(&*data, free, options, |_| ())
+            .query_interned_view(&*data, free, &options, |_| ())
             .unwrap_err();
         assert_eq!(diagnostic.code, "native-sparql-property-function");
     }
@@ -334,11 +334,11 @@ fn a_declared_parameter_must_be_bound_and_the_refusal_names_it() {
     let options = QueryOptions::new().with_env(&env);
     let dataset = empty_dataset();
     let mut execution = engine
-        .prepare_execution(&free_subject_query(), None, &["subject"], options)
+        .prepare_execution(&free_subject_query(), None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible");
 
     // Unbound: refused, by name, before anything runs.
-    let refused = run(&engine, &mut execution, &dataset, options)
+    let refused = run(&engine, &mut execution, &dataset, &options)
         .expect_err("an execution whose declaration is not honoured must not evaluate");
     assert_eq!(
         refused.code, "native-sparql-execution-parameter",
@@ -361,7 +361,7 @@ fn a_declared_parameter_must_be_bound_and_the_refusal_names_it() {
         .expect_err("binding some other variable does not honour the declaration");
     assert_eq!(wrong.code, "native-sparql-execution-parameter");
     assert!(
-        run(&engine, &mut execution, &dataset, options).is_err(),
+        run(&engine, &mut execution, &dataset, &options).is_err(),
         "the declared parameter is still unbound"
     );
 
@@ -370,7 +370,7 @@ fn a_declared_parameter_must_be_bound_and_the_refusal_names_it() {
         .bind_named("subject", iri("a"))
         .expect("the declared parameter binds");
     assert_eq!(
-        run(&engine, &mut execution, &dataset, options)
+        run(&engine, &mut execution, &dataset, &options)
             .expect("an execution whose declaration is honoured evaluates"),
         1,
         "the relation answered its one row"
@@ -407,14 +407,14 @@ fn declaring_nothing_still_runs_and_one_execution_answers_many_bindings() {
     let constant =
         format!("SELECT ?object WHERE {{ ( <https://example.org/d/a> ) <{RELATED}> ( ?object ) }}");
     let mut undeclared = engine
-        .prepare_execution(&constant, None, &[], options)
+        .prepare_execution(&constant, None, &[], &options)
         .expect("a constant subject is bound without any declaration");
     assert!(
         undeclared.parameters().is_empty(),
         "an ordinary prepare declares nothing"
     );
     assert_eq!(
-        run(&engine, &mut undeclared, &dataset, options).expect("and it runs with nothing bound"),
+        run(&engine, &mut undeclared, &dataset, &options).expect("and it runs with nothing bound"),
         1
     );
 
@@ -424,26 +424,26 @@ fn declaring_nothing_still_runs_and_one_execution_answers_many_bindings() {
             &free_subject_query(),
             None,
             &["subject", "unrelated"],
-            options,
+            &options,
         )
         .expect("the declared parameter makes the call feasible");
     spare.bind_named("subject", iri("b")).expect("declared");
     spare.bind_named("unrelated", iri("c")).expect("declared");
     assert_eq!(
-        run(&engine, &mut spare, &dataset, options)
+        run(&engine, &mut spare, &dataset, &options)
             .expect("a declared parameter the text never uses does not make it unrunnable"),
         1
     );
 
     // One execution, many bindings.
     let mut declared = engine
-        .prepare_execution(&free_subject_query(), None, &["subject"], options)
+        .prepare_execution(&free_subject_query(), None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible");
     let slot = declared.slot("subject").expect("declared");
     for local in ["d", "e", "f", "g"] {
         declared.bind(slot, iri(local)).expect("declared");
         assert_eq!(
-            run(&engine, &mut declared, &dataset, options)
+            run(&engine, &mut declared, &dataset, &options)
                 .expect("the same execution answers for another term"),
             1
         );
@@ -475,17 +475,17 @@ fn the_declaration_is_part_of_the_plan_identity() {
     let options = QueryOptions::new().with_env(&env);
 
     engine
-        .prepare_execution(&free_subject_query(), None, &["subject"], options)
+        .prepare_execution(&free_subject_query(), None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible");
     assert!(
         engine
-            .prepare_query_with_options(&free_subject_query(), None, options)
+            .prepare_query_with_options(&free_subject_query(), None, &options)
             .is_err(),
         "the undeclared prepare of the same text is not answered with the declared plan"
     );
     assert!(
         engine
-            .prepare_execution(&free_subject_query(), None, &[], options)
+            .prepare_execution(&free_subject_query(), None, &[], &options)
             .is_err(),
         "nor is an execution that declares nothing"
     );
@@ -496,11 +496,11 @@ fn the_declaration_is_part_of_the_plan_identity() {
     );
     let before = engine.cached_plan_count();
     engine
-        .prepare_execution(&text, None, &["subject", "other"], options)
+        .prepare_execution(&text, None, &["subject", "other"], &options)
         .expect("both subjects declared");
     assert_eq!(engine.cached_plan_count(), before + 1, "one new plan");
     engine
-        .prepare_execution(&text, None, &["other", "subject"], options)
+        .prepare_execution(&text, None, &["other", "subject"], &options)
         .expect("the same declaration, spelled in the other order");
     assert_eq!(
         engine.cached_plan_count(),
@@ -542,13 +542,13 @@ fn a_call_after_a_data_atom_is_invoked_with_its_declared_parameter_bound() {
     let dataset = linked_dataset();
     let text = format!("SELECT ?x WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{RELATED}> ( ?x ) }}");
     let mut execution = engine
-        .prepare_execution(&text, None, &["subject"], options)
+        .prepare_execution(&text, None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible after the data atom");
     let slot = execution.slot("subject").expect("declared");
     for (runs, local) in (1_u64..).zip(["a", "b", "c"]) {
         execution.bind(slot, iri(local)).expect("declared");
         assert_eq!(
-            run(&engine, &mut execution, &dataset, options)
+            run(&engine, &mut execution, &dataset, &options)
                 .expect("the call is invoked with the declared parameter bound"),
             1,
             "one data row, one related term"
@@ -577,22 +577,22 @@ fn a_declared_parameter_reaches_an_optional_arm_and_its_neighbours_still_run() {
         "SELECT ?o WHERE {{ ?s <{LINKED}> ?o OPTIONAL {{ ( ?subject ) <{RELATED}> ( ?x ) }} }}"
     );
     let mut execution = engine
-        .prepare_execution(&in_optional, None, &["subject"], options)
+        .prepare_execution(&in_optional, None, &["subject"], &options)
         .expect("the declaration binds the parameter inside an OPTIONAL arm");
     execution.bind_named("subject", iri("a")).expect("declared");
     assert_eq!(
-        run(&engine, &mut execution, &dataset, options).expect("and it runs bound"),
+        run(&engine, &mut execution, &dataset, &options).expect("and it runs bound"),
         1
     );
 
     let in_group =
         format!("SELECT ?o WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{RELATED}> ( ?x ) }}");
     let mut execution = engine
-        .prepare_execution(&in_group, None, &["subject"], options)
+        .prepare_execution(&in_group, None, &["subject"], &options)
         .expect("the declaration reaches a call in the group itself");
     execution.bind_named("subject", iri("a")).expect("declared");
     assert_eq!(
-        run(&engine, &mut execution, &dataset, options).expect("and it runs bound"),
+        run(&engine, &mut execution, &dataset, &options).expect("and it runs bound"),
         1
     );
 
@@ -601,11 +601,11 @@ fn a_declared_parameter_reaches_an_optional_arm_and_its_neighbours_still_run() {
          OPTIONAL {{ ?t <{LINKED}> ?u . ( ?t ) <{RELATED}> ( ?x ) }} }}"
     );
     let mut execution = engine
-        .prepare_execution(&own_binding, None, &["subject"], options)
+        .prepare_execution(&own_binding, None, &["subject"], &options)
         .expect("a call on a variable its own arm binds is feasible");
     execution.bind_named("subject", iri("a")).expect("declared");
     assert_eq!(
-        run(&engine, &mut execution, &dataset, options)
+        run(&engine, &mut execution, &dataset, &options)
             .expect("and it runs, driven by the arm's own row"),
         1
     );
@@ -629,11 +629,11 @@ fn a_filter_exists_over_the_core_invokes_its_call_with_the_declared_parameter_bo
         "SELECT ?o WHERE {{ ?s <{LINKED}> ?o FILTER EXISTS {{ ( ?subject ) <{RELATED}> ( ?x ) }} }}"
     );
     let mut execution = engine
-        .prepare_execution(&text, None, &["subject"], options)
+        .prepare_execution(&text, None, &["subject"], &options)
         .expect("the rows the filter tests carry the declared parameter");
     execution.bind_named("subject", iri("a")).expect("declared");
     assert_eq!(
-        run(&engine, &mut execution, &linked_dataset(), options)
+        run(&engine, &mut execution, &linked_dataset(), &options)
             .expect("the call inside the EXISTS is invoked bound"),
         1
     );
@@ -669,7 +669,7 @@ fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
     let refused_text =
         format!("SELECT ?o WHERE {{ ?s <{LINKED}> ?o OPTIONAL {{ ( ?s ) <{RELATED}> ( ?x ) }} }}");
     let refused = engine
-        .prepare_execution(&refused_text, None, &[], options)
+        .prepare_execution(&refused_text, None, &[], &options)
         .expect_err("the call's subject is free where it is evaluated");
     assert_eq!(
         refused.code, "native-sparql-property-function",
@@ -691,10 +691,10 @@ fn a_call_is_admitted_against_what_its_evaluation_hands_it() {
         ),
     ] {
         let mut execution = engine
-            .prepare_execution(&neighbour, None, &[], options)
+            .prepare_execution(&neighbour, None, &[], &options)
             .expect("a call joined into the group is driven by the rows before it");
         assert_eq!(
-            run(&engine, &mut execution, &dataset, options).expect("and it answers"),
+            run(&engine, &mut execution, &dataset, &options).expect("and it answers"),
             1
         );
         assert_eq!(relation.bound_invocations(), admitted, "{neighbour}");
@@ -819,7 +819,7 @@ fn answers(
     engine: &NativeSparqlEngine,
     execution: &mut PreparedExecution,
     dataset: &RdfDataset,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     column: usize,
 ) -> Result<Vec<String>, purrdf_core::RdfDiagnostic> {
     engine.execute(execution, dataset, options, |outcome| match outcome {
@@ -868,14 +868,14 @@ fn a_parameter_bound_to_a_dataset_blank_node_reaches_the_call_bound() {
         format!("SELECT ?x ?o WHERE {{ ?s <{LINKED}> ?o . ( ?subject ) <{OWNS}> ( ?x ) }}");
 
     let refused = engine
-        .prepare_execution(&alone, None, &[], options)
+        .prepare_execution(&alone, None, &[], &options)
         .expect_err("undeclared, the subject is free and no declared mode serves it");
     assert_eq!(refused.code, "native-sparql-property-function", "{refused}");
     assert!(refused.to_string().contains(RELATED_MODE), "{refused}");
 
     for (text, rows_per_run) in [(&alone, 1), (&after_atom, 2)] {
         let mut execution = engine
-            .prepare_execution(text, None, &["subject"], options)
+            .prepare_execution(text, None, &["subject"], &options)
             .expect("the declared parameter makes the call feasible");
         let slot = execution.slot("subject").expect("declared");
         for (label, owned) in [
@@ -893,7 +893,7 @@ fn a_parameter_bound_to_a_dataset_blank_node_reaches_the_call_bound() {
                         .bind(slot, TermValue::blank(label))
                         .expect("the value door binds a blank node"),
                 }
-                let answered = answers(&engine, &mut execution, &dataset, options, 0)
+                let answered = answers(&engine, &mut execution, &dataset, &options, 0)
                     .unwrap_or_else(|diagnostic| {
                         panic!(
                             "{text} bound to _:{label} through the {door} door must run with \
@@ -940,13 +940,13 @@ fn a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call() {
     let dataset = blank_dataset();
     let text = format!("SELECT ?x WHERE {{ ( ?subject ) <{OWNS}> ( ?x ) }}");
     let mut execution = engine
-        .prepare_execution(&text, None, &["subject"], options)
+        .prepare_execution(&text, None, &["subject"], &options)
         .expect("the declared parameter makes the call feasible");
 
     execution
         .bind_named("subject", TermValue::blank("b9"))
         .expect("declared");
-    let answered = answers(&engine, &mut execution, &dataset, options, 0)
+    let answered = answers(&engine, &mut execution, &dataset, &options, 0)
         .expect("a blank node the dataset does not hold is still bound into the call");
     assert!(answered.is_empty(), "{answered:?}");
     assert_eq!(relation.seen(), ["b9".to_owned()]);
@@ -954,7 +954,7 @@ fn a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call() {
     execution
         .bind_named("subject", TermValue::blank("b2"))
         .expect("declared");
-    let answered = answers(&engine, &mut execution, &dataset, options, 0)
+    let answered = answers(&engine, &mut execution, &dataset, &options, 0)
         .expect("the neighbouring held blank node answers");
     assert_eq!(answered.len(), 1, "{answered:?}");
     assert!(answered[0].contains("owned by the second"), "{answered:?}");
@@ -989,7 +989,7 @@ fn a_call_in_an_optional_arm_is_bound_on_every_lane() {
     for (prepared_under, run_under) in [(ordinary, shacl), (shacl, ordinary), (ordinary, ordinary)]
     {
         let mut execution = engine
-            .prepare_execution(&text, None, &["subject"], prepared_under)
+            .prepare_execution(&text, None, &["subject"], &prepared_under)
             .expect("the rewrite binds the parameter in the OPTIONAL arm's call");
         let slot = execution.slot("subject").expect("declared");
         for (label, owned) in [
@@ -1000,7 +1000,7 @@ fn a_call_in_an_optional_arm_is_bound_on_every_lane() {
             execution
                 .bind_id(slot, &*dataset, blank_id(&dataset, label))
                 .expect("the id door binds a blank node");
-            let answered = answers(&engine, &mut execution, &dataset, run_under, 0)
+            let answered = answers(&engine, &mut execution, &dataset, &run_under, 0)
                 .unwrap_or_else(|diagnostic| panic!("_:{label}: {diagnostic}"));
             assert_eq!(answered.len(), 1, "_:{label}: {answered:?}");
             assert!(answered[0].contains(owned), "_:{label}: {answered:?}");

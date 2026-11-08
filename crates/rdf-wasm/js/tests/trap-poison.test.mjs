@@ -45,7 +45,7 @@ test("a trap that is not a panic, in a synchronous call, poisons every entry poi
   assert.deepEqual(report.unarmed, { settled: "returned", value: 0 });
   const PARSE_ERROR = {
     settled: "threw",
-    name: "Error",
+    name: "Error", code: "native-codec-parse",
     message: "error native-codec-parse: expected 3 or 4 terms, got 2 at <unknown>:1:1",
   };
   assert.deepEqual(report.parseError, PARSE_ERROR);

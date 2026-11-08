@@ -20,13 +20,14 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seventeen
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
 | [`geo`](#geo) | execute a geographic scalar, batch, conversion, cover or point-index request |
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
+| [`yaml-source`](#yaml-source) | export YAML presentation as RDF and reconstruct its exact source bytes |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | `update` | atomically apply a SPARQL UPDATE to an RDF source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
@@ -102,8 +103,8 @@ purrdf [--geo-profile PROFILE.json] geo [INPUT] [OUTPUT]
 
 Execute a version-one geographic JSON request through the shared geographic
 engine. Both positional paths default to `-` for stdin and stdout. Coordinates
-are exact decimal strings. The default profile supplies standard CRS84
-longitude/latitude coordinates and WGS84 metric execution.
+are exact decimal strings. The default profile supplies standard `CRS84`
+longitude/latitude coordinates and `WGS84` metric execution.
 
 ```sh
 printf '%s\n' '{"version":1,"operation":"distance","a":{"longitude":"0","latitude":"0"},"b":{"longitude":"1","latitude":"0"}}' | purrdf geo
@@ -160,14 +161,14 @@ purrdf convert people.ttl people.nt
 cat people.jsonld | purrdf convert --from jsonld --to turtle - -
 
 # Pack a graph into the native lossless container, then unpack it.
-purrdf convert people.ttl people.purrpck
-purrdf convert people.purrpck restored.trig
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.ttl people.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.purrpck restored.trig
 
 # Emit RDFC-1.0 canonical N-Quads (no `--to` needed; canonical is always N-Quads).
-purrdf convert --canonical people.ttl people.nq
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert --canonical people.ttl people.nq
 
 # Materialize the RDFS closure, then canonicalize it.
-purrdf convert --entailment rdfs --canonical people.ttl closure.nq
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert --entailment rdfs --canonical people.ttl closure.nq
 
 # Resolve relative IRIs against a base while converting.
 purrdf convert --base http://example.org/ data.ttl data.nt
@@ -398,7 +399,7 @@ purrdf query --data people.ttl --results-format turtle \
   'CONSTRUCT { ?p <http://example.org/label> ?name } WHERE { ?p <http://example.org/name> ?name }'
 
 # Query a pack zero-copy (mmap'd, verified, no materialization).
-purrdf query --data people.purrpck --results-format tsv \
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json query --data people.purrpck --results-format tsv \
   'SELECT * WHERE { ?s ?p ?o } LIMIT 10'
 
 # Query the RDFS closure rather than the raw graph.
@@ -701,18 +702,18 @@ doing nothing.
 
 ```sh
 # An ordinary ontology decides well inside its derived budgets.
-purrdf consistency ontology.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency ontology.ttl
 # consistency true
 # completeness decided
 # …
 
 # Narrow the round cap to force an early `unknown` rather than let the search run to
 # its derived budget.
-purrdf consistency --step-cap 1 ontology.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency --step-cap 1 ontology.ttl
 echo $?   # 3
 
 # A pack source: verified, then reverse-mapped into the tableau like any other input.
-purrdf consistency ontology.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency ontology.purrpck
 ```
 
 ## `validate`
@@ -867,7 +868,7 @@ purrdf validate --shapes shapes.ttl data.ttl
 purrdf validate --shapes shapes.ttl --format sarif data.ttl > results.sarif
 
 # A verified pack data source and a Turtle report file.
-purrdf validate --shapes shapes.ttl --format turtle data.purrpck report.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json validate --shapes shapes.ttl --format turtle data.purrpck report.ttl
 
 # Query the report the binary just produced.
 purrdf validate --shapes shapes.ttl data.ttl report.nt
@@ -1272,7 +1273,7 @@ purrdf shex --schema user.shex --data data.ttl \
   '{FOCUS a <http://example.org/Person>}@<http://example.org/UserShape>'
 
 # A ShExJ schema with a caller-resolved IMPORT, over a verified pack.
-purrdf shex --schema user.shexj --import http://example.org/ages=ages.shex \
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json shex --schema user.shexj --import http://example.org/ages=ages.shex \
   --data data.purrpck '<http://example.org/alice>@<http://example.org/UserShape>'
 ```
 
@@ -1313,7 +1314,7 @@ purrdf describe --iri http://example.org/alice --iri http://example.org/bob \
   --to ntriples data.ttl
 
 # From a verified pack (zero-copy) into the lossless pack container.
-purrdf describe --iri http://example.org/alice source.purrpck alice.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json describe --iri http://example.org/alice source.purrpck alice.purrpck
 
 # A description carrying RDF 1.2 statement metadata into a star-incapable
 # syntax: the dropped reifier rows are recorded, not lost silently.
@@ -1516,3 +1517,76 @@ has for carrying that distinction.
 Licensed under any one of [MIT](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT),
 [Apache-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE),
 or [MulanPSL-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN), at your option.
+
+Canonicalizing paths require both `--canonical-search POLICY` and
+`--canonicalization-receipts DEST`. The policy is `unlimited` or canonical unsigned
+decimal `u64` text, without leading zeros. There is no default. This includes PACK
+input verification, PACK output, `convert --canonical`, `consistency` and SHACL
+product creation or certification. Ordinary native RDF conversions need neither flag.
+Policy-required reasoning services can return `[]` when the actual request needs
+no canonical run; the array reports execution, rather than promising a search.
+
+The receipt destination is separate from raw output. `-` writes its JSON array to
+stderr. Every constituent run has an independent ceiling; the array states no
+aggregate work limit. Exactly one finalized receipt array is emitted per request,
+including when several constituent runs occur. Receipts are published before queued
+reports and raw output, and on refusal.
+Known input, import, raw-output and report aliases are refused before execution.
+An evidence I/O refusal retains and reports any original native canonicalization
+failure, and a failure to publish evidence prevents raw output publication.
+
+## Configured YAML-LD input
+
+`convert --yamlld-input-options PATH` reads the closed version-one Basic
+configuration described in [YAML-LD input options](../../docs/YAML_INPUT_OPTIONS.md).
+Every input must be YAML-LD, including during canonicalization or entailment.
+Other commands reject this command-local flag. Existing output options remain
+independent.
+
+## `yaml-source`
+
+`yaml-source` exports presentation metadata independently of semantic YAML-LD
+conversion. Supply a named profile JSON file with an explicit name, version and
+namespace:
+
+```json
+{"version":1,"name":"authored-yaml","profile_version":1,"vocabulary":"https://example.org/yaml#"}
+```
+
+```sh
+purrdf yaml-source export --source-iri https://example.org/source --profile profile.json --root-output root.txt source.yaml metadata.nq
+purrdf yaml-source reconstruct --root "$(cat root.txt)" --profile profile.json metadata.nq restored.yaml
+```
+
+Export writes lossless N-Quads. The stream root is an RDF subject in that graph;
+`--root-output` optionally writes the same IRI plus a newline to a distinct named
+file. Reconstruction requires that exact root and matching profile and writes
+verified original bytes, including BOM, comments and line endings, without adding
+a newline. Input and primary output accept `-`; profile and root output require
+named files. Aliasing source, profile and output paths is refused. Source bytes
+are read raw, including when a filename resembles a compressed format.
+
+The existing file-identity guard supports comparisons of two existing files on
+Unix. Other platforms refuse that comparison, including between an existing
+profile and source input. Use both stdin and stdout and omit `--root-output` to
+avoid paired existing-file comparisons. A new output destination alone still
+requires comparing the existing profile and named input.
+
+The profile's optional `bounds.syntax` accepts `max_input_bytes`,
+`max_allocation_bytes`, `max_occurrences`, `max_depth`, `aliases` and
+`max_documents`. Other bounds are `max_cover_spans`, `max_partition_bytes`,
+`max_statements`, `max_payload_bytes`, `max_projection_bytes` and
+`max_decode_bytes`. All numeric bounds are unsigned integer lexemes through
+4,294,967,295; `aliases` is boolean. Omitted fields inherit the native defaults:
+16 MiB input, 128 MiB lexical storage, 1,048,576 occurrences/documents, depth 128,
+aliases enabled, 2,097,153 cover spans, 64 MiB partition, 2,097,152 statements,
+512 MiB payload/projection each and 256 MiB decode storage.
+
+Profile JSON acquisition is capped at 16 KiB; its decoder separately admits
+128 KiB, four containers and 64 values. Native profile construction, source
+acquisition, Lex, partition, projection, copied root and reconstruction phases
+have separate ownership. Reconstruction's `--max-rdf-bytes` defaults to 64 MiB
+and limits raw acquisition only; caller RDF/parser storage is outside native
+decode admission. Export uses the existing streamed serializer, with its
+proportional SerGraph/index and separate 64 KiB staging window. There is no
+total output-byte or combined process-memory promise.

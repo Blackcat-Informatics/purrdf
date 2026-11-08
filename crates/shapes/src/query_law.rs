@@ -108,9 +108,9 @@ impl Runtime {
             invocation.parameters.names(),
         )
         .map_err(|refusal| {
-            let message = refusal.to_string();
+            let cause = Arc::new(refusal.clone());
             self.record(refusal);
-            crate::error::ProcessorFailure::Admission { message }.into()
+            crate::error::ProcessorFailure::Admission { cause }.into()
         })
     }
 

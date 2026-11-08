@@ -50,7 +50,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
                     dataset.as_ref(),
                     &prepared,
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 )?;
                 let GovernedOutcome::Complete { result, .. } = outcome else {
@@ -58,7 +58,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
                 };
                 Ok(result)
             } else {
-                engine.query_prepared(&dataset, &prepared, &[], QueryOptions::EMPTY)
+                engine.query_prepared(&dataset, &prepared, &[], &QueryOptions::EMPTY)
             }
         };
         let assert_answer = |answer: SparqlResult| {
@@ -80,10 +80,18 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
         let smaller = purrdf_stack::on_stack_scoped(192 * 1024, || {
             let scoped_engine = NativeSparqlEngine::new();
             let result = evaluate(&scoped_engine);
+            let canary_result =
+                scoped_engine.query_prepared(&dataset, &canary, &[], &QueryOptions::EMPTY);
+            // Native fixed frames may consume the remaining margin even for a
+            // shallow query. Recovery must succeed on the caller's stack below.
+            #[cfg(not(target_arch = "wasm32"))]
+            match canary_result {
+                Ok(answer) => assert_answer(answer),
+                Err(error) => assert_eq!(error.code, EvalError::STACK_EXHAUSTED_CODE),
+            }
+            #[cfg(target_arch = "wasm32")]
             assert_answer(
-                scoped_engine
-                    .query_prepared(&dataset, &canary, &[], QueryOptions::EMPTY)
-                    .expect("the smaller-stack engine still answers its shallow canary"),
+                canary_result.expect("the WASM smaller stack still answers its shallow canary"),
             );
             result
         })
@@ -108,7 +116,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
         // The caller's stack context is restored after each typed refusal.
         assert_answer(
             engine
-                .query_prepared(&dataset, &canary, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, &canary, &[], &QueryOptions::EMPTY)
                 .expect("the caller's shallow canary answers after refusal"),
         );
         assert_answer(

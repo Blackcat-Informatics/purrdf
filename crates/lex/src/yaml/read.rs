@@ -4,15 +4,15 @@
 //! The YAML 1.2 reader: one document into the JSON data model, over explicit
 //! stacks of open block and flow collections.
 
+use crate::allocation::OrderedTable;
 use core::cell::Cell;
 use core::fmt;
 use core::mem;
-use std::collections::{HashMap, HashSet};
 
-use purrdf_hash::fixed::FixedState;
-
-use super::resolve::{Plain, resolve};
-use crate::json::{Number, Object, Value};
+use super::build::{Builder, CoreBuilder};
+use super::syntax::Span;
+use crate::allocation::StorageError;
+use crate::json::Value;
 
 /// The resource bounds of one read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +22,13 @@ pub struct Limits {
     /// The most nodes the document may denote, every node an alias expands to
     /// included, so an alias bomb is refused before it is built.
     pub max_nodes: u64,
+    /// Aggregate scalar-classification and numeric-conversion work units.
+    /// One input byte, packed radix digit, divided word or output/validation
+    /// byte costs one unit. The account is shared by every stream document.
+    pub max_numeric_work: u64,
+    /// Aggregate bytes of newly materialized numeric spellings. Alias copies
+    /// remain governed by the node and allocation bounds.
+    pub max_numeric_bytes: usize,
     /// Whether anchors and aliases are accepted. YAML-LD's JSON profile
     /// refuses them.
     pub aliases: bool,
@@ -35,11 +42,13 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// 128 open collections, 1,048,576 nodes, aliases accepted, scalar keys
-    /// refused.
+    /// 128 open collections, 1,048,576 nodes, 67,108,864 numeric work units,
+    /// 32 MiB of numeric spellings, aliases accepted, scalar keys refused.
     pub const DEFAULT: Self = Self {
         max_depth: 128,
         max_nodes: 1 << 20,
+        max_numeric_work: 1 << 26,
+        max_numeric_bytes: 32 << 20,
         aliases: true,
         scalar_keys: false,
     };
@@ -51,8 +60,36 @@ impl Default for Limits {
     }
 }
 
-/// What is wrong with a YAML document.
+/// Explicit bounds for construction of a complete ordered YAML stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamLimits {
+    /// Semantic rules and bounds. `max_nodes` covers the entire stream,
+    /// including every expanded alias; collection depth is local to a document.
+    pub core: Limits,
+    /// Maximum number of documents, including explicitly empty documents.
+    pub max_documents: usize,
+    /// Maximum original UTF-8 bytes, checked before allocation.
+    pub max_input_bytes: usize,
+    /// Maximum additional live native bytes, including all retained documents,
+    /// the result vector, parser scratch and anchor/alias copies.
+    pub max_allocation_bytes: usize,
+}
+
+/// The completed construct followed by unexpected source content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrailingContext {
+    /// A complete top-level document node.
+    Document,
+    /// A complete node on the same line.
+    Node,
+    /// An explicit `...` document end marker.
+    EndMarker,
+}
+
+/// What is wrong with a YAML document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ErrorKind {
     /// The grammar refuses the text here; the text names what was expected.
     Syntax(&'static str),
@@ -63,20 +100,91 @@ pub enum ErrorKind {
     /// core tag its node does not match (`!!int x`).
     Tag,
     /// An anchor or alias while [`Limits::aliases`] is off.
-    Alias,
+    Alias {
+        /// Whether the refused occurrence declares an anchor (`&`), rather than uses an alias (`*`).
+        anchor: bool,
+        /// Original name bytes, excluding its indicator; no failure-path allocation.
+        name: Span,
+    },
     /// An alias names no anchor defined before it.
-    UnknownAlias,
+    UnknownAlias {
+        /// Original name bytes, excluding `*`.
+        name: Span,
+    },
+    /// An alias names a node whose anchor is still being constructed.
+    /// The native reader supports acyclic aliases only.
+    CyclicAlias {
+        /// Original alias name bytes, excluding `*`.
+        name: Span,
+    },
+    /// A shorthand tag uses a handle not declared in this document.
+    UnknownTagHandle,
+    /// A semantic projection requires a collection or null document root.
+    InvalidRoot,
     /// A mapping key that is not a string: a number, a boolean, `null`, an
     /// empty key (all accepted under [`Limits::scalar_keys`]), or a collection.
     NonStringKey,
     /// A mapping repeats a key (§3.2.1.1).
-    DuplicateKey,
+    DuplicateKey {
+        /// Already admitted decoded key text, moved from the refused document.
+        key: String,
+        /// Original first key occurrence byte offset.
+        first: usize,
+        /// Original repeated key occurrence byte offset, including an alias indicator.
+        repeated: usize,
+    },
+    /// A lexical collection key is repeated through an alias to the same node.
+    DuplicateCollectionKey {
+        /// Original first key occurrence.
+        first: Span,
+        /// Original repeated alias occurrence.
+        repeated: Span,
+    },
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
+    /// Scalar classification or numeric preparation exhausted its work account.
+    NumericWork {
+        /// Original construction-wide work allowance.
+        limit: u64,
+    },
+    /// Newly materialized numeric spellings exceed their aggregate byte bound.
+    NumericOutput {
+        /// Original construction-wide spelling-byte allowance.
+        limit: usize,
+    },
     /// A malformed double-quoted escape, or one that names no character.
-    Escape,
+    Escape {
+        /// Original refused escape bytes, including its backslash.
+        span: Span,
+    },
+    /// EOF before a quoted scalar closes.
+    UnfinishedQuote {
+        /// Original opening quote.
+        quote: char,
+        /// Original scalar bytes, from its opening quote through EOF.
+        span: Span,
+    },
+    /// EOF before a flow collection closes.
+    UnfinishedFlow {
+        /// Original opening delimiter.
+        opener: Span,
+        /// Required closing delimiter.
+        expected: char,
+    },
+    /// Another token follows a completed document or node.
+    TrailingContent {
+        /// Original remaining source bytes.
+        span: Span,
+        /// The completed construct preceding the refused content.
+        context: TrailingContext,
+    },
     /// A second document in the stream.
     MultipleDocuments,
+    /// More documents than [`StreamLimits::max_documents`] allows.
+    Documents {
+        /// The cap that was exceeded.
+        limit: usize,
+    },
     /// More collections open at once than [`Limits::max_depth`] allows.
     Depth {
         /// The cap that was exceeded.
@@ -87,10 +195,22 @@ pub enum ErrorKind {
         /// The cap that was exceeded.
         limit: u64,
     },
+    /// Input exceeds the explicit syntax admission bound.
+    Input {
+        /// Maximum input bytes.
+        limit: usize,
+    },
+    /// Native allocation admission exceeds the syntax bound.
+    Allocation {
+        /// Maximum admitted bytes.
+        limit: usize,
+    },
+    /// A physical native allocation could not complete.
+    Storage(StorageError),
 }
 
 /// A refused YAML document: what is wrong, and where.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error {
     kind: ErrorKind,
     offset: usize,
@@ -98,20 +218,39 @@ pub struct Error {
     column: usize,
 }
 
+crate::variant_from!(ErrorKind { Storage(StorageError) });
+
 impl purrdf_hash::error::StructuredError for ErrorKind {
     purrdf_hash::error_visit! {
         Syntax(expected) => "yaml-syntax" { "expected" => Text(expected) },
         Tab => "yaml-tab" {},
         Tag => "yaml-tag" {},
-        Alias => "yaml-alias-disabled" {},
-        UnknownAlias => "yaml-unknown-alias" {},
+        Alias { anchor, name } => "yaml-alias-disabled" { "anchor" => Boolean(*anchor), "name" => Cause(name) },
+        UnknownAlias { name } => "yaml-unknown-alias" { "name" => Cause(name) },
+        CyclicAlias { name } => "yaml-cyclic-alias" { "name" => Cause(name) },
+        UnknownTagHandle => "yaml-unknown-tag-handle" {},
+        InvalidRoot => "yaml-invalid-root" {},
         NonStringKey => "yaml-non-string-key" {},
-        DuplicateKey => "yaml-duplicate-key" {},
+        DuplicateKey { key, first, repeated } => "yaml-duplicate-key" { "key" => Text(key), "first" => ByteCount(*first as u128), "repeated" => ByteCount(*repeated as u128) },
+        DuplicateCollectionKey { first, repeated } => "yaml-duplicate-key" { "first" => Cause(first), "repeated" => Cause(repeated) },
         NonFinite => "yaml-non-finite" {},
-        Escape => "yaml-escape" {},
+        NumericWork { limit } => "yaml-numeric-work-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        NumericOutput { limit } => "yaml-numeric-output-limit" { "limit" => ByteCount(*limit as u128) },
+        Escape { span } => "yaml-escape" { "span" => Cause(span) },
+        UnfinishedQuote { quote, span } => "yaml-unfinished-quote" { "quote" => Unsigned(u128::from(u32::from(*quote))), "span" => Cause(span) },
+        UnfinishedFlow { opener, expected } => "yaml-unfinished-flow" { "opener" => Cause(opener), "expected" => Unsigned(u128::from(u32::from(*expected))) },
+        TrailingContent { span, context } => "yaml-trailing-content" { "span" => Cause(span), "context" => Code(match context {
+            TrailingContext::Document => "document",
+            TrailingContext::Node => "node",
+            TrailingContext::EndMarker => "end-marker",
+        }) },
         MultipleDocuments => "yaml-multiple-documents" {},
+        Documents { limit } => "yaml-document-limit" { "limit" => Unsigned(*limit as u128) },
         Depth { limit } => "yaml-depth-limit" { "limit" => Unsigned(*limit as u128) },
         Nodes { limit } => "yaml-node-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        Input { limit } => "yaml-input-limit" { "limit" => ByteCount(*limit as u128) },
+        Allocation { limit } => "yaml-allocation-limit" { "limit" => ByteCount(*limit as u128) },
+        Storage(cause) => "yaml-storage" { "cause" => Cause(cause) },
     }
 }
 
@@ -127,8 +266,36 @@ impl purrdf_hash::error::StructuredError for Error {
 }
 
 impl Error {
+    pub(super) fn new(text: &str, kind: ErrorKind, at: usize) -> Self {
+        let at = at.min(text.len());
+        let (line, column) = position(text, at);
+        Self {
+            kind,
+            offset: at,
+            line,
+            column,
+        }
+    }
+
+    pub(super) fn storage(
+        text: &str,
+        limit: Option<usize>,
+        cause: StorageError,
+        at: usize,
+    ) -> Self {
+        let kind = match (cause, limit) {
+            (StorageError::AdmissionFailed, Some(limit)) => ErrorKind::Allocation { limit },
+            _ => ErrorKind::Storage(cause),
+        };
+        Self::new(text, kind, at)
+    }
     /// What is wrong.
-    pub const fn kind(&self) -> ErrorKind {
+    pub const fn kind(&self) -> &ErrorKind {
+        &self.kind
+    }
+
+    /// Consume this refusal, retaining its owned decoded context.
+    pub fn into_kind(self) -> ErrorKind {
         self.kind
     }
 
@@ -151,58 +318,85 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "YAML line {} column {}: ", self.line, self.column)?;
-        match self.kind {
+        match &self.kind {
             ErrorKind::Syntax(what) => write!(f, "expected {what}"),
             ErrorKind::Tab => f.write_str("a tab cannot indent a block"),
             ErrorKind::Tag => {
                 f.write_str("a tag other than a core-schema tag, or one its node does not match")
             }
-            ErrorKind::Alias => f.write_str("anchors and aliases are not accepted here"),
-            ErrorKind::UnknownAlias => f.write_str("the alias names no anchor defined before it"),
+            ErrorKind::Alias { .. } => f.write_str("anchors and aliases are not accepted here"),
+            ErrorKind::UnknownAlias { .. } => f.write_str("the alias names no anchor defined before it"),
+            ErrorKind::CyclicAlias { .. } => f.write_str("the alias names an anchor still being constructed; only acyclic aliases are supported"),
+            ErrorKind::UnknownTagHandle => f.write_str("the tag handle is not declared in this document"),
+            ErrorKind::InvalidRoot => f.write_str("a document root must be a mapping, sequence or null"),
             ErrorKind::NonStringKey => f.write_str("a mapping key must be a string"),
-            ErrorKind::DuplicateKey => f.write_str("a mapping repeats a key"),
+            ErrorKind::DuplicateKey { .. } | ErrorKind::DuplicateCollectionKey { .. } => f.write_str("a mapping repeats a key"),
             ErrorKind::NonFinite => f.write_str("JSON cannot hold an infinite or NaN number"),
-            ErrorKind::Escape => f.write_str("a malformed escape"),
+            ErrorKind::NumericWork { limit } => write!(f, "numeric work exceeds {limit} units"),
+            ErrorKind::NumericOutput { limit } => {
+                write!(f, "numeric spellings exceed {limit} bytes")
+            }
+            ErrorKind::Escape { .. } => f.write_str("a malformed escape"),
+            ErrorKind::UnfinishedQuote { .. } => f.write_str("expected the quote that closes the scalar"),
+            ErrorKind::UnfinishedFlow { .. } => f.write_str("expected the end of a flow collection"),
+            ErrorKind::TrailingContent { context: TrailingContext::Document, .. } => f.write_str("expected the end of the document after its top-level node"),
+            ErrorKind::TrailingContent { context: TrailingContext::Node, .. } => f.write_str("expected a line break after a complete node"),
+            ErrorKind::TrailingContent { context: TrailingContext::EndMarker, .. } => f.write_str("expected a line ending after `...`"),
             ErrorKind::MultipleDocuments => f.write_str("the stream holds more than one document"),
+            ErrorKind::Documents { limit } => write!(f, "more than {limit} documents"),
             ErrorKind::Depth { limit } => write!(f, "more than {limit} nested collections"),
             ErrorKind::Nodes { limit } => write!(f, "more than {limit} nodes"),
+            ErrorKind::Input { limit } => write!(f, "input exceeds {limit} bytes"),
+            ErrorKind::Allocation { limit } => write!(f, "syntax allocation exceeds {limit} bytes"),
+            ErrorKind::Storage(cause) => cause.fmt(f),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            ErrorKind::Storage(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
 
 /// A block mapping's pending entry.
-enum Slot {
+enum KeyInput<K> {
+    Scalar(String, bool),
+    Ready(K),
+}
+
+enum Slot<K> {
     /// Between entries.
     Idle,
     /// After `?`: the key node is next.
     ExplicitKey,
     /// An explicit key is complete; `:` and its value may follow.
-    KeyDone(String, usize),
+    KeyDone(K, usize),
     /// After `key:`: the value node is next.
-    Value(String, usize),
+    Value(K, usize),
 }
 
 /// An open block collection.
-enum Frame {
+enum Frame<B: Builder> {
     /// The document: its one node.
-    Root(Option<Value>),
+    Root(Option<B::Node>),
     Sequence {
         indent: usize,
         start: usize,
-        items: Vec<Value>,
+        items: Vec<B::Node>,
         /// After `-`: the item node is next.
         open: bool,
-        anchor: Option<String>,
+        anchor: Option<Anchor>,
     },
     Mapping {
         indent: usize,
         start: usize,
-        object: Object,
-        keys: HashSet<String, FixedState>,
-        slot: Slot,
-        anchor: Option<String>,
+        object: B::Mapping,
+        slot: Slot<B::Key>,
+        anchor: Option<Anchor>,
     },
 }
 
@@ -218,11 +412,20 @@ enum Line {
     Inline,
 }
 
-/// An anchor waiting for its node.
+/// A declaration token travels with its node until completion.
+struct Anchor {
+    name: String,
+    declaration: usize,
+}
+struct Binding<N> {
+    declaration: usize,
+    ready: Option<(N, u64)>,
+}
+
 /// A YAML 1.2 core-schema tag (§10.3), or the non-specific `!`: the tags the
 /// JSON data model can honour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tag {
+pub(super) enum Tag {
     Str,
     Int,
     Float,
@@ -231,41 +434,60 @@ enum Tag {
     Seq,
     Map,
     NonSpecific,
+    Other,
+}
+impl Tag {
+    pub(super) fn specific(name: &str) -> Self {
+        match name.strip_prefix("tag:yaml.org,2002:") {
+            Some("str") => Self::Str,
+            Some("int") => Self::Int,
+            Some("float") => Self::Float,
+            Some("bool") => Self::Bool,
+            Some("null") => Self::Null,
+            Some("seq") => Self::Seq,
+            Some("map") => Self::Map,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// A node's properties (§6.9), waiting for their node.
 struct Properties {
-    anchor: Option<String>,
+    anchor: Option<Anchor>,
     tag: Option<(Tag, usize)>,
     /// Where the first property starts.
     at: usize,
     column: usize,
+    spans: super::build::PropertySpans,
 }
 
+type PropertyParts = (Option<Anchor>, Option<(Tag, usize)>);
+
 /// The anchor and tag of `properties`.
-fn split(properties: Option<Properties>) -> (Option<String>, Option<(Tag, usize)>) {
+fn split(properties: Option<Properties>) -> PropertyParts {
     properties.map_or((None, None), |properties| {
         (properties.anchor, properties.tag)
     })
 }
 
 /// An open flow collection.
-enum Flow {
+enum Flow<B: Builder> {
     Sequence {
-        items: Vec<Value>,
-        anchor: Option<String>,
+        items: Vec<B::Node>,
+        anchor: Option<Anchor>,
+        start: usize,
         /// Whether an entry is complete and `,` or `]` is next.
         after_item: bool,
     },
     Mapping {
-        object: Object,
-        keys: HashSet<String, FixedState>,
-        anchor: Option<String>,
-        key: Option<(String, usize)>,
+        object: B::Mapping,
+        anchor: Option<Anchor>,
+        start: usize,
+        key: Option<(B::Key, usize)>,
         state: FlowMap,
     },
     /// A single-pair mapping inside a flow sequence (`[a: b]`).
-    Pair { key: String },
+    Pair { key: B::Key },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,7 +498,7 @@ enum FlowMap {
     Separator,
 }
 
-struct Parser<'a> {
+pub(super) struct Parser<'a, B: Builder> {
     text: &'a str,
     bytes: &'a [u8],
     pos: usize,
@@ -284,8 +506,11 @@ struct Parser<'a> {
     nodes: u64,
     depth: usize,
     /// Each anchor's node and how many nodes it holds.
-    anchors: HashMap<String, (Value, u64), FixedState>,
-    stack: Vec<Frame>,
+    anchors: OrderedTable<String, Binding<B::Node>>,
+    handles: OrderedTable<String, String>,
+    stack: Vec<Frame<B>>,
+    builder: B,
+    last_scalar_end: usize,
     pending: Option<Properties>,
     /// Properties that start a later line than `pending`: on an implicit key's
     /// line they are the key's, and `pending` the mapping's.
@@ -293,26 +518,42 @@ struct Parser<'a> {
     /// The last position located: its offset, line start and column, so
     /// locating the cursor as it advances costs the bytes it crossed.
     located: Cell<(usize, usize, usize)>,
+    /// A consumed document-prefix BOM is not an indentation column. Keep its
+    /// original line origin for backwards location lookups within that document.
+    bom_line: Option<usize>,
+    document_start: Option<Span>,
+    prologue_end: usize,
 }
 
 const fn is_break(byte: Option<u8>) -> bool {
     matches!(byte, Some(b'\n' | b'\r'))
 }
 
-const fn is_flow_indicator(byte: Option<u8>) -> bool {
-    matches!(byte, Some(b',' | b'[' | b']' | b'{' | b'}'))
+use super::scalar::flow_indicator as is_flow_indicator;
+
+macro_rules! admit {
+    ($parser:ident, $operation:expr) => {{
+        let limit = $parser.builder.allocation_limit();
+        $operation.map_err(|cause| Error::storage($parser.text, limit, cause, $parser.pos))?
+    }};
 }
 
-impl Parser<'_> {
-    fn error(&self, kind: ErrorKind, at: usize) -> Error {
-        let at = at.min(self.text.len());
-        let line_start = self.line_start(at);
-        Error {
-            kind,
-            offset: at,
-            line: 1 + self.text[..at].bytes().filter(|&b| b == b'\n').count(),
-            column: 1 + self.text[line_start..at].chars().count(),
+impl<'a, B: Builder> Parser<'a, B> {
+    fn split(
+        &mut self,
+        properties: Option<Properties>,
+        at: usize,
+        collection: bool,
+    ) -> Result<PropertyParts, Error> {
+        if let Some(properties) = &properties {
+            self.builder
+                .properties(at, collection, properties.spans)
+                .map_err(|(kind, at)| self.error(kind, at))?;
         }
+        Ok(split(properties))
+    }
+    fn error(&self, kind: ErrorKind, at: usize) -> Error {
+        Error::new(self.text, kind, at)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -325,7 +566,7 @@ impl Parser<'_> {
 
     /// Whether the byte at `at` is a space, tab, line break or the end.
     fn blank_at(&self, at: usize) -> bool {
-        matches!(self.peek_at(at), None | Some(b' ' | b'\t' | b'\n' | b'\r'))
+        super::scalar::blank(self.peek_at(at))
     }
 
     /// Whether the cursor is on the indicator `c` followed by a blank.
@@ -351,6 +592,12 @@ impl Parser<'_> {
                 .map_or(0, |index| index + 1);
             (start, self.text[start..at].chars().count())
         };
+        let located = if self.bom_line == Some(located.0) && at >= located.0 + '\u{feff}'.len_utf8()
+        {
+            (located.0 + '\u{feff}'.len_utf8(), located.1 - 1)
+        } else {
+            located
+        };
         self.located.set((at, located.0, located.1));
         located
     }
@@ -367,9 +614,7 @@ impl Parser<'_> {
     /// of a line, followed by a blank).
     fn at_marker(&self) -> bool {
         self.pos == self.line_start(self.pos)
-            && (self.bytes[self.pos..].starts_with(b"---")
-                || self.bytes[self.pos..].starts_with(b"..."))
-            && self.blank_at(self.pos + 3)
+            && super::scalar::document_marker(&self.bytes[self.pos..])
     }
 
     fn skip_inline_space(&mut self) {
@@ -405,20 +650,25 @@ impl Parser<'_> {
     /// or starts a line).
     fn at_comment(&self) -> bool {
         self.peek() == Some(b'#')
-            && (self.pos == 0 || matches!(self.bytes[self.pos - 1], b' ' | b'\t' | b'\n' | b'\r'))
+            && (self.pos == self.line_start(self.pos)
+                || matches!(self.bytes[self.pos - 1], b' ' | b'\t' | b'\n' | b'\r'))
     }
 
     /// Skip spaces, tabs, comments and line breaks: whether a line break was
     /// crossed.
-    fn skip_separation(&mut self) -> bool {
+    fn skip_separation(&mut self) -> Result<bool, Error> {
         let mut crossed = false;
         loop {
             self.skip_inline_space();
             if self.at_comment() {
+                let start = self.pos;
                 self.skip_to_line_end();
+                self.builder
+                    .comment(Span::new(start, self.pos), false)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
             }
             if !self.take_break() {
-                return crossed;
+                return Ok(crossed);
             }
             crossed = true;
         }
@@ -480,159 +730,158 @@ impl Parser<'_> {
         self.count(1, at)
     }
 
-    /// The value a plain scalar denotes.
-    fn plain_value(&self, text: String, at: usize) -> Result<Value, Error> {
-        Ok(match resolve(&text) {
-            Plain::Null => Value::Null,
-            Plain::Bool(value) => Value::Bool(value),
-            Plain::Number(lexeme) => Value::Number(
-                Number::from_lexeme(lexeme)
-                    .map_err(|_| self.error(ErrorKind::Syntax("a JSON-compatible number"), at))?,
-            ),
-            Plain::NonFinite => return Err(self.error(ErrorKind::NonFinite, at)),
-            Plain::String => Value::String(text),
-        })
-    }
-
-    /// A plain scalar key: its text, refused unless it denotes a string or
-    /// [`Limits::scalar_keys`] accepts what it denotes.
-    fn plain_key(&self, text: &str, at: usize) -> Result<String, Error> {
-        match resolve(text) {
-            Plain::String => Ok(text.to_owned()),
-            _ if self.limits.scalar_keys => Ok(text.to_owned()),
-            _ => Err(self.error(ErrorKind::NonStringKey, at)),
-        }
-    }
-
-    /// A key's text, refused unless it denotes a string: a plain key resolves
-    /// by the core schema unless a tag says `!!str` or `!`. Under
-    /// [`Limits::scalar_keys`] a number, boolean or null key (plain, or tagged
-    /// with the core tag it matches) keeps its source text.
-    fn key_text(
-        &self,
-        text: String,
-        plain: bool,
-        tag: Option<(Tag, usize)>,
-        at: usize,
-    ) -> Result<String, Error> {
-        match tag {
-            None if plain => self.plain_key(&text, at),
-            None | Some((Tag::Str | Tag::NonSpecific, _)) => Ok(text),
-            Some((tag @ (Tag::Int | Tag::Float | Tag::Bool | Tag::Null), tag_at))
-                if self.limits.scalar_keys =>
-            {
-                let denoted = resolve(&text);
-                let matches = match (tag, &denoted) {
-                    (Tag::Int, Plain::Number(lexeme)) => {
-                        Number::from_lexeme(lexeme.as_str()).is_ok_and(|number| number.is_integer())
-                    }
-                    (Tag::Float, Plain::Number(_) | Plain::NonFinite)
-                    | (Tag::Bool, Plain::Bool(_))
-                    | (Tag::Null, Plain::Null) => true,
-                    _ => false,
-                };
-                if matches {
-                    Ok(text)
-                } else {
-                    Err(self.error(ErrorKind::Tag, tag_at))
-                }
-            }
-            Some(_) => Err(self.error(ErrorKind::NonStringKey, at)),
-        }
-    }
-
-    /// The node an anchor on a key names: the key's string, or under
-    /// [`Limits::scalar_keys`] the number, boolean or null the key denotes.
-    fn key_node(&self, text: String, plain: bool, tag: Option<(Tag, usize)>, at: usize) -> Value {
-        if self.limits.scalar_keys
-            && let Ok(value) = self.scalar(text.clone(), plain, tag, at)
-        {
-            return value;
-        }
-        Value::String(text)
-    }
-
-    /// The value of a scalar: a plain one resolves by the core schema, a
-    /// quoted or block one is a string, and a tag decides both (§10.3).
     fn scalar(
-        &self,
+        &mut self,
         text: String,
         plain: bool,
         tag: Option<(Tag, usize)>,
         at: usize,
-    ) -> Result<Value, Error> {
-        let Some((tag, tag_at)) = tag else {
-            return if plain {
-                self.plain_value(text, at)
-            } else {
-                Ok(Value::String(text))
-            };
-        };
-        let value = match tag {
-            Tag::Str | Tag::NonSpecific => return Ok(Value::String(text)),
-            Tag::Seq | Tag::Map => return Err(self.error(ErrorKind::Tag, tag_at)),
-            Tag::Int | Tag::Float | Tag::Bool | Tag::Null => self.plain_value(text, at)?,
-        };
-        let matches = match (tag, &value) {
-            (Tag::Int, Value::Number(number)) => number.is_integer(),
-            (Tag::Float, Value::Number(_))
-            | (Tag::Bool, Value::Bool(_))
-            | (Tag::Null, Value::Null) => true,
-            _ => false,
-        };
-        if matches {
-            Ok(value)
+    ) -> Result<B::Node, Error> {
+        let end = if plain && text.is_empty() {
+            at
         } else {
-            Err(self.error(ErrorKind::Tag, tag_at))
-        }
+            self.last_scalar_end.max(at)
+        };
+        self.builder
+            .scalar(text, plain, tag, at, end)
+            .map_err(|(kind, at)| self.error(kind, at))
     }
 
-    /// Refuse a tag a collection does not match.
+    fn key_text(
+        &mut self,
+        text: String,
+        plain: bool,
+        tag: Option<(Tag, usize)>,
+        at: usize,
+    ) -> Result<B::Key, Error> {
+        let end = if plain && text.is_empty() {
+            at
+        } else {
+            self.last_scalar_end.max(at)
+        };
+        self.builder
+            .key_text(text, plain, tag, at, end)
+            .map_err(|(kind, at)| self.error(kind, at))
+    }
+
+    fn key_node(
+        &mut self,
+        key: &B::Key,
+        text: String,
+        plain: bool,
+        tag: Option<(Tag, usize)>,
+        at: usize,
+    ) -> Result<B::Node, Error> {
+        self.builder
+            .key_node(key, text, plain, tag, at)
+            .map_err(|(kind, at)| self.error(kind, at))
+    }
+
     fn collection_tag(&self, tag: Option<(Tag, usize)>, kind: Tag) -> Result<(), Error> {
-        match tag {
-            Some((tag, at)) if tag != kind && tag != Tag::NonSpecific => {
-                Err(self.error(ErrorKind::Tag, at))
-            }
-            _ => Ok(()),
-        }
+        self.builder
+            .collection_tag(tag, kind)
+            .map_err(|(kind, at)| self.error(kind, at))
     }
 
-    /// The tag at the cursor (on its `!`).
+    fn null(&mut self, at: usize) -> Result<B::Node, Error> {
+        self.builder
+            .null(at)
+            .map_err(|(kind, at)| self.error(kind, at))
+    }
+
+    /// Recognize one tag (§6.9.1) before the builder judges its semantics.
     fn tag(&mut self) -> Result<Tag, Error> {
         let at = self.pos;
-        let name = if self.bytes[at..].starts_with(b"!<") {
-            let close = self.text[at..].find('>').ok_or_else(|| {
+        let (expanded, decode_from) = if self.bytes[at..].starts_with(b"!<") {
+            let close = self.text[at + 2..].find('>').ok_or_else(|| {
                 self.error(ErrorKind::Syntax("the `>` that closes a verbatim tag"), at)
             })?;
-            self.pos = at + close + 1;
-            self.text[at + 2..at + close]
-                .strip_prefix("tag:yaml.org,2002:")
-                .ok_or_else(|| self.error(ErrorKind::Tag, at))?
+            self.pos = at + 3 + close;
+            let body = &self.text[at + 2..self.pos - 1];
+            if !tag_uri(body, false) {
+                return Err(self.error(ErrorKind::Tag, at));
+            }
+            (admit!(self, self.builder.allocations().string(body)), 0)
         } else {
             self.pos += 1;
             while !self.blank_at(self.pos) && !is_flow_indicator(self.peek()) {
                 self.pos += self.text[self.pos..]
                     .chars()
                     .next()
-                    .map_or(1, char::len_utf8);
+                    .expect("a tag character")
+                    .len_utf8();
             }
-            if self.pos == at + 1 {
+            let spelling = &self.text[at..self.pos];
+            if spelling == "!" {
+                if !self.blank_at(self.pos) && !matches!(self.peek(), Some(b',' | b']' | b'}')) {
+                    return Err(self.error(
+                        ErrorKind::Syntax("separation after a tag property"),
+                        self.pos,
+                    ));
+                }
+                self.builder
+                    .tag(
+                        Span::new(at, self.pos),
+                        super::syntax::ExplicitTag::NonSpecific,
+                    )
+                    .map_err(|(kind, at)| self.error(kind, at))?;
                 return Ok(Tag::NonSpecific);
             }
-            self.text[at..self.pos]
-                .strip_prefix("!!")
-                .ok_or_else(|| self.error(ErrorKind::Tag, at))?
+            let (handle, suffix) = if let Some(suffix) = spelling.strip_prefix("!!") {
+                ("!!", suffix)
+            } else if let Some(end) = spelling[1..].find('!') {
+                let end = end + 2;
+                (&spelling[..end], &spelling[end..])
+            } else {
+                ("!", &spelling[1..])
+            };
+            if !tag_handle(handle) || !tag_uri(suffix, true) {
+                return Err(self.error(ErrorKind::Tag, at));
+            }
+            let prefix = match self
+                .handles
+                .get_by(|candidate| handle.cmp(candidate.as_str()))
+            {
+                Some(prefix) => prefix.as_str(),
+                None if handle == "!!" => "tag:yaml.org,2002:",
+                None if handle == "!" => "!",
+                None => return Err(self.error(ErrorKind::UnknownTagHandle, at)),
+            };
+            let mut expanded = admit!(self, self.builder.allocations().string(prefix));
+            let decode_from = expanded.len();
+            admit!(
+                self,
+                self.builder.allocations().push_str(&mut expanded, suffix)
+            );
+            (expanded, decode_from)
         };
-        match name {
-            "str" => Ok(Tag::Str),
-            "int" => Ok(Tag::Int),
-            "float" => Ok(Tag::Float),
-            "bool" => Ok(Tag::Bool),
-            "null" => Ok(Tag::Null),
-            "seq" => Ok(Tag::Seq),
-            "map" => Ok(Tag::Map),
-            _ => Err(self.error(ErrorKind::Tag, at)),
+        if !self.blank_at(self.pos) && !matches!(self.peek(), Some(b',' | b']' | b'}')) {
+            return Err(self.error(
+                ErrorKind::Syntax("separation after a tag property"),
+                self.pos,
+            ));
         }
+        let expanded = self.decode_tag(expanded, decode_from, at)?;
+        let tag = Tag::specific(&expanded);
+        if tag == Tag::Other && !B::LEXICAL {
+            return Err(self.error(ErrorKind::Tag, at));
+        }
+        self.builder
+            .tag(
+                Span::new(at, self.pos),
+                super::syntax::ExplicitTag::Specific(expanded),
+            )
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        Ok(tag)
+    }
+
+    /// Prefixes are decoded at declaration; decode only the newly read suffix.
+    fn decode_tag(&self, text: String, from: usize, at: usize) -> Result<String, Error> {
+        let mut bytes = text.into_bytes();
+        let length = crate::percent::decode_in_place(&mut bytes[from..])
+            .map_err(|_| self.error(ErrorKind::Tag, at))?;
+        bytes.truncate(from + length);
+        String::from_utf8(bytes).map_err(|_| self.error(ErrorKind::Tag, at))
     }
 
     /// The properties waiting for their node, those of several lines joined
@@ -647,12 +896,14 @@ impl Parser<'_> {
                         return Err(self.error(ErrorKind::Syntax("one anchor per node"), later.at));
                     }
                     first.anchor = later.anchor;
+                    first.spans.anchor = later.spans.anchor;
                 }
                 if later.tag.is_some() {
                     if first.tag.is_some() {
                         return Err(self.error(ErrorKind::Syntax("one tag per node"), later.at));
                     }
                     first.tag = later.tag;
+                    first.spans.tag = later.spans.tag;
                 }
                 Ok(Some(first))
             }
@@ -696,22 +947,30 @@ impl Parser<'_> {
     fn property(&mut self, properties: &mut Option<Properties>) -> Result<(), Error> {
         let at = self.pos;
         let column = self.column(at);
-        let mut entry = properties.take().unwrap_or(Properties {
+        let mut entry = properties.take().unwrap_or_else(|| Properties {
             anchor: None,
             tag: None,
             at,
             column,
+            spans: super::build::PropertySpans::default(),
         });
         if self.peek() == Some(b'&') {
             if entry.anchor.is_some() {
                 return Err(self.error(ErrorKind::Syntax("one anchor per node"), at));
             }
-            entry.anchor = Some(self.name()?);
+            let name = self.name()?;
+            self.declare_anchor(&name, at)?;
+            entry.anchor = Some(Anchor {
+                name,
+                declaration: at,
+            });
+            entry.spans.anchor = Some(Span::new(at, self.pos));
         } else {
             if entry.tag.is_some() {
                 return Err(self.error(ErrorKind::Syntax("one tag per node"), at));
             }
             entry.tag = Some((self.tag()?, at));
+            entry.spans.tag = Some(Span::new(at, self.pos));
         }
         *properties = Some(entry);
         Ok(())
@@ -721,7 +980,17 @@ impl Parser<'_> {
     fn name(&mut self) -> Result<String, Error> {
         let at = self.pos;
         if !self.limits.aliases {
-            return Err(self.error(ErrorKind::Alias, at));
+            let mut end = at + 1;
+            while !self.blank_at(end) && !is_flow_indicator(self.peek_at(end)) {
+                end += self.text[end..].chars().next().map_or(1, char::len_utf8);
+            }
+            return Err(self.error(
+                ErrorKind::Alias {
+                    anchor: self.peek() == Some(b'&'),
+                    name: Span::new(at + 1, end),
+                },
+                at,
+            ));
         }
         self.pos += 1;
         let start = self.pos;
@@ -734,42 +1003,145 @@ impl Parser<'_> {
         if self.pos == start {
             return Err(self.error(ErrorKind::Syntax("an anchor name"), start));
         }
-        Ok(self.text[start..self.pos].to_owned())
+        Ok(admit!(
+            self,
+            self.builder
+                .allocations()
+                .string(&self.text[start..self.pos])
+        ))
     }
 
     /// The value an alias names, counted against the node bound before it is
     /// copied, so an alias bomb is refused before it is built.
-    fn alias(&mut self) -> Result<Value, Error> {
+    fn alias(&mut self) -> Result<B::Node, Error> {
         let at = self.pos;
         let name = self.name()?;
         let size = self
             .anchors
             .get(&name)
+            .ok_or_else(|| {
+                self.error(
+                    ErrorKind::UnknownAlias {
+                        name: Span::new(at + 1, self.pos),
+                    },
+                    at,
+                )
+            })?
+            .ready
+            .as_ref()
             .map(|(_, size)| *size)
-            .ok_or_else(|| self.error(ErrorKind::UnknownAlias, at))?;
-        self.count(size, at)?;
-        Ok(self.anchors[&name].0.clone())
+            .ok_or_else(|| {
+                self.error(
+                    ErrorKind::CyclicAlias {
+                        name: Span::new(at + 1, self.pos),
+                    },
+                    at,
+                )
+            })?;
+        self.count(self.builder.alias_cost(size), at)?;
+        let value = self
+            .builder
+            .alias(
+                &self
+                    .anchors
+                    .get(&name)
+                    .expect("a checked anchor")
+                    .ready
+                    .as_ref()
+                    .expect("a completed anchor")
+                    .0,
+                &name,
+                at,
+                self.pos,
+            )
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        self.builder
+            .discard_text(name)
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        Ok(value)
     }
 
-    fn register(&mut self, anchor: Option<String>, value: &Value) {
+    fn register(&mut self, anchor: Option<Anchor>, value: &B::Node) -> Result<(), Error> {
         if let Some(name) = anchor {
-            self.anchor(name, value.clone());
+            if self
+                .anchors
+                .get(&name.name)
+                .is_some_and(|binding| binding.declaration != name.declaration)
+            {
+                return self
+                    .builder
+                    .discard_text(name.name)
+                    .map_err(|(kind, at)| self.error(kind, at));
+            }
+            let named = self
+                .builder
+                .copy_node(value, self.pos)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            self.anchor(name, named)?;
         }
+        Ok(())
     }
 
-    /// Define the anchor `name` as `value`.
-    fn anchor(&mut self, name: String, value: Value) {
-        let mut size = 0_u64;
-        let mut work = vec![&value];
-        while let Some(node) = work.pop() {
-            size += 1;
-            match node {
-                Value::Array(items) => work.extend(items),
-                Value::Object(object) => work.extend(object.values()),
-                _ => {}
+    /// Shadow immediately, before any part of the declared node is parsed.
+    fn declare_anchor(&mut self, name: &str, declaration: usize) -> Result<(), Error> {
+        if let Some(binding) = self
+            .anchors
+            .get_mut_by(|candidate| name.cmp(candidate.as_str()))
+        {
+            let old = mem::replace(
+                binding,
+                Binding {
+                    declaration,
+                    ready: None,
+                },
+            );
+            if let Some((old, _)) = old.ready {
+                self.builder
+                    .discard_node(old)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
             }
+            return Ok(());
         }
-        self.anchors.insert(name, (value, size));
+        let key = admit!(self, self.builder.allocations().string(name));
+        admit!(
+            self,
+            self.builder.allocations().reserve_index(&mut self.anchors)
+        );
+        admit!(
+            self,
+            self.builder
+                .allocations()
+                .memory(|memory| self.anchors.insert(
+                    key,
+                    Binding {
+                        declaration,
+                        ready: None
+                    },
+                    memory
+                ))
+        );
+        Ok(())
+    }
+
+    /// Complete only the declaration that is still current under this name.
+    fn anchor(&mut self, anchor: Anchor, value: B::Node) -> Result<(), Error> {
+        let size = self.builder.size(&value);
+        let binding = self
+            .anchors
+            .get_mut(&anchor.name)
+            .expect("a declared anchor");
+        if binding.declaration == anchor.declaration {
+            debug_assert!(binding.ready.is_none());
+            binding.ready = Some((value, size));
+        } else {
+            self.builder
+                .discard_node(value)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        self.builder
+            .discard_text(anchor.name)
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        Ok(())
     }
 
     /// After a scalar or alias: skip spaces and take a `:` value indicator
@@ -790,16 +1162,16 @@ impl Parser<'_> {
     /// One line of a plain scalar in block context: its text without trailing
     /// white space. It stops at a line break, at a comment, and at `:` followed
     /// by a blank; the cursor is left after the text.
-    fn plain_line(&mut self) -> &str {
+    fn plain_line(&mut self) -> &'a str {
         let start = self.pos;
         let mut end = self.pos;
         loop {
+            if super::scalar::plain_end(self.bytes, self.pos, false) {
+                break;
+            }
             match self.peek() {
-                None | Some(b'\n' | b'\r') => break,
                 Some(b' ' | b'\t') => self.pos += 1,
-                Some(b':') if self.blank_at(self.pos + 1) => break,
-                Some(b'#') if matches!(self.bytes[self.pos - 1], b' ' | b'\t') => break,
-                Some(_) => {
+                _ => {
                     self.pos += self.text[self.pos..]
                         .chars()
                         .next()
@@ -842,7 +1214,7 @@ impl Parser<'_> {
                 return Ok(text);
             }
             let at = self.pos;
-            let line = self.plain_line().to_owned();
+            let line = self.owned_plain_line()?;
             if self.peek() == Some(b':') {
                 return Err(self.error(
                     ErrorKind::Syntax("no mapping key inside a multi-line plain scalar"),
@@ -850,12 +1222,27 @@ impl Parser<'_> {
                 ));
             }
             if breaks == 1 {
-                text.push(' ');
+                admit!(self, self.builder.allocations().push_char(&mut text, ' '));
             } else {
-                text.extend(core::iter::repeat_n('\n', breaks - 1));
+                admit!(
+                    self,
+                    self.builder
+                        .allocations()
+                        .repeat(&mut text, '\n', breaks - 1)
+                );
             }
-            text.push_str(&line);
+            admit!(self, self.builder.allocations().push_str(&mut text, &line));
+            self.builder
+                .discard_text(line)
+                .map_err(|(kind, at)| self.error(kind, at))?;
         }
+    }
+
+    fn owned_plain_line(&mut self) -> Result<String, Error> {
+        let start = self.pos;
+        let line = self.plain_line();
+        self.last_scalar_end = start + line.len();
+        Ok(admit!(self, self.builder.allocations().string(line)))
     }
 
     /// One line of a plain scalar in flow context, stopping also at the flow
@@ -864,17 +1251,12 @@ impl Parser<'_> {
         let start = self.pos;
         let mut end = self.pos;
         loop {
+            if super::scalar::plain_end(self.bytes, self.pos, true) {
+                break;
+            }
             match self.peek() {
-                None | Some(b'\n' | b'\r' | b',' | b'[' | b']' | b'{' | b'}') => break,
                 Some(b' ' | b'\t') => self.pos += 1,
-                Some(b':')
-                    if self.blank_at(self.pos + 1)
-                        || is_flow_indicator(self.peek_at(self.pos + 1)) =>
-                {
-                    break;
-                }
-                Some(b'#') if matches!(self.bytes[self.pos - 1], b' ' | b'\t') => break,
-                Some(_) => {
+                _ => {
                     self.pos += self.text[self.pos..]
                         .chars()
                         .next()
@@ -884,13 +1266,17 @@ impl Parser<'_> {
             }
         }
         self.pos = end;
+        self.last_scalar_end = end;
         (start, end)
     }
 
     /// A plain scalar in flow context, possibly over several lines.
     fn plain_flow(&mut self, owner: isize) -> Result<String, Error> {
         let (start, end) = self.plain_flow_line();
-        let mut text = self.text[start..end].to_owned();
+        let mut text = admit!(
+            self,
+            self.builder.allocations().string(&self.text[start..end])
+        );
         loop {
             let save = self.pos;
             self.skip_inline_space();
@@ -913,28 +1299,42 @@ impl Parser<'_> {
             self.check_flow_line(self.pos, owner)?;
             let (start, end) = self.plain_flow_line();
             if breaks == 1 {
-                text.push(' ');
+                admit!(self, self.builder.allocations().push_char(&mut text, ' '));
             } else {
-                text.extend(core::iter::repeat_n('\n', breaks - 1));
+                admit!(
+                    self,
+                    self.builder
+                        .allocations()
+                        .repeat(&mut text, '\n', breaks - 1)
+                );
             }
-            text.push_str(&self.text[start..end]);
+            admit!(
+                self,
+                self.builder
+                    .allocations()
+                    .push_str(&mut text, &self.text[start..end])
+            );
         }
     }
 
     /// Fold the line break at the cursor inside a quoted scalar (§7.3.1):
     /// one break is a space, `n` breaks with only white space between them are
     /// `n - 1` line feeds; the next line's leading white space is dropped.
-    fn fold_quoted_break(&mut self, out: &mut String) {
+    fn fold_quoted_break(&mut self, out: &mut String) -> Result<(), Error> {
         let mut breaks = 0;
         while self.take_break() {
             breaks += 1;
             self.skip_inline_space();
         }
         if breaks == 1 {
-            out.push(' ');
+            admit!(self, self.builder.allocations().push_char(out, ' '));
         } else {
-            out.extend(core::iter::repeat_n('\n', breaks - 1));
+            admit!(
+                self,
+                self.builder.allocations().repeat(out, '\n', breaks - 1)
+            );
         }
+        Ok(())
     }
 
     /// Refuse the line a multi-line quoted scalar continues on when it is a
@@ -978,22 +1378,34 @@ impl Parser<'_> {
         loop {
             match self.peek() {
                 None => {
-                    return Err(
-                        self.error(ErrorKind::Syntax("the quote that closes the scalar"), start)
-                    );
+                    return Err(self.error(
+                        ErrorKind::UnfinishedQuote {
+                            quote: char::from(quote),
+                            span: Span::new(start, self.text.len()),
+                        },
+                        start,
+                    ));
                 }
                 Some(b'\'') if quote == b'\'' => {
                     if self.peek_at(self.pos + 1) == Some(b'\'') {
-                        out.push('\'');
+                        admit!(self, self.builder.allocations().push_char(&mut out, '\''));
+                        self.builder
+                            .escape(super::syntax::SyntaxEscape {
+                                span: Span::new(self.pos, self.pos + 2),
+                                decoded: Some('\''),
+                            })
+                            .map_err(|(kind, at)| self.error(kind, at))?;
                         self.pos += 2;
                         blank_from = None;
                         continue;
                     }
                     self.pos += 1;
+                    self.last_scalar_end = self.pos;
                     return Ok((out, multiline));
                 }
                 Some(b'"') if quote == b'"' => {
                     self.pos += 1;
+                    self.last_scalar_end = self.pos;
                     return Ok((out, multiline));
                 }
                 Some(b'\n' | b'\r') => {
@@ -1001,7 +1413,7 @@ impl Parser<'_> {
                     if let Some(from) = blank_from.take() {
                         out.truncate(from);
                     }
-                    self.fold_quoted_break(&mut out);
+                    self.fold_quoted_break(&mut out)?;
                     self.check_continuation(owner)?;
                 }
                 Some(b'\\') if quote == b'"' => {
@@ -1009,28 +1421,46 @@ impl Parser<'_> {
                     if is_break(self.peek_at(self.pos + 1)) {
                         // An escaped line break joins the lines with nothing.
                         multiline = true;
+                        let escape_start = self.pos;
                         self.pos += 1;
                         self.take_break();
                         self.skip_inline_space();
                         while self.take_break() {
-                            out.push('\n');
+                            admit!(self, self.builder.allocations().push_char(&mut out, '\n'));
                             self.skip_inline_space();
                         }
                         self.check_continuation(owner)?;
+                        self.builder
+                            .escape(super::syntax::SyntaxEscape {
+                                span: Span::new(escape_start, self.pos),
+                                decoded: None,
+                            })
+                            .map_err(|(kind, at)| self.error(kind, at))?;
                         continue;
                     }
                     let (c, width) = self.escape()?;
-                    out.push(c);
+                    self.builder
+                        .escape(super::syntax::SyntaxEscape {
+                            span: Span::new(self.pos, self.pos + width),
+                            decoded: Some(c),
+                        })
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                    admit!(self, self.builder.allocations().push_char(&mut out, c));
                     self.pos += width;
                 }
                 Some(b' ' | b'\t') => {
                     blank_from.get_or_insert(out.len());
-                    out.push(char::from(self.bytes[self.pos]));
+                    admit!(
+                        self,
+                        self.builder
+                            .allocations()
+                            .push_char(&mut out, char::from(self.bytes[self.pos]))
+                    );
                     self.pos += 1;
                 }
                 Some(_) => {
                     let c = self.text[self.pos..].chars().next().expect("a character");
-                    out.push(c);
+                    admit!(self, self.builder.allocations().push_char(&mut out, c));
                     self.pos += c.len_utf8();
                     blank_from = None;
                 }
@@ -1042,50 +1472,53 @@ impl Parser<'_> {
     /// bytes the escape spans.
     fn escape(&self) -> Result<(char, usize), Error> {
         let at = self.pos;
+        let width = self
+            .peek_at(at + 1)
+            .and_then(super::scalar::hex_width)
+            .map_or_else(
+                || {
+                    self.text[at + 1..]
+                        .chars()
+                        .next()
+                        .map_or(1, |c| 1 + c.len_utf8())
+                },
+                |width| 2 + width,
+            );
+        let mut end = (at + width).min(self.text.len());
+        while !self.text.is_char_boundary(end) {
+            end += 1;
+        }
+        let refused = || {
+            self.error(
+                ErrorKind::Escape {
+                    span: Span::new(at, end),
+                },
+                at,
+            )
+        };
         let hex = |width: usize| -> Result<(char, usize), Error> {
-            let digits = self
-                .text
-                .get(at + 2..at + 2 + width)
-                .ok_or_else(|| self.error(ErrorKind::Escape, at))?;
+            let digits = self.text.get(at + 2..at + 2 + width).ok_or_else(refused)?;
             let mut code = 0_u32;
             for byte in digits.bytes() {
-                let digit = purrdf_hash::hex::nibble(byte)
-                    .ok_or_else(|| self.error(ErrorKind::Escape, at))?;
+                let digit = purrdf_hash::hex::nibble(byte).ok_or_else(refused)?;
                 code = (code << 4) | u32::from(digit);
             }
             char::from_u32(code)
                 .map(|c| (c, 2 + width))
-                .ok_or_else(|| self.error(ErrorKind::Escape, at))
+                .ok_or_else(refused)
         };
-        let short = match self.peek_at(at + 1) {
-            Some(b'0') => '\0',
-            Some(b'a') => '\u{7}',
-            Some(b'b') => '\u{8}',
-            Some(b't' | b'\t') => '\t',
-            Some(b'n') => '\n',
-            Some(b'v') => '\u{b}',
-            Some(b'f') => '\u{c}',
-            Some(b'r') => '\r',
-            Some(b'e') => '\u{1b}',
-            Some(b' ') => ' ',
-            Some(b'"') => '"',
-            Some(b'/') => '/',
-            Some(b'\\') => '\\',
-            Some(b'N') => '\u{85}',
-            Some(b'_') => '\u{a0}',
-            Some(b'L') => '\u{2028}',
-            Some(b'P') => '\u{2029}',
-            Some(b'x') => return hex(2),
-            Some(b'u') => return hex(4),
-            Some(b'U') => return hex(8),
-            _ => return Err(self.error(ErrorKind::Escape, at)),
-        };
+        let name = self.peek_at(at + 1).ok_or_else(refused)?;
+        if let Some(width) = super::scalar::hex_width(name) {
+            return hex(width);
+        }
+        let short = super::scalar::short_escape(name).ok_or_else(refused)?;
         Ok((short, 2))
     }
 
     /// A literal (`|`) or folded (`>`) block scalar, the cursor on its
     /// indicator, inside a block indented `owner` (§8.1).
     fn block_scalar(&mut self, owner: isize) -> Result<String, Error> {
+        let block_start = self.pos;
         let literal = self.peek() == Some(b'|');
         self.pos += 1;
         let (mut chomping, mut increment) = (0_i8, 0_usize);
@@ -1110,9 +1543,30 @@ impl Parser<'_> {
         }
         self.skip_inline_space();
         if self.at_comment() {
+            let start = self.pos;
             self.skip_to_line_end();
+            self.builder
+                .comment(Span::new(start, self.pos), true)
+                .map_err(|(kind, at)| self.error(kind, at))?;
         }
+        let header_end = self.pos;
         if self.pos >= self.bytes.len() {
+            self.builder
+                .block(
+                    block_start,
+                    super::syntax::BlockHeader {
+                        span: Span::new(block_start, header_end),
+                        chomping: match chomping {
+                            -1 => super::syntax::Chomping::Strip,
+                            1 => super::syntax::Chomping::Keep,
+                            _ => super::syntax::Chomping::Clip,
+                        },
+                        indent_indicator: (increment != 0).then_some(increment),
+                        content_indent: 0,
+                    },
+                )
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            self.last_scalar_end = self.pos;
             return Ok(String::new());
         }
         if !self.take_break() {
@@ -1142,18 +1596,33 @@ impl Parser<'_> {
             let trailing_blank = matches!(self.peek(), Some(b' ' | b'\t'));
             if !literal && leading_break == "\n" && !leading_blank && !trailing_blank {
                 if trailing_breaks.is_empty() {
-                    out.push(' ');
+                    admit!(self, self.builder.allocations().push_char(&mut out, ' '));
                 }
             } else {
-                out.push_str(&leading_break);
+                admit!(
+                    self,
+                    self.builder
+                        .allocations()
+                        .push_str(&mut out, &leading_break)
+                );
             }
             leading_break.clear();
-            out.push_str(&trailing_breaks);
+            admit!(
+                self,
+                self.builder
+                    .allocations()
+                    .push_str(&mut out, &trailing_breaks)
+            );
             trailing_breaks.clear();
             leading_blank = trailing_blank;
             let start = self.pos;
             self.skip_to_line_end();
-            out.push_str(&self.text[start..self.pos]);
+            admit!(
+                self,
+                self.builder
+                    .allocations()
+                    .push_str(&mut out, &self.text[start..self.pos])
+            );
             // A last line of white space alone is closed by the end of the stream
             // as by a line break (the suite's `L24T`); a last line with text is
             // not, so `k: |\n  x` at the end of a stream stays `x`, as `serde_yaml`
@@ -1163,16 +1632,57 @@ impl Parser<'_> {
                     .bytes()
                     .all(|b| b == b' ' || b == b'\t');
             if self.take_break() || blank_last_line {
-                leading_break.push('\n');
+                admit!(
+                    self,
+                    self.builder
+                        .allocations()
+                        .push_char(&mut leading_break, '\n')
+                );
             }
             self.block_breaks(&mut indent, &mut trailing_breaks, owner)?;
         }
         if chomping != -1 {
-            out.push_str(&leading_break);
+            admit!(
+                self,
+                self.builder
+                    .allocations()
+                    .push_str(&mut out, &leading_break)
+            );
         }
         if chomping == 1 {
-            out.push_str(&trailing_breaks);
+            admit!(
+                self,
+                self.builder
+                    .allocations()
+                    .push_str(&mut out, &trailing_breaks)
+            );
         }
+        self.builder
+            .block(
+                block_start,
+                super::syntax::BlockHeader {
+                    span: Span::new(block_start, header_end),
+                    chomping: match chomping {
+                        -1 => super::syntax::Chomping::Strip,
+                        1 => super::syntax::Chomping::Keep,
+                        _ => super::syntax::Chomping::Clip,
+                    },
+                    indent_indicator: (increment != 0).then_some(increment),
+                    content_indent: indent.unwrap_or(0),
+                },
+            )
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        self.builder
+            .discard_text(leading_break)
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        self.builder
+            .discard_text(trailing_breaks)
+            .map_err(|(kind, at)| self.error(kind, at))?;
+        self.last_scalar_end = if self.pos == self.text.len() {
+            self.pos
+        } else {
+            self.line_start(self.pos)
+        };
         Ok(out)
     }
 
@@ -1202,13 +1712,13 @@ impl Parser<'_> {
             }
             if self.take_break() {
                 widest_empty = widest_empty.max(column);
-                breaks.push('\n');
+                admit!(self, self.builder.allocations().push_char(breaks, '\n'));
                 continue;
             }
             if self.pos >= self.bytes.len() {
                 // White space alone on the last line is an empty line.
                 if column > 0 {
-                    breaks.push('\n');
+                    admit!(self, self.builder.allocations().push_char(breaks, '\n'));
                 }
             } else if indent.is_none() && column >= floor && widest_empty > column {
                 return Err(self.error(
@@ -1234,14 +1744,18 @@ impl Parser<'_> {
     // ── flow collections ──────────────────────────────────────────────────
 
     /// Skip white space, line breaks and comments inside a flow collection.
-    fn skip_flow_space(&mut self) {
+    fn skip_flow_space(&mut self) -> Result<(), Error> {
         loop {
             self.skip_inline_space();
             if self.at_comment() {
+                let start = self.pos;
                 self.skip_to_line_end();
+                self.builder
+                    .comment(Span::new(start, self.pos), false)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
             }
             if !self.take_break() {
-                return;
+                return Ok(());
             }
         }
     }
@@ -1288,37 +1802,61 @@ impl Parser<'_> {
         properties: Option<Properties>,
         key_position: bool,
         at: usize,
-    ) -> Result<Value, Error> {
-        let (anchor, tag) = split(properties);
-        let (value, named) = if key_position {
-            let key = self.key_text(text.clone(), plain, tag, at)?;
-            let named = self.key_node(text, plain, tag, at);
-            (Value::String(key), named)
+    ) -> Result<B::Node, Error> {
+        let (anchor, tag) = self.split(properties, at, false)?;
+        if key_position {
+            let copied = admit!(self, self.builder.allocations().string(&text));
+            let key = self.key_text(copied, plain, tag, at)?;
+            if let Some(name) = anchor {
+                let named = self.key_node(&key, text, plain, tag, at)?;
+                self.count(1, at)?;
+                self.anchor(name, named)?;
+            } else {
+                self.builder
+                    .discard_text(text)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
+                self.count(1, at)?;
+            }
+            Ok(self.builder.key_value(key))
         } else {
             let value = self.scalar(text, plain, tag, at)?;
-            (value.clone(), value)
-        };
-        self.count(1, at)?;
-        self.register(anchor, &named);
-        Ok(value)
+            self.count(1, at)?;
+            self.register(anchor, &value)?;
+            Ok(value)
+        }
     }
 
     /// A flow collection, the cursor on its `[` or `{`, however deep, over a
     /// heap stack. `owner` is the indentation of the block that holds it, or
     /// -1 at the top of a document.
-    fn flow(&mut self, properties: Option<Properties>, owner: isize) -> Result<Value, Error> {
+    fn flow(&mut self, properties: Option<Properties>, owner: isize) -> Result<B::Node, Error> {
         let scalar_keys = self.limits.scalar_keys;
-        let mut stack: Vec<Flow> = Vec::new();
+        let mut stack: Vec<Flow<B>> = Vec::new();
         let mut pending = properties;
         // An entry that began with `?`, and whether its node is still to come.
         let (mut explicit, mut fresh) = (false, false);
         loop {
             let before = self.pos;
-            self.skip_flow_space();
+            self.skip_flow_space()?;
             let at = self.pos;
             let crossed_break = self.text[before..at].contains(['\n', '\r']);
             let Some(byte) = self.peek() else {
-                return Err(self.error(ErrorKind::Syntax("the end of a flow collection"), at));
+                let (start, expected) = stack
+                    .iter()
+                    .rev()
+                    .find_map(|frame| match frame {
+                        Flow::Sequence { start, .. } => Some((*start, ']')),
+                        Flow::Mapping { start, .. } => Some((*start, '}')),
+                        Flow::Pair { .. } => None,
+                    })
+                    .expect("an open flow collection");
+                return Err(self.error(
+                    ErrorKind::UnfinishedFlow {
+                        opener: Span::new(start, start + 1),
+                        expected,
+                    },
+                    at,
+                ));
             };
             self.check_flow_line(at, owner)?;
             // A node with properties and no content (`!!str ,`), or the empty
@@ -1344,6 +1882,7 @@ impl Parser<'_> {
                     self.flow_scalar(String::new(), true, pending.take(), key_position, at)?;
                 fresh = false;
                 if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                    admit!(self, self.builder.allocations().discard_vec(stack));
                     return Ok(done);
                 }
                 continue;
@@ -1353,8 +1892,9 @@ impl Parser<'_> {
                 Some(Flow::Sequence { after_item, .. }) => match byte {
                     b']' => {
                         self.pos += 1;
-                        let value = self.close_flow(&mut stack);
+                        let value = self.close_flow(&mut stack)?;
                         if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                            admit!(self, self.builder.allocations().discard_vec(stack));
                             return Ok(done);
                         }
                         continue;
@@ -1381,12 +1921,23 @@ impl Parser<'_> {
                         else {
                             unreachable!("the innermost collection is a sequence");
                         };
-                        let Some(key) = items.pop().and_then(|item| key_of(item, scalar_keys))
-                        else {
+                        let key = match items.pop() {
+                            Some(item) => self
+                                .builder
+                                .key_of(item, scalar_keys, at)
+                                .map_err(|(kind, at)| Error::new(self.text, kind, at))?,
+                            None => None,
+                        };
+                        let Some(key) = key else {
                             return Err(self.error(ErrorKind::NonStringKey, at));
                         };
                         *after_item = false;
-                        stack.push(Flow::Pair { key });
+                        admit!(
+                            self,
+                            self.builder
+                                .allocations()
+                                .push(&mut stack, Flow::Pair { key })
+                        );
                         continue;
                     }
                     _ if *after_item => {
@@ -1400,22 +1951,22 @@ impl Parser<'_> {
                     _ => {}
                 },
                 Some(Flow::Mapping {
-                    state,
-                    key,
-                    object,
-                    keys,
-                    ..
+                    state, key, object, ..
                 }) => match (*state, byte) {
                     (_, b'}') => {
                         if let Some((name, key_at)) = key.take() {
-                            if !keys.insert(name.clone()) {
-                                return Err(self.error(ErrorKind::DuplicateKey, key_at));
-                            }
-                            object.push(name, Value::Null);
+                            let null = self
+                                .builder
+                                .null(at)
+                                .map_err(|(kind, at)| self.error(kind, at))?;
+                            self.builder
+                                .insert(object, name, null, key_at)
+                                .map_err(|(kind, at)| self.error(kind, at))?;
                         }
                         self.pos += 1;
-                        let value = self.close_flow(&mut stack);
+                        let value = self.close_flow(&mut stack)?;
                         if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                            admit!(self, self.builder.allocations().discard_vec(stack));
                             return Ok(done);
                         }
                         continue;
@@ -1428,10 +1979,13 @@ impl Parser<'_> {
                     }
                     (FlowMap::Colon | FlowMap::Value, b',') => {
                         let (name, key_at) = key.take().expect("a key precedes its value");
-                        if !keys.insert(name.clone()) {
-                            return Err(self.error(ErrorKind::DuplicateKey, key_at));
-                        }
-                        object.push(name, Value::Null);
+                        let null = self
+                            .builder
+                            .null(at)
+                            .map_err(|(kind, at)| self.error(kind, at))?;
+                        self.builder
+                            .insert(object, name, null, key_at)
+                            .map_err(|(kind, at)| self.error(kind, at))?;
                         self.pos += 1;
                         *state = FlowMap::Key;
                         explicit = false;
@@ -1454,13 +2008,31 @@ impl Parser<'_> {
                     (FlowMap::Key, b':')
                         if self.blank_at(at + 1) || is_flow_indicator(self.peek_at(at + 1)) =>
                     {
-                        return Err(self.error(ErrorKind::NonStringKey, at));
+                        if !B::LEXICAL {
+                            return Err(self.error(ErrorKind::NonStringKey, at));
+                        }
+                        let empty = self
+                            .builder
+                            .null(at)
+                            .map_err(|(kind, at)| Error::new(self.text, kind, at))?;
+                        *key = Some((
+                            self.builder
+                                .key_of(empty, true, at)
+                                .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                                .expect("a lexical key"),
+                            at,
+                        ));
+                        *state = FlowMap::Value;
+                        self.pos += 1;
+                        continue;
                     }
                     _ => {}
                 },
                 Some(Flow::Pair { .. }) => {
                     if matches!(byte, b',' | b']') {
-                        if let Some(done) = self.attach_flow(&mut stack, Value::Null, at)? {
+                        let null = self.null(at)?;
+                        if let Some(done) = self.attach_flow(&mut stack, null, at)? {
+                            admit!(self, self.builder.allocations().discard_vec(stack));
                             return Ok(done);
                         }
                         continue;
@@ -1471,26 +2043,28 @@ impl Parser<'_> {
             // A node.
             match byte {
                 b'[' | b'{' => {
-                    let (anchor, tag) = split(pending.take());
+                    let (anchor, tag) = self.split(pending.take(), at, true)?;
                     self.collection_tag(tag, if byte == b'[' { Tag::Seq } else { Tag::Map })?;
                     self.enter(at)?;
                     self.pos += 1;
                     fresh = false;
-                    stack.push(if byte == b'[' {
+                    let frame = if byte == b'[' {
                         Flow::Sequence {
                             items: Vec::new(),
                             anchor,
+                            start: at,
                             after_item: false,
                         }
                     } else {
                         Flow::Mapping {
-                            object: Object::new(),
-                            keys: HashSet::with_hasher(FixedState::new()),
+                            object: self.builder.new_map(),
                             anchor,
+                            start: at,
                             key: None,
                             state: FlowMap::Key,
                         }
-                    });
+                    };
+                    admit!(self, self.builder.allocations().push(&mut stack, frame));
                 }
                 b'&' | b'!' => self.property(&mut pending)?,
                 b'*' => {
@@ -1502,10 +2076,14 @@ impl Parser<'_> {
                     let value = self.alias()?;
                     fresh = false;
                     if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                        admit!(self, self.builder.allocations().discard_vec(stack));
                         return Ok(done);
                     }
                 }
                 b'?' if self.blank_at(at + 1) => {
+                    self.builder
+                        .question(Span::new(at, at + 1))
+                        .map_err(|(kind, at)| self.error(kind, at))?;
                     self.pos += 1;
                     explicit = true;
                     fresh = true;
@@ -1539,6 +2117,7 @@ impl Parser<'_> {
                     let value = self.flow_scalar(text, plain, pending.take(), key_position, at)?;
                     fresh = false;
                     if let Some(done) = self.attach_flow(&mut stack, value, at)? {
+                        admit!(self, self.builder.allocations().discard_vec(stack));
                         return Ok(done);
                     }
                 }
@@ -1547,25 +2126,36 @@ impl Parser<'_> {
     }
 
     /// Close the innermost flow collection: its value, its anchor registered.
-    fn close_flow(&mut self, stack: &mut Vec<Flow>) -> Value {
+    fn close_flow(&mut self, stack: &mut Vec<Flow<B>>) -> Result<B::Node, Error> {
         self.depth -= 1;
         let (value, anchor) = match stack.pop() {
-            Some(Flow::Sequence { items, anchor, .. }) => (Value::Array(items), anchor),
-            Some(Flow::Mapping { object, anchor, .. }) => (Value::Object(object), anchor),
+            Some(Flow::Sequence {
+                items,
+                anchor,
+                start,
+                ..
+            }) => (self.builder.sequence(items, start, self.pos, true), anchor),
+            Some(Flow::Mapping {
+                object,
+                anchor,
+                start,
+                ..
+            }) => (self.builder.mapping(object, start, self.pos, true), anchor),
             _ => unreachable!("only an open collection closes"),
         };
-        self.register(anchor, &value);
-        value
+        let value = value.map_err(|(kind, at)| self.error(kind, at))?;
+        self.register(anchor, &value)?;
+        Ok(value)
     }
 
     /// Hand a complete flow node to the innermost collection; the whole value
     /// once the outermost collection closes.
     fn attach_flow(
-        &self,
-        stack: &mut Vec<Flow>,
-        value: Value,
+        &mut self,
+        stack: &mut Vec<Flow<B>>,
+        value: B::Node,
         at: usize,
-    ) -> Result<Option<Value>, Error> {
+    ) -> Result<Option<B::Node>, Error> {
         let mut value = value;
         loop {
             match stack.last_mut() {
@@ -1573,20 +2163,20 @@ impl Parser<'_> {
                 Some(Flow::Sequence {
                     items, after_item, ..
                 }) => {
-                    items.push(value);
+                    admit!(self, self.builder.allocations().push(items, value));
                     *after_item = true;
                     return Ok(None);
                 }
                 Some(Flow::Mapping {
-                    state,
-                    key,
-                    object,
-                    keys,
-                    ..
+                    state, key, object, ..
                 }) => {
                     match *state {
                         FlowMap::Key => {
-                            let Some(name) = key_of(value, self.limits.scalar_keys) else {
+                            let Some(name) = self
+                                .builder
+                                .key_of(value, self.limits.scalar_keys, at)
+                                .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                            else {
                                 return Err(self.error(ErrorKind::NonStringKey, at));
                             };
                             *key = Some((name, at));
@@ -1594,10 +2184,9 @@ impl Parser<'_> {
                         }
                         FlowMap::Value => {
                             let (name, key_at) = key.take().expect("a key precedes its value");
-                            if !keys.insert(name.clone()) {
-                                return Err(self.error(ErrorKind::DuplicateKey, key_at));
-                            }
-                            object.push(name, value);
+                            self.builder
+                                .insert(object, name, value, key_at)
+                                .map_err(|(kind, at)| self.error(kind, at))?;
                             *state = FlowMap::Separator;
                         }
                         FlowMap::Colon | FlowMap::Separator => {
@@ -1612,9 +2201,14 @@ impl Parser<'_> {
                     let Some(Flow::Pair { key }) = stack.pop() else {
                         unreachable!("the innermost frame is a pair");
                     };
-                    let mut pair = Object::new();
-                    pair.push(key, value);
-                    value = Value::Object(pair);
+                    let mut pair = self.builder.new_map();
+                    self.builder
+                        .insert(&mut pair, key, value, at)
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                    value = self
+                        .builder
+                        .mapping(pair, at, self.pos, true)
+                        .map_err(|(kind, at)| self.error(kind, at))?;
                 }
             }
         }
@@ -1646,7 +2240,7 @@ impl Parser<'_> {
     }
 
     /// Fill the innermost open slot with a complete node.
-    fn fill(&mut self, value: Value, at: usize) -> Result<(), Error> {
+    fn fill(&mut self, value: B::Node, at: usize) -> Result<(), Error> {
         let scalar_keys = self.limits.scalar_keys;
         let refused = match self.stack.last_mut().expect("the root frame stays") {
             Frame::Root(slot) => {
@@ -1654,27 +2248,19 @@ impl Parser<'_> {
                 None
             }
             Frame::Sequence { items, open, .. } => {
-                items.push(value);
+                admit!(self, self.builder.allocations().push(items, value));
                 *open = false;
                 None
             }
-            Frame::Mapping {
-                object, keys, slot, ..
-            } => match mem::replace(slot, Slot::Idle) {
-                Slot::Value(key, key_at) => {
-                    if keys.insert(key.clone()) {
-                        object.push(key, value);
-                        None
-                    } else {
-                        Some((ErrorKind::DuplicateKey, key_at))
-                    }
-                }
-                Slot::ExplicitKey => match key_of(value, scalar_keys) {
-                    Some(key) => {
+            Frame::Mapping { object, slot, .. } => match mem::replace(slot, Slot::Idle) {
+                Slot::Value(key, key_at) => self.builder.insert(object, key, value, key_at).err(),
+                Slot::ExplicitKey => match self.builder.key_of(value, scalar_keys, at) {
+                    Ok(Some(key)) => {
                         *slot = Slot::KeyDone(key, at);
                         None
                     }
-                    None => Some((ErrorKind::NonStringKey, at)),
+                    Ok(None) => Some((ErrorKind::NonStringKey, at)),
+                    Err(refusal) => Some(refusal),
                 },
                 Slot::Idle | Slot::KeyDone(..) => unreachable!("only an open slot is filled"),
             },
@@ -1690,7 +2276,7 @@ impl Parser<'_> {
         properties: Option<Properties>,
         at: usize,
     ) -> Result<(), Error> {
-        let (anchor, tag) = split(properties);
+        let (anchor, tag) = self.split(properties, at, false)?;
         let explicit_key = matches!(
             self.stack.last(),
             Some(Frame::Mapping {
@@ -1701,24 +2287,27 @@ impl Parser<'_> {
         if explicit_key && self.limits.scalar_keys {
             // A scalar after `?` is a key; a number, boolean or null one keeps
             // its source text, as an implicit key does.
-            let key = self.key_text(text.clone(), plain, tag, at)?;
-            let value = match self.scalar(text, plain, tag, at) {
-                Ok(value) => value,
-                Err(error) if error.kind == ErrorKind::NonFinite => Value::String(key.clone()),
-                Err(error) => return Err(error),
-            };
+            let copied = admit!(self, self.builder.allocations().string(&text));
+            let key = self.key_text(copied, plain, tag, at)?;
+            let value = self.key_node(&key, text, plain, tag, at)?;
             self.count(1, at)?;
-            self.register(anchor, &value);
+            if let Some(name) = anchor {
+                self.anchor(name, value)?;
+            } else {
+                self.builder
+                    .discard_node(value)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
+            }
             return self.fill_key(key, at);
         }
         let value = self.scalar(text, plain, tag, at)?;
         self.count(1, at)?;
-        self.register(anchor, &value);
+        self.register(anchor, &value)?;
         self.fill(value, at)
     }
 
     /// Complete the explicit key the open slot waits for.
-    fn fill_key(&mut self, key: String, at: usize) -> Result<(), Error> {
+    fn fill_key(&mut self, key: B::Key, at: usize) -> Result<(), Error> {
         let Some(Frame::Mapping { slot, .. }) = self.stack.last_mut() else {
             unreachable!("an explicit key fills a mapping's slot");
         };
@@ -1737,13 +2326,17 @@ impl Parser<'_> {
                 ..
             }) => {
                 if open {
-                    items.push(Value::Null);
+                    let null = self.null(self.pos)?;
+                    admit!(self, self.builder.allocations().push(&mut items, null));
                 }
-                (Value::Array(items), anchor, start)
+                (
+                    self.builder.sequence(items, start, self.pos, false),
+                    anchor,
+                    start,
+                )
             }
             Some(Frame::Mapping {
                 mut object,
-                mut keys,
                 slot,
                 anchor,
                 start,
@@ -1751,20 +2344,25 @@ impl Parser<'_> {
             }) => {
                 match slot {
                     Slot::Value(key, key_at) | Slot::KeyDone(key, key_at) => {
-                        if !keys.insert(key.clone()) {
-                            return Err(self.error(ErrorKind::DuplicateKey, key_at));
-                        }
-                        object.push(key, Value::Null);
+                        let null = self.null(self.pos)?;
+                        self.builder
+                            .insert(&mut object, key, null, key_at)
+                            .map_err(|(kind, at)| self.error(kind, at))?;
                     }
                     Slot::ExplicitKey => return Err(self.error(ErrorKind::NonStringKey, start)),
                     Slot::Idle => {}
                 }
-                (Value::Object(object), anchor, start)
+                (
+                    self.builder.mapping(object, start, self.pos, false),
+                    anchor,
+                    start,
+                )
             }
             _ => unreachable!("the root frame is never closed here"),
         };
+        let value = value.map_err(|(kind, at)| self.error(kind, at))?;
         self.depth -= 1;
-        self.register(anchor, &value);
+        self.register(anchor, &value)?;
         self.fill(value, start)
     }
 
@@ -1773,8 +2371,7 @@ impl Parser<'_> {
     fn open_mapping(
         &mut self,
         column: usize,
-        text: String,
-        plain: bool,
+        input: KeyInput<B::Key>,
         key_at: usize,
         line: Line,
     ) -> Result<(), Error> {
@@ -1811,29 +2408,57 @@ impl Parser<'_> {
             (other, None) => (other, None, column),
             (None, Some(_)) => unreachable!("a later property follows an earlier one"),
         };
-        let (key_anchor, key_tag) = split(key_properties);
-        let key = self.key_text(text.clone(), plain, key_tag, key_at)?;
-        if let Some(name) = key_anchor {
-            let node = self.key_node(text, plain, key_tag, key_at);
-            self.anchor(name, node);
-        }
-        let (anchor, tag) = split(mapping);
+        let key_spans = key_properties.as_ref().map(|properties| properties.spans);
+        let (key_anchor, key_tag) = self.split(key_properties, key_at, false)?;
+        let key = match input {
+            KeyInput::Scalar(text, plain) => {
+                let copied = admit!(self, self.builder.allocations().string(&text));
+                let key = self.key_text(copied, plain, key_tag, key_at)?;
+                if let Some(name) = key_anchor {
+                    let node = self.key_node(&key, text, plain, key_tag, key_at)?;
+                    self.anchor(name, node)?;
+                } else {
+                    self.builder
+                        .discard_text(text)
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                }
+                key
+            }
+            KeyInput::Ready(key) => {
+                if let Some(spans) = key_spans {
+                    let copied = self
+                        .builder
+                        .copy_key(&key, key_at)
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                    let node = self.builder.key_value(copied);
+                    self.builder
+                        .decorate(&node, spans)
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                    self.register(key_anchor, &node)?;
+                }
+                key
+            }
+        };
+        let (anchor, tag) = self.split(mapping, key_at, true)?;
         self.collection_tag(tag, Tag::Map)?;
         self.enter(key_at)?;
         self.count(1, key_at)?;
-        self.stack.push(Frame::Mapping {
+        let frame = Frame::Mapping {
             indent,
             start: key_at,
-            object: Object::new(),
-            keys: HashSet::with_hasher(FixedState::new()),
+            object: self.builder.new_map(),
             slot: Slot::Value(key, key_at),
             anchor,
-        });
+        };
+        admit!(
+            self,
+            self.builder.allocations().push(&mut self.stack, frame)
+        );
         Ok(())
     }
 
     /// A block mapping's implicit key, the cursor on it, through its `:`.
-    fn block_key(&mut self) -> Result<(String, usize), Error> {
+    fn block_key(&mut self) -> Result<(B::Key, usize), Error> {
         let mut properties = None;
         while matches!(self.peek(), Some(b'&' | b'!')) {
             self.property(&mut properties)?;
@@ -1845,10 +2470,19 @@ impl Parser<'_> {
                 if properties.is_some() {
                     return Err(self.error(ErrorKind::Syntax("an alias without properties"), at));
                 }
-                let Some(key) = key_of(self.alias()?, self.limits.scalar_keys) else {
+                let value = self.alias()?;
+                let Some(key) = self
+                    .builder
+                    .key_of(value, self.limits.scalar_keys, at)
+                    .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                else {
                     return Err(self.error(ErrorKind::NonStringKey, at));
                 };
-                (key, false)
+                if !self.take_value_indicator() {
+                    return Err(self.error(ErrorKind::Syntax("`:` after a mapping key"), self.pos));
+                }
+                self.count(1, at)?;
+                return Ok((key, at));
             }
             Some(b'"' | b'\'') => {
                 let (key, multiline) = self.quoted(-1)?;
@@ -1856,6 +2490,19 @@ impl Parser<'_> {
                     return Err(self.error(ErrorKind::Syntax("an implicit key on one line"), at));
                 }
                 (key, false)
+            }
+            Some(b'[' | b'{') if B::LEXICAL => {
+                let value = self.flow(properties, -1)?;
+                if !self.take_value_indicator() {
+                    return Err(self.error(ErrorKind::Syntax("`:` after a mapping key"), self.pos));
+                }
+                return Ok((
+                    self.builder
+                        .key_of(value, true, at)
+                        .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                        .expect("a lexical key"),
+                    at,
+                ));
             }
             Some(b'[' | b'{') => return Err(self.error(ErrorKind::NonStringKey, at)),
             Some(b'|' | b'>') => {
@@ -1870,17 +2517,22 @@ impl Parser<'_> {
                     at,
                 ));
             }
-            _ => (self.plain_line().to_owned(), true),
+            _ => (self.owned_plain_line()?, true),
         };
-        let (anchor, tag) = split(properties);
-        let key = self.key_text(text.clone(), plain, tag, at)?;
+        let (anchor, tag) = self.split(properties, at, false)?;
+        let copied = admit!(self, self.builder.allocations().string(&text));
+        let key = self.key_text(copied, plain, tag, at)?;
         if !self.take_value_indicator() {
             return Err(self.error(ErrorKind::Syntax("`:` after a mapping key"), self.pos));
         }
         self.count(1, at)?;
         if let Some(name) = anchor {
-            let node = self.key_node(text, plain, tag, at);
-            self.anchor(name, node);
+            let node = self.key_node(&key, text, plain, tag, at)?;
+            self.anchor(name, node)?;
+        } else {
+            self.builder
+                .discard_text(text)
+                .map_err(|(kind, at)| self.error(kind, at))?;
         }
         Ok((key, at))
     }
@@ -1907,10 +2559,14 @@ impl Parser<'_> {
                 }
                 let value = self.alias()?;
                 if self.take_value_indicator() {
-                    let Some(key) = key_of(value, self.limits.scalar_keys) else {
+                    let Some(key) = self
+                        .builder
+                        .key_of(value, self.limits.scalar_keys, at)
+                        .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                    else {
                         return Err(self.error(ErrorKind::NonStringKey, at));
                     };
-                    self.open_mapping(column, key, false, at, *line)?;
+                    self.open_mapping(column, KeyInput::Ready(key), at, *line)?;
                     *line = Line::Inline;
                 } else if self.pending.is_some() {
                     return Err(self.error(ErrorKind::Syntax("an alias without properties"), at));
@@ -1932,6 +2588,11 @@ impl Parser<'_> {
                     return Err(self.error(ErrorKind::Tab, at));
                 }
                 let sequence = self.bytes[at] == b'-';
+                if !sequence {
+                    self.builder
+                        .question(Span::new(at, at + 1))
+                        .map_err(|(kind, at)| self.error(kind, at))?;
+                }
                 let properties = self.take_props()?;
                 if properties
                     .as_ref()
@@ -1942,10 +2603,10 @@ impl Parser<'_> {
                         at,
                     ));
                 }
-                let (anchor, tag) = split(properties);
+                let (anchor, tag) = self.split(properties, at, true)?;
                 self.collection_tag(tag, if sequence { Tag::Seq } else { Tag::Map })?;
                 self.enter(at)?;
-                self.stack.push(if sequence {
+                let frame = if sequence {
                     Frame::Sequence {
                         indent: column,
                         start: at,
@@ -1957,12 +2618,15 @@ impl Parser<'_> {
                     Frame::Mapping {
                         indent: column,
                         start: at,
-                        object: Object::new(),
-                        keys: HashSet::with_hasher(FixedState::new()),
+                        object: self.builder.new_map(),
                         slot: Slot::ExplicitKey,
                         anchor,
                     }
-                });
+                };
+                admit!(
+                    self,
+                    self.builder.allocations().push(&mut self.stack, frame)
+                );
                 self.pos += 1;
                 *line = Line::Compact;
             }
@@ -1975,12 +2639,38 @@ impl Parser<'_> {
                     .iter()
                     .chain(self.later.iter())
                     .any(|properties| self.line_start(properties.at) == line_start);
-                if !(self.limits.scalar_keys && propertied) {
+                if !(B::LEXICAL || self.limits.scalar_keys && propertied) {
                     return Err(self.error(ErrorKind::NonStringKey, at));
                 }
                 self.pos += 1;
-                self.open_mapping(column, String::new(), true, at, *line)?;
+                self.open_mapping(column, KeyInput::Scalar(String::new(), true), at, *line)?;
                 *line = Line::Inline;
+            }
+            b'[' | b'{' if B::LEXICAL => {
+                // The flow grammar produces the actual collection first.
+                // A following colon decides whether preceding properties
+                // belong to this key or to its enclosing block mapping.
+                let value = self.flow(None, owner)?;
+                if self.take_value_indicator() {
+                    let key = self
+                        .builder
+                        .key_of(value, true, at)
+                        .map_err(|(kind, at)| Error::new(self.text, kind, at))?
+                        .expect("a lexical key");
+                    self.open_mapping(column, KeyInput::Ready(key), at, *line)?;
+                    *line = Line::Inline;
+                } else {
+                    let properties = self.take_props()?;
+                    let spans = properties.as_ref().map(|properties| properties.spans);
+                    let (anchor, _) = self.split(properties, at, true)?;
+                    if let Some(spans) = spans {
+                        self.builder
+                            .decorate(&value, spans)
+                            .map_err(|(kind, at)| self.error(kind, at))?;
+                    }
+                    self.register(anchor, &value)?;
+                    self.fill(value, at)?;
+                }
             }
             b'[' | b'{' => {
                 // Two sets of properties before a flow collection are a
@@ -2015,7 +2705,7 @@ impl Parser<'_> {
                     let (text, multiline) = self.quoted(owner)?;
                     (text, false, multiline)
                 } else {
-                    (self.plain_line().to_owned(), true, false)
+                    (self.owned_plain_line()?, true, false)
                 };
                 if self.take_value_indicator() {
                     if multiline {
@@ -2023,7 +2713,7 @@ impl Parser<'_> {
                             self.error(ErrorKind::Syntax("an implicit key on one line"), at)
                         );
                     }
-                    self.open_mapping(column, text, plain, at, *line)?;
+                    self.open_mapping(column, KeyInput::Scalar(text, plain), at, *line)?;
                     *line = Line::Inline;
                 } else {
                     let text = if plain {
@@ -2049,7 +2739,10 @@ impl Parser<'_> {
             match self.stack.last() {
                 Some(Frame::Root(_)) | None => {
                     return Err(self.error(
-                        ErrorKind::Syntax("the end of the document after its top-level node"),
+                        ErrorKind::TrailingContent {
+                            span: Span::new(at, self.text.len()),
+                            context: TrailingContext::Document,
+                        },
                         at,
                     ));
                 }
@@ -2098,26 +2791,32 @@ impl Parser<'_> {
                     return Ok(());
                 }
                 Slot::KeyDone(key, key_at) => Some((key, key_at)),
-                _ if value => return Err(self.error(ErrorKind::NonStringKey, at)),
+                _ if value && !B::LEXICAL => return Err(self.error(ErrorKind::NonStringKey, at)),
                 _ => None,
             },
             _ => unreachable!("a collection continues here"),
         };
         if let Some((key, key_at)) = pending_key {
             // An explicit key with no `:` line has a null value.
-            let Some(Frame::Mapping { object, keys, .. }) = self.stack.last_mut() else {
+            let null = self
+                .builder
+                .null(at)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            let Some(Frame::Mapping { object, .. }) = self.stack.last_mut() else {
                 unreachable!("the innermost collection is a mapping");
             };
-            if !keys.insert(key.clone()) {
-                return Err(self.error(ErrorKind::DuplicateKey, key_at));
-            }
-            object.push(key, Value::Null);
+            self.builder
+                .insert(object, key, null, key_at)
+                .map_err(|(kind, at)| self.error(kind, at))?;
         }
         if explicit {
             let Some(Frame::Mapping { slot, .. }) = self.stack.last_mut() else {
                 unreachable!("the innermost collection is a mapping");
             };
             *slot = Slot::ExplicitKey;
+            self.builder
+                .question(Span::new(self.pos, self.pos + 1))
+                .map_err(|(kind, at)| Error::new(self.text, kind, at))?;
             self.pos += 1;
             *line = Line::Compact;
             return Ok(());
@@ -2137,18 +2836,28 @@ impl Parser<'_> {
     fn directive(
         &mut self,
         yaml_seen: &mut bool,
-        handles: &mut HashSet<String, FixedState>,
+        handles: &mut OrderedTable<String, String>,
     ) -> Result<(), Error> {
         let at = self.pos;
         self.skip_to_line_end();
+        self.builder
+            .directive(Span::new(at, self.pos))
+            .map_err(|(kind, at)| self.error(kind, at))?;
         let line = &self.text[at + 1..self.pos];
         // A comment starts at a `#` that white space precedes.
         let body = line
             .char_indices()
             .find(|&(index, c)| c == '#' && line[..index].ends_with([' ', '\t']))
             .map_or(line, |(index, _)| &line[..index]);
+        if body.len() < line.len() {
+            let comment = Span::new(at + 1 + body.len(), self.pos);
+            self.builder
+                .comment(comment, false)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
         let mut words = body.split([' ', '\t']).filter(|word| !word.is_empty());
-        let refuse = |what: &'static str| self.error(ErrorKind::Syntax(what), at);
+        let text = self.text;
+        let refuse = |what: &'static str| Error::new(text, ErrorKind::Syntax(what), at);
         match words.next() {
             None => Err(refuse("a directive name after `%`")),
             Some("YAML") => {
@@ -2167,21 +2876,32 @@ impl Parser<'_> {
                 Ok(())
             }
             Some("TAG") => {
-                let (Some(handle), Some(_prefix), None) =
-                    (words.next(), words.next(), words.next())
+                let (Some(handle), Some(prefix), None) = (words.next(), words.next(), words.next())
                 else {
                     return Err(refuse("a `%TAG` handle and a prefix"));
                 };
-                let word_handle = handle.len() > 2
-                    && handle.starts_with('!')
-                    && handle.ends_with('!')
-                    && handle[1..handle.len() - 1]
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-');
-                if !(handle == "!" || handle == "!!" || word_handle) {
+                if !tag_handle(handle) {
                     return Err(refuse("a tag handle: `!`, `!!` or `!name!`"));
                 }
-                if !handles.insert(handle.to_owned()) {
+                if !tag_uri(prefix, false) || is_flow_indicator(prefix.as_bytes().first().copied())
+                {
+                    return Err(refuse("a URI tag prefix with valid percent escapes"));
+                }
+                let handle = admit!(self, self.builder.allocations().string(handle));
+                if handles.get(&handle).is_some() {
+                    return Err(refuse("one `%TAG` directive per handle"));
+                }
+                let prefix = admit!(self, self.builder.allocations().string(prefix));
+                let prefix = self.decode_tag(prefix, 0, at)?;
+                admit!(self, self.builder.allocations().reserve_index(handles));
+                if admit!(
+                    self,
+                    self.builder
+                        .allocations()
+                        .memory(|memory| handles.insert(handle, prefix, memory))
+                )
+                .is_some()
+                {
                     return Err(refuse("one `%TAG` directive per handle"));
                 }
                 Ok(())
@@ -2190,17 +2910,22 @@ impl Parser<'_> {
         }
     }
 
-    fn document(&mut self) -> Result<Value, Error> {
-        if self.text.starts_with('\u{feff}') {
-            self.pos = 3;
+    fn take_bom(&mut self) {
+        self.bom_line = Some(self.pos);
+        self.pos += '\u{feff}'.len_utf8();
+    }
+
+    fn document(&mut self, stream: bool) -> Result<B::Node, Error> {
+        if self.pos == 0 && self.text.starts_with('\u{feff}') {
+            self.take_bom();
         }
         // The prologue: comments, directives, and the document start marker.
         let mut directives = false;
         let mut yaml_directive = false;
-        let mut tag_handles: HashSet<String, FixedState> = HashSet::with_hasher(FixedState::new());
+        let mut tag_handles: OrderedTable<String, String> = OrderedTable::default();
         let mut line = Line::Fresh;
         loop {
-            self.skip_separation();
+            self.skip_separation()?;
             if self.pos < self.bytes.len()
                 && self.peek() == Some(b'%')
                 && self.pos == self.line_start(self.pos)
@@ -2210,15 +2935,20 @@ impl Parser<'_> {
                 continue;
             }
             if self.at_marker() && self.bytes[self.pos] == b'-' {
+                self.document_start = Some(Span::new(self.pos, self.pos + 3));
+                self.prologue_end = self.pos;
                 self.pos += 3;
                 line = Line::Inline;
             } else if directives {
                 return Err(self.error(ErrorKind::Syntax("`---` after the directives"), self.pos));
+            } else {
+                self.prologue_end = self.pos;
             }
             break;
         }
+        self.handles = tag_handles;
         loop {
-            if self.skip_separation() {
+            if self.skip_separation()? {
                 line = Line::Fresh;
             }
             if self.pos >= self.bytes.len() || self.at_marker() {
@@ -2238,7 +2968,10 @@ impl Parser<'_> {
             } else {
                 if line != Line::Fresh {
                     return Err(self.error(
-                        ErrorKind::Syntax("a line break after a complete node"),
+                        ErrorKind::TrailingContent {
+                            span: Span::new(self.pos, self.text.len()),
+                            context: TrailingContext::Node,
+                        },
                         self.pos,
                     ));
                 }
@@ -2257,34 +2990,88 @@ impl Parser<'_> {
             }
             self.close_top()?;
         }
-        // Only comments may follow the document (after an optional `...`).
-        if self.pos < self.bytes.len()
-            && self.bytes[self.pos..].starts_with(b"...")
-            && self.at_marker()
-        {
-            self.pos += 3;
-            self.skip_separation();
-        }
-        if self.pos < self.bytes.len() {
-            return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+        if !stream {
+            // Preserve the single-document refusal before publishing its root.
+            if self.pos < self.bytes.len()
+                && self.bytes[self.pos..].starts_with(b"...")
+                && self.at_marker()
+            {
+                self.pos += 3;
+                self.skip_separation()?;
+            }
+            if self.pos < self.bytes.len() {
+                return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+            }
         }
         match self.stack.pop() {
-            Some(Frame::Root(value)) => Ok(value.unwrap_or(Value::Null)),
+            Some(Frame::Root(Some(value))) => Ok(value),
+            Some(Frame::Root(None)) => self.null(self.pos),
             _ => unreachable!("only the root frame remains"),
         }
     }
-}
 
-/// The key a resolved node stands for: a string is its own text, and with
-/// `scalar_keys` a number, boolean or null is the JSON text of its value. A
-/// collection is never a key.
-fn key_of(mut value: Value, scalar_keys: bool) -> Option<String> {
-    match &mut value {
-        Value::String(text) => Some(mem::take(text)),
-        Value::Number(number) if scalar_keys => Some(number.lexeme().to_owned()),
-        Value::Bool(flag) if scalar_keys => Some(flag.to_string()),
-        Value::Null if scalar_keys => Some("null".to_owned()),
-        _ => None,
+    fn end_marker(&mut self) -> Result<(), Error> {
+        self.pos += 3;
+        self.skip_inline_space();
+        if !matches!(self.peek(), None | Some(b'\n' | b'\r' | b'#')) {
+            return Err(self.error(
+                ErrorKind::TrailingContent {
+                    span: Span::new(self.pos, self.text.len()),
+                    context: TrailingContext::EndMarker,
+                },
+                self.pos,
+            ));
+        }
+        self.skip_separation()?;
+        Ok(())
+    }
+
+    // Stream material is not itself an empty document. Explicit `---` is.
+    fn stream_prefix(&mut self) -> Result<bool, Error> {
+        loop {
+            self.skip_separation()?;
+            if (self.pos == 0 || matches!(self.bytes.get(self.pos - 1), Some(b'\r' | b'\n')))
+                && self.text[self.pos..].starts_with('\u{feff}')
+            {
+                self.take_bom();
+            } else if self.at_marker() && self.peek() == Some(b'.') {
+                self.end_marker()?;
+            } else {
+                return Ok(self.pos < self.bytes.len());
+            }
+        }
+    }
+
+    fn clear_document(&mut self) -> Result<(), Error> {
+        while let Some((name, binding)) = self.anchors.pop_first() {
+            if let Some((value, _)) = binding.ready {
+                self.builder
+                    .discard_node(value)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
+            }
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        while let Some((name, prefix)) = self.handles.pop_first() {
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            self.builder
+                .discard_text(prefix)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        let anchors = mem::take(&mut self.anchors);
+        let handles = mem::take(&mut self.handles);
+        admit!(
+            self,
+            self.builder.allocations().memory(|memory| {
+                anchors.release(memory)?;
+                handles.release(memory)
+            })
+        );
+        self.last_scalar_end = self.pos;
+        Ok(())
     }
 }
 
@@ -2298,7 +3085,7 @@ fn key_of(mut value: Value, scalar_keys: bool) -> Option<String> {
 /// assert_eq!(value["list"][1], "true");
 /// assert_eq!(value["list"][2]["a"][1], "c");
 /// assert_eq!(value["text"], "one\ntwo\n");
-/// assert_eq!(yaml::read("a: 1\na: 2").unwrap_err().kind(), ErrorKind::DuplicateKey);
+/// assert!(matches!(yaml::read("a: 1\na: 2").unwrap_err().kind(), ErrorKind::DuplicateKey { .. }));
 /// ```
 ///
 /// # Errors
@@ -2314,18 +3101,273 @@ pub fn read(text: &str) -> Result<Value, Error> {
 ///
 /// [`Error`] at the first refusal.
 pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
-    let mut parser = Parser {
+    parse(
+        text,
+        limits,
+        CoreBuilder::new(limits, super::admission::Allocations::legacy()),
+    )
+    .map(|(node, _)| node.value)
+}
+
+/// Construct every document using the existing reader's scalar, tag, mapping
+/// and alias rules, in source order, under one allocation and node account.
+///
+/// Empty/comment-only streams and standalone end markers contain no documents;
+/// `---` with an omitted root constructs a null document. Anchor bindings and
+/// directives are local to each document. Original offsets remain stream-wide.
+/// No documents are returned unless the entire stream succeeds.
+///
+/// # Errors
+///
+/// [`Error`] at the original absolute position of a syntax, semantic or resource
+/// refusal, including refusals in later documents. Single-document [`read_with`]
+/// retains its existing `MultipleDocuments` policy and error precedence.
+pub fn read_stream(text: &str, limits: StreamLimits) -> Result<Vec<Value>, Error> {
+    input_limit(text, limits.max_input_bytes)?;
+    let builder = CoreBuilder::new(
+        limits.core,
+        super::admission::Allocations::bounded(limits.max_allocation_bytes),
+    );
+    parse_stream(
+        text,
+        limits.core,
+        builder,
+        limits.max_documents,
+        |node, _| node.value,
+    )
+    .map(|(documents, _)| documents)
+}
+
+/// Shared stream driver; each retained record is admitted beside its builder's
+/// occurrences or Core products, without publishing a partial vector.
+pub(super) struct DocumentBoundary {
+    pub(super) span: Span,
+    pub(super) prologue: Span,
+    pub(super) start_marker: Option<Span>,
+    pub(super) end_marker: Option<Span>,
+}
+
+pub(super) fn parse_stream<B: Builder, R>(
+    text: &str,
+    limits: Limits,
+    builder: B,
+    max_documents: usize,
+    mut record: impl FnMut(B::Node, DocumentBoundary) -> R,
+) -> Result<(Vec<R>, B), Error> {
+    let mut parser = parser(text, limits, builder);
+    let mut documents = Vec::new();
+    loop {
+        let prefix = parser.pos;
+        if !parser.stream_prefix()? {
+            break;
+        }
+        if documents.len() >= max_documents {
+            return Err(parser.error(
+                ErrorKind::Documents {
+                    limit: max_documents,
+                },
+                parser.pos,
+            ));
+        }
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .push(&mut parser.stack, Frame::Root(None))
+        );
+        parser.document_start = None;
+        let node = parser.document(true)?;
+        // Preserve Core stream refusal order: admit the retained result slot
+        // and release document-local state before examining its end marker.
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .memory(|memory| memory.reserve_for_push(&mut documents))
+        );
+        parser.clear_document()?;
+        let end_marker = if parser.at_marker() && parser.peek() == Some(b'.') {
+            let marker = Span::new(parser.pos, parser.pos + 3);
+            parser.end_marker()?;
+            Some(marker)
+        } else {
+            None
+        };
+        let boundaries = DocumentBoundary {
+            span: Span::new(prefix, parser.pos),
+            prologue: Span::new(prefix, parser.prologue_end),
+            start_marker: parser.document_start,
+            end_marker,
+        };
+        documents.push(record(node, boundaries));
+    }
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok((documents, parser.builder))
+}
+
+fn input_limit(text: &str, limit: usize) -> Result<(), Error> {
+    if text.len() > limit {
+        return Err(Error::new(text, ErrorKind::Input { limit }, 0));
+    }
+    Ok(())
+}
+
+/// Run the one grammar with an admitted product builder.
+pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Result<Value, Error> {
+    input_limit(text, limits.max_input_bytes)?;
+    parse(
+        text,
+        limits.core,
+        CoreBuilder::new(
+            limits.core,
+            super::admission::Allocations::bounded(limits.max_allocation_bytes),
+        ),
+    )
+    .map(|(node, _)| node.value)
+}
+
+/// Run the one grammar with an admitted product builder.
+pub(super) fn parse<B: Builder>(
+    text: &str,
+    limits: Limits,
+    builder: B,
+) -> Result<(B::Node, B), Error> {
+    let mut parser = parser(text, limits, builder);
+    admit!(
+        parser,
+        parser
+            .builder
+            .allocations()
+            .push(&mut parser.stack, Frame::Root(None))
+    );
+    let node = parser.document(false)?;
+    parser.clear_document()?;
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok((node, parser.builder))
+}
+
+fn parser<B: Builder>(text: &str, limits: Limits, builder: B) -> Parser<'_, B> {
+    Parser {
         text,
         bytes: text.as_bytes(),
         pos: 0,
         limits,
         nodes: 0,
         depth: 0,
-        anchors: HashMap::with_hasher(FixedState::new()),
-        stack: vec![Frame::Root(None)],
+        anchors: OrderedTable::default(),
+        handles: OrderedTable::default(),
+        stack: Vec::new(),
         pending: None,
         later: None,
         located: Cell::new((0, 0, 0)),
-    };
-    parser.document()
+        bom_line: None,
+        document_start: None,
+        prologue_end: 0,
+        builder,
+        last_scalar_end: 0,
+    }
+}
+
+pub(super) fn position(text: &str, at: usize) -> (usize, usize) {
+    let (mut line, mut column, mut cr) = (1, 1, false);
+    for ch in text[..at].chars() {
+        match ch {
+            '\r' => {
+                line += 1;
+                column = 1;
+                cr = true;
+            }
+            '\n' => {
+                if !cr {
+                    line += 1;
+                }
+                column = 1;
+                cr = false;
+            }
+            _ => {
+                column += 1;
+                cr = false;
+            }
+        }
+    }
+    (line, column)
+}
+
+/// YAML 1.2 §6.8.2.1 c-tag-handle; the primary and secondary handles are
+/// predefined, and a named handle has an ASCII word between its bangs.
+fn tag_handle(handle: &str) -> bool {
+    handle == "!"
+        || handle == "!!"
+        || (handle.len() > 2
+            && handle.starts_with('!')
+            && handle.ends_with('!')
+            && handle[1..handle.len() - 1]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+}
+
+/// YAML 1.2 §5.6 ns-uri-char and ns-tag-char. Percent escapes consume exactly
+/// two hexadecimal digits; shorthand suffixes exclude bangs and flow indicators.
+fn tag_uri(text: &str, shorthand: bool) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        if byte == b'%' {
+            if bytes
+                .get(cursor + 1)
+                .and_then(|&byte| purrdf_hash::hex::nibble(byte))
+                .is_none()
+                || bytes
+                    .get(cursor + 2)
+                    .and_then(|&byte| purrdf_hash::hex::nibble(byte))
+                    .is_none()
+            {
+                return false;
+            }
+            cursor += 3;
+        } else {
+            let uri = byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'-' | b'#'
+                        | b';'
+                        | b'/'
+                        | b'?'
+                        | b':'
+                        | b'@'
+                        | b'&'
+                        | b'='
+                        | b'+'
+                        | b'$'
+                        | b','
+                        | b'_'
+                        | b'.'
+                        | b'!'
+                        | b'~'
+                        | b'*'
+                        | b'\''
+                        | b'('
+                        | b')'
+                        | b'['
+                        | b']'
+                );
+            if !uri || (shorthand && (byte == b'!' || is_flow_indicator(Some(byte)))) {
+                return false;
+            }
+            cursor += 1;
+        }
+    }
+    true
 }

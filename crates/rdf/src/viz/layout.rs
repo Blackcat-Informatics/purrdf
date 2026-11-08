@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::*;
 
+mod presentation;
+pub(super) use presentation::layout_presented;
+
 /// Version of the deterministic layout contract.
 pub const VIZ_LAYOUT_SCHEMA_VERSION: &str = "purrdf-viz-layout-1";
 
@@ -290,6 +293,14 @@ struct ComponentLayout {
 }
 
 fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<VizLayout, VizError> {
+    layout_graph_with_limit(scene, options, false)
+}
+
+fn layout_graph_with_limit(
+    scene: &VizScene,
+    options: &VizLayoutOptions,
+    presentation_limit: bool,
+) -> Result<VizLayout, VizError> {
     let (work_nodes, work_arcs) = build_work_graph(scene, options)?;
     let components = connected_components(&work_nodes, &work_arcs);
     let mut component_layouts = components
@@ -321,6 +332,32 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         }
     }
 
+    if presentation_limit {
+        for rect in all_rects.values() {
+            if i64::from(rect.x) + i64::from(rect.width) > 16_384
+                || i64::from(rect.y) + i64::from(rect.height) > 16_384
+            {
+                return Err(VizError::TooLarge {
+                    limit: "presentation coordinate",
+                    actual: usize::try_from(i64::from(rect.x).max(i64::from(rect.y)))
+                        .unwrap_or(usize::MAX),
+                    allowed: 16_384,
+                });
+            }
+        }
+    }
+    finish_graph_layout(scene, options, &all_rects, &all_ranks, all_waypoints, false)
+}
+
+fn finish_graph_layout(
+    scene: &VizScene,
+    options: &VizLayoutOptions,
+    all_rects: &BTreeMap<String, VizRect>,
+    all_ranks: &BTreeMap<String, (usize, usize)>,
+    mut all_waypoints: BTreeMap<String, Vec<VizPoint>>,
+    ordered_waypoints: bool,
+) -> Result<VizLayout, VizError> {
+    let self_padding = self_edge_padding(scene);
     let scene_nodes = scene
         .nodes
         .iter()
@@ -328,13 +365,18 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .collect::<BTreeMap<_, _>>();
     let mut nodes = Vec::new();
     for (id, node) in &scene_nodes {
-        let rect = *all_rects
-            .get(*id)
-            .ok_or_else(|| VizError::Layout(format!("layout omitted scene node {id}")))?;
-        let (component, rank) = all_ranks
-            .get(*id)
-            .copied()
-            .ok_or_else(|| VizError::Layout(format!("layout omitted rank for scene node {id}")))?;
+        let rect = *all_rects.get(*id).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::MissingSceneNode {
+                node: (*id).to_owned(),
+            })
+        })?;
+        let padding = self_padding.get(*id).copied().unwrap_or_default();
+        let rect = inset_routing_padding(rect, padding)?;
+        let (component, rank) = all_ranks.get(*id).copied().ok_or_else(|| {
+            VizError::Layout(VizLayoutError::MissingRank {
+                node: (*id).to_owned(),
+            })
+        })?;
         nodes.push(place_scene_node(node, rect, component, rank));
     }
     nodes.sort_by(|left, right| left.id.cmp(&right.id));
@@ -343,7 +385,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         .iter()
         .map(|node| (node.id.as_str(), node))
         .collect::<BTreeMap<_, _>>();
-    let anchor_lookup = build_anchor_lookup(scene, &all_rects)?;
+    let anchor_lookup = build_anchor_lookup(scene, all_rects)?;
     let parallel_offsets = parallel_edge_offsets(scene);
     let endpoint_offsets = endpoint_offsets(scene);
     let mut reserved_vertical_lanes = Vec::new();
@@ -368,8 +410,10 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
                 .unwrap_or(&0),
         );
         let mut waypoints = all_waypoints.remove(&edge.id).unwrap_or_default();
-        waypoints.sort_by_key(|point| (point.x, point.y));
-        if start.x > end.x {
+        if !ordered_waypoints {
+            waypoints.sort_by_key(|point| (point.x, point.y));
+        }
+        if !ordered_waypoints && start.x > end.x {
             waypoints.reverse();
         }
         let offset = parallel_offsets.get(&edge.id).copied().unwrap_or_default();
@@ -380,7 +424,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
             place_anchor(scene_anchor, rect)
         });
         let mut required = waypoints;
-        if let Some(value) = &anchor {
+        if !ordered_waypoints && let Some(value) = &anchor {
             required.push(value.rect.center());
             required.sort_by_key(|point| {
                 if start.x <= end.x {
@@ -390,16 +434,25 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
                 }
             });
         }
-        let mut points = if edge.kind == VizSceneEdgeKind::Reifies
+        let self_rect = self_edge_node(edge)
+            .map(|node| node_lookup[node].rect)
+            .or_else(|| self_edge_anchor(edge).and_then(|key| anchor_lookup.get(&key).copied()));
+        let mut points = if let Some(rect) = self_rect {
+            route_node_self(start, end, rect, &required, offset)
+        } else if !ordered_waypoints
+            && edge.kind == VizSceneEdgeKind::Reifies
             && matches!(
                 &edge.target,
                 VizEndpoint::NodePort { port, .. } if port == "relation"
-            ) {
+            )
+        {
             route_reifies_to_relation(start, end, offset)
         } else {
             route_edge(start, end, &required, offset)
         };
-        separate_route_lanes(&mut points, &reserved_vertical_lanes);
+        if !ordered_waypoints && self_rect.is_none() {
+            separate_route_lanes(&mut points, &reserved_vertical_lanes);
+        }
         reserved_vertical_lanes.extend(vertical_lane_segments(&points));
         edges.push(VizLayoutEdge {
             id: edge.id.clone(),
@@ -451,7 +504,9 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
         );
     }
     edges.sort_by(|left, right| left.id.cmp(&right.id));
-    normalize_graph_geometry(&mut nodes, &mut edges, options.margin);
+    if !ordered_waypoints {
+        normalize_graph_geometry(&mut nodes, &mut edges, options.margin);
+    }
 
     let max_right = nodes
         .iter()
@@ -491,7 +546,7 @@ fn layout_graph_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
     })
 }
 
-fn normalize_graph_geometry(nodes: &mut [VizLayoutNode], edges: &mut [VizLayoutEdge], margin: i32) {
+fn graph_minimum(nodes: &[VizLayoutNode], edges: &[VizLayoutEdge], margin: i32) -> VizPoint {
     let min_x = nodes
         .iter()
         .map(|node| node.rect.x)
@@ -518,8 +573,13 @@ fn normalize_graph_geometry(nodes: &mut [VizLayoutNode], edges: &mut [VizLayoutE
         }))
         .min()
         .unwrap_or(margin);
-    let dx = margin - min_x;
-    let dy = margin - min_y;
+    VizPoint { x: min_x, y: min_y }
+}
+
+fn normalize_graph_geometry(nodes: &mut [VizLayoutNode], edges: &mut [VizLayoutEdge], margin: i32) {
+    let minimum = graph_minimum(nodes, edges, margin);
+    let dx = margin - minimum.x;
+    let dy = margin - minimum.y;
     if dx == 0 && dy == 0 {
         return;
     }
@@ -558,8 +618,10 @@ fn build_work_graph(
     options: &VizLayoutOptions,
 ) -> Result<(BTreeMap<String, WorkNode>, Vec<WorkArc>), VizError> {
     let mut nodes = BTreeMap::new();
+    let padding = self_edge_padding(scene);
     for node in &scene.nodes {
-        let (width, height) = measure_node(node, options);
+        let pad = padding.get(&node.id).copied().unwrap_or_default();
+        let (width, height) = routing_dimensions(measure_node(node, options), pad)?;
         nodes.insert(
             node.id.clone(),
             WorkNode {
@@ -572,7 +634,10 @@ fn build_work_graph(
     for edge in &scene.edges {
         if let Some(anchor) = &edge.anchor {
             let id = anchor_work_id(&edge.id, &anchor.id);
-            let (width, height) = measure_anchor(anchor);
+            let (width, height) = routing_dimensions(
+                measure_anchor(anchor),
+                padding.get(&id).copied().unwrap_or_default(),
+            )?;
             nodes.insert(
                 id,
                 WorkNode {
@@ -588,10 +653,11 @@ fn build_work_graph(
         let source = endpoint_work_id(&edge.source);
         let target = endpoint_work_id(&edge.target);
         if !nodes.contains_key(&source) || !nodes.contains_key(&target) {
-            return Err(VizError::Layout(format!(
-                "scene edge {} has an endpoint absent from the work graph",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::MissingWorkEndpoint {
+                edge: edge.id.clone(),
+                source,
+                target,
+            }));
         }
         if let Some(anchor) = &edge.anchor {
             let anchor_id = anchor_work_id(&edge.id, &anchor.id);
@@ -820,9 +886,10 @@ fn assign_ranks(
         }
     }
     if visited != component.len() {
-        return Err(VizError::Layout(
-            "deterministic cycle breaking did not produce a DAG".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::Cycle {
+            visited,
+            expected: component.len(),
+        }));
     }
     Ok(ranks)
 }
@@ -1120,18 +1187,20 @@ fn measure_node(node: &VizSceneNode, options: &VizLayoutOptions) -> (i32, i32) {
 }
 
 fn place_anchor(anchor: &VizEdgeAnchor, rect: VizRect) -> VizLayoutAnchor {
+    let label_width = (rect.width - 16).max(CHAR_WIDTH);
+    let lines = wrap_text(&anchor.label.text, chars_for_width(label_width));
     let label_rect = VizRect {
         x: rect.x + 8,
         y: rect.y + 6,
-        width: (rect.width - 16).max(CHAR_WIDTH),
-        height: LINE_HEIGHT,
+        width: label_width,
+        height: LINE_HEIGHT * i32_from_usize(lines.len()),
     };
     VizLayoutAnchor {
         id: anchor.id.clone(),
         rect,
         label: VizLayoutLabel {
             rect: label_rect,
-            lines: wrap_text(&anchor.label.text, chars_for_width(label_rect.width)),
+            lines,
         },
         badges: place_badges(
             &anchor.badges,
@@ -1161,13 +1230,19 @@ fn build_anchor_lookup<'a>(
     rects: &BTreeMap<String, VizRect>,
 ) -> Result<BTreeMap<(&'a str, &'a str), VizRect>, VizError> {
     let mut anchors = BTreeMap::new();
+    let padding = self_edge_padding(scene);
     for edge in &scene.edges {
         if let Some(anchor) = &edge.anchor {
             let work_id = anchor_work_id(&edge.id, &anchor.id);
-            let rect = rects
-                .get(&work_id)
-                .copied()
-                .ok_or_else(|| VizError::Layout(format!("layout omitted edge anchor {work_id}")))?;
+            let rect = rects.get(&work_id).copied().ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingAnchor {
+                    work_id: work_id.clone(),
+                    edge: edge.id.clone(),
+                    anchor: anchor.id.clone(),
+                })
+            })?;
+            let rect =
+                inset_routing_padding(rect, padding.get(&work_id).copied().unwrap_or_default())?;
             anchors.insert((edge.id.as_str(), anchor.id.as_str()), rect);
         }
     }
@@ -1184,12 +1259,22 @@ fn endpoint_point(
             .get(node.as_str())
             .and_then(|value| value.ports.iter().find(|candidate| candidate.id == *port))
             .map(|value| value.point)
-            .ok_or_else(|| VizError::Layout(format!("missing layout endpoint {node}.{port}"))),
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingEndpoint {
+                    node: node.clone(),
+                    port: port.clone(),
+                })
+            }),
         VizEndpoint::EdgeAnchor { edge, anchor } => anchors
             .get(&(edge.as_str(), anchor.as_str()))
             .copied()
             .map(VizRect::center)
-            .ok_or_else(|| VizError::Layout(format!("missing layout edge anchor {edge}.{anchor}"))),
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingEdgeAnchor {
+                    edge: edge.clone(),
+                    anchor: anchor.clone(),
+                })
+            }),
     }
 }
 
@@ -1272,7 +1357,10 @@ fn rect_boundary_point(rect: VizRect, toward: VizPoint) -> VizPoint {
     let dx = toward.x - center.x;
     let dy = toward.y - center.y;
     if dx == 0 && dy == 0 {
-        return center;
+        return VizPoint {
+            x: rect.right(),
+            y: center.y,
+        };
     }
     if dx.abs() * rect.height >= dy.abs() * rect.width {
         let half_width = rect.width / 2;
@@ -1324,24 +1412,6 @@ fn route_edge(
     required: &[VizPoint],
     parallel_offset: i32,
 ) -> Vec<VizPoint> {
-    if start == end {
-        return vec![
-            start,
-            VizPoint {
-                x: start.x + 54 + parallel_offset.abs(),
-                y: start.y,
-            },
-            VizPoint {
-                x: start.x + 54 + parallel_offset.abs(),
-                y: start.y - 54 - parallel_offset,
-            },
-            VizPoint {
-                x: start.x,
-                y: start.y - 54 - parallel_offset,
-            },
-            start,
-        ];
-    }
     let mut checkpoints = Vec::with_capacity(required.len() + 2);
     checkpoints.push(start);
     checkpoints.extend(required.iter().copied());
@@ -1352,6 +1422,246 @@ fn route_edge(
     }
     dedup_points(&mut points);
     points
+}
+
+fn self_edge_node(edge: &VizSceneEdge) -> Option<&str> {
+    match (&edge.source, &edge.target) {
+        (VizEndpoint::NodePort { node: from, .. }, VizEndpoint::NodePort { node: to, .. })
+            if from == to =>
+        {
+            Some(from)
+        }
+        _ => None,
+    }
+}
+
+fn self_edge_anchor(edge: &VizSceneEdge) -> Option<(&str, &str)> {
+    match (&edge.source, &edge.target) {
+        (
+            VizEndpoint::EdgeAnchor {
+                edge: from,
+                anchor: from_anchor,
+            },
+            VizEndpoint::EdgeAnchor {
+                edge: to,
+                anchor: to_anchor,
+            },
+        ) if from == to && from_anchor == to_anchor => Some((from, from_anchor)),
+        _ => None,
+    }
+}
+
+fn routing_dimensions((width, height): (i32, i32), padding: i32) -> Result<(i32, i32), VizError> {
+    let extra = padding.checked_mul(2).ok_or_else(|| {
+        VizError::Layout(VizLayoutError::Arithmetic {
+            operation: VizLayoutArithmetic::Padding,
+            left: padding,
+            right: 2,
+        })
+    })?;
+    Ok((
+        width.checked_add(extra).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Width,
+                left: width,
+                right: extra,
+            })
+        })?,
+        height.checked_add(extra).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Height,
+                left: height,
+                right: extra,
+            })
+        })?,
+    ))
+}
+
+fn inset_routing_padding(rect: VizRect, padding: i32) -> Result<VizRect, VizError> {
+    let extra = padding.checked_mul(2).ok_or_else(|| {
+        VizError::Layout(VizLayoutError::Arithmetic {
+            operation: VizLayoutArithmetic::Padding,
+            left: padding,
+            right: 2,
+        })
+    })?;
+    let width = rect
+        .width
+        .checked_sub(extra)
+        .filter(|v| *v > 0)
+        .ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::InsetWidth,
+                left: rect.width,
+                right: extra,
+            })
+        })?;
+    let height = rect
+        .height
+        .checked_sub(extra)
+        .filter(|v| *v > 0)
+        .ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::InsetHeight,
+                left: rect.height,
+                right: extra,
+            })
+        })?;
+    Ok(VizRect {
+        x: rect.x.checked_add(padding).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::X,
+                left: rect.x,
+                right: padding,
+            })
+        })?,
+        y: rect.y.checked_add(padding).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Y,
+                left: rect.y,
+                right: padding,
+            })
+        })?,
+        width,
+        height,
+    })
+}
+
+fn self_edge_padding(scene: &VizScene) -> BTreeMap<String, i32> {
+    let offsets = parallel_edge_offsets(scene);
+    let mut padding: BTreeMap<String, i32> = BTreeMap::new();
+    for edge in &scene.edges {
+        if let Some(node) = self_edge_node(edge)
+            .map(str::to_owned)
+            .or_else(|| self_edge_anchor(edge).map(|(id, anchor)| anchor_work_id(id, anchor)))
+        {
+            let distance =
+                self_edge_distance(offsets.get(&edge.id).copied().unwrap_or_default()) + 24;
+            padding
+                .entry(node)
+                .and_modify(|pad| *pad = (*pad).max(distance))
+                .or_insert(distance);
+        }
+    }
+    padding
+}
+
+fn self_edge_distance(offset: i32) -> i32 {
+    40 + offset.abs() * 2 + if offset >= 0 { 14 } else { 0 }
+}
+
+fn route_node_self(
+    start: VizPoint,
+    end: VizPoint,
+    rect: VizRect,
+    required: &[VizPoint],
+    offset: i32,
+) -> Vec<VizPoint> {
+    let distance = self_edge_distance(offset);
+    let right = rect.right() + distance;
+    let roof = rect.y - distance;
+    let start_side = boundary_side(start, rect);
+    let end_side = boundary_side(end, rect);
+    let entry_distance = if start_side == end_side { 12 } else { distance };
+    let exit = boundary_escape(start, rect, start_side, distance);
+    let entry = boundary_escape(end, rect, end_side, entry_distance);
+    let mut points = vec![start, exit];
+    if start_side == SelfSide::Bottom {
+        points.push(VizPoint {
+            x: right,
+            y: exit.y,
+        });
+        points.push(VizPoint { x: right, y: roof });
+    } else {
+        points.push(VizPoint { x: exit.x, y: roof });
+    }
+    for point in required {
+        if point.x > rect.x && point.x < rect.right() && point.y >= rect.bottom() {
+            points.extend([
+                VizPoint { x: right, y: roof },
+                VizPoint {
+                    x: right,
+                    y: point.y,
+                },
+                *point,
+                VizPoint {
+                    x: right,
+                    y: point.y,
+                },
+                VizPoint { x: right, y: roof },
+            ]);
+        } else {
+            points.extend([
+                VizPoint {
+                    x: point.x,
+                    y: roof,
+                },
+                *point,
+                VizPoint {
+                    x: point.x,
+                    y: roof,
+                },
+            ]);
+        }
+    }
+    if end_side == SelfSide::Bottom || (end_side == SelfSide::Top && start_side == end_side) {
+        points.extend([
+            VizPoint { x: right, y: roof },
+            VizPoint {
+                x: right,
+                y: entry.y,
+            },
+        ]);
+    } else {
+        points.push(VizPoint {
+            x: entry.x,
+            y: roof,
+        });
+    }
+    points.extend([entry, end]);
+    dedup_points(&mut points);
+    points
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelfSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+fn boundary_side(point: VizPoint, rect: VizRect) -> SelfSide {
+    if point.x <= rect.x {
+        SelfSide::Left
+    } else if point.x >= rect.right() {
+        SelfSide::Right
+    } else if point.y <= rect.y {
+        SelfSide::Top
+    } else {
+        SelfSide::Bottom
+    }
+}
+
+fn boundary_escape(point: VizPoint, rect: VizRect, side: SelfSide, distance: i32) -> VizPoint {
+    match side {
+        SelfSide::Left => VizPoint {
+            x: rect.x - distance,
+            y: point.y,
+        },
+        SelfSide::Right => VizPoint {
+            x: rect.right() + distance,
+            y: point.y,
+        },
+        SelfSide::Top => VizPoint {
+            x: point.x,
+            y: rect.y - distance,
+        },
+        SelfSide::Bottom => VizPoint {
+            x: point.x,
+            y: rect.bottom() + distance,
+        },
+    }
 }
 
 fn route_reifies_to_relation(start: VizPoint, end: VizPoint, offset: i32) -> Vec<VizPoint> {
@@ -1405,8 +1715,12 @@ fn dedup_points(points: &mut Vec<VizPoint>) {
         let previous = points[index - 1];
         let current = points[index];
         let next = points[index + 1];
-        if (previous.x == current.x && current.x == next.x)
-            || (previous.y == current.y && current.y == next.y)
+        if (previous.x == current.x
+            && current.x == next.x
+            && (previous.y.min(next.y)..=previous.y.max(next.y)).contains(&current.y))
+            || (previous.y == current.y
+                && current.y == next.y
+                && (previous.x.min(next.x)..=previous.x.max(next.x)).contains(&current.x))
         {
             points.remove(index);
         } else {
@@ -1697,13 +2011,11 @@ pub(super) fn wrap_text(value: &str, max_chars: usize) -> Vec<String> {
     for word in value.split_whitespace() {
         let needed = word.chars().count() + usize::from(!current.is_empty());
         if current.chars().count() + needed > max_chars && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
+            lines.push(std::mem::take(&mut current));
         }
         if word.chars().count() > max_chars {
             if !current.is_empty() {
-                lines.push(current);
-                current = String::new();
+                lines.push(std::mem::take(&mut current));
             }
             let chars = word.chars().collect::<Vec<_>>();
             for chunk in chars.chunks(max_chars) {
@@ -1730,11 +2042,15 @@ pub(super) fn chars_for_width(width: i32) -> usize {
     usize::try_from((width / CHAR_WIDTH).max(1)).unwrap_or(1)
 }
 
+pub(super) fn text_line_width(value: &str) -> i32 {
+    i32_from_usize(value.chars().count()) * CHAR_WIDTH
+}
+
 fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<VizLayout, VizError> {
     let table = scene
         .table
         .as_ref()
-        .ok_or_else(|| VizError::Layout("table scene is missing table records".to_owned()))?;
+        .ok_or(VizError::Layout(VizLayoutError::MissingTableRecords))?;
     let column_count = table.fields.len();
     let mut widths = vec![96; column_count];
     for (column, field) in table.fields.iter().enumerate() {
@@ -1859,20 +2175,20 @@ fn table_cell(row: usize, column: usize, rect: VizRect, text: &str) -> VizLayout
 /// Validate geometry and scene-to-layout completeness.
 pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizError> {
     if layout.width <= 0 || layout.height <= 0 {
-        return Err(VizError::Layout(
-            "visualization layout has non-positive canvas bounds".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::CanvasBounds {
+            width: layout.width,
+            height: layout.height,
+        }));
     }
     if layout.legend.len() != scene.legend.len() {
-        return Err(VizError::Layout(
-            "layout does not cover every legend entry".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::LegendCoverage {
+            actual: layout.legend.len(),
+            expected: scene.legend.len(),
+        }));
     }
     if scene.mode == VizMode::Table {
         let Some(table) = &layout.table else {
-            return Err(VizError::Layout(
-                "table scene has no table geometry".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::MissingTableGeometry));
         };
         if table.cells.len()
             != scene
@@ -1880,9 +2196,13 @@ pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizEr
                 .as_ref()
                 .map_or(0, |value| value.fields.len() * (value.rows.len() + 1))
         {
-            return Err(VizError::Layout(
-                "table geometry does not cover every scene cell".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::TableCoverage {
+                actual: table.cells.len(),
+                expected: scene
+                    .table
+                    .as_ref()
+                    .map_or(0, |value| value.fields.len() * (value.rows.len() + 1)),
+            }));
         }
         return validate_label_bounds(table.cells.iter().map(|cell| (&cell.label, cell.rect)));
     }
@@ -1892,45 +2212,49 @@ pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizEr
         .map(|node| (node.id.as_str(), node))
         .collect::<BTreeMap<_, _>>();
     if nodes.len() != scene.nodes.len() || layout.edges.len() != scene.edges.len() {
-        return Err(VizError::Layout(
-            "graph layout does not cover every scene node and edge".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::GraphCoverage {
+            nodes: nodes.len(),
+            expected_nodes: scene.nodes.len(),
+            edges: layout.edges.len(),
+            expected_edges: scene.edges.len(),
+        }));
     }
     for scene_node in &scene.nodes {
         if !nodes.contains_key(scene_node.id.as_str()) {
-            return Err(VizError::Layout(format!(
-                "graph layout omitted scene node {}",
-                scene_node.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::GraphNodeMissing {
+                node: scene_node.id.clone(),
+            }));
         }
     }
     for (index, left) in layout.nodes.iter().enumerate() {
         for right in layout.nodes.iter().skip(index + 1) {
             if left.rect.intersects(right.rect) {
-                return Err(VizError::Layout(format!(
-                    "layout nodes {} and {} overlap",
-                    left.id, right.id
-                )));
+                return Err(VizError::Layout(VizLayoutError::NodeOverlap {
+                    left: left.id.clone(),
+                    right: right.id.clone(),
+                    left_rect: left.rect,
+                    right_rect: right.rect,
+                }));
             }
         }
     }
     validate_label_bounds(layout.nodes.iter().map(|node| (&node.label, node.rect)))?;
     for edge in &layout.edges {
         if edge.points.len() < 2 {
-            return Err(VizError::Layout(format!(
-                "layout edge {} has fewer than two route points",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::RoutePoints {
+                edge: edge.id.clone(),
+                points: edge.points.clone(),
+            }));
         }
         if edge
             .points
             .windows(2)
             .any(|pair| pair[0].x != pair[1].x && pair[0].y != pair[1].y)
         {
-            return Err(VizError::Layout(format!(
-                "layout edge {} contains a non-orthogonal segment",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::RouteOrthogonality {
+                edge: edge.id.clone(),
+                points: edge.points.clone(),
+            }));
         }
     }
     Ok(())
@@ -1945,18 +2269,20 @@ fn validate_label_bounds<'a>(
             || label.rect.right() > parent.right()
             || label.rect.bottom() > parent.bottom()
         {
-            return Err(VizError::Layout(
-                "layout label lies outside its containing box".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::LabelBounds {
+                rect: label.rect,
+                parent,
+            }));
         }
         if label
             .lines
             .iter()
-            .any(|line| i32_from_usize(line.chars().count()) * CHAR_WIDTH > label.rect.width)
+            .any(|line| text_line_width(line) > label.rect.width)
         {
-            return Err(VizError::Layout(
-                "layout label text exceeds its assigned box".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::LabelWidth {
+                rect: label.rect,
+                lines: label.lines.clone(),
+            }));
         }
     }
     Ok(())
@@ -1971,9 +2297,9 @@ fn validate_options(options: &VizLayoutOptions) -> Result<(), VizError> {
         || options.crossing_sweeps == 0
         || options.max_node_width < 160
     {
-        return Err(VizError::Layout(
-            "visualization layout options violate deterministic geometry bounds".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::Options {
+            options: options.clone(),
+        }));
     }
     Ok(())
 }
@@ -2142,8 +2468,39 @@ mod tests {
         };
         assert!(matches!(
             layout_scene(&scene, &options),
-            Err(VizError::Layout(_))
+            Err(VizError::Layout(VizLayoutError::Options { options: original })) if original == options
         ));
+        let mut valid_options = options;
+        valid_options.crossing_sweeps = 1;
+        let valid = layout_scene(&scene, &valid_options).expect("minimum valid sweep count");
+        validate_layout(&scene, &valid).expect("valid neighbor");
+
+        let mut changed = valid.clone();
+        changed.nodes.pop();
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::GraphCoverage { nodes, expected_nodes, .. })) if nodes + 1 == expected_nodes && expected_nodes == scene.nodes.len())
+        );
+        let mut changed = valid.clone();
+        let missing = changed.nodes[0].id.clone();
+        changed.nodes[0].id = "absent-layout-node".to_owned();
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::GraphNodeMissing { node })) if node == missing)
+        );
+        let mut changed = valid.clone();
+        changed.nodes[1].rect = changed.nodes[0].rect;
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::NodeOverlap { left, right, left_rect, right_rect })) if left == changed.nodes[0].id && right == changed.nodes[1].id && left_rect == right_rect)
+        );
+        let mut changed = valid.clone();
+        changed.edges[0].points.truncate(1);
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::RoutePoints { edge, points })) if edge == changed.edges[0].id && points == changed.edges[0].points)
+        );
+        let mut changed = valid;
+        changed.edges[0].points = vec![VizPoint { x: 0, y: 0 }, VizPoint { x: 1, y: 1 }];
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::RouteOrthogonality { edge, points })) if edge == changed.edges[0].id && points == changed.edges[0].points)
+        );
     }
 
     #[test]

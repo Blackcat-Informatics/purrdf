@@ -67,7 +67,7 @@ fn substituted(query: &str, lane: ShaclPrebinding) -> Vec<Row> {
                 base_iri: None,
                 substitutions: &substitutions,
             },
-            QueryOptions::EMPTY.with_prebinding(lane),
+            &QueryOptions::EMPTY.with_prebinding(lane),
         )
         .unwrap_or_else(|e| panic!("{query}: {e:?}"));
     let SparqlResult::Solutions {
@@ -89,11 +89,11 @@ fn prepared(query: &str) -> Vec<Row> {
     let dataset = dataset();
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)
         .unwrap_or_else(|e| panic!("{query}: {e:?}"));
     execution.bind(0, a()).expect("bind");
     let rows = engine
-        .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+        .execute(&mut execution, &*dataset, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("{query}: expected solutions");
             };
@@ -223,7 +223,7 @@ fn prepared_refusal(query: &str, declared: &[&str]) -> Option<String> {
             query,
             None,
             &["this"],
-            QueryOptions::EMPTY.with_declared_prebound(declared),
+            &QueryOptions::EMPTY.with_declared_prebound(declared),
         )
         .err()
         .map(|e| e.message)
@@ -241,7 +241,7 @@ fn substituted_refusal(query: &str) -> Option<String> {
                 base_iri: None,
                 substitutions: &substitutions,
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .err()
         .map(|e| e.message)
@@ -441,12 +441,12 @@ fn a_prepared_execution_honours_its_declared_pre_bound_names() {
             &reads,
             None,
             &["this"],
-            QueryOptions::EMPTY.with_declared_prebound(&["ctx"]),
+            &QueryOptions::EMPTY.with_declared_prebound(&["ctx"]),
         )
         .expect("prepares");
     execution.bind(0, a()).expect("bind");
     let answer = engine
-        .execute(&mut execution, &*dataset, QueryOptions::EMPTY, |outcome| {
+        .execute(&mut execution, &*dataset, &QueryOptions::EMPTY, |outcome| {
             let InternedOutcome::Solutions(solutions) = outcome else {
                 panic!("expected solutions");
             };

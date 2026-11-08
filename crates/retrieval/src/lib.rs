@@ -210,13 +210,12 @@
 //! stratum's weight and the total tie-break; the admitted contribution count
 //! and the score ceiling follow from the weights, because a candidate may
 //! surface at most once per stratum. Weights are read as ratios and never as
-//! absolute quantities, so a map built with two different [`Fixed`]
-//! constructors is a silent factor-of-`10^12` error that refuses nothing — see
-//! [`FusionProfile::with_decay`] before writing one.
-//! It is content-addressed, so an answer names exactly which law produced it.
-//! Contributions are exact [`Fixed`] values computed with checked arithmetic;
-//! an intermediate that does not fit is a loud [`FusionError::Overflow`], never
-//! a wrapped score masquerading as an order.
+//! absolute quantities. Each value carries its explicitly selected [`Precision`];
+//! combining different units is refused. The law is content-addressed, so an
+//! answer names exactly which precision and decay produced it. Contributions
+//! are exact unsigned [`Score`] values computed with checked arithmetic;
+//! an unrepresentable result is a loud [`FusionError::Overflow`]. Wide
+//! intermediates are computed through the shared exact arithmetic home.
 //!
 //! The law's decay rule, its weights, the fixed-point scale and a stratum's
 //! depth are one coupled quantity: past a depth those first three decide,
@@ -231,10 +230,10 @@
 //!
 //! Which rule a profile names decides how much depth a weight can buy.
 //! [`DecayRule::ReciprocalRank`] truncates the reciprocal before applying the
-//! weight, so every weight at or above one shares a bound near a million ranks.
+//! weight, so every weight at or above one shares a bound near `sqrt(scale)` ranks.
 //! [`DecayRule::WeightedReciprocalRank`] folds the weight into the numerator —
 //! the same quantity, one exactly-rounded division instead of two truncations —
-//! and its bound runs to roughly `10^6 · sqrt(w)`, so a stratum that must be
+//! and its bound runs to roughly `sqrt(scale · w)`. At scale twelve, a stratum
 //! read fourteen million ranks deep is admissible at a weight of two hundred.
 //! Read in reverse, that relation is a design calculus: under the weighted rule
 //! a deep stratum *needs* a heavy enough weight, and a profile that underweights
@@ -416,6 +415,7 @@ mod fusion_stream;
 mod id;
 mod iri;
 mod matching;
+mod ordering;
 mod plan;
 mod planner;
 mod ranked_stream;
@@ -423,7 +423,13 @@ mod reciprocal_rank;
 mod render;
 mod request;
 mod scope;
+mod score;
 mod search;
+
+pub use ordering::{
+    CandidateKeys, LeadingBound, ORDER_CATALOG_DOMAIN, OrderBound, OrderBytes, OrderCatalog,
+    OrderWitness, OrderingError, OrderingEvidence, OrderingPolicy, OrderingStatus,
+};
 
 pub use purrdf_core::query_scope::{
     ConstraintCounts, ConstraintDecision, ScopeCounters, ScopeError,
@@ -463,10 +469,11 @@ pub use compile::{
     compile,
 };
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
-pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
+pub use error::{CanonicalSection, FusionError, PlanError, ProfileRefusal, StatisticsDimension};
 pub use execute::{
     CandidateExecutionResult, ExecutionError, ExecutionResult, RankedStreamImpl, ReadStratum,
-    StratumStream, StreamEnding, execute, execute_scoped_within, execute_within,
+    StratumStream, StreamEnding, execute, execute_scoped_in_read, execute_scoped_within,
+    execute_within,
 };
 pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
@@ -496,16 +503,16 @@ pub use reciprocal_rank::{
 };
 pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
-pub use search::{RankedStreamAdapter, SearchError, SearchResult, search, search_scoped};
+pub use search::{
+    FallibleSearchError, RankedStreamAdapter, SearchError, SearchResult, search, search_ordered,
+    search_scoped, search_scoped_fallible, search_scoped_fallible_ordered, search_scoped_ordered,
+};
 pub use statistics::Statistics;
 pub use union::{CandidateUnion, UnionCandidate, UnionError, UnionFailure, UnionProducer, union};
 
-// The exact fixed-point type a fusion profile's weights and the fused scores
-// are expressed in, and the fixed-point scale itself. Re-exported so a caller
-// building a plan or a fusion profile can name those values without depending
-// on `purrdf-text` directly.
+// Signed lexical request endpoints remain independent of unsigned fusion units.
 pub use fixed::{Fixed, RECIP_K};
-pub use purrdf_text::SCALE_DIGITS;
+pub use score::{Precision, Score};
 // The registry instance identity a plan records. Re-exported for the same
 // reason: `Plan::registry_instance_id` is a value a caller compares against a
 // live Registry.
@@ -533,7 +540,7 @@ pub use purrdf_sparql_eval::{IndexGeneration, PfAttestation, ServiceLevel};
 // at the producer's verbatim evidence, and the second of those is the only way
 // to learn that a score carries no finite bound at all. A consumer that can read
 // the verdict but cannot name the types in it has been handed half a seam.
-pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};
+pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity, RankLaw, RankSource};
 // What a producer's exclusion answer is a fact about. Re-exported for the same
 // reason the three above are: `StreamContract` carries one, a caller assembling
 // a stream of its own states it positionally, and a caller reading a producer's

@@ -107,6 +107,32 @@ executes that example against the generated shared library and committed header.
 
 ## ABI contract (every entry point)
 
+ABI `0.20.0` adds `purrdf_yaml_source_export` and
+`purrdf_yaml_source_reconstruct`. Export borrows original source bytes, an
+explicit source IRI and mandatory profile JSON, returning independent dataset
+and root-buffer handles. The root buffer holds exact UTF-8 IRI bytes with no
+NUL or newline; use its length when preparing a NUL-terminated reconstruction
+argument. Reconstruction verifies that root/profile against the existing
+dataset and returns exact original bytes. Free datasets with
+`purrdf_dataset_free` and both kinds of buffers with `purrdf_buffer_free`.
+
+Both export outputs are prepared before either is published. Output slots must
+be empty, writable and distinct, including from `out_error`; aliasing the error
+slot is rejected by status without writing through it. Native profile/source
+admission precedes copies. Profile JSON uses the shared explicit source profile;
+native processing, retained dataset ownership, and C handle controls have
+separate accounts. `purrdf_error_native_cause_json` exposes original native
+codes, fields and available positions until error-free, while the presentation
+accessor retains the diagnostic. Inspection failure is explicit and retains the
+original cause; it never becomes a successful incomplete error record.
+
+The existing ABI `0.19.0` parse signature is unchanged by this additive pair.
+ABI `0.19.0` extends `purrdf_parse` with `const uint8_t *input_options` and
+`size_t input_options_len` after `source_name`. Recompile consumers against the
+generated header. Pass `NULL, 0` for existing default parsing; explicit options
+require YAML-LD input. See [YAML-LD input options](../../docs/YAML_INPUT_OPTIONS.md)
+for the closed Basic schema, defaults and independent admission accounts.
+
 `purrdf_error_presentation_json(error)` returns a borrowed, nullable UTF-8 JSON
 record with stable diagnostic message identities, named typed parameters and
 exact logical anchors. It remains valid until `purrdf_error_free(error)`. This
@@ -137,7 +163,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.11.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.20.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -245,6 +271,61 @@ the IRI failure without parsing English. The error message and the record's
   publishing an output or changing the input dataset. The underlying native
   graph policy is shared with Rust, Python and WASM; no struct layout or existing
   status value changes.
+
+  `0.11.0` → `0.12.0` adds nullable `const uint64_t *max_term_arena_bytes`
+  immediately after `max_join_steps` on the four regime materialization/conclusion
+  services and all three governed entailment-query variants. Rebuild affected C
+  callers against the new header; `NULL` retains the default. Refusals preserve
+  original byte counts and name this parameter on the function called.
+
+  `0.12.0` → `0.13.0` adds nullable `const char *now` and
+  `const uint64_t *entropy_seed` immediately before the first output on all twelve
+  ordinary, JSON, governed and entailment query entries, including XPath and
+  geographic variants. Rebuild every query caller. Each `NULL` independently uses
+  the native default; a pointed zero supplies seed zero. Time is an exact
+  `xsd:dateTime` lexical form, retaining fractional seconds, timezone and negative
+  years. Inputs are copied for execution and results retain no caller memory.
+
+  `0.13.0` → `0.14.0` adds the same independently nullable `now` and
+  `entropy_seed` inputs after governors and before the first output on all three
+  governed UPDATE entries: plain, dated XPath and geographic. Rebuild UPDATE
+  callers. Supplied coordinates give one request a fixed exact time and a
+  progressing random stream across its operations; omissions retain native defaults.
+  Invalid coordinates preserve the dataset and untouched
+  outcome/evidence outputs; budget exhaustion still publishes nothing. Caller
+  input memory is not retained by the resulting dataset.
+
+  `0.14.0` → `0.15.0` adds independently nullable `now` and `entropy_seed`
+  pointers before the first output on both rule execution APIs and their XPath
+  variants. Rule application accepts either SHACL or SRL. Supplied time stays
+  exact, and the seed selects a reproducible sequence for the rule queries.
+  Outputs own their values; malformed coordinates leave non-error output slots untouched.
+  All four limits, import handling, proofs and diagnostics retain their contracts.
+  Static rule checking, validation and node-expression APIs are unchanged.
+
+  `0.15.0` → `0.16.0` inserts required `PurrdfBuffer **out_receipt` immediately
+  after `entropy_seed` on all query, governed UPDATE and rule execution entries,
+  including XPath and geographic variants. Recompile every affected caller.
+  Initialize a separate receipt pointer to `NULL`, pass its address, read its JSON
+  through `purrdf_buffer_data` on success, and release it with `purrdf_buffer_free`.
+  The payload buffer or result handle and receipt buffer are independent owners.
+  The receipt slot is written only on success; read a failed execution's receipt with
+  `purrdf_error_execution_receipt_json(error)`, borrowed until `purrdf_error_free`.
+  No context means `state: "not-started"`; an UPDATE without a WHERE context can
+  still apply. The effective seed is a decimal string and unavailable identities
+  are explicit JSON nulls. Rule receipts include ordered query contexts.
+
+  `0.16.0` → `0.17.0` adds required `canonical_search`, nullable `cancellation`,
+  and required `out_canonicalization_json` before `out_error` on every existing
+  canonicalizing entailment, session, SHACL entailment, product encode and product
+  certify export. Rebuild affected callers. Supply `unlimited` or an unsigned
+  decimal `u64` without leading zeros. Every constituent run has its own ceiling
+  and receipt; the receipt array makes no aggregate work-limit claim.
+  Free the separate evidence buffer with `purrdf_buffer_free`. Failed requests
+  expose it through `purrdf_error_canonicalization_json`; native cause fields are
+  available through `purrdf_error_native_cause_json`. Both strings and the original
+  native cause remain owned by the error until `purrdf_error_free`. Required output
+  slots must be non-null and all output slots must be distinct.
 
 ## Shapes-graph tools
 
@@ -513,6 +594,13 @@ error is not a query error), indexed by `PurrdfExpressionErrorCode`: `[0]` `err:
 `err:FOCA0003`, `[5]` `err:FOCA0006`, `[6]` `err:FORG0001`, `[7]` `err:XPTY0004`
 (`PURRDF_EXPRESSION_ERROR_CODE_COUNT` entries). Every entry is zero for an execution
 that raised none.
+
+The `PurrdfResourceVector` fields and their C discriminants are a fixed
+eight-dimension projection, even when the Rust resource vocabulary grows.
+An unrepresented budget/refusal dimension is `-1`; the trip kind, limit,
+consumed value and estimate still describe the original trip. A complete
+receipt for future dimensions requires an additive C carrier retaining native
+evidence. The existing projected values cannot supply those measurements later.
 
 ## Division policy
 

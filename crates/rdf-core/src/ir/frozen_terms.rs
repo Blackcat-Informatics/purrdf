@@ -7,8 +7,8 @@ use super::dataset::TermRef;
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
 use crate::hash::FastHasher;
+use crate::hash::table::HashTable;
 use crate::{RdfLiteral, RdfTextDirection};
-use hashbrown::HashTable;
 use std::collections::HashMap;
 
 /// Moved from the validated interner, never reconstructed from unchecked IDs.
@@ -35,6 +35,126 @@ pub(crate) struct FrozenTerms {
 }
 
 impl FrozenTerms {
+    /// Stream the same value encoding as TermValue without reconstructing an
+    /// owned term or copying lexical bytes. Batch callers reuse one admitted
+    /// pending buffer; local IDs never enter the emitted content.
+    pub(super) fn visit_canonical_bytes<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        id: TermId,
+        pending: &mut Vec<TermId>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut output: impl FnMut(&[u8]),
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        match self.try_visit_canonical_bytes(id, pending, memory, |bytes, _| {
+            output(bytes);
+            Ok::<_, core::convert::Infallible>(())
+        }) {
+            Ok(()) => Ok(()),
+            Err(super::term_walk::OwnedTermFoldError::Storage(error)) => Err(error),
+            Err(super::term_walk::OwnedTermFoldError::Visitor(never)) => match never {},
+        }
+    }
+
+    /// Fallible canonical emission through the original account. Caller-owned
+    /// pending storage stays admitted on refusal; no error payload is refunded.
+    pub(super) fn try_visit_canonical_bytes<S, E>(
+        &self,
+        id: TermId,
+        pending: &mut Vec<TermId>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut output: impl FnMut(&[u8], &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+    ) -> Result<(), super::term_walk::OwnedTermFoldError<E>>
+    where
+        S: purrdf_lex::allocation::Admission + ?Sized,
+    {
+        use super::term::CanonicalNode;
+        use super::term_walk::OwnedTermFoldError;
+        pending.clear();
+        let mut current = Some(id);
+        while let Some(id) = current {
+            memory.admission_mut().checkpoint(1)?;
+            let node = match self.resolve(id) {
+                TermRef::Iri(iri) => CanonicalNode::Iri(iri),
+                TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                        unreachable!("validated literal datatype is an IRI")
+                    };
+                    CanonicalNode::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    }
+                }
+                TermRef::Triple { .. } => CanonicalNode::Triple,
+            };
+            node.try_visit_bytes(&mut |bytes| output(bytes, memory))
+                .map_err(OwnedTermFoldError::Visitor)?;
+            if let TermRef::Triple { s, p, o } = self.resolve(id) {
+                for child in [o, p, s] {
+                    memory.push_copy_with_progress(pending, child)?;
+                }
+            }
+            current = pending.pop();
+        }
+        Ok(())
+    }
+
+    /// Bind every retained lexical owner, including unused blank names consulted
+    /// by deterministic mint collision checks. Triple references name entries in
+    /// this complete ordered dictionary; they never stand in for absent content.
+    /// This linear representation seal avoids expanding nested triples once for
+    /// every ancestor in the dictionary.
+    pub(super) fn snapshot_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<[u8; 32], purrdf_lex::allocation::StorageError> {
+        const DICTIONARY: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/snapshot/dictionary/v1");
+        let mut hash = purrdf_hash::blake3::RecordHasher::new();
+        crate::source::source_hash_update(&mut hash, DICTIONARY.as_bytes(), memory)?;
+        crate::source::source_hash_update(
+            &mut hash,
+            &(self.terms.len() as u64).to_le_bytes(),
+            memory,
+        )?;
+        memory.try_scope(|memory| {
+            let mut pending = Vec::new();
+            for (index, term) in self.terms.iter().enumerate() {
+                memory.admission_mut().checkpoint(1)?;
+                if let TermRef::Triple { s, p, o } = self.resolve_interned(term) {
+                    super::term::CanonicalNode::Triple.try_visit_bytes(&mut |bytes| {
+                        crate::source::source_hash_update(&mut hash, bytes, memory)
+                    })?;
+                    for child in [s, p, o] {
+                        crate::source::source_hash_update(
+                            &mut hash,
+                            &(child.index() as u32).to_le_bytes(),
+                            memory,
+                        )?;
+                    }
+                } else {
+                    let id = TermId::from_index(
+                        u32::try_from(index)
+                            .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?,
+                    )?;
+                    self.try_visit_canonical_bytes(id, &mut pending, memory, |bytes, memory| {
+                        crate::source::source_hash_update(&mut hash, bytes, memory)
+                    })
+                    .map_err(|error| crate::source::source_visit_error(&error))?;
+                }
+            }
+            memory.release_vec(pending)?;
+            crate::source::source_hash_finalize(&hash, memory)
+        })
+    }
+
     /// Reifier targets have already passed the frozen triple-term validation.
     pub(super) fn triple_components(&self, target: TermId) -> [TermId; 3] {
         match self.terms[target.index()] {
@@ -75,6 +195,34 @@ impl FrozenTerms {
         self.find_term_hashed(crate::hash::hash_iri_for_interner(iri), |id| {
             self.iri_matches(id, iri)
         })
+    }
+
+    /// Probe the original immutable index under the ongoing freeze account.
+    pub(super) fn term_id_by_iri_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        iri: &str,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Option<TermId>, purrdf_lex::allocation::StorageError> {
+        let hash = crate::hash::hash_iri_for_interner_with_memory(iri, memory)?;
+        let found = self
+            .term_index
+            .find_with_control(
+                hash,
+                |&index, memory| {
+                    let InternedTerm::Iri(range) = self.terms[index as usize] else {
+                        return Ok(false);
+                    };
+                    purrdf_lex::control::compare_bytes(
+                        arena_str(&self.arena, range).as_bytes(),
+                        iri.as_bytes(),
+                        &mut |units| memory.admission_mut().checkpoint(units),
+                    )
+                    .map(core::cmp::Ordering::is_eq)
+                },
+                memory,
+            )?
+            .copied();
+        Ok(found.map(TermId::from_index).transpose()?)
     }
 
     #[must_use]

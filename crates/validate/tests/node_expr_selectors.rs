@@ -240,6 +240,38 @@ fn an_inline_expression_has_exactly_one_root() {
         message(&syntax).contains("not a Turtle document"),
         "{syntax}"
     );
+    // Synthetic inherited prefixes must not shift the caller's diagnostic.
+    let fragment = "# é\r\n[ sh:path ex:name ]";
+    let error = eval(ExprSelector::Turtle(fragment)).expect_err("missing terminator");
+    let ShapesError::Selector(cause) = &error else {
+        panic!("{error:?}")
+    };
+    let position = cause
+        .fragment_position(0)
+        .expect("coordinates fit")
+        .expect("syntax diagnostic belongs to the fragment");
+    assert_eq!(position.byte_offset, fragment.len());
+    assert_eq!(position.line, 2);
+    assert_eq!(position.column, 20);
+    let ExprSelectorError::Turtle {
+        input,
+        carrier,
+        fragment_offset,
+        errors,
+    } = cause.as_ref()
+    else {
+        panic!("{cause:?}")
+    };
+    assert_eq!(input, fragment);
+    assert!(carrier[..*fragment_offset].contains("@prefix"));
+    assert!(
+        errors[0]
+            .source_position()
+            .expect("coordinates fit")
+            .expect("position")
+            .byte_offset
+            > position.byte_offset
+    );
 }
 
 /// The node form is unchanged: an IRI names a constant expression.

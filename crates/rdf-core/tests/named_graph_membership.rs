@@ -181,7 +181,11 @@ fn paged_membership_agrees() {
 
 #[test]
 fn pack_membership_agrees() {
-    let bytes = purrdf_core::term_fixture::pack_bytes(&fixture("").expect("authored fixture"));
+    let bytes = purrdf_core::term_fixture::pack_bytes(
+        &fixture("").expect("authored fixture"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let view = PackView::from_bytes(&bytes).expect("the pack opens");
     assert_agrees(&view, "pack", &["g"], &["phantom", "s", "o"]);
 }

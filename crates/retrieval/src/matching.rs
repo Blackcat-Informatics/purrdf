@@ -928,6 +928,7 @@ mod tests {
             stratum: purrdf_core::parse_iri(&ex("stratum/mock")).expect("fixture IRI"),
             accepted_terms: accepted,
             depth_placement: depth,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             // Placement is about rendering arguments, not about fusion, so

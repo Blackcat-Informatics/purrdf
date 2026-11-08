@@ -299,7 +299,7 @@ impl<'a> Projector<'a> {
 
         self.record_source_losses()?;
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", "okf")
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         let report = OkfGenerationReport {
             source_records: self.named_graphs.len()

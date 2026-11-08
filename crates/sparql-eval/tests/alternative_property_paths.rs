@@ -55,14 +55,14 @@ fn native_path(dataset: &Arc<RdfDataset>, path: &str) -> purrdf_core::SparqlResu
     *path = (**original).clone();
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_algebra(query, QueryOptions::EMPTY)
+        .prepare_algebra(query, &QueryOptions::EMPTY)
         .expect("valid native control");
     engine
         .query_prepared_governed_view(
             &**dataset,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("native path evaluates")
@@ -253,7 +253,7 @@ fn service_carriers_keep_zero_column_bags_and_distinct_star_counts() {
                     substitutions: &[],
                 },
                 &resolver,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("the carrier evaluates remotely");
         let expected = run_prefixed(&dataset, PREFIX, &format!("SELECT * WHERE {{ {body} }}"));
@@ -307,7 +307,7 @@ fn named_graph_and_literal_or_quoted_endpoints_survive_service_roundtrips() {
                     substitutions: &[],
                 },
                 &resolver,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("valid positional matcher carrier");
         let expected = run_prefixed(&dataset, PREFIX, &format!("SELECT * WHERE {{ {body} }}"));
@@ -390,11 +390,11 @@ fn preparing_already_scoped_source_blanks_is_idempotent() {
         .expect("a source block parses");
     let engine = NativeSparqlEngine::new();
     let original = engine
-        .prepare_algebra(query, QueryOptions::EMPTY)
+        .prepare_algebra(query, &QueryOptions::EMPTY)
         .expect("the source block is admitted");
     for _ in 0..3 {
         let prepared = engine
-            .prepare_algebra(original.query().clone(), QueryOptions::EMPTY)
+            .prepare_algebra(original.query().clone(), &QueryOptions::EMPTY)
             .expect("the canonical match identities remain valid");
         assert_eq!(prepared.query(), original.query());
         let result = engine
@@ -402,7 +402,7 @@ fn preparing_already_scoped_source_blanks_is_idempotent() {
                 &*dataset,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("prepared evaluation succeeds")
@@ -439,7 +439,7 @@ fn serialized_updates_never_bind_template_only_variables_to_path_witnesses() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("unbound output causes no insertion");
             assert_eq!(

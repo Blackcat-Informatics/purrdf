@@ -96,8 +96,8 @@ test("the policy reaches the governed, update and entailment entries", () => {
   assert.equal(engine.updateGoverned(target, insertQuotient("1/8")).isApplied, true);
   assert.equal(target.size, 2);
 
-  assert.equal(engine.update(seed(), insertQuotient("1/3")).size, 1);
-  assert.equal(engine.update(seed(), insertQuotient("1/8")).size, 2);
+  assert.equal(engine.update(seed(), insertQuotient("1/3")).dataset.size, 1);
+  assert.equal(engine.update(seed(), insertQuotient("1/8")).dataset.size, 2);
 
   const entailed = engine.queryEntailmentGoverned(seed(), "SELECT (1/8 AS ?x) {}", "rdfs");
   assert.equal(entailed.outcome.result.rows.toArray()[0].x.value, "0.125");

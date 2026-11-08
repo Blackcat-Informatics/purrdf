@@ -38,13 +38,16 @@ impl StreamingSink for Sink {
         self.encoded_limit
     }
 
-    fn blob_payload(&mut self, payload: BlobPayload<'_>) {
-        assert!(
-            payload.codecs.is_empty(),
-            "eager decoding must complete first"
-        );
-        self.payloads
-            .push(payload.bytes.expect("decoded payload").to_vec());
+    fn blob_payload(&mut self, mut payload: BlobPayload<'_>) {
+        let mut decoded = purrdf_gts::codec::decode_chain_reader(
+            payload.codecs,
+            payload.bytes.reader().expect("readable payload"),
+            usize::MAX,
+        )
+        .expect("available codec");
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut decoded, &mut bytes).expect("verified decoded payload");
+        self.payloads.push(bytes);
     }
 }
 

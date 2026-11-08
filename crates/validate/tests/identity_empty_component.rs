@@ -58,7 +58,13 @@ fn repack(product: &[u8], edit: impl Fn(&str, &[u8]) -> Option<Vec<u8>>) -> Vec<
 }
 
 fn products() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let plain = pack_shapes_product(SHAPES, None, &[]).expect("shapes pack");
+    let plain = pack_shapes_product(
+        SHAPES,
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("shapes pack");
     let emptied = repack(&plain, |label, value| {
         Some(if label == LABEL {
             Vec::new()

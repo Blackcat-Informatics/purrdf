@@ -118,7 +118,11 @@ fn build_fixture() -> Arc<RdfDataset> {
 #[test]
 fn file_backed_pack_view_matches_heap_and_source_by_value() {
     let dataset = build_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("pack build must succeed");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pack build must succeed");
 
     // Write the pack bytes to a real temp file and read them back from disk.
     let mut tmp = purrdf_testkit::temp_file!().expect("create temp file");
@@ -137,10 +141,16 @@ fn file_backed_pack_view_matches_heap_and_source_by_value() {
     let pack_heap = PackView::from_bytes(&heap_bytes[..]).expect("pack opens over heap bytes");
 
     // -- Certificate verification over the disk-read slice --------------------------
-    let disk_digest =
-        verify_pack(&disk[..]).expect("verify_pack must succeed over the disk-read slice");
-    let heap_digest =
-        verify_pack(&heap_bytes[..]).expect("verify_pack must succeed over the heap slice");
+    let disk_digest = verify_pack(
+        &disk[..],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_pack must succeed over the disk-read slice");
+    let heap_digest = verify_pack(
+        &heap_bytes[..],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_pack must succeed over the heap slice");
     assert_eq!(
         disk_digest, heap_digest,
         "verify_pack's certified digest must be identical whether the bytes are read from disk or heap-resident"

@@ -688,7 +688,7 @@ fn lateral_truncation_commits_per_left_row() {
         .query_governed(
             &ds,
             request(&query),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("a metered run must not error");
@@ -719,7 +719,7 @@ fn lateral_truncation_commits_per_left_row() {
             .query_governed(
                 &ds,
                 request(&query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(fuel),
             )
             .expect("a governor trip is an outcome, never an error");

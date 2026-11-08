@@ -30,7 +30,7 @@ fn selective_patterns_across_boundaries_preserve_bags_with_bounded_work() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &governors,
                     )
                     .expect("scaled query returns an outcome");
@@ -120,7 +120,7 @@ fn negative_exists_probes_the_selected_anchor_without_an_independent_product() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
             .expect("negative EXISTS returns an outcome");

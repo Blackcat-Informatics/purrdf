@@ -58,15 +58,14 @@
 //!
 //! # The ratchet
 //!
-//! [`declared`] reads the vendored vocabularies (`crates/shapes/spec/`, shipped
-//! inside the package) and [`implemented`] is the table; a test asserts the two
+//! The unpublished conformance support reader `purrdf_shacl_conformance::vocab::declared`
+//! reads the vendored vocabularies and [`implemented`] is the table; a test asserts the two
 //! agree exactly, component by component, function by function, parameter by
 //! parameter.
 
 pub mod census;
 mod link;
 mod table;
-mod vocab;
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -80,7 +79,6 @@ pub use table::{
     AliasSource, Carrier, ComponentParam, ComponentRow, FunctionClass, FunctionParam, FunctionRow,
     KeyAlias, SPEC_TEXT_OPTIONALITY, SparqlAlias, TargetRow, ValueRule,
 };
-pub use vocab::{DeclaredFunction, DeclaredParam, Vocabulary, declared, declared_terms};
 
 use crate::expression::SparqlCallForm;
 use crate::model::sparql_ns;

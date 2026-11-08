@@ -1,0 +1,3 @@
+- "@id": https://w3.org/yaml-ld/
+  "@type":
+    - https://schema.org/WebContent

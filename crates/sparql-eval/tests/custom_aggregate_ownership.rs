@@ -172,12 +172,12 @@ fn full_tuple_distinct_scalarvals_and_output_original_grants_survive_extraction(
     let engine = NativeSparqlEngine::new();
     let options = QueryOptions::EMPTY.with_env(&environment);
     let prepared = engine
-        .prepare_query_with_options(&query("pre:"), None, options)
+        .prepare_query_with_options(&query("pre:"), None, &options)
         .unwrap();
     let source = open(&image, CEILING);
     let window = CurrentThreadWindow::open();
     let complete = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], options)
+        .query_prepared_fallible_view(&source, &prepared, &[], &options)
         .unwrap();
     let measured = window.close();
     assert_eq!(
@@ -216,11 +216,11 @@ fn scalarval_capacity_refusal_keeps_original_source_error_and_does_not_start_the
     let engine = NativeSparqlEngine::new();
     let options = QueryOptions::EMPTY.with_env(&environment);
     let small = engine
-        .prepare_query_with_options(&query("p:"), None, options)
+        .prepare_query_with_options(&query("p:"), None, &options)
         .unwrap();
     let calibration = open(&image, CEILING);
     let healthy = engine
-        .query_prepared_fallible_view(&calibration, &small, &[], options)
+        .query_prepared_fallible_view(&calibration, &small, &[], &options)
         .unwrap();
     let ceiling = calibration.evidence().peak_bytes();
     drop(healthy);
@@ -229,11 +229,11 @@ fn scalarval_capacity_refusal_keeps_original_source_error_and_does_not_start_the
 
     let prefix = "p".repeat(usize::try_from(ceiling).unwrap().checked_add(1).unwrap());
     let large = engine
-        .prepare_query_with_options(&query(&prefix), None, options)
+        .prepare_query_with_options(&query(&prefix), None, &options)
         .unwrap();
     let source = open(&image, ceiling);
     let window = CurrentThreadWindow::open();
-    let refused = engine.query_prepared_fallible_view(&source, &large, &[], options);
+    let refused = engine.query_prepared_fallible_view(&source, &large, &[], &options);
     let measured = window.close();
     assert!(matches!(
         refused,
@@ -248,7 +248,7 @@ fn scalarval_capacity_refusal_keeps_original_source_error_and_does_not_start_the
 
     let source = open(&image, CEILING);
     let complete = engine
-        .query_prepared_fallible_view(&source, &large, &[], options)
+        .query_prepared_fallible_view(&source, &large, &[], &options)
         .unwrap();
     assert_eq!(
         complete.result.solutions().unwrap().1,

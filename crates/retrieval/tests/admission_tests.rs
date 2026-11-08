@@ -9,15 +9,16 @@
 //! `example.org` throughout; the registry is a mock of the property-function seam
 //! and the statistics provider is a plain caller-owned lookup.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::TermValue;
 use purrdf_retrieval::{
-    AdmissionEnvironment, AdmissionError, BoundMode, CompiledRetrieval, DecayRule, Fixed,
-    FusionError, FusionProfile, Iri, MonotoneDepth, Plan, PlanOrigin, ProducerDecision,
-    ProducerStatus, RankFidelity, RejectionReason, RequestTerm, RetrievalRequest, StratumUnit,
-    Term, UnitError, UnservedReason, UnservedTerm, compile, contribution, execute,
+    AdmissionEnvironment, AdmissionError, BoundMode, CompiledRetrieval, DecayRule, FusionError,
+    FusionProfile, Iri, MonotoneDepth, Plan, PlanOrigin, ProducerDecision, ProducerStatus,
+    RankFidelity, RejectionReason, RequestTerm, RetrievalRequest, Score, StratumUnit, Term,
+    UnitError, UnservedReason, UnservedTerm, compile, contribution, execute,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, CandidateDomains, DuplicatePolicy, EvalError, ExclusionBasis,
@@ -474,14 +475,18 @@ const MONOTONE_K: u32 = 1;
 /// weight be strictly positive — which is exactly the point: nothing about the
 /// profile itself is malformed, and only the coupling with the depth is.
 ///
-/// `Fixed::from_raw(1_000)` is deliberate here and is *not* the constructor a
+/// `Score::from_raw(1_000, PRECISION_12)` is deliberate here and is *not* the constructor a
 /// whole-number weight wants: raw units are `10^-12` each, so this is `10^-9`,
 /// which is the sub-unit weight this fixture is about. A weight meaning the
-/// number one is `Fixed::ONE` or `Fixed::from_integer(1)`.
+/// number one is `PRECISION_12.score(PRECISION_12.scale())` or `Score::from_integer(1, PRECISION_12)`.
 fn shallow_profile() -> FusionProfile {
     FusionProfile::with_decay(
-        BTreeMap::from([(iri(&ex("stratum/universal")), Fixed::from_raw(1_000))]),
+        BTreeMap::from([(
+            iri(&ex("stratum/universal")),
+            Score::from_raw(1_000, PRECISION_12),
+        )]),
         DecayRule::ReciprocalRank { k: MONOTONE_K },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile")
 }
@@ -653,7 +658,7 @@ const REQUIRED_DEPTH: u32 = 14_000_000;
 /// The weight that buys it. `(14e6 / 1e6)^2 = 196`, so two hundred clears the
 /// requirement with room; the assertion below checks the bound rather than
 /// trusting the arithmetic in this comment.
-const DEEP_WEIGHT_UNITS: i64 = 200;
+const DEEP_WEIGHT_UNITS: u128 = 200;
 
 /// A registry whose one ranked producer declares enough rows for the deep plan.
 ///
@@ -679,9 +684,11 @@ fn deep_profile() -> FusionProfile {
     FusionProfile::with_decay(
         BTreeMap::from([(
             iri(&ex("stratum/universal")),
-            Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
+            Score::from_integer(DEEP_WEIGHT_UNITS, PRECISION_12)
+                .expect("two hundred is representable"),
         )]),
         DecayRule::WeightedReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile")
 }
@@ -734,9 +741,11 @@ fn a_fourteen_million_deep_stratum_is_admitted_under_a_heavy_enough_weighted_pro
     let truncated = FusionProfile::with_decay(
         BTreeMap::from([(
             stratum.clone(),
-            Fixed::from_integer(DEEP_WEIGHT_UNITS).expect("two hundred is representable"),
+            Score::from_integer(DEEP_WEIGHT_UNITS, PRECISION_12)
+                .expect("two hundred is representable"),
         )]),
         DecayRule::ReciprocalRank { k: 1 },
+        PRECISION_12,
     )
     .expect("valid");
     let shallow_env = AdmissionEnvironment {
@@ -874,8 +883,9 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
     // The criterion: a non-positive weight cannot participate in the §5 sum, so
     // no profile carrying one can be built. A plan therefore cannot present one.
     let error = FusionProfile::with_decay(
-        BTreeMap::from([(stratum.clone(), Fixed::ZERO)]),
+        BTreeMap::from([(stratum.clone(), PRECISION_12.score(0))]),
         DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
     )
     .expect_err("a zero weight cannot fuse");
     match error {
@@ -884,7 +894,7 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
             weight,
         } => {
             assert_eq!(named, stratum.as_str());
-            assert_eq!(weight, Fixed::ZERO);
+            assert_eq!(weight, PRECISION_12.score(0));
         }
         other => panic!("expected NonPositiveWeight, got {other:?}"),
     }
@@ -895,25 +905,30 @@ fn a_weight_unusable_under_the_sum_is_refused_where_the_fusing_weights_live() {
     // do is order a deep stratum, and that is a different, separately named
     // dimension: see the monotone-depth tests above.)
     let thin = FusionProfile::with_decay(
-        BTreeMap::from([(stratum.clone(), Fixed::from_raw(1))]),
+        BTreeMap::from([(stratum.clone(), Score::from_raw(1, PRECISION_12))]),
         DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
     )
     .expect("one raw unit is strictly positive");
-    assert_eq!(thin.weight(&stratum), Some(Fixed::from_raw(1)));
+    assert_eq!(
+        thin.weight(&stratum),
+        Some(Score::from_raw(1, PRECISION_12))
+    );
 
     // And a profile a plan can actually be fused under admits that plan, with no
     // weight dimension of its own left at the waist to trip over.
     let registry = fixture_registry();
     let stats = statistics("r1");
     let plan = fresh_plan(&registry, &stats);
-    let weights: BTreeMap<Iri, Fixed> = plan
+    let weights: BTreeMap<Iri, Score> = plan
         .stratum_depths
         .keys()
         .cloned()
-        .map(|reached| (reached, Fixed::ONE))
+        .map(|reached| (reached, PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
-        .expect("unit weights are valid");
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 }, PRECISION_12)
+            .expect("unit weights are valid");
     let env = AdmissionEnvironment {
         registry: &registry,
         statistics: &stats,
@@ -932,18 +947,19 @@ fn a_profile_weighting_a_stratum_no_producer_emits_under_is_admitted() {
     let stats = statistics("r1");
     let plan = fresh_plan(&registry, &stats);
     let ghost = iri(&ex("stratum/ghost"));
-    let weights: BTreeMap<Iri, Fixed> = plan
+    let weights: BTreeMap<Iri, Score> = plan
         .stratum_depths
         .keys()
         .cloned()
         .chain(core::iter::once(ghost.clone()))
-        .map(|stratum| (stratum, Fixed::ONE))
+        .map(|stratum| (stratum, PRECISION_12.score(PRECISION_12.scale())))
         .collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 })
-        .expect("every weight is strictly positive");
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: 60 }, PRECISION_12)
+            .expect("every weight is strictly positive");
     assert_eq!(
         profile.weight(&ghost),
-        Some(Fixed::ONE),
+        Some(PRECISION_12.score(PRECISION_12.scale())),
         "the profile does declare the stratum nothing emits under"
     );
 
@@ -2121,6 +2137,7 @@ fn declaration(stratum: &str, accepted: Vec<AcceptedTerm>, mandatory: bool) -> R
         stratum: kernel_iri(stratum),
         accepted_terms: accepted,
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         fidelity: RankFidelity::EXACT,

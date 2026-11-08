@@ -119,7 +119,7 @@ fn governed(
     governors: &QueryGovernors,
 ) -> bool {
     matches!(
-        engine.query_governed(ds, request(query), QueryOptions::EMPTY, governors),
+        engine.query_governed(ds, request(query), &QueryOptions::EMPTY, governors),
         Ok(GovernedOutcome::Complete { .. })
     )
 }

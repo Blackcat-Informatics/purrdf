@@ -48,12 +48,19 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
                 .expect("Cypher rewrite")
                 .artifacts())
     );
-    assert!(datasets_isomorphic(
-        &dataset,
-        &lift_lpg(&cypher_graph, &config)
-            .expect("Cypher lift")
-            .dataset
-    ));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &lift_lpg(&cypher_graph, &config)
+                .expect("Cypher lift")
+                .dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     let graphml = project_lpg_graphml(dataset.as_ref(), &config).expect("GraphML projection");
     assert!(!graphml.loss_ledger.is_empty());
@@ -66,10 +73,17 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
                 .expect("GraphML rewrite")
                 .artifacts())
     );
-    assert!(datasets_isomorphic(
-        &dataset,
-        &lift_lpg(&graphml_graph, &config)
-            .expect("GraphML lift")
-            .dataset
-    ));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &lift_lpg(&graphml_graph, &config)
+                .expect("GraphML lift")
+                .dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }

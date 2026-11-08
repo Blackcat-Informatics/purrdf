@@ -52,6 +52,7 @@
 //! focus graph is the data graph; there are no variable bindings.
 
 use ::purrdf_rdf::{IdSet, TermId};
+use purrdf_lex::allocation::{Memory, Resident};
 
 use crate::constraints::conforms_with_id_depth;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids, resolve_id};
@@ -60,7 +61,7 @@ use crate::engine::FocusNode;
 use crate::expression::NodeExpr;
 use crate::model::sh;
 use crate::report::ConformanceDisallows;
-use crate::shapes::{Constraint, Path, PropertyShape, Shape};
+use crate::shapes::{Constraint, Path, Shape};
 use crate::term::{NamedNode, Term};
 
 /// How deep [`narrowing`] descends through `sh:and` / `sh:node` looking for a
@@ -104,22 +105,49 @@ pub(crate) fn declared_shape_targets(data: &ShaclData, shape: &Term) -> Vec<Term
 pub(crate) fn where_targets(
     data: &ShaclData,
     shape: &Shape,
-    disallows: &ConformanceDisallows,
+    targets: crate::plan::TargetBinding<'_>,
 ) -> Result<Vec<TermId>, crate::error::ShapesError> {
-    let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+    let request = targets.binding.validation_request();
+    if request.recursion.is_some() {
+        return where_targets_with_plan(data, targets.where_plan(shape)?);
+    }
+    let model = targets.model;
+    let lowered = crate::plan::lower_shapes_in_model(std::iter::once(shape), model)?;
     let mut binding = lowered.bind(data.core_view(), lowered.classes());
-    binding.set_conformance_disallows(disallows);
-    let plan = lowered.untargeted_plan(shape, 0, &binding)?;
+    binding.set_validation_request(request);
+    let mut plan = lowered.untargeted_plan(shape, 0, &binding)?;
+    if let Some(owner) = model {
+        plan = plan.with_origin(owner).with_model(owner);
+    }
+    where_targets_with_plan(data, plan)
+}
+
+fn where_targets_with_plan(
+    data: &ShaclData,
+    plan: crate::plan::ShapePlan<'_>,
+) -> Result<Vec<TermId>, crate::error::ShapesError> {
+    let request = plan.binding().validation_request();
     data.prepare_class_membership();
-    let narrowed = narrowing(data, shape, disallows, 0);
+    let narrowed = narrowing(
+        data,
+        plan.shape(),
+        &request.conformance_disallows,
+        plan.model().map(std::sync::Arc::as_ref),
+        0,
+    )?;
     let candidates: &[TermId] = match &narrowed {
         Some(ids) => ids,
         None => data.graph_nodes(),
     };
+    if request.recursion.is_some() {
+        return crate::constraints::fixed_point::conforming_targets(data, plan, candidates);
+    }
     let mut out: Vec<TermId> = Vec::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
     for &node in candidates {
         if conforms_with_id_depth(data, &FocusNode::Interned(node), plan, 0)? {
-            out.push(node);
+            memory.push(&mut out, node)?;
         }
     }
     Ok(out)
@@ -135,9 +163,10 @@ pub(crate) fn node_expression_targets(
     data: &ShaclData,
     shape: &Term,
     expr: &NodeExpr,
-    disallows: &ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
+    model: Option<&std::sync::Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    crate::expression::eval_node_expr_in_run(data, shape, expr, disallows).map_err(|error| {
+    crate::expression::eval_node_expr_in_run(data, shape, expr, request, model).map_err(|error| {
         error.context(&format!(
             "sh:targetNode node expression on shape {shape} failed: "
         ))
@@ -175,16 +204,18 @@ fn narrowing(
     data: &ShaclData,
     shape: &Shape,
     disallows: &ConformanceDisallows,
+    model: Option<&crate::shapes::ModelOwner>,
     depth: u32,
-) -> Option<Vec<TermId>> {
+) -> Result<Option<Vec<TermId>>, crate::PreparationRefusal> {
     if depth > MAX_NARROWING_DEPTH
         || shape.deactivated
         || !shape.deactivated_when.is_empty()
         || !disallows.contains(&shape.severity)
         || !shape.constraint_annotations.is_empty()
     {
-        return None;
+        return Ok(None);
     }
+    let model = shape.owner.as_deref().or(model);
     let mut best: Option<Vec<TermId>> = None;
     let mut offer = |candidate: Vec<TermId>| {
         if best
@@ -196,30 +227,38 @@ fn narrowing(
     };
     for constraint in &shape.constraints {
         match constraint {
+            Constraint::Reference(target) => {
+                let definition = model
+                    .ok_or(crate::PreparationRefusal::UnboundReference)?
+                    .definition_required(target)?;
+                if let Some(ids) = narrowing(data, definition, disallows, model, depth + 1)? {
+                    offer(ids);
+                }
+            }
             Constraint::Class(classes) => offer(instances_of_any(data, classes)),
             Constraint::HasValue(value) => offer(graph_nodes_among(data, std::iter::once(value))),
             Constraint::In(members) => offer(graph_nodes_among(data, members.iter())),
             Constraint::And(operands) => {
                 for operand in operands {
-                    if let Some(ids) = narrowing(data, operand, disallows, depth + 1) {
+                    if let Some(ids) = narrowing(data, operand, disallows, model, depth + 1)? {
                         offer(ids);
                     }
                 }
             }
             Constraint::Node(operand) => {
-                if let Some(ids) = narrowing(data, operand, disallows, depth + 1) {
+                if let Some(ids) = narrowing(data, operand, disallows, model, depth + 1)? {
                     offer(ids);
                 }
             }
             _ => {}
         }
     }
-    for property in &shape.property_shapes {
-        if let Some(ids) = property_narrowing(data, property, disallows) {
+    for property in shape.properties_in(model) {
+        if let Some(ids) = property_narrowing(data, property?, disallows) {
             offer(ids);
         }
     }
-    best
+    Ok(best)
 }
 
 /// The narrowing one property shape offers: the subjects (objects) of its
@@ -227,15 +266,19 @@ fn narrowing(
 /// [`narrowing`] for the conditions.
 fn property_narrowing(
     data: &ShaclData,
-    property: &PropertyShape,
+    view: crate::shapes::PropertyView<'_>,
     disallows: &ConformanceDisallows,
 ) -> Option<Vec<TermId>> {
+    let property = view.property;
     // A computed value node (`sh:values`, `sh:defaultValue`) satisfies
     // `sh:minCount` at a focus node that is no subject of the predicate at all, so
     // the predicate's subjects no longer bound the conforming nodes.
-    if property.deactivated
+    if view.deactivated()
+        || view
+            .edge
+            .is_some_and(|edge| !edge.deactivated_when.is_empty())
         || !property.deactivated_when.is_empty()
-        || !disallows.contains(&property.severity)
+        || !disallows.contains(view.severity())
         || !property.constraint_annotations.is_empty()
         || property.values.is_some()
         || property.default_value.is_some()

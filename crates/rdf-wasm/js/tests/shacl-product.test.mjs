@@ -25,7 +25,7 @@ import {
   shaclProductValidateToSarifRebuildExpecting,
   ShaclProductRefusal,
 } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 // Shapes as Turtle, data as N-Triples — the exact input contract shared with
@@ -63,7 +63,7 @@ function identityDigestOf(product) {
 }
 
 test("shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME verdict shaclValidateToSarif reaches", () => {
-  const product = shaclPackProduct(SHAPES);
+  const product = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
   assert.ok(product instanceof Uint8Array, "a packed product is a Uint8Array");
 
   const viaProduct = shaclProductValidateToSarif(product, DATA);
@@ -84,7 +84,7 @@ test("shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME ve
 });
 
 test("shaclProductExplain reports well-formed identity/format fields without admitting the product", () => {
-  const product = shaclPackProduct(SHAPES, "https://example.org/shapes");
+  const product = canonicalValue(shaclPackProduct(SHAPES, "https://example.org/shapes", undefined, undefined, undefined, "unlimited"));
   const explained = shaclProductExplain(product);
   const lines = explained.split("\n").filter((l) => l.length > 0);
 
@@ -105,12 +105,12 @@ test("shaclProductExplain reports well-formed identity/format fields without adm
 });
 
 test("shaclProductCertify succeeds on a genuine product", () => {
-  const product = shaclPackProduct(SHAPES);
-  assert.equal(shaclProductCertify(product), undefined);
+  const product = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
+  assert.equal(canonicalValue(shaclProductCertify(product, "unlimited")), undefined);
 });
 
 test("shaclProductValidateToSarifRebuild validates and agrees with the admit path", () => {
-  const product = shaclPackProduct(SHAPES);
+  const product = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
   const viaAdmit = shaclProductValidateToSarif(product, DATA);
   const viaRebuild = shaclProductValidateToSarifRebuild(product, DATA);
 
@@ -121,7 +121,7 @@ test("shaclProductValidateToSarifRebuild validates and agrees with the admit pat
 });
 
 test("*Expecting variants accept the product's own identity digest", () => {
-  const product = shaclPackProduct(SHAPES);
+  const product = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
   const own = identityDigestOf(product);
 
   const bound = shaclProductValidateToSarifExpecting(product, DATA, own);
@@ -134,8 +134,8 @@ test("*Expecting variants accept the product's own identity digest", () => {
 });
 
 test("*Expecting variants refuse a product bound to a DIFFERENT identity digest, with a neighbouring valid case beside it", () => {
-  const held = shaclPackProduct(SHAPES);
-  const wanted = identityDigestOf(shaclPackProduct(OTHER_SHAPES));
+  const held = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
+  const wanted = identityDigestOf(canonicalValue(shaclPackProduct(OTHER_SHAPES, undefined, undefined, undefined, undefined, "unlimited")));
   assert.notEqual(wanted, identityDigestOf(held));
 
   try {
@@ -163,7 +163,7 @@ test("*Expecting variants refuse a product bound to a DIFFERENT identity digest,
 });
 
 test("a corrupted product is refused as a ShaclProductRefusal carrying its dimension label across the boundary, with a valid neighbour beside it", () => {
-  const product = shaclPackProduct(SHAPES);
+  const product = canonicalValue(shaclPackProduct(SHAPES, undefined, undefined, undefined, undefined, "unlimited"));
 
   // Flip one byte in the middle of an otherwise-valid product — corruption IN
   // PLACE, not truncation and not a foreign magic number at byte 0.

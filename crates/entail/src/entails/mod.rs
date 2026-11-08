@@ -549,11 +549,19 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         }
         other @ (EntailError::Storage(_)
         | EntailError::Build(_)
+        | EntailError::Dataset { .. }
         | EntailError::Parse(_)
+        | EntailError::OwlSyntax(_)
+        | EntailError::RifXml(_)
+        | EntailError::RifVariable(_)
+        | EntailError::Decision(_)
+        | EntailError::KeyMembership(_)
         | EntailError::Evaluate(_)
+        | EntailError::Maintenance(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
         | EntailError::RoleHierarchy(_)
+        | EntailError::PropertyKind { .. }
         | EntailError::ForeignTerm(_)
         | EntailError::SourceRead(_)
         | EntailError::UnsupportedRegime(_)
@@ -564,7 +572,8 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
         | EntailError::Canonicalization(_)
-        | EntailError::Unsatisfiable) => other,
+        | EntailError::Unsatisfiable
+        | EntailError::Collection(_)) => other,
     }
 }
 

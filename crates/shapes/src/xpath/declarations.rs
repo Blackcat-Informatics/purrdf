@@ -9,7 +9,7 @@ use purrdf_core::FastSet;
 use purrdf_core::xsd_regex::xpath::{Error, Resource};
 
 use crate::expression::CustomFunction;
-use crate::shapes::link::{ModelWalk, ShapeIndex};
+use crate::shapes::link::{ModelWalk, ShapeIndexRef};
 use crate::shapes::{Constraint, Shapes};
 
 use super::Cause;
@@ -40,6 +40,12 @@ impl Inventory<'_> {
 }
 
 impl<'model> ModelWalk<'model, Cause> for Inventory<'model> {
+    fn first_owner(
+        &mut self,
+        owner: &'model Arc<crate::shapes::ModelOwner>,
+    ) -> Result<bool, Cause> {
+        self.first(3, Arc::as_ptr(owner).addr())
+    }
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }
@@ -48,16 +54,9 @@ impl<'model> ModelWalk<'model, Cause> for Inventory<'model> {
         self.first(0, Arc::as_ptr(func).addr())
     }
 
-    fn shape_index(&mut self, index: &'model ShapeIndex) -> Result<(), Cause> {
-        if self.first(1, Arc::as_ptr(index).addr())?
-            && let Some(shapes) = index.get()
-        {
-            // The final inventory is source-sorted. Index iteration cannot
-            // select a different pattern refusal merely by visiting it first.
-            for shape in shapes.values() {
-                self.shape(shape)?;
-            }
-        }
+    fn shape_index(&mut self, _index: &'model ShapeIndexRef) -> Result<(), Cause> {
+        // ModelWalk::model visits the retained definitions through their owner.
+        // Following a weak backreference cannot provide model-lived borrows.
         Ok(())
     }
 

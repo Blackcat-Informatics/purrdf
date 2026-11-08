@@ -64,10 +64,24 @@ fn derived(blank: bool) -> Arc<RdfDataset> {
 fn current_clash_preserves_named_and_scoped_blank_source_identity() {
     for blank in [false, true] {
         let dataset = derived(blank);
-        let (answer, proof) = prove_consistency(&dataset).unwrap();
+        let (answer, proof) = prove_consistency(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(answer, ProofAnswer::Inconsistent);
         let decoded = DlProof::decode(&proof.encode()).unwrap();
-        let context = DlProofContext::of_ontology(&dataset).unwrap();
+        let context = DlProofContext::of_ontology(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let expected = if blank {
             TermValue::Blank {
                 label: "subject".to_owned(),
@@ -91,16 +105,37 @@ fn current_clash_preserves_named_and_scoped_blank_source_identity() {
 fn public_dataset_views_preserve_source_identity_and_causal_verification() {
     for blank in [false, true] {
         let source = derived(blank);
-        let bytes = purrdf_core::PackBuilder::build_bytes(&source).unwrap();
+        let bytes = purrdf_core::PackBuilder::build_bytes(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
-        let producer = Reasoner::with_proofs(&view).unwrap();
+        let producer = Reasoner::with_proofs(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), Verdict::False);
         assert_eq!(
             answer.certificate(),
             Reasoner::new(&view).unwrap().consistency().certificate(),
         );
-        let consumer = Reasoner::with_proofs(&view).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
         let proof = answer.proof().unwrap();
         proof
@@ -109,6 +144,10 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
                 &Question::Consistency,
                 Some(answer.certificate()),
                 &context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         let captured = proof
@@ -123,12 +162,34 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
             }
         }
         assert!(branches > 0);
-        let (verdict, raw) = prove_consistency(&view).unwrap();
+        let (verdict, raw) = prove_consistency(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(verdict, ProofAnswer::Inconsistent);
-        let independent = DlProofContext::of_ontology(&view).unwrap();
+        let independent = DlProofContext::of_ontology(
+            &view,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(
             independent.input(),
-            DlProofContext::of_ontology(&source).unwrap().input()
+            DlProofContext::of_ontology(
+                &source,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .input()
         );
         assert!(raw.replay_refutation(&independent).unwrap().is_closed());
     }
@@ -137,7 +198,11 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
 fn current_clash_preserves_public_service_certificate_and_verification() {
     let dataset = derived(false);
     let plain = Reasoner::new(&dataset).unwrap().consistency();
-    let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let recorded = reasoner.consistency();
     assert_eq!(*recorded.answer(), Verdict::False);
     assert_eq!(plain.certificate(), recorded.certificate());
@@ -150,6 +215,10 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
             &Question::Consistency,
             Some(recorded.certificate()),
             &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
     assert!(
@@ -163,7 +232,11 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
             .all(|step| step.current_support().is_some())
     );
     let other = Fixture::default().freeze();
-    let wrong = DlProofContext::of_ontology(&other).unwrap();
+    let wrong = DlProofContext::of_ontology(
+        &other,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let proof = recorded
         .proof()
         .unwrap()
@@ -192,10 +265,18 @@ fn current_clash_replays_generated_existential_witnesses() {
     fixture.edge(b, owl::DISJOINT_WITH, c);
     fixture.edge(subject, rdf::TYPE, a);
     let dataset = fixture.freeze();
-    let (answer, proof) = prove_consistency(&dataset).unwrap();
+    let (answer, proof) = prove_consistency(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(answer, ProofAnswer::Inconsistent);
     let proof = DlProof::decode(&proof.encode()).unwrap();
-    let context = DlProofContext::of_ontology(&dataset).unwrap();
+    let context = DlProofContext::of_ontology(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         proof
             .replay_refutation(&context)
@@ -224,7 +305,11 @@ fn current_clash_checks_fresh_refutation_assumptions_without_a_source_name() {
     fixture.edge(a, rdfs::SUB_CLASS_OF, c);
     fixture.edge(b, owl::DISJOINT_WITH, c);
     let dataset = fixture.freeze();
-    let mut reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let mut reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let result = reasoner.class_satisfiability(&term("A")).unwrap();
     assert_eq!(*result.answer(), Verdict::False);
     let context = reasoner.proof_context().unwrap();
@@ -236,6 +321,10 @@ fn current_clash_checks_fresh_refutation_assumptions_without_a_source_name() {
             &Question::ClassSatisfiability { class: term("A") },
             Some(result.certificate()),
             &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
     let proofs: Vec<_> = result
@@ -294,7 +383,11 @@ fn current_clash_replays_equality_before_observing_role_premises() {
     fixture.edge(role, rdf::TYPE, asymmetric);
     fixture.builder.push_quad(b, role, a, None).unwrap();
     let dataset = fixture.freeze();
-    let (answer, proof) = prove_consistency(&dataset).unwrap();
+    let (answer, proof) = prove_consistency(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(answer, ProofAnswer::Inconsistent);
     assert!(
         !proof.merges().is_empty(),
@@ -305,7 +398,11 @@ fn current_clash_replays_equality_before_observing_role_premises() {
         "the identified edge closes on the asymmetric clause"
     );
     let proof = DlProof::decode(&proof.encode()).unwrap();
-    let context = DlProofContext::of_ontology(&dataset).unwrap();
+    let context = DlProofContext::of_ontology(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         proof
             .replay_refutation(&context)
@@ -328,14 +425,34 @@ fn current_clash_replays_equality_before_observing_role_premises() {
 fn current_clash_borrows_the_independent_prepared_consumer() {
     for blank in [false, true] {
         let dataset = derived(blank);
-        let producer = Reasoner::with_proofs(&dataset).unwrap();
+        let producer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
-        let consumer = Reasoner::with_proofs(&dataset).unwrap();
-        let owned = Reasoner::with_proofs(&dataset)
-            .unwrap()
-            .proof_context()
-            .unwrap();
+        let consumer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let owned = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .proof_context()
+        .unwrap();
         {
             let borrowed = consumer.borrowed_proof_context().unwrap();
             assert_eq!(borrowed.input(), owned.input());
@@ -346,6 +463,10 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     &Question::Consistency,
                     Some(answer.certificate()),
                     &owned,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .unwrap();
             for _ in 0..3 {
@@ -370,11 +491,22 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     &other,
                     &Question::Consistency,
                     Some(answer.certificate()),
-                    &later
+                    &later,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );
-        let wrong_consumer = Reasoner::with_proofs(&other).unwrap();
+        let wrong_consumer = Reasoner::with_proofs(
+            &other,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let wrong = wrong_consumer.borrowed_proof_context().unwrap();
         assert!(
             proof
@@ -392,10 +524,24 @@ fn public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs
     };
     for blank in [false, true] {
         let dataset = derived(blank);
-        let producer = Reasoner::with_proofs(&dataset).unwrap();
+        let producer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
-        let consumer = Reasoner::with_proofs(&dataset).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
         let ordinary = proof
             .verify_prepared(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -492,11 +638,19 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
     fixture.edge(a, rdfs::SUB_CLASS_OF, c);
     fixture.edge(b, owl::DISJOINT_WITH, c);
     let dataset = fixture.freeze();
-    let mut producer = Reasoner::with_proofs(&dataset).unwrap();
+    let mut producer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.class_satisfiability(&term("A")).unwrap();
     assert_eq!(*answer.answer(), Verdict::False);
     let question = Question::ClassSatisfiability { class: term("A") };
-    let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
+    let mut consumer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     consumer.prepare(&question).unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let proof = answer.proof().unwrap();
@@ -524,7 +678,11 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
         proof.verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx),
         Err(purrdf_entail::DlProofError::WrongQuestion { .. })
     ));
-    let wrong = Reasoner::with_proofs(&Fixture::default().freeze()).unwrap();
+    let wrong = Reasoner::with_proofs(
+        &Fixture::default().freeze(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let wrong_ctx = wrong.borrowed_proof_context().unwrap();
     assert!(matches!(
         proof.verify_prepared_causal(&question, Some(answer.certificate()), &wrong_ctx),
@@ -581,13 +739,21 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
     let subject = f.name("subject");
     f.edge(subject, rdf::TYPE, class);
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
     let original = answer.proof().unwrap();
     let proof = purrdf_entail::ServiceProof::decode(&original.encode()).unwrap();
     assert_eq!(proof.encode(), original.encode());
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -652,11 +818,25 @@ fn check_singleton_nominal_target_support() {
         }
         f.edge(unrelated, rdf::TYPE, other);
         let source = f.freeze();
-        let producer = Reasoner::with_proofs(&source).unwrap();
+        let producer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), Verdict::False);
         let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
         let checked = proof
             .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
@@ -770,11 +950,19 @@ fn public_causal_service_checks_reserved_birth_and_generative_trigger() {
         f.edge(s, predicate, o);
     }
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -883,11 +1071,19 @@ fn public_causal_service_checks_nested_reserved_origin() {
         f.edge(cells[i], predicate, count);
     }
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &ctx)
@@ -974,11 +1170,25 @@ fn public_causal_service_preserves_literal_metadata_in_key_support() {
         f.builder.push_quad(right, property, value, None).unwrap();
         let source = f.freeze();
         let expected = source.term_value(value);
-        let producer = Reasoner::with_proofs(&source).unwrap();
+        let producer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), Verdict::False);
         let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-        let consumer = Reasoner::with_proofs(&source).unwrap();
+        let consumer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
         let checked = proof
             .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
@@ -1041,11 +1251,19 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     f.builder.push_quad(from, subrole, middle, None).unwrap();
     f.builder.push_quad(target, inverse, middle, None).unwrap();
     let source = f.freeze();
-    let producer = Reasoner::with_proofs(&source).unwrap();
+    let producer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
-    let consumer = Reasoner::with_proofs(&source).unwrap();
+    let consumer = Reasoner::with_proofs(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let context = consumer.borrowed_proof_context().unwrap();
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(answer.certificate()), &context)
@@ -1084,7 +1302,134 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     assert_eq!(licenses, [true; 3]);
 }
 
+fn signed_refutation_scenarios_preserve_public_warrants_and_source_binding() {
+    use purrdf_entail::Regime;
+    use purrdf_entail::entails::{
+        EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify,
+    };
+    let mut premise = Fixture::default();
+    let a = premise.name("A");
+    let b = premise.name("B");
+    let class = premise.builder.intern_iri(owl::CLASS).unwrap();
+    premise.edge(a, rdf::TYPE, class);
+    premise.edge(b, rdf::TYPE, class);
+    premise.edge(a, owl::DISJOINT_WITH, b);
+    for name in ["first", "second", "third"] {
+        let subject = premise.name(name);
+        premise.edge(subject, rdf::TYPE, a);
+    }
+    let premise = premise.freeze();
+    let mut conclusion = Fixture::default();
+    let b = conclusion.name("B");
+    let class = conclusion.builder.intern_iri(owl::CLASS).unwrap();
+    let complement = conclusion
+        .builder
+        .intern_blank("complement", BlankScope::DEFAULT)
+        .unwrap();
+    conclusion.edge(b, rdf::TYPE, class);
+    conclusion.edge(complement, rdf::TYPE, class);
+    conclusion.edge(complement, owl::COMPLEMENT_OF, b);
+    for name in ["first", "second", "third"] {
+        let subject = conclusion.name(name);
+        conclusion.edge(subject, rdf::TYPE, complement);
+    }
+    let conclusion = conclusion.freeze();
+    let (outcome, _) = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
+        .unwrap()
+        .into_parts();
+    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Refutation(_)) = outcome else {
+        panic!("the negative memberships require three native signed scenarios");
+    };
+    let EntailmentWarrant::Refutation(refutations) = &warrant else {
+        unreachable!()
+    };
+    assert_eq!(refutations.refutations().len(), 3);
+    assert!(verify(&warrant, &premise, &conclusion));
+    assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
+}
+
+fn frozen_warrants_reject_empty_and_weakened_premises() {
+    use purrdf_core::TermFactory;
+    use purrdf_entail::Regime;
+    use purrdf_entail::entails::{
+        EntailmentOutcome, EntailmentWarrant, ImportMap, entails, verify,
+    };
+    let mut premise = Fixture::default();
+    let ontology = premise.name("ontology");
+    let ontology_type = premise.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    premise.edge(ontology, rdf::TYPE, ontology_type);
+    let p = premise.name("p");
+    let property = premise.builder.intern_iri(owl::OBJECT_PROPERTY).unwrap();
+    premise.edge(p, rdf::TYPE, property);
+    let first = premise
+        .builder
+        .intern_blank("first", BlankScope::DEFAULT)
+        .unwrap();
+    let second = premise
+        .builder
+        .intern_blank("second", BlankScope::DEFAULT)
+        .unwrap();
+    let nil = premise.builder.intern_iri(rdf::NIL).unwrap();
+    premise.edge(p, owl::PROPERTY_CHAIN_AXIOM, first);
+    premise.edge(first, rdf::FIRST, p);
+    premise.edge(first, rdf::REST, second);
+    premise.edge(second, rdf::FIRST, p);
+    premise.edge(second, rdf::REST, nil);
+    let premise = premise.freeze();
+    let mut conclusion = Fixture::default();
+    let ontology = conclusion.name("ontology");
+    let ontology_type = conclusion.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    conclusion.edge(ontology, rdf::TYPE, ontology_type);
+    let p = conclusion.name("p");
+    let transitive = conclusion
+        .builder
+        .intern_iri(owl::TRANSITIVE_PROPERTY)
+        .unwrap();
+    conclusion.edge(p, rdf::TYPE, transitive);
+    let conclusion = conclusion.freeze();
+    let (outcome, _) = entails(&premise, &conclusion, Regime::OwlRl, &ImportMap::default())
+        .unwrap()
+        .into_parts();
+    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Freeze(_)) = outcome else {
+        panic!("the chain entails transitivity through the native frozen scenario");
+    };
+    assert!(verify(&warrant, &premise, &conclusion));
+    // The same asserted content must survive different dataset-local IDs and order.
+    let mut reordered = Fixture::default();
+    let rows: Vec<_> = premise.quads().collect();
+    for quad in rows.into_iter().rev() {
+        let subject = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.s))
+            .unwrap();
+        let predicate = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.p))
+            .unwrap();
+        let object = reordered
+            .builder
+            .intern_value(&premise.term_value(quad.o))
+            .unwrap();
+        reordered
+            .builder
+            .push_quad(subject, predicate, object, None)
+            .unwrap();
+    }
+    assert!(verify(&warrant, &reordered.freeze(), &conclusion));
+    assert!(!verify(&warrant, &Fixture::default().freeze(), &conclusion));
+    let mut weakened = Fixture::default();
+    let ontology = weakened.name("ontology");
+    let ontology_type = weakened.builder.intern_iri(owl::ONTOLOGY).unwrap();
+    weakened.edge(ontology, rdf::TYPE, ontology_type);
+    let p = weakened.name("p");
+    let property = weakened.builder.intern_iri(owl::OBJECT_PROPERTY).unwrap();
+    weakened.edge(p, rdf::TYPE, property);
+    assert!(!verify(&warrant, &weakened.freeze(), &conclusion));
+}
+
 purrdf_testkit::harness_main!(
+    signed_refutation_scenarios_preserve_public_warrants_and_source_binding,
+    frozen_warrants_reject_empty_and_weakened_premises,
     public_dataset_views_preserve_source_identity_and_causal_verification,
     current_clash_preserves_named_and_scoped_blank_source_identity,
     current_clash_preserves_public_service_certificate_and_verification,

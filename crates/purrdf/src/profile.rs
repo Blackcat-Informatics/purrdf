@@ -172,7 +172,7 @@ impl OntologyProfile {
     /// declarations nor the W3C builtins (see [`Namespaces::new`]) — which
     /// cannot happen for a profile built through these constructors, but the
     /// fallibility is preserved from the underlying API.
-    pub fn namespaces(&self) -> Result<Namespaces, String> {
+    pub fn namespaces(&self) -> Result<Namespaces, purrdf_shapes::NamespaceError> {
         let mut declarations = Vec::with_capacity(self.prefixes.len() + 1);
         declarations.push((self.prefix.clone(), self.namespace.clone()));
         declarations.extend(self.prefixes.iter().cloned());

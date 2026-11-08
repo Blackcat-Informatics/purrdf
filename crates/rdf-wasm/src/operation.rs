@@ -34,6 +34,7 @@ use purrdf::{
 };
 use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DiagnosticPresentation, RdfDiagnostic, SparqlResult};
+use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
     GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
@@ -51,6 +52,44 @@ use crate::query::{
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclNodeExprOutcome, ShaclRefusal, ShaclRulesInference,
 };
+
+/// Original diagnostic-backed native cause under its retained admission.
+/// The existing shipped JavaScript name remains unchanged.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct YamlSourceCause {
+    diagnostic: RdfDiagnostic,
+}
+#[wasm_bindgen]
+impl YamlSourceCause {
+    /// Typed fields from the original cause, without a host error enum.
+    #[wasm_bindgen(getter)]
+    pub fn json(&self) -> Result<String, JsError> {
+        let cause = self
+            .diagnostic
+            .native_cause()
+            .ok_or_else(|| JsError::new("YAML source diagnostic has no native cause"))?;
+        purrdf_validate::native_error::to_json(cause)
+            .map(|value| value.to_string())
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+}
+
+/// Preserve the existing diagnostic and original typed native-cause interface.
+pub(crate) fn native_diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
+    native_diagnostic_to_js_with_text(diagnostic, ErrorText::Diagnostic)
+}
+
+/// Retain a native diagnostic while preserving an existing plain factory message.
+pub(crate) fn native_diagnostic_to_js_with_message(diagnostic: RdfDiagnostic) -> JsValue {
+    native_diagnostic_to_js_with_text(diagnostic, ErrorText::Message)
+}
+
+fn native_diagnostic_to_js_with_text(diagnostic: RdfDiagnostic, text: ErrorText) -> JsValue {
+    let mut error = JobError::diagnostic(diagnostic);
+    error.text = text;
+    error.to_js()
+}
 
 // ---------------------------------------------------------------------------
 // Codes of the failures that are not an engine diagnostic
@@ -123,8 +162,12 @@ enum ErrorText {
 /// refusal falls at the same depth on each and carries no lane-specific remedy.
 #[derive(Debug, Clone)]
 pub(crate) struct JobError {
+    execution_receipt: Option<Box<str>>,
+    canonicalization_json: Option<Box<str>>,
+    native_canonical_cause: Option<Box<purrdf_core::CanonError>>,
+    retained_native_diagnostic: Option<Box<RdfDiagnostic>>,
     kind: JobErrorKind,
-    diagnostic: RdfDiagnostic,
+    diagnostic: Box<RdfDiagnostic>,
     text: ErrorText,
     /// The engine diagnostic's typed presentation, when the failure carries one: a
     /// SPARQL parse failure's `sparql-parse-*` condition, thrown as `presentation`.
@@ -132,12 +175,32 @@ pub(crate) struct JobError {
 }
 
 impl JobError {
+    /// A reasoning request failure retaining its original fields under the job code.
+    pub(crate) fn reasoning_request(error: purrdf_validate::regime::ReasoningError) -> Self {
+        Self::diagnostic_message(purrdf_validate::native_error::diagnostic(
+            ENTAILMENT_CODE,
+            error,
+            None,
+        ))
+    }
+
+    /// A retained native diagnostic with the boundary's original plain message.
+    pub(crate) fn diagnostic_message(diagnostic: RdfDiagnostic) -> Self {
+        let mut error = Self::diagnostic(diagnostic);
+        error.text = ErrorText::Message;
+        error
+    }
+
     /// An engine diagnostic, rendered as the engine renders it.
     pub(crate) fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
         Self {
+            execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Error,
             presentation: diagnostic.presentation().cloned().map(Box::new),
-            diagnostic,
+            diagnostic: Box::new(diagnostic),
             text: ErrorText::Diagnostic,
         }
     }
@@ -145,8 +208,12 @@ impl JobError {
     /// A failure reported under `code` in `message`'s own words.
     pub(crate) fn message(code: &str, message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Error,
-            diagnostic: RdfDiagnostic::error(code, message),
+            diagnostic: Box::new(RdfDiagnostic::error(code, message)),
             text: ErrorText::Message,
             presentation: None,
         }
@@ -155,8 +222,15 @@ impl JobError {
     /// A negotiated query whose result no acceptable format can carry.
     pub(crate) fn not_acceptable(message: String) -> Self {
         Self {
+            execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::NotAcceptable,
-            diagnostic: RdfDiagnostic::error(FailureCode::NotAcceptable.code(), message),
+            diagnostic: Box::new(RdfDiagnostic::error(
+                FailureCode::NotAcceptable.code(),
+                message,
+            )),
             text: ErrorText::Message,
             presentation: None,
         }
@@ -165,8 +239,12 @@ impl JobError {
     /// A latched fault: the host broke the effect protocol.
     pub(crate) fn fault(message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Fault,
-            diagnostic: RdfDiagnostic::error(FailureCode::HostFault.code(), message),
+            diagnostic: Box::new(RdfDiagnostic::error(FailureCode::HostFault.code(), message)),
             text: ErrorText::Message,
             presentation: None,
         }
@@ -197,8 +275,12 @@ impl JobError {
             ),
         };
         Self {
+            execution_receipt: None,
+            canonicalization_json: None,
+            native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind,
-            diagnostic: RdfDiagnostic::error(failure.code(), message),
+            diagnostic: Box::new(RdfDiagnostic::error(failure.code(), message)),
             text: ErrorText::Message,
             presentation: None,
         }
@@ -207,18 +289,106 @@ impl JobError {
     /// An entailment query's failure: a query diagnostic keeps its code, and the closure's
     /// own failure is reported under [`ENTAILMENT_CODE`]; either reads as the reasoning
     /// layer renders it.
-    fn reasoning(error: &ReasoningError) -> Self {
+    fn reasoning(error: ReasoningError) -> Self {
         match error {
             ReasoningError::Query(diagnostic) => Self {
                 text: ErrorText::ReasoningQuery,
-                ..Self::diagnostic(diagnostic.clone())
+                ..Self::diagnostic(diagnostic)
             },
-            _ => Self::message(ENTAILMENT_CODE, error.to_string()),
+            other => Self::diagnostic_message(purrdf_validate::native_error::diagnostic(
+                ENTAILMENT_CODE,
+                other,
+                None,
+            )),
         }
+    }
+
+    pub(crate) fn with_canonicalization(
+        mut self,
+        receipts: String,
+        cause: Option<purrdf_core::CanonError>,
+    ) -> Self {
+        self.canonicalization_json = Some(receipts.into_boxed_str());
+        self.native_canonical_cause = cause.map(Box::new);
+        self
+    }
+
+    pub(crate) fn canonicalization_json(&self) -> Option<String> {
+        self.canonicalization_json.as_deref().map(str::to_owned)
+    }
+
+    fn native_diagnostic(&self) -> Option<&RdfDiagnostic> {
+        if self.diagnostic.native_cause().is_some() {
+            Some(&self.diagnostic)
+        } else {
+            self.retained_native_diagnostic.as_deref()
+        }
+    }
+
+    pub(crate) fn native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        if let Some(original) = self.native_diagnostic() {
+            let diagnostic = original
+                .clone_with_memory(&mut Memory::new(&mut Resident))
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            return Ok(Some(YamlSourceCause { diagnostic }.into()));
+        }
+        Ok(self
+            .native_canonical_cause
+            .as_deref()
+            .cloned()
+            .map(|cause| JsValue::from(crate::canonical::CanonicalCause::from(cause))))
+    }
+
+    pub(crate) fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        if let Some(cause) = self
+            .native_diagnostic()
+            .and_then(RdfDiagnostic::native_cause)
+        {
+            return purrdf_validate::native_error::to_json(cause)
+                .map(|value| Some(value.to_string()))
+                .map_err(|error| JsError::new(&error.to_string()));
+        }
+        self.native_canonical_cause
+            .as_deref()
+            .map(|cause| {
+                purrdf_validate::native_error::to_json(cause)
+                    .map(|value| value.to_string())
+                    .map_err(|error| JsError::new(&error.to_string()))
+            })
+            .transpose()
+    }
+
+    /// Stop precedence preserves the completed request's owned canonical evidence.
+    pub(crate) fn stopped_preserving(tripped: TrippedGovernor, original: Self) -> Self {
+        Self::stopped(tripped).preserving_canonicalization(original)
+    }
+
+    /// Changing failure precedence does not release the original native owner.
+    pub(crate) fn preserving_canonicalization(mut self, original: Self) -> Self {
+        self.canonicalization_json = original.canonicalization_json;
+        self.native_canonical_cause = original.native_canonical_cause;
+        self.execution_receipt = original.execution_receipt;
+        self.retained_native_diagnostic = original.retained_native_diagnostic.or_else(|| {
+            original
+                .diagnostic
+                .native_cause()
+                .is_some()
+                .then_some(original.diagnostic)
+        });
+        self
     }
 
     pub(crate) const fn kind(&self) -> JobErrorKind {
         self.kind
+    }
+
+    pub(crate) fn with_execution_receipt(mut self, receipt: String) -> Self {
+        self.execution_receipt = Some(receipt.into_boxed_str());
+        self
+    }
+
+    pub(crate) fn execution_receipt_json(&self) -> Option<String> {
+        self.execution_receipt.as_deref().map(str::to_owned)
     }
 
     /// The stable code the failure is reported under.
@@ -248,7 +418,7 @@ impl JobError {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
             ErrorText::ReasoningQuery => {
-                let error: ReasoningError = ReasoningError::Query(self.diagnostic.clone());
+                let error: ReasoningError = ReasoningError::Query((*self.diagnostic).clone());
                 error.to_string()
             }
         }
@@ -263,18 +433,19 @@ impl JobError {
             .map(|presentation| presentation.to_json().to_string())
     }
 
-    /// A storage refusal's original diagnostic record. Capacity counts remain decimal
+    /// The original diagnostic record. Capacity counts remain decimal
     /// strings, including values wider than either a JavaScript number or a native ID.
     pub(crate) fn diagnostic_json(&self) -> Option<String> {
-        self.diagnostic
-            .storage_error()
-            .map(|_| self.diagnostic.to_json().to_string())
+        Some(self.diagnostic.to_json().to_string())
     }
 
     /// The JavaScript error this failure is thrown as: its message, its `code`, and,
     /// when it carries one, its typed `presentation`.
     pub(crate) fn to_js(&self) -> JsValue {
         let error = CodedError::new(&self.rendered());
+        if let Some(receipt) = &self.execution_receipt {
+            error.set_execution_receipt_json(receipt);
+        }
         error.set_code(self.code());
         if let Some(record) = self.diagnostic_json() {
             match json_parse(&record) {
@@ -291,7 +462,37 @@ impl JobError {
         {
             error.set_presentation(&presentation);
         }
-        error.into()
+        let error = error.into();
+        let error = match self.canonicalization_json.as_deref() {
+            Some(receipts) => crate::canonical::attach_evidence(
+                error,
+                receipts,
+                self.native_canonical_cause.as_deref(),
+            ),
+            None => error,
+        };
+        let attach = || -> Result<JsValue, JsValue> {
+            if self.native_diagnostic().is_some() {
+                let fields = self
+                    .native_cause_json()?
+                    .expect("original native cause is present");
+                if !crate::host::reflect_set(
+                    &error,
+                    &JsValue::from_str("nativeCauseJson"),
+                    &JsValue::from_str(&fields),
+                )? {
+                    return Err(JsError::new("cannot attach native cause fields").into());
+                }
+                let cause = self
+                    .native_cause()?
+                    .expect("original native cause is present");
+                if !crate::host::reflect_set(&error, &JsValue::from_str("nativeCause"), &cause)? {
+                    return Err(JsError::new("cannot retain original native cause").into());
+                }
+            }
+            Ok(error)
+        };
+        attach().unwrap_or_else(core::convert::identity)
     }
 }
 
@@ -306,6 +507,9 @@ extern "C" {
 
     #[wasm_bindgen(method, setter = code)]
     fn set_code(this: &CodedError, code: &str);
+
+    #[wasm_bindgen(method, setter = executionReceiptJson)]
+    fn set_execution_receipt_json(this: &CodedError, receipt: &str);
 
     #[wasm_bindgen(method, setter = diagnostic)]
     fn set_diagnostic(this: &CodedError, diagnostic: &JsValue);
@@ -336,6 +540,15 @@ pub(crate) fn coded_error(message: &str, code: &str) -> JsValue {
     error.into()
 }
 
+/// Attach a receipt without changing the original JavaScript rejection class.
+pub(crate) fn attach_execution_receipt(error: JsValue, receipt: &str) -> JsValue {
+    use wasm_bindgen::JsCast;
+    error
+        .unchecked_ref::<CodedError>()
+        .set_execution_receipt_json(receipt);
+    error
+}
+
 /// A `TypeError` whose message is `message` and whose `code` property is `code`.
 pub(crate) fn coded_type_error(message: &str, code: &str) -> JsValue {
     let error = CodedTypeError::new(message);
@@ -358,11 +571,15 @@ pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
     reason = "The stopped-update payload moves inline so outcome transfer does not allocate after workspace refusal."
 )]
 pub(crate) enum JobOutcome {
-    Query(SparqlResult),
+    Query(SparqlResult, purrdf_sparql_eval::QueryCoordinates),
+    QueryRaw {
+        body: String,
+        coordinates: purrdf_sparql_eval::QueryCoordinates,
+    },
     Raw(String),
     Governed(Box<GovernedOutcome>),
     Entailment(Box<GovernedEntailment>),
-    Updated(Arc<RdfDataset>),
+    Updated(Arc<RdfDataset>, purrdf_sparql_eval::QueryCoordinates),
     UpdateGoverned {
         outcome: GovernedUpdateOutcome,
         frozen: Option<Arc<RdfDataset>>,
@@ -386,11 +603,12 @@ pub(crate) enum JobOutcome {
 impl fmt::Debug for JobOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Query(_) => "Query",
+            Self::Query(..) => "Query",
+            Self::QueryRaw { .. } => "QueryRaw",
             Self::Raw(_) => "Raw",
             Self::Governed(_) => "Governed",
             Self::Entailment(_) => "Entailment",
-            Self::Updated(_) => "Updated",
+            Self::Updated(..) => "Updated",
             Self::UpdateGoverned { .. } => "UpdateGoverned",
             Self::Negotiated(_) => "Negotiated",
             Self::ShaclChange(_) => "ShaclChange",
@@ -486,8 +704,12 @@ impl JobRun<'_> {
         division: DivisionPolicy,
         xpath_regex: Option<Profile>,
         geo: &'o purrdf_validate::geo::GeoProfile,
+        coordinates: &'o purrdf_validate::query::CoordinateInputs,
     ) -> QueryOptions<'o, 'o> {
-        crate::xpath_regex::select(self.options_under(env, division).with_geo(geo), xpath_regex)
+        coordinates.apply(crate::xpath_regex::select(
+            &self.options_under(env, division).with_geo(geo),
+            xpath_regex,
+        ))
     }
 
     /// The run's sources, for an ambient execution scope.
@@ -541,10 +763,13 @@ pub(crate) struct ClosureInputs {
     pub(crate) premise_iris: Vec<String>,
     pub(crate) max_stored_facts: Option<u64>,
     pub(crate) max_join_steps: Option<u64>,
+    pub(crate) max_term_arena_bytes: Option<u64>,
 }
 
 /// Everything an operation is built from.
 pub(crate) struct OperationInput<'a> {
+    /// Exact caller inputs owned for the complete operation, including suspension.
+    pub(crate) coordinates: purrdf_validate::query::CoordinateInputs,
     pub(crate) kind: AsyncOperationKind,
     pub(crate) engine: Rc<NativeSparqlEngine>,
     pub(crate) frozen: Arc<RdfDataset>,
@@ -580,6 +805,7 @@ impl<'a> OperationInput<'a> {
         base: Option<&'a str>,
     ) -> Self {
         Self {
+            coordinates: purrdf_validate::query::CoordinateInputs::default(),
             kind,
             engine: Rc::clone(engine),
             frozen,
@@ -617,29 +843,61 @@ fn ungoverned_query(
     division: DivisionPolicy,
     xpath_regex: Option<Profile>,
     geo: &purrdf_validate::geo::GeoProfile,
-) -> Result<SparqlResult, JobError> {
-    let options = run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, geo);
+    coordinates: &purrdf_validate::query::CoordinateInputs,
+) -> Result<(SparqlResult, purrdf_sparql_eval::QueryCoordinates), JobError> {
+    let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+    let options = run
+        .selected_options(
+            QueryOptions::EMPTY.env,
+            division,
+            xpath_regex,
+            geo,
+            coordinates,
+        )
+        .with_coordinate_observer(&capture);
     let Some(governors) = run.ungoverned_watch() else {
         // The engine's ungoverned entry, exactly as its `SparqlEngine::query` runs it:
         // the plan, then its evaluation with no governor state.
-        return run
+        let result = run
             .evaluate(|| {
-                let prepared = engine.prepare_query_with_options(sparql, base, options)?;
-                engine.query_prepared(frozen, &prepared, &[], options)
+                let prepared = engine.prepare_query_with_options(sparql, base, &options)?;
+                engine.query_prepared(frozen, &prepared, &[], &options)
             })
             .map_err(JobError::diagnostic);
+        let receipt = capture
+            .into_coordinates()
+            .map_err(|error| JobError::fault(error.to_string()))?;
+        return result
+            .map(|result| (result, receipt.clone()))
+            .map_err(|error| {
+                error.with_execution_receipt(purrdf_validate::query::execution_receipt_json(
+                    &receipt,
+                ))
+            });
     };
     let outcome = run.evaluate(|| {
-        engine.query_governed(frozen, sparql_request(sparql, base), options, &governors)
+        engine.query_governed(frozen, sparql_request(sparql, base), &options, &governors)
     });
     if let Ok(outcome) = &outcome {
         run.record_evidence(outcome.evidence());
     }
     match outcome {
-        Err(diagnostic) => Err(JobError::diagnostic(diagnostic)),
-        Ok(GovernedOutcome::Complete { result, .. }) => Ok(result),
+        Err(diagnostic) => {
+            let receipt = capture
+                .into_coordinates()
+                .map_err(|error| JobError::fault(error.to_string()))?;
+            Err(JobError::diagnostic(diagnostic)
+                .with_execution_receipt(purrdf_validate::query::execution_receipt_json(&receipt)))
+        }
+        Ok(GovernedOutcome::Complete {
+            result,
+            coordinates,
+            ..
+        }) => Ok((result, coordinates)),
         Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
-            Err(JobError::stopped(exhausted.tripped))
+            Err(JobError::stopped(exhausted.tripped).with_execution_receipt(
+                purrdf_validate::query::execution_receipt_json(&exhausted.coordinates),
+            ))
         }
     }
 }
@@ -660,6 +918,7 @@ impl OperationInput<'_> {
     /// Evaluate the operation under `run`.
     pub(crate) fn execute(self, run: &JobRun<'_>) -> Result<JobOutcome, JobError> {
         let Self {
+            coordinates,
             kind,
             engine,
             frozen,
@@ -681,263 +940,342 @@ impl OperationInput<'_> {
         } = self;
         let base = base.as_deref();
         let request = sparql_request(&sparql, base);
-        match kind {
-            AsyncOperationKind::Query => Ok(JobOutcome::Query(ungoverned_query(
-                run,
-                &engine,
-                &frozen,
-                &sparql,
-                base,
-                division,
-                xpath_regex,
-                &geo,
-            )?)),
-            AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
-                let result = ungoverned_query(
-                    run,
-                    &engine,
-                    &frozen,
-                    &sparql,
-                    base,
-                    division,
-                    xpath_regex,
-                    &geo,
-                )?;
-                let text = run.serialize(|| match (&jsonld, format.as_deref()) {
-                    (Some(options), Some(format)) => {
-                        serialize_configured_graph(result, format, options)
-                    }
-                    _ => serialize_query_result(
-                        &result,
-                        format.as_deref(),
-                        provenance.as_ref(),
+        let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+        let result = (|| {
+            match kind {
+                AsyncOperationKind::Query => {
+                    let (result, receipt) = ungoverned_query(
+                        run,
+                        &engine,
+                        &frozen,
                         &sparql,
-                    )
-                    .map_err(|message| JobError::message(SERIALIZE_CODE, message)),
-                });
-                Ok(JobOutcome::Raw(text?))
-            }
-            AsyncOperationKind::Governed => {
-                let env = governed_env(aggregate_namespace.as_deref())?;
-                let governors = run.governors(
-                    ceilings
-                        .ceilings()
-                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
-                );
-                let outcome = run
-                    .evaluate(|| {
-                        engine.query_governed(
-                            &frozen,
-                            request,
-                            run.selected_options(&env, division, xpath_regex, &geo),
-                            &governors,
-                        )
-                    })
-                    .map_err(JobError::diagnostic)?;
-                run.record_evidence(outcome.evidence());
-                Ok(JobOutcome::Governed(Box::new(outcome)))
-            }
-            AsyncOperationKind::Negotiated => {
-                let env = governed_env(aggregate_namespace.as_deref())?;
-                let governors = run.governors(
-                    ceilings
-                        .ceilings()
-                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
-                );
-                let outcome = run
-                    .evaluate(|| {
-                        engine.query_governed(
-                            &frozen,
-                            request,
-                            run.selected_options(&env, division, xpath_regex, &geo),
-                            &governors,
-                        )
-                    })
-                    .map_err(JobError::diagnostic)?;
-                run.record_evidence(outcome.evidence());
-                let value = match outcome {
-                    GovernedOutcome::Complete {
-                        result, evidence, ..
-                    } => {
-                        // Negotiated against the result's actual shape: a graph carrying
-                        // named graphs is offered only in the syntaxes that can hold it,
-                        // so no format ever silently drops a graph.
-                        let shape = negotiable_result_kind(&result);
-                        let format = negotiate(accept.as_deref(), shape).ok_or_else(|| {
-                            JobError::not_acceptable(not_acceptable_message(shape))
-                        })?;
-                        let text = run
-                            .serialize(|| {
-                                serialize_query_result(&result, Some(format), None, &sparql)
-                            })
-                            .map_err(|message| JobError::message(SERIALIZE_CODE, message))?;
-                        NegotiatedValue::Complete {
-                            bytes: text.into_bytes(),
-                            format,
-                            evidence,
+                        base,
+                        division,
+                        xpath_regex,
+                        &geo,
+                        &coordinates,
+                    )?;
+                    Ok(JobOutcome::Query(result, receipt))
+                }
+                AsyncOperationKind::Raw | AsyncOperationKind::RawWithContext => {
+                    let (result, receipt) = ungoverned_query(
+                        run,
+                        &engine,
+                        &frozen,
+                        &sparql,
+                        base,
+                        division,
+                        xpath_regex,
+                        &geo,
+                        &coordinates,
+                    )?;
+                    let text = run.serialize(|| match (&jsonld, format.as_deref()) {
+                        (Some(options), Some(format)) => {
+                            serialize_configured_graph(result, format, options)
                         }
-                    }
-                    GovernedOutcome::BudgetExhausted(exhausted) => {
-                        NegotiatedValue::Exhausted(exhausted)
-                    }
-                };
-                Ok(JobOutcome::Negotiated(Box::new(value)))
-            }
-            AsyncOperationKind::EntailmentGoverned => {
-                let regime = regime.unwrap_or_default();
-                let plan = QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
-                    .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
-                let imports = crate::entail::entailment_import_map(
-                    &closure.import_iris,
-                    &closure.import_documents,
-                    &closure.premise_iris,
-                )
-                .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
-                let limits =
-                    crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
-                let env = governed_env(aggregate_namespace.as_deref())?;
-                let governors = run.governors(
-                    ceilings
-                        .ceilings()
-                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
-                );
-                let outcome = run
-                    .evaluate(|| {
-                        query_with_entailment_closure_governed(
-                            &engine,
-                            &frozen,
-                            request,
-                            &EntailmentClosure::new(plan.entailment(), &imports)
-                                .with_limits(limits.eval_options()),
-                            run.selected_options(&env, division, xpath_regex, &geo),
-                            // This surface registers no relation, so there is none to
-                            // re-derive over the closure.
-                            &ClosureRelations::NONE,
-                            &governors,
-                        )
-                    })
-                    .map_err(|error| match error {
-                        // Rendered by the shared boundary, so a passed evaluation limit
-                        // names `queryEntailmentGoverned`'s argument rather than a Rust type
-                        // a JavaScript caller cannot reach.
-                        ReasoningError::Entailment(error) => JobError::message(
-                            ENTAILMENT_CODE,
-                            purrdf_validate::render_entail_error_in(
-                                &regime,
-                                &error,
-                                purrdf_validate::RegimeHost::Wasm,
-                                purrdf_validate::RegimeService::Query,
-                            ),
-                        ),
-                        other => JobError::reasoning(&other),
-                    })?;
-                if let Some(answered) = outcome.outcome() {
-                    run.record_evidence(answered.evidence());
-                }
-                Ok(JobOutcome::Entailment(Box::new(outcome)))
-            }
-            AsyncOperationKind::Explain => {
-                // The measuring run — metered, never bounded — with the run's sources
-                // installed and its signal, when it has one, polled at every charge point.
-                let options =
-                    run.selected_options(QueryOptions::EMPTY.env, division, xpath_regex, &geo);
-                let explanation = run
-                    .evaluate(|| match &run.stop {
-                        Some(stop) => engine.explain_query_with_stop_signal(
-                            &frozen,
+                        _ => serialize_query_result(
+                            &result,
+                            format.as_deref(),
+                            provenance.as_ref(),
                             &sparql,
-                            base,
-                            options,
-                            Arc::clone(stop),
-                        ),
-                        None => engine.explain_query_with_options(&frozen, &sparql, base, options),
-                    })
-                    .map_err(JobError::diagnostic)?;
-                run.record_evidence(explanation.evidence());
-                // A stop cut the measuring run short, so its ledger describes a truncated
-                // run rather than the query: the stop is the operation's error, as it is
-                // for every ungoverned operation. Any other trip is part of the
-                // explanation.
-                if let Some(tripped @ TrippedGovernor::Stopped { .. }) =
-                    explanation.evidence().tripped
-                {
-                    return Err(JobError::stopped(tripped));
-                }
-                Ok(JobOutcome::Raw(explanation.render()))
-            }
-            AsyncOperationKind::Update => {
-                let mut target = Arc::clone(&frozen);
-                let Some(governors) = run.ungoverned_watch() else {
-                    run.evaluate(|| {
-                        engine.update_with_options(
-                            &mut target,
-                            request,
-                            run.selected_options(
-                                QueryOptions::EMPTY.env,
-                                division,
-                                xpath_regex,
-                                &geo,
-                            )
-                            .with_graph_existence(graph_existence),
                         )
-                    })
-                    .map_err(JobError::diagnostic)?;
-                    return Ok(JobOutcome::Updated(target));
-                };
-                let outcome = run
-                    .evaluate(|| {
-                        engine.update_governed(
-                            &mut target,
-                            request,
-                            run.selected_options(
-                                QueryOptions::EMPTY.env,
-                                division,
-                                xpath_regex,
-                                &geo,
+                        .map_err(|message| JobError::message(SERIALIZE_CODE, message)),
+                    });
+                    Ok(JobOutcome::QueryRaw {
+                        body: text.map_err(|error| {
+                            error.with_execution_receipt(
+                                purrdf_validate::query::execution_receipt_json(&receipt),
                             )
-                            .with_graph_existence(graph_existence),
-                            &governors,
-                        )
+                        })?,
+                        coordinates: receipt,
                     })
-                    .map_err(JobError::diagnostic)?;
-                run.record_evidence(outcome.evidence());
-                match outcome.tripped() {
-                    None => Ok(JobOutcome::Updated(target)),
-                    Some(tripped) => Err(JobError::stopped(tripped)),
                 }
-            }
-            // A SHACL operation reads no dataset and no SPARQL text; it is built by
-            // `AsyncJob.beginShacl`, never as an input.
-            AsyncOperationKind::Shacl => Err(JobError::message(
-                OPTIONS_CODE,
-                crate::async_query::SHACL_STARTS_ELSEWHERE,
-            )),
-            AsyncOperationKind::UpdateGoverned => {
-                let env = governed_env(aggregate_namespace.as_deref())?;
-                let governors = run.governors(
-                    ceilings
-                        .update_ceilings()
-                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
-                );
-                let mut target = Arc::clone(&frozen);
-                let outcome = run
-                    .evaluate(|| {
-                        engine.update_governed(
-                            &mut target,
-                            request,
-                            run.selected_options(&env, division, xpath_regex, &geo)
+                AsyncOperationKind::Governed => {
+                    let env = governed_env(aggregate_namespace.as_deref())?;
+                    let governors = run.governors(
+                        ceilings
+                            .ceilings()
+                            .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                    );
+                    let outcome = run
+                        .evaluate(|| {
+                            engine.query_governed(
+                                &frozen,
+                                request,
+                                &run.selected_options(
+                                    &env,
+                                    division,
+                                    xpath_regex,
+                                    &geo,
+                                    &coordinates,
+                                )
+                                .with_coordinate_observer(&capture),
+                                &governors,
+                            )
+                        })
+                        .map_err(JobError::diagnostic)?;
+                    run.record_evidence(outcome.evidence());
+                    Ok(JobOutcome::Governed(Box::new(outcome)))
+                }
+                AsyncOperationKind::Negotiated => {
+                    let env = governed_env(aggregate_namespace.as_deref())?;
+                    let governors = run.governors(
+                        ceilings
+                            .ceilings()
+                            .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                    );
+                    let outcome = run
+                        .evaluate(|| {
+                            engine.query_governed(
+                                &frozen,
+                                request,
+                                &run.selected_options(
+                                    &env,
+                                    division,
+                                    xpath_regex,
+                                    &geo,
+                                    &coordinates,
+                                )
+                                .with_coordinate_observer(&capture),
+                                &governors,
+                            )
+                        })
+                        .map_err(JobError::diagnostic)?;
+                    run.record_evidence(outcome.evidence());
+                    let value = match outcome {
+                        GovernedOutcome::Complete {
+                            result,
+                            evidence,
+                            coordinates,
+                            ..
+                        } => {
+                            // Negotiated against the result's actual shape: a graph carrying
+                            // named graphs is offered only in the syntaxes that can hold it,
+                            // so no format ever silently drops a graph.
+                            let shape = negotiable_result_kind(&result);
+                            let format = negotiate(accept.as_deref(), shape).ok_or_else(|| {
+                                JobError::not_acceptable(not_acceptable_message(shape))
+                            })?;
+                            let text = run
+                                .serialize(|| {
+                                    serialize_query_result(&result, Some(format), None, &sparql)
+                                })
+                                .map_err(|message| JobError::message(SERIALIZE_CODE, message))?;
+                            NegotiatedValue::Complete {
+                                coordinates,
+                                bytes: text.into_bytes(),
+                                format,
+                                evidence,
+                            }
+                        }
+                        GovernedOutcome::BudgetExhausted(exhausted) => NegotiatedValue::Exhausted {
+                            coordinates: exhausted.coordinates,
+                            tripped: exhausted.tripped,
+                            evidence: exhausted.evidence,
+                            partial: exhausted.partial,
+                        },
+                    };
+                    Ok(JobOutcome::Negotiated(Box::new(value)))
+                }
+                AsyncOperationKind::EntailmentGoverned => {
+                    let regime = regime.unwrap_or_default();
+                    let plan =
+                        QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
+                            .map_err(JobError::reasoning_request)?;
+                    let imports = crate::entail::entailment_import_map(
+                        &closure.import_iris,
+                        &closure.import_documents,
+                        &closure.premise_iris,
+                    )
+                    .map_err(JobError::reasoning_request)?;
+                    let limits = crate::entail::wasm_limits(
+                        closure.max_stored_facts,
+                        closure.max_join_steps,
+                        closure.max_term_arena_bytes,
+                    );
+                    let env = governed_env(aggregate_namespace.as_deref())?;
+                    let governors = run.governors(
+                        ceilings
+                            .ceilings()
+                            .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                    );
+                    let outcome = run
+                        .evaluate(|| {
+                            query_with_entailment_closure_governed(
+                                &engine,
+                                &frozen,
+                                request,
+                                &EntailmentClosure::new(plan.entailment(), &imports)
+                                    .with_limits(limits.eval_options()),
+                                &run.selected_options(
+                                    &env,
+                                    division,
+                                    xpath_regex,
+                                    &geo,
+                                    &coordinates,
+                                )
+                                .with_coordinate_observer(&capture),
+                                // This surface registers no relation, so there is none to
+                                // re-derive over the closure.
+                                &ClosureRelations::NONE,
+                                &governors,
+                            )
+                        })
+                        .map_err(|error| match error {
+                            // Rendered by the shared boundary, so a passed evaluation limit
+                            // names `queryEntailmentGoverned`'s argument rather than a Rust type
+                            // a JavaScript caller cannot reach.
+                            ReasoningError::Entailment(error) => JobError::reasoning_request(
+                                purrdf_validate::regime::ReasoningError::entail(
+                                    purrdf_validate::regime::EntailContext::Regime {
+                                        spelling: regime.clone(),
+                                        host: purrdf_validate::RegimeHost::Wasm,
+                                        service: purrdf_validate::RegimeService::Query,
+                                    },
+                                    error,
+                                ),
+                            ),
+                            other => JobError::reasoning(other),
+                        })?;
+                    if let Some(answered) = outcome.outcome() {
+                        run.record_evidence(answered.evidence());
+                    }
+                    Ok(JobOutcome::Entailment(Box::new(outcome)))
+                }
+                AsyncOperationKind::Explain => {
+                    // The measuring run — metered, never bounded — with the run's sources
+                    // installed and its signal, when it has one, polled at every charge point.
+                    let options = run
+                        .selected_options(
+                            QueryOptions::EMPTY.env,
+                            division,
+                            xpath_regex,
+                            &geo,
+                            &coordinates,
+                        )
+                        .with_coordinate_observer(&capture);
+                    let explanation = run
+                        .evaluate(|| match &run.stop {
+                            Some(stop) => engine.explain_query_with_stop_signal(
+                                &frozen,
+                                &sparql,
+                                base,
+                                &options,
+                                Arc::clone(stop),
+                            ),
+                            None => {
+                                engine.explain_query_with_options(&frozen, &sparql, base, &options)
+                            }
+                        })
+                        .map_err(JobError::diagnostic)?;
+                    run.record_evidence(explanation.evidence());
+                    // A stop cut the measuring run short, so its ledger describes a truncated
+                    // run rather than the query: the stop is the operation's error, as it is
+                    // for every ungoverned operation. Any other trip is part of the
+                    // explanation.
+                    if let Some(tripped @ TrippedGovernor::Stopped { .. }) =
+                        explanation.evidence().tripped
+                    {
+                        return Err(JobError::stopped(tripped));
+                    }
+                    Ok(JobOutcome::QueryRaw {
+                        body: explanation.render(),
+                        coordinates: capture
+                            .coordinates()
+                            .map_err(|error| JobError::fault(error.to_string()))?,
+                    })
+                }
+                AsyncOperationKind::Update => {
+                    let mut target = Arc::clone(&frozen);
+                    let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+                    let options = run
+                        .selected_options(
+                            QueryOptions::EMPTY.env,
+                            division,
+                            xpath_regex,
+                            &geo,
+                            &coordinates,
+                        )
+                        .with_graph_existence(graph_existence)
+                        .with_coordinate_observer(&capture);
+                    let result = match run.ungoverned_watch() {
+                        None => run
+                            .evaluate(|| engine.update_with_options(&mut target, request, &options))
+                            .map_err(JobError::diagnostic),
+                        Some(governors) => run
+                            .evaluate(|| {
+                                engine.update_governed(&mut target, request, &options, &governors)
+                            })
+                            .map_err(JobError::diagnostic)
+                            .and_then(|outcome| {
+                                run.record_evidence(outcome.evidence());
+                                match outcome.tripped() {
+                                    None => Ok(()),
+                                    Some(tripped) => Err(JobError::stopped(tripped)),
+                                }
+                            }),
+                    };
+                    let receipt = capture
+                        .into_coordinates()
+                        .map_err(|error| JobError::fault(error.to_string()))?;
+                    result.map_err(|error| {
+                        error.with_execution_receipt(
+                            purrdf_validate::query::execution_receipt_json(&receipt),
+                        )
+                    })?;
+                    Ok(JobOutcome::Updated(target, receipt))
+                }
+                // A SHACL operation reads no dataset and no SPARQL text; it is built by
+                // `AsyncJob.beginShacl`, never as an input.
+                AsyncOperationKind::Shacl => Err(JobError::message(
+                    OPTIONS_CODE,
+                    crate::async_query::SHACL_STARTS_ELSEWHERE,
+                )),
+                AsyncOperationKind::UpdateGoverned => {
+                    let env = governed_env(aggregate_namespace.as_deref())?;
+                    let governors = run.governors(
+                        ceilings
+                            .update_ceilings()
+                            .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                    );
+                    let mut target = Arc::clone(&frozen);
+                    let outcome = run
+                        .evaluate(|| {
+                            engine.update_governed(
+                                &mut target,
+                                request,
+                                &run.selected_options(
+                                    &env,
+                                    division,
+                                    xpath_regex,
+                                    &geo,
+                                    &coordinates,
+                                )
+                                .with_coordinate_observer(&capture)
                                 .with_graph_existence(graph_existence),
-                            &governors,
-                        )
-                    })
-                    .map_err(JobError::diagnostic)?;
-                run.record_evidence(outcome.evidence());
-                // The engine publishes into `target` only on the applied path, so a
-                // tripped request offers nothing to commit.
-                let frozen = outcome.is_applied().then_some(target);
-                Ok(JobOutcome::UpdateGoverned { outcome, frozen })
+                                &governors,
+                            )
+                        })
+                        .map_err(JobError::diagnostic)?;
+                    run.record_evidence(outcome.evidence());
+                    // The engine publishes into `target` only on the applied path, so a
+                    // tripped request offers nothing to commit.
+                    let frozen = outcome.is_applied().then_some(target);
+                    Ok(JobOutcome::UpdateGoverned { outcome, frozen })
+                }
             }
-        }
+        })();
+        result.map_err(|error: JobError| {
+            if error.execution_receipt.is_some() {
+                return error;
+            }
+            match capture.coordinates() {
+                Ok(receipt) => error.with_execution_receipt(
+                    purrdf_validate::query::execution_receipt_json(&receipt),
+                ),
+                Err(cause) => JobError::fault(cause.to_string()),
+            }
+        })
     }
 
     /// Run the operation on the synchronous lane: offline, with `stop` only when the
@@ -969,7 +1307,7 @@ mod tests {
         let reasoning = ReasoningError::Query(original.clone());
         for error in [
             JobError::diagnostic(original.clone()),
-            JobError::reasoning(&reasoning),
+            JobError::reasoning(reasoning),
         ] {
             assert_eq!(error.diagnostic.storage_error(), Some(cause));
             assert_eq!(error.code(), original.code);
@@ -977,8 +1315,8 @@ mod tests {
             assert!(error.presentation_json().is_none());
         }
         assert_eq!(
-            JobError::reasoning(&reasoning).rendered(),
-            reasoning.to_string()
+            JobError::reasoning(ReasoningError::Query(original.clone())).rendered(),
+            ReasoningError::<std::convert::Infallible>::Query(original).to_string()
         );
     }
 
@@ -1007,7 +1345,7 @@ mod tests {
                 Some(expected.as_str())
             );
             assert_eq!(direct.rendered(), original.to_string());
-            let reasoning = JobError::reasoning(&ReasoningError::Query(original.clone()));
+            let reasoning = JobError::reasoning(ReasoningError::Query(original.clone()));
             assert_eq!(
                 reasoning.presentation_json().as_deref(),
                 Some(expected.as_str())
@@ -1087,6 +1425,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("parses")
         .view()
@@ -1113,7 +1452,7 @@ mod tests {
                 "LOAD SILENT <http://example.org/doc>",
                 None,
             );
-            assert!(matches!(update.execute(&run), Ok(JobOutcome::Updated(_))));
+            assert!(matches!(update.execute(&run), Ok(JobOutcome::Updated(..))));
             counters.snapshot(0).silenced().len()
         };
         assert_eq!(
@@ -1180,14 +1519,14 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 ),
                 Ok(SparqlResult::Boolean(true))
             )
         };
         match outcome {
-            JobOutcome::Query(result) => in_result(result),
-            JobOutcome::Raw(text) => text.contains(THIRD),
+            JobOutcome::Query(result, _) => in_result(result),
+            JobOutcome::Raw(text) | JobOutcome::QueryRaw { body: text, .. } => text.contains(THIRD),
             JobOutcome::Governed(governed) => in_outcome(governed),
             JobOutcome::Entailment(entailment) => matches!(
                 entailment.as_ref(),
@@ -1197,7 +1536,7 @@ mod tests {
                 value.as_ref(),
                 NegotiatedValue::Complete { bytes, .. } if String::from_utf8_lossy(bytes).contains(THIRD)
             ),
-            JobOutcome::Updated(dataset)
+            JobOutcome::Updated(dataset, _)
             | JobOutcome::UpdateGoverned {
                 frozen: Some(dataset),
                 ..
@@ -1218,6 +1557,7 @@ mod tests {
         let frozen = crate::dataset::Dataset::parse(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
+            None,
             None,
             None,
         )

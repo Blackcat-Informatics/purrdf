@@ -6,13 +6,11 @@
 //! ordinal comparisons are used to omit candidates that cannot pass it.
 
 use super::{Builtin, ShapeOffer};
-use crate::eval::EvalCtx;
-use crate::governor::lift::Evaluated;
 use crate::native_numeric::NumericFrame;
 use crate::parsed_value::ParsedValue;
 use crate::{AdmittedVec, EvalError, WorkspaceCapability};
 use core::cmp::Ordering;
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::TermValue;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, GraphPattern, TermPattern, Variable,
 };
@@ -345,35 +343,4 @@ impl WindowSpec {
             strict: self.strict,
         })
     }
-}
-
-pub(crate) fn execute<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    spec: &WindowSpec,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let GraphPattern::Filter { inner, expr } = node else {
-        return Err(EvalError::WorkspaceBoundOverflow);
-    };
-    let GraphPattern::Bgp { patterns } = &**inner else {
-        return Err(EvalError::WorkspaceBoundOverflow);
-    };
-    let previous = ctx.window_bgp.take();
-    let sequential = ctx.options.force_sequential;
-    let mut selected = spec.clone();
-    // Source-declared expression gaps are reached on ordinary false rows too.
-    // Keep every original pair until the original FILTER owner decides it.
-    selected.restrict &= ctx.evidence_input.is_none();
-    // The barrier cache is owned by this ordered FILTER context. Reached eager
-    // residuals keep literal pair order and share one domain preparation.
-    if !selected.restrict {
-        ctx.options.force_sequential = true;
-    }
-    ctx.window_bgp = Some((patterns.as_ptr() as usize, selected));
-    // The original native FILTER/BGP checkpoints, lifting, residual evaluation
-    // and publication remain the only path. The marker changes candidate access.
-    let result = crate::expr::eval_filter(node, expr, inner, ctx);
-    ctx.window_bgp = previous;
-    ctx.options.force_sequential = sequential;
-    result
 }

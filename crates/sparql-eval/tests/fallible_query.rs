@@ -5,6 +5,7 @@
 
 mod support;
 
+use support::fallible::{FaultingProvider, ScriptedFault, two_page_faulting_dataset};
 use support::local_dataset;
 use support::solutions;
 
@@ -50,7 +51,7 @@ fn successful_and_empty_results_are_explicitly_complete() {
         .query_fallible_view(
             &view,
             request("SELECT ?s WHERE { ?s <http://example.org/p> <http://example.org/o> }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("complete SELECT");
     let (variables, rows) = complete.result.solutions().expect("SELECT shape");
@@ -65,7 +66,7 @@ fn successful_and_empty_results_are_explicitly_complete() {
         .query_fallible_view(
             &empty_view,
             request("SELECT ?s WHERE { ?s <http://example.org/missing> ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("a genuinely empty answer is complete");
     assert_eq!(
@@ -91,7 +92,7 @@ fn prepared_entry_uses_the_same_completeness_boundary() {
         .expect("prepare query");
     let view = paged.query_view(PagedQueryLimits::new(1, 17));
     let complete = engine
-        .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
         .expect("complete prepared ASK");
     assert_eq!(complete.result.boolean(), Some(true));
     assert_eq!(complete.evidence.requested_pages, vec![PageId(0)]);
@@ -141,7 +142,7 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
         .query_fallible_view(
             &view,
             request("SELECT ?s WHERE { ?s ?p ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect_err("cancelled materialization cannot return empty solutions");
     match error {
@@ -182,7 +183,7 @@ fn operational_root_cause_wins_over_a_derived_evaluator_error() {
                  { SERVICE <http://example.org/service> { ?a ?b ?c } } \
                  }";
     let error = NativeSparqlEngine::new()
-        .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
+        .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
         .expect_err("operational failure has precedence");
     assert!(matches!(
         error,
@@ -203,7 +204,7 @@ fn parse_failure_remains_an_ordinary_query_error_with_evidence() {
         .expect("seal page");
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let error = NativeSparqlEngine::new()
-        .query_fallible_view(&view, request("SELECT WHERE {"), QueryOptions::EMPTY)
+        .query_fallible_view(&view, request("SELECT WHERE {"), &QueryOptions::EMPTY)
         .expect_err("invalid SPARQL must fail parsing");
     match error {
         FallibleSparqlError::Query {
@@ -222,104 +223,6 @@ fn parse_failure_remains_an_ordinary_query_error_with_evidence() {
         // arm can witness that.
         other => panic!("view remained ready; expected parse error, got: {other:?}"),
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScriptedFault {
-    Provider,
-    Cancelled,
-    Deadline,
-    InvalidData,
-    StaleMaterialization,
-    CorruptByteCharge,
-}
-
-struct FaultingProvider {
-    pages: Box<[Arc<RdfDataset>]>,
-    byte_lengths: Box<[u64]>,
-    generation: PageGeneration,
-    fail_page: PageId,
-    fault: ScriptedFault,
-    calls: AtomicUsize,
-}
-
-impl FaultingProvider {
-    fn new(
-        pages: Vec<Arc<RdfDataset>>,
-        byte_lengths: Vec<u64>,
-        fail_page: PageId,
-        fault: ScriptedFault,
-    ) -> Self {
-        assert_eq!(pages.len(), byte_lengths.len());
-        Self {
-            pages: pages.into_boxed_slice(),
-            byte_lengths: byte_lengths.into_boxed_slice(),
-            generation: PageGeneration(31),
-            fail_page,
-            fault,
-            calls: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl PageProvider for FaultingProvider {
-    fn page_count(&self) -> u64 {
-        u64::try_from(self.pages.len()).unwrap()
-    }
-
-    fn generation(&self) -> PageGeneration {
-        self.generation
-    }
-
-    fn materialize(&self, page: PageId) -> Result<PageMaterialization, PageFault> {
-        let index = usize::try_from(page.0).expect("page id fits usize");
-        let Some(dataset) = self.pages.get(index) else {
-            return Err(PageFault::provider(page, "page out of range"));
-        };
-        let call = self.calls.fetch_add(1, Ordering::Relaxed);
-        let query_phase = call >= self.pages.len();
-        if query_phase && page == self.fail_page {
-            return match self.fault {
-                ScriptedFault::Provider => Err(PageFault::provider(page, "object read failed")),
-                ScriptedFault::Cancelled => Err(PageFault::cancelled(page, "cancel token set")),
-                ScriptedFault::Deadline => {
-                    Err(PageFault::deadline_exceeded(page, "host deadline elapsed"))
-                }
-                ScriptedFault::InvalidData => {
-                    Err(PageFault::invalid_data(page, "page checksum mismatch"))
-                }
-                ScriptedFault::StaleMaterialization => Ok(PageMaterialization::new(
-                    dataset.clone(),
-                    PageGeneration(self.generation.0 + 1),
-                    self.byte_lengths[index],
-                )),
-                ScriptedFault::CorruptByteCharge => Ok(PageMaterialization::new(
-                    dataset.clone(),
-                    self.generation,
-                    self.byte_lengths[index] + 1,
-                )),
-            };
-        }
-        Ok(PageMaterialization::new(
-            dataset.clone(),
-            self.generation,
-            self.byte_lengths[index],
-        ))
-    }
-}
-
-fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
-    let pages = vec![
-        local_dataset([("a", "p", "b")]),
-        local_dataset([("b", "q", "c")]),
-    ];
-    PagedDataset::from_provider(Arc::new(FaultingProvider::new(
-        pages,
-        vec![10, 20],
-        PageId(1),
-        fault,
-    )))
-    .expect("fault is armed only after the successful seal")
 }
 
 #[test]
@@ -387,7 +290,7 @@ fn healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entrie
                         &configured,
                         query,
                         None,
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                     )
                     .expect("configured operational explanation"),
                 engine
@@ -395,7 +298,7 @@ fn healthy_fallible_explain_preserves_receipts_on_cold_warm_and_signalled_entrie
                         &signalled,
                         query,
                         None,
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         Arc::new(CancellationFlag::new()),
                     )
                     .expect("quiet stop signal is inert"),
@@ -471,7 +374,7 @@ fn every_required_query_form_and_operator_propagates_page_failure() {
         let paged = two_page_faulting_dataset(ScriptedFault::Provider);
         let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
         let error = engine
-            .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
+            .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
             .expect_err("query must propagate the page failure");
         assert!(
             matches!(
@@ -505,7 +408,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
 
     let exact_view = paged.query_view(PagedQueryLimits::new(2, 30));
     let exact = engine
-        .query_fallible_view(&exact_view, query, QueryOptions::EMPTY)
+        .query_fallible_view(&exact_view, query, &QueryOptions::EMPTY)
         .expect("equality with both ceilings is admitted");
     assert_eq!(solutions(exact.result).1.len(), 2);
     assert_eq!(exact.evidence.requested_pages, vec![PageId(0), PageId(1)]);
@@ -514,7 +417,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
 
     let page_view = paged.query_view(PagedQueryLimits::new(1, u64::MAX));
     let page_error = engine
-        .query_fallible_view(&page_view, query, QueryOptions::EMPTY)
+        .query_fallible_view(&page_view, query, &QueryOptions::EMPTY)
         .expect_err("second page exceeds page ceiling");
     assert!(matches!(
         page_error,
@@ -530,7 +433,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
 
     let byte_view = paged.query_view(PagedQueryLimits::new(2, 29));
     let byte_error = engine
-        .query_fallible_view(&byte_view, query, QueryOptions::EMPTY)
+        .query_fallible_view(&byte_view, query, &QueryOptions::EMPTY)
         .expect_err("second page exceeds byte ceiling");
     assert!(matches!(
         byte_error,
@@ -548,7 +451,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
     let zero_pages = paged.query_view(PagedQueryLimits::new(0, u64::MAX));
     assert!(matches!(
         engine
-            .query_fallible_view(&zero_pages, query, QueryOptions::EMPTY)
+            .query_fallible_view(&zero_pages, query, &QueryOptions::EMPTY)
             .expect_err("zero page limit"),
         FallibleSparqlError::Operational {
             error: PagedQueryError::PageBudgetExceeded {
@@ -563,7 +466,7 @@ fn production_query_budget_boundaries_are_exact_and_distinct() {
     let zero_bytes = paged.query_view(PagedQueryLimits::new(u64::MAX, 0));
     assert!(matches!(
         engine
-            .query_fallible_view(&zero_bytes, query, QueryOptions::EMPTY)
+            .query_fallible_view(&zero_bytes, query, &QueryOptions::EMPTY)
             .expect_err("zero byte limit"),
         FallibleSparqlError::Operational {
             error: PagedQueryError::ByteBudgetExceeded {
@@ -595,7 +498,7 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
             .query_fallible_view(
                 &view,
                 request("SELECT * WHERE { ?s ?p ?o }"),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect_err("scripted operational fault cannot return a result");
         let FallibleSparqlError::Operational { error, evidence } = error else {
@@ -650,7 +553,7 @@ fn operational_failure_taxonomy_is_not_an_empty_answer() {
         .query_fallible_view(
             &normal_view,
             request("SELECT * WHERE { ?s <http://example.org/absent> ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("genuinely empty query is complete");
     assert_eq!(solutions(empty.result).1, [] as [Vec<Option<TermValue>>; 0]);
@@ -678,7 +581,7 @@ fn identical_executions_have_identical_results_status_and_evidence() {
     for _ in 0..4 {
         let view = paged.query_view(PagedQueryLimits::new(2, 30));
         let complete = engine
-            .query_fallible_view(&view, query, QueryOptions::EMPTY)
+            .query_fallible_view(&view, query, &QueryOptions::EMPTY)
             .expect("identical complete execution");
         let (variables, rows) = solutions(complete.result);
         let current = (variables, rows, (*complete.evidence).clone());
@@ -697,7 +600,7 @@ fn identical_executions_have_identical_results_status_and_evidence() {
             .query_fallible_view(
                 &view,
                 request("SELECT * WHERE { ?s ?p ?o }"),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect_err("identical failed execution");
         // The error type carries a materialized `SparqlResult` on its budget-exhausted
@@ -746,7 +649,7 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
     for _ in 0..2 {
         let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
         let complete = engine
-            .query_fallible_view(&view, query, QueryOptions::EMPTY)
+            .query_fallible_view(&view, query, &QueryOptions::EMPTY)
             .expect("complete empty execution");
         let (_, rows) = solutions(complete.result);
         assert_eq!(rows, [] as [Vec<Option<TermValue>>; 0]);
@@ -767,7 +670,11 @@ fn cold_and_warm_bgp_planning_have_identical_demand_paging_evidence() {
 #[test]
 fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
     let resident = local_dataset([("a", "p", "b"), ("b", "q", "c")]);
-    let pack_bytes = PackBuilder::build_bytes(&resident).expect("build pack");
+    let pack_bytes = PackBuilder::build_bytes(
+        &resident,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("build pack");
     let pack = PackView::from_bytes(&pack_bytes).expect("open pack");
     let engine = NativeSparqlEngine::new();
     let prepared = engine
@@ -775,10 +682,10 @@ fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
         .expect("prepare query");
 
     let resident_result = engine
-        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
         .expect("resident infallible query");
     let pack_result = engine
-        .query_prepared_view(&pack, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&pack, &prepared, &[], &QueryOptions::EMPTY)
         .expect("pack infallible query");
     assert_eq!(
         solutions(resident_result),
@@ -828,7 +735,7 @@ fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
     let env = ExtensionEnv::over_relations(pair_relation()).expect("declare the relation");
     let options = QueryOptions::new().with_env(&env);
     let expected = engine
-        .explain_query_with_options(&resident, RELATION_QUERY, None, options)
+        .explain_query_with_options(&resident, RELATION_QUERY, None, &options)
         .expect("resident registered-relation explanation")
         .render();
 
@@ -836,14 +743,14 @@ fn fallible_explain_options_measure_the_same_registered_relation_as_resident() {
     let signalled = paged.query_view(PagedQueryLimits::UNBOUNDED);
     for (explanation, evidence) in [
         engine
-            .explain_query_with_options_fallible_view(&configured, RELATION_QUERY, None, options)
+            .explain_query_with_options_fallible_view(&configured, RELATION_QUERY, None, &options)
             .expect("operational relation is parsed and measured with its registry"),
         engine
             .explain_query_with_stop_signal_fallible_view(
                 &signalled,
                 RELATION_QUERY,
                 None,
-                options,
+                &options,
                 Arc::new(CancellationFlag::new()),
             )
             .expect("quiet signal preserves registry-aware measuring"),
@@ -868,7 +775,7 @@ fn a_failed_paged_view_outranks_an_explain_stop_signal() {
         .query_fallible_view(
             &view,
             request("SELECT * WHERE { ?s ?p ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect_err("arm the sticky source failure");
     let stop = Arc::new(CancellationFlag::new());
@@ -878,7 +785,7 @@ fn a_failed_paged_view_outranks_an_explain_stop_signal() {
             &view,
             "SELECT * WHERE {}",
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             stop,
         )
         .expect_err("failed storage cannot publish even a stopped explanation");
@@ -904,7 +811,7 @@ fn query_fallible_view_dispatches_a_registered_relation_with_options() {
     let options = QueryOptions::new().with_env(&env);
 
     let complete = engine
-        .query_fallible_view(&view, request(RELATION_QUERY), options)
+        .query_fallible_view(&view, request(RELATION_QUERY), &options)
         .expect("a registered relation's call evaluates through the fallible entry");
     let (variables, rows) = solutions(complete.result);
     assert_eq!(variables, vec!["a", "b"]);
@@ -934,7 +841,7 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     let stale = engine
         .prepare_query(RELATION_QUERY, None)
         .expect("the text parses as ordinary data with no registry in scope");
-    let refused = engine.query_prepared_fallible_view(&view, &stale, &[], options);
+    let refused = engine.query_prepared_fallible_view(&view, &stale, &[], &options);
     match refused.expect_err("a plan/registry disagreement must be a diagnostic") {
         FallibleSparqlError::Query { diagnostic, .. } => {
             assert_eq!(diagnostic.code, "native-sparql-property-function");
@@ -946,10 +853,10 @@ fn query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_ma
     // relation — never from the page, which holds no `rel:pair` triple to have
     // matched instead.
     let matched = engine
-        .prepare_query_with_options(RELATION_QUERY, None, options)
+        .prepare_query_with_options(RELATION_QUERY, None, &options)
         .expect("the registry-aware parse lowers the predicate to a call");
     let complete = engine
-        .query_prepared_fallible_view(&view, &matched, &[], options)
+        .query_prepared_fallible_view(&view, &matched, &[], &options)
         .expect("a plan and options that agree on the registry evaluate");
     assert_eq!(solutions(complete.result).1.len(), 1);
 }

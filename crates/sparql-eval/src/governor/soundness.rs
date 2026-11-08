@@ -1150,7 +1150,7 @@ pub(crate) const fn child_row_ceiling(
         //
         // The correlated property-function call — `Lateral(left, PropertyFunction)`, the
         // shape the parser builds for a call written after a data pattern — still gets its
-        // ceiling, by a route that creates no new licence. [`crate::binop::eval_lateral`]
+        // ceiling, by a route that creates no new licence. [`crate::binop::begin_lateral`]
         // FUSES that pair into a single driven operator: the dispatch reads each left row
         // itself, so the rows it emits are already joined and are this `Lateral`'s OUTPUT
         // rows, one for one and in emission order. It therefore consumes the ceiling

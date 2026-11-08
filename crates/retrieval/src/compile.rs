@@ -348,6 +348,7 @@ use purrdf_sparql_algebra::Child;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::Score;
 use purrdf_sparql_algebra::{
     BlankNode, GraphPattern, NamedNodePattern, ParserOptions, PropertyFunctionCall, Query,
     QueryDataset, SparqlParser, TermPattern, TriplePattern, Variable, pattern_to_select_query,
@@ -356,7 +357,6 @@ use purrdf_sparql_eval::{
     BindingPattern, CallReadShape, CandidateDomains, ColumnSource, ExclusionBasis, PfDescriptor,
     PreparedQuery, PropertyFunctionRegistry, RankedDeclaration, RegistryId,
 };
-use purrdf_text::Fixed;
 
 use crate::admission::{
     AdmissionEnvironment, AdmissionError, BoundMode, MAX_READ_DEPTH, ProbedDepth, RowBound,
@@ -426,6 +426,8 @@ enum UnitQuery {
 /// them, and a bound spelled beside the depth is a bound that can disagree with it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RenderedQuery {
+    /// The producer's explicit rank output, absent for assigned ordinals.
+    rank: Option<usize>,
     /// The registered producer IRI the branch calls.
     producer: String,
     /// The subject-side argument list, in declared position order.
@@ -517,6 +519,12 @@ impl RenderedQuery {
                 format!("(?c{candidate} AS ?{CANDIDATE_NAME}) (?c{block} AS ?{BLOCK_NAME})"),
             ),
         };
+        if let Some(position) = self.rank {
+            use core::fmt::Write as _;
+            // INVARIANT: fmt::Write for String cannot return fmt::Error.
+            write!(projected, " ?{RANK_NAME}").expect("string formatting");
+            write!(projections, " (?c{position} AS ?{RANK_NAME})").expect("string formatting");
+        }
         if retain {
             for (position, argument) in self.arguments().enumerate() {
                 if matches!(argument, UnitArgument::Free) {
@@ -1561,6 +1569,7 @@ impl UnitAttribution {
 /// and reporting the first shifted tag would name a unit nothing was done to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompiledRetrieval {
+    score_prefix_bounded: bool,
     constraints: Vec<crate::RequestTerm>,
     /// Per-stratum query units, ordered by stratum IRI.
     ///
@@ -1689,7 +1698,9 @@ impl CompiledRead for CompiledRetrieval {
                         fused_bound: self.fused_bound,
                         contract: stream.contract,
                         attestation: stream.attestation,
-                        stream: stream.stream,
+                        stream: stream
+                            .stream
+                            .with_score_prefix_bounded(self.score_prefix_bounded),
                     }),
                 &workspace,
             )
@@ -1749,6 +1760,7 @@ impl CompiledRetrieval {
     ) -> Self {
         let attribution = units.iter().map(UnitAttribution::of).collect();
         Self {
+            score_prefix_bounded: false,
             constraints: Vec::new(),
             units,
             plan_id,
@@ -1862,7 +1874,7 @@ pub struct PlannedResolution {
     /// emits no unit, contributes no stream and therefore has no declaration to
     /// meet anyone else's.
     pub sharing_weights:
-        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Fixed>>,
+        purrdf_sparql_eval::SharedWorkspace<purrdf_sparql_eval::AdmittedVec<Score>>,
 }
 
 impl PlannedResolution {
@@ -1924,6 +1936,8 @@ pub(crate) const CANDIDATE_NAME: &str = "candidate";
 /// so a unit compiled for a producer that names no block per row is
 /// byte-identical to the one this compiler emitted before blocks existed.
 pub(crate) const BLOCK_NAME: &str = "block";
+/// The explicit producer rank column of a shared-rank stream.
+pub(crate) const RANK_NAME: &str = "rank";
 
 /// Admit `plan` against `env` and emit its per-stratum SPARQL units.
 ///
@@ -1940,6 +1954,15 @@ pub fn compile(
     plan: &Plan,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<CompiledRetrieval, AdmissionError> {
+    if env
+        .fusion_profile
+        .is_some_and(|profile| profile.ordering().is_some())
+        && matches!(plan.read_bound, ReadBound::Bounded(_))
+    {
+        return Err(AdmissionError::MalformedPlan {
+            reason: "caller-key fusion cannot use a score-prefix bounded plan; replan with ReadBound::CallerOrdered or Complete".to_owned(),
+        });
+    }
     let admitted = admit_plan(plan, env)?;
 
     let units = emit_units(&admitted)?;
@@ -2012,6 +2035,7 @@ pub fn compile(
         resolution,
     );
     compiled.constraints.clone_from(&plan.constraints);
+    compiled.score_prefix_bounded = matches!(plan.read_bound, ReadBound::Bounded(_));
     Ok(compiled)
 }
 
@@ -2095,7 +2119,7 @@ pub(crate) fn emit_units(
 /// reaching it would need more distinct candidates than a `usize` can count.
 fn fused_bound(plan: &Plan) -> TopK {
     match plan.read_bound {
-        ReadBound::Bounded(top_k) => top_k,
+        ReadBound::Bounded(top_k) | ReadBound::CallerOrdered(top_k) => top_k,
         ReadBound::Complete => {
             TopK::new(plan.stratum_depths.values().fold(0_usize, |total, depth| {
                 total.saturating_add(*depth as usize)
@@ -3182,6 +3206,20 @@ fn emit_query(
     let arguments = render_slots(invocation).map_err(|error| unrenderable(binding, &error))?;
     let (subject_arguments, object_arguments) = arguments.split_at(subject);
     Ok(RenderedQuery {
+        rank: match declaration.rank_source {
+            purrdf_sparql_eval::RankSource::Ordinal => None,
+            purrdf_sparql_eval::RankSource::Shared { position }
+                if position < total && !invocation.mode.is_bound(position) =>
+            {
+                Some(position)
+            }
+            purrdf_sparql_eval::RankSource::Shared { .. } => {
+                return Err(malformed(
+                    binding,
+                    "projects its shared rank from a position that is not a free argument",
+                ));
+            }
+        },
         producer: binding.producer.clone(),
         subject: subject_arguments.to_vec(),
         object: object_arguments.to_vec(),
@@ -3313,6 +3351,7 @@ mod tests {
                     position: 2,
                     datatype: INTEGER.to_owned(),
                 }),
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -3336,7 +3375,7 @@ mod tests {
         let options = || QueryOptions::new().with_env(&env);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_query_with_options(text, None, options())
+            .prepare_query_with_options(text, None, &options())
             .expect("the caller's text prepares");
         let lookups = supplied_exclusion_texts(&prepared, registry, ExclusionBasis::Membership)?;
         let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
@@ -3344,7 +3383,7 @@ mod tests {
         assert_eq!(lookup.parameter, CANDIDATE_NAME);
         assert!(!lookup.driven, "nothing in the text drives the call");
         engine
-            .prepare_execution(&lookup.text, None, &[CANDIDATE_NAME], options())
+            .prepare_execution(&lookup.text, None, &[CANDIDATE_NAME], &options())
             .unwrap_or_else(|error| {
                 panic!("the derived lookup prepares: {error}\n{}", lookup.text)
             });
@@ -3463,7 +3502,7 @@ mod tests {
                      ?candidate <{NEIGHBOURS}> ( ?seed \"5\"^^<{INTEGER}> ?score ) }}"
                 ),
                 None,
-                options(),
+                &options(),
             )
             .expect("the caller's text prepares");
         let lookups = supplied_exclusion_texts(&prepared, &registry, ExclusionBasis::Membership)
@@ -3493,7 +3532,7 @@ mod tests {
             "read whole, one row per seed: {text}"
         );
         engine
-            .prepare_execution(text, None, &[CANDIDATE_NAME], options())
+            .prepare_execution(text, None, &[CANDIDATE_NAME], &options())
             .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{text}"));
     }
 
@@ -3501,6 +3540,7 @@ mod tests {
     /// at 0, a constant seed at 1, the producer's depth at 2, and a free projection at 3.
     fn self_bounding() -> RenderedQuery {
         RenderedQuery {
+            rank: None,
             producer: "https://example.org/pf/neighbours".to_owned(),
             subject: vec![UnitArgument::Free],
             object: vec![
@@ -3601,7 +3641,7 @@ mod tests {
         let prepared_under = |registry: &PropertyFunctionRegistry<'_>, text: &str| {
             let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
             engine
-                .prepare_query_with_options(text, None, QueryOptions::new().with_env(&env))
+                .prepare_query_with_options(text, None, &QueryOptions::new().with_env(&env))
                 .map_err(|error| error.to_string())
         };
 
@@ -3646,7 +3686,7 @@ mod tests {
                 &lookup.text,
                 None,
                 &[CANDIDATE_NAME],
-                QueryOptions::new().with_env(&env),
+                &QueryOptions::new().with_env(&env),
             )
             .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{}", lookup.text));
     }

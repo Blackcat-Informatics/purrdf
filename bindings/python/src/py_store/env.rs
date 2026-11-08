@@ -66,3 +66,20 @@ pub(crate) fn division_policy(text: Option<&str>) -> PyResult<DivisionPolicy> {
             .map_err(|e| PyValueError::new_err(format!("division: {e}")))
     })
 }
+
+/// Decode supplied execution coordinates before parsing, snapshots or detached execution.
+/// Python already extracts the seed as `u64`; the shared boundary owns the
+/// exact time parser and the resulting request storage.
+///
+/// # Errors
+/// Invalid time raises `ValueError` naming `now`, with the ordinary argument
+/// refusal presentation. Integer type/range errors come from PyO3 extraction.
+pub(crate) fn query_coordinates(
+    now: Option<&str>,
+    entropy_seed: Option<u64>,
+) -> PyResult<purrdf_validate::query::CoordinateInputs> {
+    super::presentation::settled(|| {
+        purrdf_validate::query::CoordinateInputs::from_time_and_seed(now, entropy_seed)
+            .map_err(|error| PyValueError::new_err(format!("now: {error}")))
+    })
+}

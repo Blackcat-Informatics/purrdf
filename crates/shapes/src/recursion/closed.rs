@@ -1,0 +1,398 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Checked eligibility for the borrowed recursive evaluator.
+
+use crate::expression::{NodeExpr, ShapeArg};
+use crate::shapes::{
+    ModelOwner,
+    link::{ShapeIndex, ShapeIndexRef},
+};
+use crate::term::Term;
+use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
+use purrdf_lex::walk::WorkList;
+use std::sync::{Arc, Weak};
+
+struct Fields {
+    definition: Term,
+    parameter: &'static str,
+    model: Option<Arc<ModelOwner>>,
+    _index_owner: Option<ShapeIndex>,
+    index: Option<ShapeIndexRef>,
+}
+
+/// An original operation whose recursive dependency scope has not been proved.
+/// Published refusals retain their original model and index. They are never
+/// installed in the weak-key admission cache.
+#[derive(Clone)]
+pub struct ClosedRecursionRefusal {
+    fields: Shared<Fields>,
+}
+
+impl purrdf_hash::error::StructuredError for ClosedRecursionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { fields } => "shapes-unqualified-recursion" {
+            "definition" => Term(self.definition()),
+            "parameter" => Text(self.parameter()),
+            "model_retained" => Boolean(self.model().is_some()),
+            "index_retained" => Boolean(self.index().is_some()),
+        }
+    }
+}
+
+impl ClosedRecursionRefusal {
+    pub(crate) fn new(
+        definition: &Term,
+        parameter: &'static str,
+        model: Option<&Arc<ModelOwner>>,
+        index: Option<&ShapeIndexRef>,
+    ) -> Result<Self, StorageError> {
+        let fields = Fields {
+            definition: definition.try_clone()?,
+            parameter,
+            model: model.cloned(),
+            _index_owner: index.and_then(Weak::upgrade),
+            index: index.cloned(),
+        };
+        Shared::try_new(fields)
+            .map(|fields| Self { fields })
+            .map_err(|_| StorageError::AllocationFailed)
+    }
+    /// The original containing definition.
+    #[must_use]
+    pub fn definition(&self) -> &Term {
+        &self.fields.definition
+    }
+    /// The original parameter or native model operation.
+    #[must_use]
+    pub fn parameter(&self) -> &'static str {
+        self.fields.parameter
+    }
+    /// The original model, retained for inspection after the caller drops it.
+    #[must_use]
+    pub fn model(&self) -> Option<&Arc<ModelOwner>> {
+        self.fields.model.as_ref()
+    }
+    /// The original computed-reference index scope, if present.
+    #[must_use]
+    pub fn index(&self) -> Option<&ShapeIndexRef> {
+        self.fields.index.as_ref()
+    }
+}
+
+impl PartialEq for ClosedRecursionRefusal {
+    fn eq(&self, other: &Self) -> bool {
+        fn same<T>(a: Option<&Weak<T>>, b: Option<&Weak<T>>) -> bool {
+            match (a, b) {
+                (Some(a), Some(b)) => Weak::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+        }
+        self.definition() == other.definition()
+            && self.parameter() == other.parameter()
+            && match (self.model(), other.model()) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && same(self.index(), other.index())
+    }
+}
+impl Eq for ClosedRecursionRefusal {}
+impl std::fmt::Debug for ClosedRecursionRefusal {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.debug_struct("ClosedRecursionRefusal")
+            .field("definition", self.definition())
+            .field("parameter", &self.parameter())
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Display for ClosedRecursionRefusal {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            out,
+            "recursive definition {} has no closed dependency proof for {}; retain its original model/index and use a supported structural catalog",
+            self.definition(),
+            self.parameter()
+        )
+    }
+}
+impl std::error::Error for ClosedRecursionRefusal {}
+
+/// Constructed only after the original catalog and occurrence are checked.
+pub(crate) struct ClosedProof(pub(super) ());
+
+/// A conformance question whose focus and target cannot depend on the current
+/// recursive valuation. Static targets retain canonical original references;
+/// computed targets enumerate their possible outputs in the same original index.
+/// A local replacement or another model cannot acquire this catalog's proof.
+pub(crate) fn original_conformance<'a>(
+    expression: &'a NodeExpr,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Result<Option<&'a ShapeArg>, crate::error::ShapesError> {
+    let NodeExpr::ConformsToShape { node, shape } = expression else {
+        return Ok(None);
+    };
+    if !pure_focus(node, 2)? {
+        return Ok(None);
+    }
+    let proved = match shape {
+        ShapeArg::Named(shape) => original_reference(shape, owner).is_some(),
+        ShapeArg::Computed { expr, shapes } => original_shape_outputs(expr, shapes, owner, 2)?,
+    };
+    Ok(proved.then_some(shape))
+}
+
+/// Every possible shape output is enumerated without inspecting conformance,
+/// and is looked up in this original model's index when selected at runtime.
+pub(crate) fn original_shape_outputs(
+    expression: &NodeExpr,
+    index: &ShapeIndexRef,
+    owner: Option<&Arc<ModelOwner>>,
+    depth: u32,
+) -> Result<bool, crate::error::ShapesError> {
+    Ok(
+        owner.is_some_and(|owner| Weak::ptr_eq(index, &Arc::downgrade(&owner.index)))
+            && pure_focus(expression, depth)?
+            && crate::expression::named_outputs::visit_terms(expression, |_| {
+                Ok::<(), crate::error::ShapesError>(())
+            })?,
+    )
+}
+
+/// Check every child, independently of which branch a particular focus takes.
+/// The starting depth includes any enclosing conformance expression.
+fn pure_focus(expression: &NodeExpr, depth: u32) -> Result<bool, crate::error::ShapesError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut pending: WorkList<(&NodeExpr, u32), 8> = WorkList::new();
+    pending.try_push_admitted((expression, depth), &mut memory)?;
+    while let Some((expression, depth)) = pending.pop() {
+        if depth > crate::expression::MAX_NODE_EXPR_DEPTH {
+            return Err(crate::error::ProcessorFailure::ExpressionDepth {
+                depth,
+                limit: crate::expression::MAX_NODE_EXPR_DEPTH,
+            }
+            .into());
+        }
+        let mut child =
+            |expression| pending.try_push_admitted((expression, depth + 1), &mut memory);
+        match expression {
+            NodeExpr::Constant(_)
+            | NodeExpr::This
+            | NodeExpr::Path(_)
+            | NodeExpr::Empty
+            | NodeExpr::Var(_)
+            | NodeExpr::List(_) => {}
+            NodeExpr::Union(operands)
+            | NodeExpr::Intersection(operands)
+            | NodeExpr::Concat(operands) => {
+                for operand in operands {
+                    child(operand)?;
+                }
+            }
+            NodeExpr::If { cond, then, els } => {
+                child(cond.as_ref())?;
+                child(then.as_ref())?;
+                child(els.as_ref())?;
+            }
+            NodeExpr::Count { of, .. }
+            | NodeExpr::Distinct(of)
+            | NodeExpr::Min(of)
+            | NodeExpr::Max(of)
+            | NodeExpr::Sum(of)
+            | NodeExpr::Limit { of, .. }
+            | NodeExpr::Offset { of, .. }
+            | NodeExpr::Exists(of)
+            | NodeExpr::InstancesOf(of) => child(of.as_ref())?,
+            NodeExpr::OrderBy { of, key, .. } => {
+                child(of.as_ref())?;
+                child(key.as_ref())?;
+            }
+            NodeExpr::PathValues { focus, .. } => child(focus.as_ref())?,
+            NodeExpr::Remove { nodes, remove } => {
+                child(nodes.as_ref())?;
+                child(remove.as_ref())?;
+            }
+            NodeExpr::FlatMap { nodes, map } => {
+                child(nodes.as_ref())?;
+                child(map.as_ref())?;
+            }
+            NodeExpr::Filter { .. }
+            | NodeExpr::FindFirst { .. }
+            | NodeExpr::MatchAll { .. }
+            | NodeExpr::NodesMatching(_)
+            | NodeExpr::ConformsToShape { .. }
+            | NodeExpr::Call(_)
+            | NodeExpr::CustomCall { .. }
+            | NodeExpr::Arg(_)
+            | NodeExpr::Owned { .. }
+            | NodeExpr::Select { .. } => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+/// Resolve only canonical references in their original declaration domain.
+/// Blank labels carry RDF scope, while the owner distinguishes independent
+/// catalogs even when their native terms have the same spelling.
+fn original_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    let owner = owner?;
+    (matches!(shape.id, Term::NamedNode(_) | Term::BlankNode(_))
+        && shape
+            .owner
+            .as_ref()
+            .is_none_or(|target| Arc::ptr_eq(owner, target))
+        && super::model::canonical_handle(shape)
+        && owner.definition(&shape.id).is_some())
+    .then_some(shape)
+}
+
+/// A where operand is the original bare reference, not an exported root with
+/// its own targets. Check that representation before the general root proof:
+/// its ownerless branch checks every metadata field without descending into a
+/// caller-built tree of owned where targets.
+pub(crate) fn where_reference<'a>(
+    shape: &'a crate::shapes::Shape,
+    owner: Option<&Arc<ModelOwner>>,
+) -> Option<&'a crate::shapes::Shape> {
+    if shape.owner.is_some() {
+        return None;
+    }
+    original_reference(shape, owner)
+}
+
+/// The original kind of an admitted dependency-graph occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RecursionDefinitionKind {
+    /// Original node/definition shape body.
+    Shape,
+    /// Original local property body.
+    Property,
+    /// Original named expression declaration in unselected admission evidence.
+    Function,
+}
+
+impl purrdf_hash::error::StructuredError for RecursionDefinitionKind {
+    purrdf_hash::error_visit! {
+        Shape => "shacl-recursion-shape" {},
+        Property => "shacl-recursion-property" {},
+        Function => "shacl-recursion-function" {},
+    }
+}
+
+/// An original definition retained by a published recursive-component refusal.
+#[derive(Clone)]
+pub struct RecursionDefinition {
+    fields: Shared<DefinitionFields>,
+}
+
+impl purrdf_hash::error::StructuredError for RecursionDefinition {
+    purrdf_hash::error_visit! {
+        @record self { fields } => "shacl-recursion-definition" {
+            "definition" => Term(self.definition()), "kind" => Record(&self.fields.kind),
+            "occurrence" => Unsigned(self.occurrence() as u128),
+            "model_retained" => Boolean(self.model().is_some()),
+        }
+    }
+}
+struct DefinitionFields {
+    definition: Shared<Term>,
+    model: Option<Arc<ModelOwner>>,
+    occurrence: usize,
+    kind: RecursionDefinitionKind,
+}
+purrdf_hash::debug_non_exhaustive!(RecursionDefinition {});
+impl RecursionDefinition {
+    /// The authored definition identity, without rendering or scope folding.
+    #[must_use]
+    pub fn definition(&self) -> &Term {
+        &self.fields.definition
+    }
+    /// Its original model domain, retained for inspection.
+    #[must_use]
+    pub fn model(&self) -> Option<&Arc<ModelOwner>> {
+        self.fields.model.as_ref()
+    }
+    /// Original occurrence identity within that retained model domain.
+    #[must_use]
+    pub fn occurrence(&self) -> usize {
+        self.fields.occurrence
+    }
+    /// The original shape/property/declaration kind, independently of its name.
+    #[must_use]
+    pub fn kind(&self) -> RecursionDefinitionKind {
+        self.fields.kind
+    }
+}
+impl PartialEq for RecursionDefinition {
+    fn eq(&self, other: &Self) -> bool {
+        self.definition() == other.definition()
+            && self.occurrence() == other.occurrence()
+            && self.kind() == other.kind()
+            && match (self.model(), other.model()) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+impl Eq for RecursionDefinition {}
+
+pub(crate) struct WeakDefinition {
+    definition: Shared<Term>,
+    model: Option<Weak<ModelOwner>>,
+    occurrence: usize,
+    kind: RecursionDefinitionKind,
+}
+impl WeakDefinition {
+    pub(crate) fn new(
+        definition: &Term,
+        model: Option<&Arc<ModelOwner>>,
+        occurrence: usize,
+        kind: RecursionDefinitionKind,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            definition: Shared::try_new(definition.try_clone()?)
+                .map_err(|_| StorageError::AllocationFailed)?,
+            model: model.map(Arc::downgrade),
+            occurrence,
+            kind,
+        })
+    }
+    pub(crate) fn native(&self) -> &Term {
+        &self.definition
+    }
+    pub(crate) fn model_key(&self) -> Option<usize> {
+        self.model.as_ref().map(|model| model.as_ptr().addr())
+    }
+    pub(crate) fn occurrence(&self) -> usize {
+        self.occurrence
+    }
+    pub(crate) fn kind(&self) -> RecursionDefinitionKind {
+        self.kind
+    }
+    pub(crate) fn publish(&self) -> Result<RecursionDefinition, crate::error::ShapesError> {
+        let model = self
+            .model
+            .as_ref()
+            .map(|model| {
+                model
+                    .upgrade()
+                    .ok_or(crate::PreparationRefusal::UnboundModel)
+            })
+            .transpose()?;
+        let fields = Shared::try_new(DefinitionFields {
+            definition: self.definition.clone(),
+            model,
+            occurrence: self.occurrence,
+            kind: self.kind,
+        })
+        .map_err(|_| StorageError::AllocationFailed)?;
+        Ok(RecursionDefinition { fields })
+    }
+}

@@ -17,13 +17,13 @@ const SCALAR: Limits = Limits {
 fn strict(text: &str) -> Result<String, ErrorKind> {
     read(text)
         .map(|value| write_compact(&value))
-        .map_err(|error| error.kind())
+        .map_err(purrdf_lex::yaml::Error::into_kind)
 }
 
 fn scalar(text: &str) -> Result<String, ErrorKind> {
     read_with(text, SCALAR)
         .map(|value| write_compact(&value))
-        .map_err(|error| error.kind())
+        .map_err(purrdf_lex::yaml::Error::into_kind)
 }
 
 #[test]
@@ -35,6 +35,7 @@ fn by_default_a_number_boolean_or_null_key_is_refused_and_its_string_spelling_is
         "1.5: a",
         "~: a",
         "0x1F: a",
+        "007: a",
         "True: a",
         "? 1\n: a",
         "!!int 1: a",
@@ -51,7 +52,9 @@ fn by_default_a_number_boolean_or_null_key_is_refused_and_its_string_spelling_is
         ("!!str 1: a", r#"{"1":"a"}"#),
         ("? '1'\n: a", r#"{"1":"a"}"#),
         ("{'1': a}", r#"{"1":"a"}"#),
-        ("007: a", r#"{"007":"a"}"#),
+        ("'007': a", r#"{"007":"a"}"#),
+        ("0b101: a", r#"{"0b101":"a"}"#),
+        ("-0x1F: a", r#"{"-0x1F":"a"}"#),
         ("1a: b", r#"{"1a":"b"}"#),
         ("nulls: a", r#"{"nulls":"a"}"#),
         ("a: 1", r#"{"a":1}"#),
@@ -104,8 +107,14 @@ fn with_scalar_keys_a_number_boolean_or_null_key_is_its_source_text() {
 #[test]
 fn with_scalar_keys_a_repeated_key_is_still_refused_and_a_collection_is_never_a_key() {
     // `1` and `"1"` spell one key.
-    assert_eq!(scalar("1: a\n\"1\": b"), Err(ErrorKind::DuplicateKey));
-    assert_eq!(scalar("1: a\n1: b"), Err(ErrorKind::DuplicateKey));
+    assert!(matches!(
+        scalar("1: a\n\"1\": b"),
+        Err(ErrorKind::DuplicateKey { .. })
+    ));
+    assert!(matches!(
+        scalar("1: a\n1: b"),
+        Err(ErrorKind::DuplicateKey { .. })
+    ));
     for refused in [
         "[x]: a",
         "{x: y}: a",

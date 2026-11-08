@@ -81,10 +81,9 @@
 //!   threshold, so a [`purrdf_alloc_probe::CurrentThreadWindow`] would miss every
 //!   worker and report a stable figure that measured almost nothing. Every
 //!   measurement here uses a [`WholeProcessWindow`].
-//! * That window reads one process-global ledger and `cargo test` runs a
-//!   binary's tests concurrently, so [`MEASURE_LOCK`] serializes every measured
-//!   region in this binary. Poisoning is absorbed, so one failure does not
-//!   cascade into unrelated ones that hide it.
+//! * The shared serial runner executes cases and reporting synchronously on
+//!   the same thread, keeping runner allocation traffic outside each window.
+//!   Concurrent test requests are refused; Rayon workers remain parallel.
 //! * [`FOCUS_NODES`] and its double both sit above
 //!   [`PARALLEL_MIN_FOCUS_NODES`], checked when the file compiles, and
 //!   [`assert_parallel_path_is_reachable`] refuses to report a figure from a host
@@ -123,7 +122,7 @@ mod roles;
 
 use std::sync::Arc;
 
-use measured::{assert_parallel_path_is_reachable, measure, measure_lock};
+use measured::{assert_parallel_path_is_reachable, measure};
 use roles::role_iris;
 
 use purrdf_alloc_probe::CountingAllocator;
@@ -403,9 +402,7 @@ fn assert_measured_fixture_roles(result: &ValidationResult) {
 /// not about the host, so two runs of the same work produce the same number and
 /// any tolerance here would be a place for the term this test exists to forbid to
 /// hide.
-#[test]
 fn a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = Fixture::build(2 * FOCUS_NODES, VIOLATIONS);
@@ -486,9 +483,7 @@ fn a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path() {
 /// [`a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path`] states the
 /// same thing with whatever the surrounding route costs cancelled rather than
 /// assumed away, and the two are kept side by side for that reason.
-#[test]
 fn conforming_box_role_validation_has_no_growth_term_in_focus_count() {
-    let _guard = measure_lock();
     assert_parallel_path_is_reachable();
 
     let fixture = Fixture::build(2 * FOCUS_NODES, VIOLATIONS);
@@ -536,9 +531,7 @@ fn conforming_box_role_validation_has_no_growth_term_in_focus_count() {
 /// roles without a configured vocabulary fails here too. PurRDF mints no
 /// vocabulary IRIs, and an inactive feature that quietly acquired a default would
 /// be the same defect read from the other side.
-#[test]
 fn violating_box_role_validation_still_stamps_every_role() {
-    let _guard = measure_lock();
     let fixture = Fixture::build(FOCUS_NODES, VIOLATIONS);
 
     let configured = fixture.validate_violating(true);
@@ -658,9 +651,7 @@ const ROLE_CASES: &[RoleCase] = &[
 /// and the CBox individual the reifier path adds from the vocabulary. Counts
 /// would not catch a merge that dropped an ancestor or an initializer that
 /// captured the wrong slice, so the contents are asserted, sorted and complete.
-#[test]
 fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
-    let _guard = measure_lock();
     for case in ROLE_CASES {
         let shapes = format!("{CASE_PREFIXES}{}", case.shapes);
         let report = purrdf_shapes::engine::validate_graphs_with_config(
@@ -706,43 +697,9 @@ fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 5. The regression guard: every test in this binary holds MEASURE_LOCK first
-// ---------------------------------------------------------------------------
-
-/// **Every `#[test]` function in this binary takes [`MEASURE_LOCK`] as the FIRST
-/// statement of its body.**
-///
-/// This file's own documentation states that rule; this is what enforces it. A
-/// binary-wide [`WholeProcessWindow`] reads one process-global ledger, and
-/// `cargo test` runs a binary's test functions CONCURRENTLY, so a test that
-/// allocates without holding the lock — whether or not it takes a measurement of
-/// its own — can land its traffic inside a sibling test's open window and shift
-/// a pinned constant nondeterministically. A future test that omits the lock is
-/// exactly the contamination source this file exists to rule out, so it must
-/// fail loudly and name itself rather than show up as an occasional,
-/// unattributed shift in someone else's figure.
-///
-/// A source scan rather than a runtime check: nothing observable at runtime
-/// distinguishes "this test forgot to take the lock" from "this test never
-/// needed it", so the only place the distinction is visible is the source
-/// itself.
-#[test]
-fn every_test_in_this_binary_takes_the_measure_lock_first() {
-    let _guard = measure_lock();
-    let source = include_str!("box_role_alloc.rs");
-    let (tests, offenders) = measured::tests_and_unlocked(source);
-
-    assert!(
-        tests > 0,
-        "the scan found no #[test] function in this file at all, so this guard is reading \
-         nothing"
-    );
-
-    assert!(
-        offenders.is_empty(),
-        "these #[test] functions do not take MEASURE_LOCK as the first statement of their \
-         body, so they can allocate concurrently with another test's WholeProcessWindow and \
-         silently shift its pinned figure: {offenders:?}"
-    );
-}
+purrdf_testkit::harness_main!(serial;
+    a_box_role_vocabulary_adds_no_allocation_to_the_conforming_path,
+    conforming_box_role_validation_has_no_growth_term_in_focus_count,
+    violating_box_role_validation_still_stamps_every_role,
+    box_roles_are_pinned_for_path_nested_and_reifier_shapes,
+);

@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     int exit_code = 1;
 
     int status = purrdf_parse((const uint8_t *)document, strlen(document),
-                              "text/turtle", NULL, NULL, &dataset, &error);
+                              "text/turtle", NULL, NULL, NULL, 0, &dataset, &error);
     if (status != PURRDF_STATUS_OK) {
         print_error("parse", error);
         goto cleanup;

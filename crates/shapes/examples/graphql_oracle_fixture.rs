@@ -161,7 +161,8 @@ fn reverse_evidence(
     config: &SchemaImportConfig,
 ) -> Result<Value, Box<dyn Error>> {
     let imported = import_graphql_package(package, config)?;
-    check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")?;
+    check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let repeated = import_graphql_package(package, config)?;
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("GraphQL reverse ledger is not deterministic".into());
@@ -550,7 +551,8 @@ fn exact_fixture(schema: &Value, package: &GraphqlPackage) -> Result<Fixture, Bo
 }
 
 fn lossy_fixture(schema: &Value, package: &GraphqlPackage) -> Result<Fixture, Box<dyn Error>> {
-    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     check_ledger_complete(&package.losses, &CLOSED_PROFILE)?;
     let rows = [
         (
@@ -853,7 +855,8 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_lists::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
-    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     // The verified reverse import restores the list components exactly: the
     // imported shapes compile back to the same Holder definition.
     let imported = import_graphql_package(&package, &oracle::import_config()?)?;
@@ -868,7 +871,21 @@ fn lists_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
         let divergence = LIST_DIVERGENCES
             .iter()
             .find(|(label, _, _)| *label == case.label)
-            .map(|(_, code, location)| (*code, format!("#/$defs/Holder/properties/{location}")));
+            .map(|(_, code, location)| {
+                let location = if case.label == "member-negative" {
+                    format!(
+                        "{}/minimum",
+                        oracle::referenced_location(
+                            &schema,
+                            "#/$defs/Holder/properties/ex:members/anyOf/1/properties/@list/items"
+                        )?
+                    )
+                } else {
+                    format!("#/$defs/Holder/properties/{location}")
+                };
+                Ok::<_, Box<dyn Error>>((*code, location))
+            })
+            .transpose()?;
         if divergence.is_some() && case.conforms {
             return Err(format!("conforming list probe {:?} cannot diverge", case.label).into());
         }
@@ -897,7 +914,8 @@ fn temporal_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error>> {
     let compiled = shacl_temporal::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
-    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let mut probes = Vec::new();
     for case in shacl_temporal::FIXTURE.cases()? {
         let property = shacl_temporal::VARIANTS
@@ -932,7 +950,8 @@ fn value_shapes_fixture(config: &GraphqlConfig) -> Result<Fixture, Box<dyn Error
     let compiled = shacl_value_shapes::FIXTURE.compiled()?;
     let schema: Value = read_sorted(&compiled.schema_json)?;
     let package = emit_graphql(&compiled, config)?;
-    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)?;
+    check_ledger_sound(&package.losses, "json-schema", GRAPHQL_DIALECT)
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let mut probes = Vec::new();
     for case in shacl_value_shapes::cases()? {
         let property = shacl_value_shapes::VARIANTS

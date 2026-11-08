@@ -41,6 +41,41 @@ assert rows[0]["name"].value == "Alice"
 
 `SELECT` returns `QuerySolutions`. A row supports variable names, `Variable` objects and integer positions, including negative indexing. An unbound projected cell is `None`; it is not omitted. Missing variable names raise `KeyError`, and out-of-range positions raise `IndexError`. `ASK` returns `QueryBoolean`. Default-graph `CONSTRUCT`/`DESCRIBE` results iterate over `Triple`; a result carrying named graphs iterates over `Quad`.
 
+## Preserve original YAML source
+
+`yaml_source_export` returns a frozen `YamlSourceExport` with a computed `root`
+and an existing immutable `RdfDataset`. Supply immutable source and profile JSON
+bytes. The profile is explicit; no vocabulary or standard profile is implicit.
+These operations preserve source presentation through the native cover carrier.
+Ordinary YAML-LD parsing remains a separate semantic operation.
+
+```python
+profile = b'{"version":1,"name":"my-source","profile_version":1,"vocabulary":"https://example.org/yaml#"}'
+source = b"# original\r\nkey: 'value'\r\n"
+exported = purrdf.yaml_source_export(
+    source, source_iri="https://example.org/source.yaml", profile_json=profile
+)
+restored = purrdf.yaml_source_reconstruct(
+    exported.dataset, root=exported.root, profile_json=profile
+)
+assert restored == source
+```
+
+Retain the explicit root and use the same profile for reconstruction. Dataset
+handles remain usable after the export result is released. Reconstruction returns
+verified original UTF-8 bytes without a newline or transport transformation.
+
+The bounded profile decoder runs before source work. Source and profile bytes are
+borrowed while their Python owners remain alive during native execution. Native
+phase accounts, shared handle control, Python output and error inspection have
+separate ownership; native bounds are not a combined process memory ceiling.
+
+Failures raise `ValueError` with the usual `code`, `diagnostic_json`, `message_id`
+and `presentation` attributes. `native_cause` carries the original structured
+cause, including available byte offsets and line/column positions;
+`native_cause_json` carries its JSON representation. Error inspection or attachment
+failures propagate as their own exceptions.
+
 ## RDF terms and exact values
 
 `NamedNode.value` is its IRI. `Literal.value` preserves its lexical form; datatype, language and direction are separate properties. Language-tag identity folds case. Construct typed literals with `datatype=NamedNode(iri)`, language literals with `language=`, and directional language literals with both `language=` and `direction=`.
@@ -78,7 +113,7 @@ Use lexical forms for exact decimal and temporal values rather than converting t
 
 ## Prepared queries
 
-Declare parameter names with `Store.prepare(..., parameters=[...])`. Every run must bind every declared name to an RDF term. An unknown name or a missing binding raises an error. Configuration is fixed at preparation; source rows are read from the store for each run. Parameter names are supplied without `?`.
+Declare parameter names with `Store.prepare(..., parameters=[...])`. Every run must bind every declared name to an RDF term. An unknown name or a missing binding raises an error. Parser and provider configuration is fixed at preparation; source rows and optional time/entropy inputs are selected for each run. Parameter names are supplied without `?`.
 
 ```python
 prepared = store.prepare(
@@ -86,13 +121,58 @@ prepared = store.prepare(
     parameters=["person"],
 )
 assert prepared.parameters == ["person"]
-rows = list(prepared.run(person=purrdf.NamedNode("https://example.org/alice")))
+rows = list(prepared.run({"person": purrdf.NamedNode("https://example.org/alice")}))
 assert rows[0]["name"].value == "Alice"
 ```
 
+## Supplied query and UPDATE time and entropy
+
+`query`, `query_rdflib`, `query_governed`, `query_entailment_governed`,
+`update` and `update_governed`
+accept keyword-only `now: str | None` and `entropy_seed: int | None` on both
+`Store` and `MutableDataset`. The RDFLib-compatible `Graph.query`,
+`Graph.update` and their processors forward the same inputs, including through
+Dataset and context receivers. `now` is a native `xsd:dateTime` lexical
+form, preserving exact fractional seconds, declared timezone and negative
+years without conversion through Python `datetime` or `float`. The seed is
+an unsigned 64-bit Python integer; zero is valid. Omission or `None` requests
+the native clock or entropy default for that execution.
+
+A prepared handle accepts fresh inputs on each call:
+
+```python
+rows = prepared.run(
+    {"person": purrdf.NamedNode("https://example.org/alice")},
+    now="2024-01-02T03:04:05.123456789012345678901+05:30",
+    entropy_seed=0,
+)
+```
+
+Bindings are an explicit dictionary, so parameter names such as `now`,
+`entropy_seed` and `bindings` do not collide with execution options. Each call
+replaces all bindings and both coordinate selections; omitted values never
+reuse a preceding run's settings. Preparing a query samples neither input.
+
+Malformed time raises `ValueError` naming `now`, with `message_id` and
+`presentation` set to `None`. Wrong Python argument types raise `TypeError`;
+negative or overflowing seeds raise `OverflowError`. Coordinate conversion
+precedes snapshot and execution work. Governor trips, partial answers and
+entailment reports retain their existing contracts. These controls do not
+serialize an execution receipt or change the serializer's caller-supplied
+opaque `query_hash`.
+
+UPDATE uses one request-wide entropy stream across its operations and the
+same supplied time in each WHERE clause. Repeating an identical request on
+identical starting data with the same coordinates repeats its generated values.
+A governed trip still applies nothing. Malformed coordinates fail before any
+snapshot, provider execution or mutation; existing engine-configuration errors
+retain their precedence. RDFLib first performs its nonmutating namespace and
+`initBindings` string preprocessing, then forwards coordinates for native
+decoding. Successful updates retain the existing literal reconciliation.
+
 ## Governors and incomplete answers
 
-`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. Omitted ceilings retain metering. `no_ceiling=True` declines accounting and resource caps, retains deadline/cancellation, and conflicts with explicitly supplied caps.
+`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `max_udf_depth`, `unlimited_udf_depth`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. Omitted ceilings retain metering and the default UDF depth limit of 32. Set `max_udf_depth` to a finite logical invocation limit, or `unlimited_udf_depth=True` to remove it; supplying both is a typed conflict. `no_ceiling=True` declines accounting and resource caps, including UDF depth, retains deadline/cancellation, and conflicts with explicitly supplied finite caps.
 
 ```python
 stopped = store.query_governed("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", fuel=0)
@@ -262,12 +342,20 @@ namespace fallback. `project_statements_rdf12` and `normalize_rdf12_to_owl`
 provide the statement-codec conversions; `canonicalize_turtle` returns canonical
 bytes with optional extra prefix mappings.
 
-`Dataset.canonicalize` relabels blank nodes in place under
-`CanonicalizationAlgorithm.RDFC_1_0` or `UNSTABLE`. `RdfDataset.to_nquads()`
-uses the shipped flat canonicalization profile: it agrees with RDFC-1.0 on
-the RDF 1.1 subset, while the RDF 1.2 profile has its own reserved-vocabulary,
-statement-layer and refusal contract. Do not label an RDF 1.2 digest as RDFC-1.0.
-Canonicalization refusal raises `ValueError`. Read the
+`Dataset.canonicalize(canonical_search="unlimited")` relabels blank nodes in
+place and returns a `CanonicalResult` whose `value` is `None`. Refusal leaves the
+dataset unchanged. `RdfDataset.to_nquads(canonical_search="unlimited")` returns
+canonical N-Quads in its result's `value`, using the flat assertion presentation.
+It agrees with RDFC-1.0 on the RDF 1.1 subset; the RDF 1.2 profile has its own
+reserved-vocabulary, statement-layer and refusal contract. Do not label an RDF
+1.2 digest as RDFC-1.0.
+
+Both calls require an explicit `canonical_search`: `"unlimited"` or a canonical
+unsigned decimal `u64` string for a finite per-run limit. Both accept an optional
+`cancel` token. Each result carries immutable `canonicalization_json` receipt
+text. Canonicalization refusal raises `ValueError` with the finalized receipts;
+when a native canonical cause exists, `native_cause` and `native_cause_json`
+preserve its metadata. Read the
 [canonicalization chapter](../concepts/canonicalization.md) before using bytes
 as identities.
 
@@ -379,13 +467,32 @@ validation does not redefine that checkpoint.
 
 `shapes.entail` applies a shapes graph's default rule set and returns base plus
 inferred triples. It differs from `purrdf.entail.materialize`, which uses a
-regime's rule table without a shapes graph. `shapes.apply_rules` runs an SRL
+regime's rule table without a shapes graph. `shapes.apply_rules` runs a shapes graph or SRL
 document and returns only the inference graph, with proof text when
 `explain=True`. `check_rules` admits a rule set at the selected checking level:
 `level` accepts `syntax`, `well-formed` or `stratified`; omission selects
 `stratified`. It reports declarations, imports, versions and strata. Stored-fact, join-step,
 generated-term and generating-round controls are explicit keyword arguments;
 exhaustion raises a limit-specific `ValueError`.
+
+`shapes.entail` and `shapes.apply_rules` accept keyword-only `now` and
+`entropy_seed`, including the SHACL and SRL rule sources and the `shacl` aliases.
+They use the same exact `xsd:dateTime` strings and unsigned 64-bit integers as
+query and UPDATE execution. Both inputs are independently optional; zero is a
+valid seed. A supplied time reaches every rule query without losing fractional
+seconds, timezone or negative years. The seed selects a reproducible sequence
+for the rule execution's queries. Repeating identical input documents and
+coordinates repeats the inferred output.
+
+These controls work with the default or an explicitly selected `xpath_regex`
+law. Coordinate decoding follows XPath selection and precedes document/import
+parsing and detached execution. Malformed time raises `ValueError` naming `now`,
+wrong Python types raise `TypeError`, and negative or overflowing seeds raise
+`OverflowError`. The four rule limits and their diagnostic keyword names remain
+in force. Imports, shapes-graph selection, proof output and mandatory diagnostics
+retain their existing contracts. Static `check_rules` refuses these execution
+keywords. These controls do not add execution receipts or extend shape validation,
+node expressions or the separate `purrdf.entail` regime API.
 
 `eval_node_expr` selects exactly one expression: a named IRI/blank label,
 a unique walk from `expr_at` through `expr_via`, or a one-root inline
@@ -476,7 +583,7 @@ traversal is refused with `reasoning-closure-relation-witness`. See
 `purrdf.geo.GeoProfile` owns an immutable strict geographic profile; `to_json`
 returns its canonical version-one record with explicit limits. `GeoSession`
 accepts that profile, another session, profile JSON or `None`; omission selects
-the standard CRS84 profile. `profile()` returns the selected profile. Query,
+the standard `CRS84` profile. `profile()` returns the selected profile. Query,
 update and prepared methods accept these same choices through `geo`.
 
 `GeoSession.call` evaluates a strict scalar/batch JSON request; `point_index`

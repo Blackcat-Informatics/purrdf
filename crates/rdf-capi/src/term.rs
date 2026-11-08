@@ -399,7 +399,17 @@ pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, P
                     literal.language.as_deref(),
                     direction,
                 )
-                .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
+                .map_err(|cause| match cause.into_diagnostic() {
+                    Ok(diagnostic) => PurrdfError::from_owned_diagnostic_with_message(
+                        PurrdfStatus::InvalidArgument,
+                        diagnostic,
+                        cause.message(),
+                    ),
+                    Err(storage) => PurrdfError::from_owned_diagnostic(
+                        PurrdfStatus::StorageError,
+                        storage.into(),
+                    ),
+                })?;
                 Ok(TermValue::from_rdf_term(&RdfTerm::Literal(literal)))
             }
             PurrdfTermKind::Triple => Err(PurrdfError::new(
@@ -462,7 +472,7 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                 }
                 None => emit_term(&view_to_rdf_term(view)?),
             };
-            *out_buffer = into_handle(PurrdfBuffer(token.into_bytes()));
+            *out_buffer = into_handle(PurrdfBuffer::from(token.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }

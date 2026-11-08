@@ -67,6 +67,24 @@ head publishes no fact. A latched read failure is returned as the original
 typed `SrlError::TripleSource`; opening a new read on the same frozen source
 starts a fresh operation.
 
+Rule inference retains `RuleCoordinates` on success and typed execution failure.
+The receipt binds the typed program, source and shapes snapshots, the rule
+contract, and its ordered nested query receipts. Nested receipts record actual
+clock values and initial seeds, including sampled defaults; capturing them does
+not draw another seed or read the clock again. A rule set that executes no query
+still has program and snapshot identities without inventing a sampled context.
+The existing program contract hash keeps its separate meaning.
+
+For cooperative cancellation, pass a borrowed `StopSignal` to
+`srl::infer_until` or `srl::infer_triples_until`. Both take
+`Option<&dyn StopSignal>` after the inference options. `Inference::usage()`
+exposes the original deterministic `BudgetReport`, and a limit error retains
+that same complete report through `RuleLimitExceeded::usage()`. A stopped run
+returns `SrlError::Stopped { cause }`, carrying the original native stopped
+error and usage, before publishing an unfinished inference graph. Cancellation
+is checked within scheduled candidate and scan work and around synchronous
+callbacks; it does not preempt a callback or enter the program identity.
+
 A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
 parameter value, or a term the engine does not evaluate fails the load with
 its name, rather than dropping the constraint. The terms the SHACL
@@ -454,9 +472,9 @@ allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
 
 `CHANGE_PATH_CONSTANT` is the same entry cost the zero-growth cases pin.
 `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, in
-`tests/sparql_path_alloc.rs`: **40** for a `sh:sparql` SELECT constraint, **77**
-for a custom `sh:ask` component over a two-valued path, **48** for a custom
-`sh:select` component, and **79** for a `sh:expression` function call over two
+`tests/sparql_path_alloc.rs`: **43** for a `sh:sparql` SELECT constraint, **99**
+for a custom `sh:ask` component over a two-valued path, **55** for a custom
+`sh:select` component, and **97** for a `sh:expression` function call over two
 argument tuples.
 
 Two properties of that term are worth separating from its size. It is **flat in
@@ -469,6 +487,32 @@ surfaces) and the per-focus-node pre-binding rewrite, in which
 pre-bound term crosses the boundary as an owned `TermValue` whose IRI is a fresh
 `String`. Neither share is currently zero, and this crate does not claim
 otherwise.
+
+## Plain FnO argument schemas
+
+`json_schema::compile_tool_arguments` uses the shared compiler with explicit
+shape/class roots and complete caller-owned field bindings. It emits bare JSON
+objects, arrays, strings, booleans, integers and numbers. Decimal coefficients and
+boundaries remain exact at arbitrary precision. Finite floats and doubles are
+written as their exact dyadic decimal values, rather than decimal spellings that
+merely round back to the same IEEE bits.
+
+An unrestricted IEEE datatype carries a registered, source-located
+`plain:ieee-representability` loss: JSON `number` membership does not establish
+single or double precision representability. The original SHACL datatype check
+remains mandatory. A finite admitted enumeration or scalar constant proves this
+obligation and records no representability loss. Numeric patterns are checked on
+finite canonical members; an unrestricted lexical pattern retains its original
+SHACL check in the loss ledger.
+
+Numeric enum/constant terms require the native canonical RDF lexical form.
+Nonfinite values, negative IEEE zero, malformed values, ambiguous numeric datatype
+domains and unsupported exact logical positions return source-bearing typed
+refusals. Bounds compare by value using the existing SPARQL promotion/threshold
+authority. Residual checks cannot be negated or treated as exact exclusive
+alternatives, including through references. The ordinary JSON-LD compiler retains
+its existing carrier and behavior. `ToolSchemaLimits` keeps its documented native
+work, bytes and node ceilings; failure publishes no partial schema.
 
 ## Ontology-complete developer schemas
 

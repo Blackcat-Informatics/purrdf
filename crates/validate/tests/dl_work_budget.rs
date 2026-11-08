@@ -116,8 +116,15 @@ fn document(blocks: usize) -> String {
 #[test]
 fn two_co_typed_copies_decide_inside_both_budgets() {
     let document = document(2);
-    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
+    let answer = purrdf_validate::regime::consistency_to_string(
+        &document,
+        &[],
+        &[],
+        0,
+        0,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
     assert_eq!(
         answer.answer(),
@@ -145,8 +152,15 @@ fn two_co_typed_copies_decide_inside_both_budgets() {
 #[test]
 fn ten_co_typed_copies_decide_inside_the_derived_work_cap() {
     let document = document(10);
-    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
+    let answer = purrdf_validate::regime::consistency_to_string(
+        &document,
+        &[],
+        &[],
+        0,
+        0,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the ontology reverse-maps");
     // The messages name what failed rather than formatting the certificate: the verdict and
     // the three fields are what this test reads, and they are all it needs to say.
     assert_eq!(
@@ -178,9 +192,15 @@ const NARROWED_WORK_CAP: u32 = 10_000_000;
 #[test]
 fn ten_co_typed_copies_answer_unknown_at_a_narrowed_work_cap() {
     let document = document(10);
-    let answer =
-        purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, NARROWED_WORK_CAP)
-            .expect("the ontology reverse-maps");
+    let answer = purrdf_validate::regime::consistency_to_string(
+        &document,
+        &[],
+        &[],
+        0,
+        NARROWED_WORK_CAP,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
     assert_eq!(
         answer.answer(),
@@ -220,8 +240,18 @@ fn ten_co_typed_copies_answer_unknown_at_a_narrowed_work_cap() {
 fn the_exhausted_answer_is_identical_twice() {
     let document = document(10);
     let run = || {
-        purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, NARROWED_WORK_CAP)
-            .expect("the ontology reverse-maps")
+        purrdf_validate::regime::consistency_to_string(
+            &document,
+            &[],
+            &[],
+            0,
+            NARROWED_WORK_CAP,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the ontology reverse-maps")
     };
     let (first, again) = (run(), run());
     assert_eq!(

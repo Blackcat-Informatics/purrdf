@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
-    canonicalize,
+    try_canonicalize,
 };
 
 use crate::engine::NativeSparqlEngine;
@@ -478,7 +478,7 @@ fn eval_forced(
 /// and CONSTRUCT/DESCRIBE compare canonical N-Quads (RDFC-1.0 blank-node
 /// canonicalization; `TermId`s from the two independently-evaluated queries
 /// are never expected to match, only the abstract graph they denote).
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Comparable {
     Solutions {
         variables: Vec<String>,
@@ -486,11 +486,36 @@ enum Comparable {
     },
     Boolean(bool),
     Graph {
-        nquads: String,
+        canonical: purrdf_core::Canonicalized,
     },
 }
 
-fn comparable(result: &SparqlResult) -> Comparable {
+impl PartialEq for Comparable {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Solutions {
+                    variables: left_variables,
+                    rows: left_rows,
+                },
+                Self::Solutions {
+                    variables: right_variables,
+                    rows: right_rows,
+                },
+            ) => left_variables == right_variables && left_rows == right_rows,
+            (Self::Boolean(left), Self::Boolean(right)) => left == right,
+            (Self::Graph { canonical: left }, Self::Graph { canonical: right }) => {
+                left.nquads() == right.nquads()
+            }
+            _ => false,
+        }
+    }
+}
+
+fn comparable(
+    result: &SparqlResult,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Comparable {
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -500,7 +525,7 @@ fn comparable(result: &SparqlResult) -> Comparable {
         },
         SparqlResult::Boolean(b) => Comparable::Boolean(*b),
         SparqlResult::Graph(ds) => Comparable::Graph {
-            nquads: canonicalize(ds).nquads,
+            canonical: try_canonicalize(ds, control).unwrap(),
         },
     }
 }
@@ -521,8 +546,20 @@ fn parallel_paths_are_byte_identical_across_the_corpus() {
         let parallel = eval_forced(&engine, &ds, query, true);
         let sequential = eval_forced(&engine, &ds, query, false);
 
-        let parallel_cmp = comparable(&parallel);
-        let sequential_cmp = comparable(&sequential);
+        let parallel_cmp = comparable(
+            &parallel,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
+        let sequential_cmp = comparable(
+            &sequential,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
 
         assert_eq!(
             parallel_cmp, sequential_cmp,
@@ -730,7 +767,7 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    crate::engine::QueryOptions {
+                    &crate::engine::QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..crate::engine::QueryOptions::EMPTY
@@ -741,8 +778,20 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
         let parallel = run(true);
         let sequential = run(false);
         assert_eq!(
-            comparable(&parallel),
-            comparable(&sequential),
+            comparable(
+                &parallel,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
+            comparable(
+                &sequential,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             "query `{name}` diverged between forced-parallel and forced-sequential \
              evaluation:\n{query}"
         );
@@ -878,7 +927,7 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions {
+                &crate::engine::QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
                         .expect("the fixture declarations read cleanly"),
                     ..crate::engine::QueryOptions::EMPTY
@@ -890,8 +939,20 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
     let parallel = run(true);
     let sequential = run(false);
     assert_eq!(
-        comparable(&parallel),
-        comparable(&sequential),
+        comparable(
+            &parallel,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
+        comparable(
+            &sequential,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         "custom aggregate diverged between forced-parallel and forced-sequential evaluation"
     );
 

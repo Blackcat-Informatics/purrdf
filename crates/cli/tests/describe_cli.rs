@@ -25,6 +25,67 @@
 mod support;
 use support::{code, pipe, run, stderr, stdout, write_file};
 
+/// Explicit document selection reaches the shared selector/base path before output.
+#[test]
+fn configured_yamlld_input_reaches_describe_selection() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let mut args = vec![
+        "describe",
+        "--iri",
+        "second",
+        "--base",
+        "https://example.org/",
+        "--to",
+        "nquads",
+    ];
+    let mut first_args = args.clone();
+    first_args.push(&input);
+    let first = run(&first_args);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert_eq!(stdout(&first), "");
+    args.extend(["--yamlld-input-options", &config, &input]);
+    let selected = run(&args);
+    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+    assert_eq!(
+        stdout(&selected),
+        "<https://example.org/second> <https://example.org/p> \"two\" .\n"
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let output = write_file(dir.path(), "output.nq", "unchanged destination");
+    let refused = run(&[
+        "describe",
+        "--iri",
+        "second",
+        "--base",
+        "https://example.org/",
+        "--yamlld-input-options",
+        &limited,
+        &input,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
 /// A graph exercising every SCBD rule at once:
 ///
 /// * `alice → bob` is OUTGOING from the subject;
@@ -247,6 +308,14 @@ fn an_absent_subject_is_an_empty_description() {
 /// EVERY native source syntax, plus the pack container, reaches the same description.
 #[test]
 fn every_native_source_format_reaches_the_same_description() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_conditional_2 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let seed = write_file(dir.path(), "seed.ttl", DATA);
     let baseline = run(&[
@@ -279,21 +348,47 @@ fn every_native_source_format_reaches_the_same_description() {
             .to_str()
             .expect("temp path is valid UTF-8")
             .to_owned();
-        let converted = run(&["convert", "--from", "turtle", "--to", token, &seed, &target]);
+        let converted = {
+            let mut arguments = vec!["convert", "--from", "turtle", "--to", token, &seed, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert!(
             converted.status.success(),
             "seeding the `{token}` source failed: {}",
             stderr(&converted)
         );
 
-        let out = run(&[
-            "describe",
-            "--iri",
-            "http://example.org/alice",
-            "--to",
-            "ntriples",
-            &target,
-        ]);
+        let out = {
+            let mut arguments = vec![
+                "describe",
+                "--iri",
+                "http://example.org/alice",
+                "--to",
+                "ntriples",
+                &target,
+            ];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_2
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert_eq!(code(&out), 0, "`{token}`: {}", stderr(&out));
         assert_eq!(
             stdout(&out),
@@ -669,6 +764,10 @@ fn an_unresolvable_selector_is_refused_and_an_absent_one_is_an_empty_answer() {
 /// selector denote anything.
 #[test]
 fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "rel.ttl", "<alice> <../knows> <bob> .\n");
     let pack = dir
@@ -687,6 +786,12 @@ fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
         "http://example.org/dir/",
         &data,
         &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
@@ -701,6 +806,12 @@ fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
         "--base",
         "http://example.org/dir/",
         &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         code(&from_pack),
@@ -749,6 +860,11 @@ fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
 /// A description can be written into the lossless pack container and read back.
 #[test]
 fn a_description_can_be_written_to_a_pack() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
     let pack = dir
@@ -764,13 +880,43 @@ fn a_description_can_be_written_to_a_pack() {
         "http://example.org/alice",
         &data,
         &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 
-    let verified = run(&["pack", "verify", &pack]);
+    let verified = run(&[
+        "pack",
+        "verify",
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(verified.status.success(), "{}", stderr(&verified));
 
-    let back = run(&["convert", "--from", "pack", "--to", "turtle", &pack, "-"]);
+    let back = run(&[
+        "convert",
+        "--from",
+        "pack",
+        "--to",
+        "turtle",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(back.status.success(), "{}", stderr(&back));
     assert!(
         stdout(&back).contains("rdf-syntax-ns#reifies"),

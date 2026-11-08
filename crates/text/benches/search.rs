@@ -350,7 +350,7 @@ fn benchmark(criterion: &mut Bench) {
         bencher.iter(|| {
             let index = black_box(&spread_index);
             let mut held = false;
-            for &document in index.documents_with_subject(black_box(&subject)) {
+            for document in index.documents_with_subject(black_box(&subject)) {
                 for term in black_box(&query) {
                     held |= index.term_frequency(document, term) > 0;
                 }

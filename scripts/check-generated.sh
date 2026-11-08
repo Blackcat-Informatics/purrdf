@@ -61,7 +61,7 @@ cargo run -p purrdf-core --example gen_unicode_blocks --locked \
 # vendored verbatim, and byte-frozen, under `vectors/w3c-recs/`.
 #   xpath-dated-names  - purrdf-core: XML 1.0 Second Edition `\i` and `\c`
 #   xpath-dated-blocks - purrdf-core: XML Schema Part 2 Second Edition blocks
-for set in normalization case-context text idna ecma-properties ecma-ranges xpath \
+for set in normalization case-context folding text idna ecma-properties ecma-ranges xpath \
   xpath-compatibility xpath-dated-names xpath-dated-blocks; do
   cargo run -p purrdf-lex --example gen_unicode_tables --locked -- "$set" \
     | rustfmt --edition 2024 --emit stdout \
@@ -127,6 +127,7 @@ sync_file "$tmp/entailment-rules.md" docs/book/src/entailment-rules.md
 sync_file "$tmp/blocks.rs" crates/rdf-core/src/xsd_regex/blocks.rs
 sync_file "$tmp/unicode-normalization.rs" crates/lex/src/unicode_tables.rs
 sync_file "$tmp/unicode-case-context.rs" crates/lex/src/unicode/case_tables.rs
+sync_file "$tmp/unicode-folding.rs" crates/lex/src/unicode/fold_tables.rs
 sync_file "$tmp/unicode-text.rs" crates/text/src/unicode_tables.rs
 sync_file "$tmp/unicode-idna.rs" crates/iri/src/idna_tables.rs
 sync_file "$tmp/unicode-ecma-properties.rs" crates/jsonschema/src/ecma/property_tables.rs

@@ -22,7 +22,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, CancellationToken, Dataset, QueryEngine, governorDimensions } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 // One-time wasm instantiation before any test runs.
 await ready();
 
@@ -101,7 +101,7 @@ test("an ungoverned query is unchanged: same rows, and no governor vocabulary re
   const after = engine.select(ds, NAMES).rows.toArray().map((row) => row.name.value);
   assert.deepEqual(after, before);
   assert.deepEqual(
-    JSON.parse(ds.query(NAMES)).results.bindings.map((b) => b.name.value),
+    JSON.parse(ds.query(NAMES).body).results.bindings.map((b) => b.name.value),
     ["Ann", "Bob"],
   );
 });
@@ -120,7 +120,7 @@ test("an ungoverned entry refuses a governor option rather than ignoring it", ()
   ]) {
     assert.throws(() => engine.select(ds, NAMES, options), TypeError);
     assert.throws(() => engine.query(ds, NAMES, options), TypeError);
-    assert.throws(() => engine.queryRaw(ds, NAMES, options), TypeError);
+    assert.throws(() => engine.queryRaw(ds, NAMES, options).body, TypeError);
   }
 });
 
@@ -199,20 +199,20 @@ test("queryEntailmentGoverned closes over the dataset's owl:imports table", () =
   );
 });
 
-test("queryEntailmentGoverned takes the closure's evaluation limits, naming its own option", () => {
+test("queryEntailmentGoverned takes the closure's evaluation limits, naming its own option", async () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(RDFS, "turtle");
-  assert.throws(
-    () => engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", { maxJoinSteps: 1 }),
-    (error) =>
-      error.message.includes("evaluation exceeded the join-step limit: ") &&
-      error.message.endsWith("raise it with queryEntailmentGoverned's maxJoinSteps"),
-  );
-  const answered = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", {
-    maxStoredFacts: 131072n,
-    maxJoinSteps: 1048576,
-  });
-  assert.equal(answered.outcome.result.rowCount, 1);
+  for (const method of ["queryEntailmentGoverned", "queryEntailmentGovernedAsync"]) {
+    for (const [key, short] of [["maxJoinSteps", 1], ["maxTermArenaBytes", 0n]]) {
+      await assert.rejects(async () => engine[method](ds, RDFS_QUERY, "owl-rl", { [key]: short }),
+        (error) => error.message.includes("evaluation exceeded") &&
+          error.message.endsWith(`raise it with queryEntailmentGoverned's ${key}`));
+    }
+    const answered = await engine[method](ds, RDFS_QUERY, "owl-rl", {
+      maxStoredFacts: 131072n, maxJoinSteps: 1048576, maxTermArenaBytes: 16777216n,
+    });
+    assert.equal(answered.outcome.result.rowCount, 1);
+  }
 });
 
 test("queryEntailmentGoverned exposes a closure stop without an answer or report", () => {
@@ -574,7 +574,7 @@ test("a governed UPDATE that fits its budget applies and reports a receipt", () 
 test("a tripped UPDATE applies NOTHING and leaves the dataset byte-identical", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   const size = ds.size;
 
   const outcome = engine.updateGoverned(
@@ -587,13 +587,13 @@ test("a tripped UPDATE applies NOTHING and leaves the dataset byte-identical", (
   assert.equal(outcome.tripped.label, "fuel-exhausted");
   assert.equal(outcome.evidence.isComplete, false);
   assert.equal(ds.size, size);
-  assert.equal(ds.canonicalize(), before, "a tripped request is not a partial mutation");
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before, "a tripped request is not a partial mutation");
 });
 
 test("a cancelled token stops an UPDATE as an outcome", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   const cancel = new CancellationToken();
   cancel.cancel();
 
@@ -605,7 +605,7 @@ test("a cancelled token stops an UPDATE as an outcome", () => {
 
   assert.equal(outcome.isApplied, false);
   assert.equal(outcome.tripped.label, "cancelled");
-  assert.equal(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before);
 });
 
 test("updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set", () => {
@@ -630,7 +630,7 @@ test("updateGoverned refuses maxAnswers rather than ignoring a ceiling the calle
 test("explainQuery renders the charge ledger a budget is sized from", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const explanation = engine.explainQuery(ds, NAMES);
+  const explanation = engine.explainQuery(ds, NAMES).body;
 
   assert.match(explanation, /^profile purrdf-sparql-governors v\d+ digest [0-9a-f]+ /);
   assert.match(explanation, /\nschedule\n/);
@@ -640,5 +640,5 @@ test("explainQuery renders the charge ledger a budget is sized from", () => {
   assert.match(explanation, /\n {2}fuel\t\d+\n/);
 
   // Deterministic: a ledger with a clock or an address in it would not repeat.
-  assert.equal(engine.explainQuery(ds, NAMES), explanation);
+  assert.equal(engine.explainQuery(ds, NAMES).body, explanation);
 });

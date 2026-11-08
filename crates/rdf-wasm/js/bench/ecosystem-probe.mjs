@@ -278,7 +278,7 @@ const results = {
     graphIdentity: await measure(() => {
       const a = purrdf.Dataset.parse("_:a <https://bench.example/p> <https://bench.example/o> .", "ntriples");
       const b = purrdf.Dataset.parse("_:b <https://bench.example/p> <https://bench.example/o> .", "ntriples");
-      return a.isomorphic(b);
+      const result = a.isomorphic(b, "unlimited"); const same = result.value; result.free(); return same;
     }, (same) => "blank-node isomorphic=" + same),
     rdf12: await measure(() => purrdf.Dataset.parse(RDF12_NQ, "nquads"), (ds) => String(ds.size) + " quads"),
   },

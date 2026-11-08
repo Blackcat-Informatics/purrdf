@@ -3,11 +3,8 @@
 
 use super::{Builtin, ShapeOffer};
 use crate::AdmittedVec;
-use crate::eval::EvalCtx;
-use crate::governor::lift::Evaluated;
 use crate::solution::{RetainedRow, SolutionSeq};
 use crate::{EvalError, WorkspaceCapability};
-use purrdf_core::DatasetView;
 use purrdf_sparql_algebra::{Expression, Function, GraphPattern};
 use purrdf_xsd::XsdDatatype;
 
@@ -47,17 +44,6 @@ pub(crate) fn offer(
     }
     Ok(None)
 }
-pub(crate) fn execute<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let previous = ctx.bucketed_group;
-    ctx.bucketed_group = Some(std::ptr::from_ref(node) as usize);
-    let result = crate::eval::eval_literal_node(node, ctx);
-    ctx.bucketed_group = previous;
-    result
-}
-
 /// Native identity equality is the grouping law after the original typed cast.
 /// Sorting never merges different date timezone spellings or unbound keys.
 pub(crate) fn partition<I: purrdf_core::ViewTermId>(

@@ -100,6 +100,37 @@ pub enum RoleHierarchyError {
     Stopped,
 }
 
+impl purrdf_hash::error::StructuredError for RoleHierarchyError {
+    purrdf_hash::error_visit! {
+        Witness { original, presentation } => "role-hierarchy-witness" {
+            "original" => Cause(original.as_ref()),
+            "presentation" => Record(presentation),
+        },
+        MalformedList { node, kind } => "role-hierarchy-malformed-list" {
+            "node" => Unsigned(u128::from(*node)), "kind" => Record(kind),
+        },
+        InvalidProperty { node } => "role-hierarchy-invalid-property" {
+            "node" => Unsigned(u128::from(*node)),
+        },
+        ShortChain { head } => "role-hierarchy-short-chain" {
+            "head" => Unsigned(u128::from(*head)),
+        },
+        NonSimpleProperty { property } => "role-hierarchy-non-simple-property" {
+            "property" => Unsigned(u128::from(*property)),
+        },
+        OrderConflict { lower, lower_inverse, upper, upper_inverse } => "role-hierarchy-order-conflict" {
+            "lower" => Unsigned(u128::from(*lower)), "lower_inverse" => Boolean(*lower_inverse),
+            "upper" => Unsigned(u128::from(*upper)), "upper_inverse" => Boolean(*upper_inverse),
+        },
+        RecursiveDependency { property } => "role-hierarchy-recursive-dependency" {
+            "property" => Unsigned(u128::from(*property)),
+        },
+        Storage(cause) => "role-hierarchy-storage" { "cause" => Cause(cause) },
+        Graph(cause) => "role-hierarchy-graph" { "cause" => Cause(cause) },
+        Stopped => "role-hierarchy-stopped" {},
+    }
+}
+
 purrdf_lex::variant_from!(RoleHierarchyError { Storage(StorageError) });
 
 impl From<GraphError> for RoleHierarchyError {

@@ -264,13 +264,15 @@ pub(crate) fn try_canonical_key_lexical(
     memory: &mut Memory<'_>,
 ) -> Result<String, StorageError> {
     memory.scope(|memory| {
-        let length = key_lexical_len(key);
+        // The duplicate-key refusal is publishable only after its native key
+        // diagnostic is constructed under the same work and storage account.
+        let length = try_key_lexical_len(key, memory)?;
         let mut output = FixedText {
             text: String::new(),
             failed: false,
         };
         memory.reserve_string(&mut output.text, length)?;
-        write_key(&mut output, key);
+        purrdf_lex::text_out::with_memory_progress(&mut output, memory, |out| write_key(out, key))?;
         if output.failed || output.text.len() != length {
             return Err(StorageError::FormattingFailed);
         }
@@ -306,9 +308,16 @@ pub(crate) fn try_triple_lexical_len(
 
 /// The byte length one map key occupies in a canonical form, without allocating it.
 pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
+    try_key_lexical_len(key, &mut Memory::new(&mut Resident)).expect("resident key measure")
+}
+
+pub(crate) fn try_key_lexical_len(
+    key: &CdtKey,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
     let mut out = Measure(0);
-    write_key(&mut out, key);
-    out.0
+    purrdf_lex::text_out::with_memory_progress(&mut out, memory, |out| write_key(out, key))?;
+    Ok(out.0)
 }
 
 /// Drive the renderer's job stack into a sink. Iterative: nesting costs heap, never
@@ -319,16 +328,35 @@ fn run<S: Sink>(
     memory: &mut Memory<'_>,
 ) -> Result<(), StorageError> {
     while let Some(job) = jobs.pop() {
+        memory.admission_mut().checkpoint(1)?;
         match job {
-            Job::Punct(text) => out.push_str(text),
-            Job::Key(key) => write_key(out, key),
+            Job::Punct(text) => {
+                purrdf_lex::text_out::with_memory_progress(out, memory, |out| out.push_str(text))?;
+            }
+            Job::Key(key) => {
+                purrdf_lex::text_out::with_memory_progress(out, memory, |out| write_key(out, key))?;
+            }
             Job::Term(term) => match term {
                 CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref(), memory)?,
                 CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref(), memory)?,
-                CdtTerm::Iri(iri) => write_iri(iri, out),
-                CdtTerm::Blank(label) => write_blank(label, out),
-                CdtTerm::Literal(literal) => write_literal(out, literal),
-                CdtTerm::Null => out.push_str("null"),
+                CdtTerm::Iri(iri) => {
+                    purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
+                        write_iri(iri, out);
+                    })?;
+                }
+                CdtTerm::Blank(label) => {
+                    purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
+                        write_blank(label, out);
+                    })?;
+                }
+                CdtTerm::Literal(literal) => {
+                    purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
+                        write_literal(out, literal);
+                    })?;
+                }
+                CdtTerm::Null => purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
+                    out.push_str("null");
+                })?,
             },
         }
     }
@@ -386,7 +414,7 @@ fn push_triple<'a>(
     Ok(())
 }
 
-fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
+fn write_key<S: TextOut + ?Sized>(out: &mut S, key: &CdtKey) {
     match key {
         CdtKey::Iri(iri) => write_iri(iri, out),
         CdtKey::Literal(literal) => write_literal(out, literal),
@@ -395,7 +423,7 @@ fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
 
 /// A literal with its datatype always written: the canonical string body, then
 /// `@tag`, `@tag--dir`, or `^^` and the datatype's `IRIREF`.
-fn write_literal<S: Sink>(out: &mut S, literal: &CdtLiteral) {
+fn write_literal<S: TextOut + ?Sized>(out: &mut S, literal: &CdtLiteral) {
     out.push('"');
     literal_escape::write(&literal.lexical, Carrier::Canonical, out);
     out.push('"');

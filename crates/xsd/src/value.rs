@@ -46,7 +46,8 @@ pub enum XsdValue {
     Double(f64),
     /// `xsd:boolean`.
     Boolean(bool),
-    /// `xsd:string` — the value space is the lexical space (no normalization).
+    /// `xsd:string` and its modeled derived types. Their values are character
+    /// sequences in one shared space; the source RDF term retains its own datatype.
     String(String),
     /// `xsd:anyURI`, after fixed XML whitespace collapse. This primitive value
     /// space is disjoint from `xsd:string`, even for identical character sequences.
@@ -318,7 +319,7 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Float => crate::numeric::parse_float(lexical).map(XsdValue::Float),
         D::Double => crate::numeric::parse_double(lexical).map(XsdValue::Double),
         D::Boolean => crate::simple::parse_boolean(lexical).map(XsdValue::Boolean),
-        D::String => crate::simple::read_xml_string(lexical)
+        D::String | D::NormalizedString | D::Token => crate::simple::read_string(lexical, datatype)
             .map(|value| XsdValue::String(value.to_owned()))
             .map_err(|reason| XsdError::invalid(datatype, lexical, reason)),
         D::AnyUri => crate::simple::read_any_uri(lexical)
@@ -551,10 +552,12 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
             Ok(value) => ParsedValue::Value(XsdValue::Boolean(value)),
             Err(_) => ParsedValue::Invalid(Some(ErrorCode::Forg0001)),
         }),
-        D::String => match crate::simple::read_xml_string(lexical) {
-            Ok(value) => Ok(ParsedValue::Value(XsdValue::String(memory.string(value)?))),
-            Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
-        },
+        D::String | D::NormalizedString | D::Token => {
+            match crate::simple::read_string(lexical, datatype) {
+                Ok(value) => Ok(ParsedValue::Value(XsdValue::String(memory.string(value)?))),
+                Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
+            }
+        }
         D::AnyUri => match crate::simple::read_any_uri(lexical) {
             Ok(value) => Ok(ParsedValue::Value(XsdValue::AnyUri(memory.format(&value)?))),
             Err(_) => Ok(ParsedValue::Invalid(Some(ErrorCode::Forg0001))),
@@ -1001,8 +1004,8 @@ impl XsdError {
 
 impl std::fmt::Display for XsdError {
     /// The condition, then its XPath F&O code in parentheses when it has one —
-    /// `lexical form "300" is out of representable range for <…#byte>: value outside
-    /// datatype range (err:FORG0001)` — so every surface that reports the error names
+    /// For example, an out-of-range byte lexical carries `err:FORG0001`,
+    /// so every surface that reports the error names
     /// the code; [`Self::presentation`] gives the same text typed.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.presentation().english())

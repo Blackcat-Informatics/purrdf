@@ -129,8 +129,8 @@ function consumed(text) {
 test("explainQueryAsync on a SERVICE-free query is byte-identical to explainQuery", async () => {
   const engine = new QueryEngine();
   const dataset = local();
-  const sync = engine.explainQuery(dataset, LOCAL_ONLY);
-  const explained = await engine.explainQueryAsync(dataset, LOCAL_ONLY);
+  const sync = engine.explainQuery(dataset, LOCAL_ONLY).body;
+  const explained = await engine.explainQueryAsync(dataset, LOCAL_ONLY).then(result => result.body);
   assert.equal(typeof explained, "string");
   assert.equal(explained, sync, "the whole rendered ledger, not merely its presence");
   // The ledger is not vacuous: the projection materialised both local rows.
@@ -139,8 +139,8 @@ test("explainQueryAsync on a SERVICE-free query is byte-identical to explainQuer
   // `base` is forwarded exactly as the synchronous twin forwards it.
   const relative = "SELECT ?o WHERE { <a> <p> ?o }";
   const based = { base: EX };
-  assert.equal(await engine.explainQueryAsync(dataset, relative, based), engine.explainQuery(dataset, relative, based));
-  assert.equal(node(engine.explainQuery(dataset, relative, based), "Project").rows, 1);
+  assert.equal(await engine.explainQueryAsync(dataset, relative, based).then(result => result.body), engine.explainQuery(dataset, relative, based).body);
+  assert.equal(node(engine.explainQuery(dataset, relative, based).body, "Project").rows, 1);
 });
 
 test("explainQueryAsync explains a SERVICE join over the host's answer; the synchronous twin refuses it", async () => {
@@ -148,12 +148,12 @@ test("explainQueryAsync explains a SERVICE join over the host's answer; the sync
   const query = joinQuery(false);
 
   // The offline lane's refusal, by name.
-  const refused = syncThrow(() => engine.explainQuery(local(), query));
+  const refused = syncThrow(() => engine.explainQuery(local(), query).body);
   assert.match(refused.message, /no remote query source configured/);
 
   // The asynchronous lane explains it, over the resolver's answer.
   const explainMock = recordingResolver(async () => REMOTE_OX);
-  const explained = await engine.explainQueryAsync(local(), query, { resolveService: explainMock.resolveService });
+  const explained = await engine.explainQueryAsync(local(), query, { resolveService: explainMock.resolveService }).then(result => result.body);
   assert.equal(explainMock.calls.length, 1, "one SERVICE clause, one remote request");
   const [{ request, ctx }] = explainMock.calls;
   assert.equal(request.kind, "service");
@@ -181,7 +181,7 @@ test("SERVICE SILENT under explainQueryAsync: a failing resolver is the join ide
   const failing = () => recordingResolver(async () => ({ kind: "transport", message: "endpoint unreachable" }));
 
   const explainMock = failing();
-  const explained = await engine.explainQueryAsync(local(), query, { resolveService: explainMock.resolveService });
+  const explained = await engine.explainQueryAsync(local(), query, { resolveService: explainMock.resolveService }).then(result => result.body);
   assert.equal(explainMock.calls.length, 1, "SILENT still asked the endpoint");
   assert.equal(explainMock.calls[0].ctx.silent, true);
 
@@ -196,7 +196,7 @@ test("SERVICE SILENT under explainQueryAsync: a failing resolver is the join ide
 
   // The non-SILENT neighbour of the same failure rejects, with the transport's words.
   const loud = await rejection(
-    engine.explainQueryAsync(local(), joinQuery(false), { resolveService: failing().resolveService }),
+    engine.explainQueryAsync(local(), joinQuery(false), { resolveService: failing().resolveService }).then(result => result.body),
   );
   assert.match(loud.message, /SERVICE <http:\/\/example\.org\/sparql>: transport: endpoint unreachable/);
 });
@@ -209,10 +209,10 @@ test("a CPU-heavy explainQueryAsync yields to the event loop; the synchronous tw
     ticks += 1;
   }, 5);
   try {
-    const sync = engine.explainQuery(dataset, CROSS_COUNT);
+    const sync = engine.explainQuery(dataset, CROSS_COUNT).body;
     const syncTicks = ticks;
     ticks = 0;
-    const explained = await engine.explainQueryAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 1024 });
+    const explained = await engine.explainQueryAsync(dataset, CROSS_COUNT, { yieldEveryPolls: 1024 }).then(result => result.body);
     const asyncTicks = ticks;
     assert.equal(syncTicks, 0, "the synchronous twin never turns the event loop");
     assert.ok(asyncTicks > 0, `the interval ticked ${asyncTicks} times during the asynchronous explain`);
@@ -244,29 +244,29 @@ test("an AbortSignal aborted mid-explain rejects with the abort reason", async (
     const reason = new Error("the caller gave up");
     setTimeout(() => controller.abort(reason), 20);
     const error = await rejection(
-      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: controller.signal, yieldEveryPolls: 1024 }),
+      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: controller.signal, yieldEveryPolls: 1024 }).then(result => result.body),
     );
-    assert.equal(error, reason, "the twin rejects with the signal's own reason");
+    assert.equal(error.cause, reason, "the twin rejects with the signal's own reason");
 
     // Without a reason of its own, the rejection is the signal's default AbortError.
     const bare = new AbortController();
     setTimeout(() => bare.abort(), 20);
     const aborted = await rejection(
-      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: bare.signal, yieldEveryPolls: 1024 }),
+      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: bare.signal, yieldEveryPolls: 1024 }).then(result => result.body),
     );
     assert.equal(aborted.name, "AbortError");
-    assert.equal(aborted, bare.signal.reason);
+    assert.equal(aborted.cause, bare.signal.reason);
 
     // An already-aborted signal rejects before any job is begun.
     const early = new AbortController();
     early.abort(reason);
-    assert.equal(await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { signal: early.signal })), reason);
+    assert.equal(await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { signal: early.signal }).then(result => result.body)), reason);
 
     // The neighbour: a signal that never fires resolves to the synchronous twin's ledger.
     const dataset = local();
     assert.equal(
-      await engine.explainQueryAsync(dataset, LOCAL_ONLY, { signal: new AbortController().signal }),
-      engine.explainQuery(dataset, LOCAL_ONLY),
+      await engine.explainQueryAsync(dataset, LOCAL_ONLY, { signal: new AbortController().signal }).then(result => result.body),
+      engine.explainQuery(dataset, LOCAL_ONLY).body,
     );
   } finally {
     wide.free();
@@ -281,10 +281,10 @@ test("a deadline stops explainQueryAsync as it stops the other ungoverned twins"
     // signal's TimeoutError — exactly as on `queryAsync`.
     const deadline = AbortSignal.timeout(20);
     const explainError = await rejection(
-      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: deadline, yieldEveryPolls: 1024 }),
+      engine.explainQueryAsync(wide, ENDLESS_COUNT, { signal: deadline, yieldEveryPolls: 1024 }).then(result => result.body),
     );
     assert.equal(explainError.name, "TimeoutError");
-    assert.equal(explainError, deadline.reason);
+    assert.equal(explainError.cause, deadline.reason);
     const queryDeadline = AbortSignal.timeout(20);
     const queryError = await rejection(
       engine.queryAsync(wide, ENDLESS_COUNT, { signal: queryDeadline, yieldEveryPolls: 1024 }),
@@ -293,18 +293,18 @@ test("a deadline stops explainQueryAsync as it stops the other ungoverned twins"
 
     // A ceiling is refused by name: EXPLAIN measures a run that is metered, never
     // bounded, exactly as the synchronous twin's is, so a `deadlineMs` would be ignored.
-    const refused = await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { deadlineMs: 20 }));
+    const refused = await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { deadlineMs: 20 }).then(result => result.body));
     assert.ok(refused instanceof TypeError);
     assert.match(refused.message, /deadlineMs is an execution governor/);
-    const unknown = await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { format: "json" }));
+    const unknown = await rejection(engine.explainQueryAsync(local(), LOCAL_ONLY, { format: "json" }).then(result => result.body));
     assert.ok(unknown instanceof TypeError);
     assert.match(unknown.message, /unknown query option "format"/);
 
     // The neighbour: a generous timeout signal over the same small query resolves.
     const dataset = local();
     assert.equal(
-      await engine.explainQueryAsync(dataset, LOCAL_ONLY, { signal: AbortSignal.timeout(600_000) }),
-      engine.explainQuery(dataset, LOCAL_ONLY),
+      await engine.explainQueryAsync(dataset, LOCAL_ONLY, { signal: AbortSignal.timeout(600_000) }).then(result => result.body),
+      engine.explainQuery(dataset, LOCAL_ONLY).body,
     );
   } finally {
     wide.free();
@@ -314,8 +314,8 @@ test("a deadline stops explainQueryAsync as it stops the other ungoverned twins"
 test("a parse error rejects with the synchronous twin's words", async () => {
   const engine = new QueryEngine();
   const dataset = local();
-  const syncError = syncThrow(() => engine.explainQuery(dataset, "SELEC"));
-  const asyncError = await rejection(engine.explainQueryAsync(dataset, "SELEC"));
+  const syncError = syncThrow(() => engine.explainQuery(dataset, "SELEC").body);
+  const asyncError = await rejection(engine.explainQueryAsync(dataset, "SELEC").then(result => result.body));
   assert.equal(asyncError.message, syncError.message);
   assert.equal(typeof asyncError.evidence.async.polls, "number", "the rejection carries the job's evidence");
 });

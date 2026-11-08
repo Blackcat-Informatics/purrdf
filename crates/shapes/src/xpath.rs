@@ -30,6 +30,13 @@ use crate::term::Term;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum XPathValidationError {
+    /// Selected-law failure with the rule contexts captured before refusal.
+    RuleExecution {
+        /// Original selected-law cause.
+        cause: Box<Self>,
+        /// Supplied inputs and observed effective contexts.
+        coordinates: Box<crate::RuleCoordinates>,
+    },
     /// Existing shape, projection, source or target admission failed.
     Shapes(ShapesError),
     /// A selected dated SHACL bundle refused source or query admission.
@@ -46,14 +53,36 @@ pub enum XPathValidationError {
     CachePoisoned,
 }
 
+impl purrdf_hash::error::StructuredError for XPathValidationError {
+    purrdf_hash::error_visit! {
+        RuleExecution { cause, coordinates } => "shacl-xpath-rule-execution" {
+            "cause" => Cause(cause.as_ref()), "coordinates" => Record(coordinates.as_ref()),
+        },
+        Shapes(cause) => "shacl-xpath-shapes" { "cause" => Cause(cause) },
+        Complete(cause) => "shacl-xpath-complete" { "cause" => Cause(cause.as_ref()) },
+        Pattern(cause) => "shacl-xpath-pattern" { "cause" => Cause(cause) },
+        Query(cause) => "shacl-xpath-query" { "cause" => Cause(cause) },
+        Execution(message) => "shacl-xpath-execution" { "message" => Text(message) },
+        Preparation(cause) => "shacl-xpath-preparation" { "cause" => Cause(cause) },
+        CachePoisoned => "shacl-xpath-cache-poisoned" {},
+    }
+}
+
 purrdf_lex::variant_from!(XPathValidationError {
     Shapes(ShapesError), Pattern(xpath::Error), Query(RdfDiagnostic), Execution(String),
     Preparation(crate::product::ShapesProductError)
 });
 
+impl From<crate::report::CompleteValidationError> for XPathValidationError {
+    fn from(cause: crate::report::CompleteValidationError) -> Self {
+        Self::Complete(Box::new(cause))
+    }
+}
+
 impl fmt::Display for XPathValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuleExecution { cause, .. } => cause.fmt(f),
             Self::Shapes(error) => error.fmt(f),
             Self::Complete(error) => error.fmt(f),
             Self::Pattern(error) => error.fmt(f),
@@ -68,6 +97,7 @@ impl fmt::Display for XPathValidationError {
 impl std::error::Error for XPathValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RuleExecution { cause, .. } => Some(cause.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::Complete(error) => Some(error.as_ref()),
             Self::Pattern(error) => Some(error),
@@ -205,7 +235,7 @@ impl Configuration {
         let result = operation();
         match take_cause() {
             Some(cause) => Err(RunError::Cause {
-                cause,
+                cause: Box::new(cause),
                 execution: result.err().map(Box::new),
             }),
             None => result.map_err(RunError::Execution),
@@ -216,7 +246,7 @@ impl Configuration {
 #[derive(Clone, Debug)]
 pub(crate) enum Cause {
     Pattern(xpath::Error),
-    Query(RdfDiagnostic),
+    Query(Arc<RdfDiagnostic>),
     Preparation(crate::product::ShapesProductError),
     CachePoisoned,
 }
@@ -227,7 +257,7 @@ impl Cause {
     pub(crate) fn into_public(self) -> XPathValidationError {
         match self {
             Self::Pattern(error) => XPathValidationError::Pattern(error),
-            Self::Query(error) => XPathValidationError::Query(error),
+            Self::Query(error) => XPathValidationError::Query(Arc::unwrap_or_clone(error)),
             Self::Preparation(error) => XPathValidationError::Preparation(error),
             Self::CachePoisoned => XPathValidationError::CachePoisoned,
         }
@@ -237,7 +267,7 @@ impl Cause {
 #[derive(Debug)]
 pub(crate) enum RunError<E> {
     Cause {
-        cause: Cause,
+        cause: Box<Cause>,
         // The paired caller payload is allocated only on this error path.
         execution: Option<Box<E>>,
     },
@@ -248,7 +278,7 @@ impl<E> RunError<E> {
     /// Let the caller resolve its actual typed payload and associated native cause.
     pub(crate) fn into_parts(self) -> (Option<Cause>, Option<E>) {
         match self {
-            Self::Cause { cause, execution } => (Some(cause), execution.map(|error| *error)),
+            Self::Cause { cause, execution } => (Some(*cause), execution.map(|error| *error)),
             Self::Execution(error) => (None, Some(error)),
         }
     }
@@ -337,9 +367,9 @@ pub(crate) fn capture(cause: Cause) {
 pub(crate) fn query_error(error: RdfDiagnostic) -> ShapesError {
     let message = format!("query evaluation error: {error}");
     if purrdf_sparql_eval::EvalError::diagnostic_requires_propagation(&error.code) {
-        let code = error.code.clone();
-        capture(Cause::Query(error));
-        return crate::error::ProcessorFailure::Query { code, message }.into();
+        let cause = Arc::new(error);
+        capture(Cause::Query(Arc::clone(&cause)));
+        return crate::error::ProcessorFailure::Query { cause }.into();
     }
     ShapesError::Invalid(message)
 }
@@ -744,7 +774,7 @@ impl XPathPreparedValidator {
     ) -> Result<crate::engine::ChangeValidation, XPathValidationError> {
         self.configuration
             .run(|| crate::engine::validate_change(&self.validator, delta))
-            .map_err(|error| error.into_public(XPathValidationError::Execution))
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 
     /// [`Self::validate_change`] under one SPARQL budget, exactly as
@@ -762,7 +792,7 @@ impl XPathPreparedValidator {
             .run(|| {
                 crate::engine::validate_change_with_governors(&self.validator, delta, governors)
             })
-            .map_err(|error| error.into_public(XPathValidationError::Execution))
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 }
 
@@ -859,6 +889,29 @@ pub fn run_rules(
     profile: Profile,
     pattern_limits: Limits,
 ) -> Result<crate::Inference, XPathValidationError> {
+    run_rules_with_options(
+        source,
+        data,
+        &limits.rule_options(knobs),
+        profile,
+        pattern_limits,
+    )
+}
+
+/// Run caller-configured rules inside the selected XPath pattern law.
+///
+/// Supplied time, entropy, limits and knob names reach the same dispatch as
+/// [`crate::run_rules_with_options`]; pattern refusal semantics match [`run_rules`].
+///
+/// # Errors
+/// The errors of [`run_rules`], under the caller's execution options.
+pub fn run_rules_with_options(
+    source: crate::RuleSource<'_>,
+    data: &RdfDataset,
+    options: &crate::RuleOptions,
+    profile: Profile,
+    pattern_limits: Limits,
+) -> Result<crate::Inference, XPathValidationError> {
     // The selection's declared-pattern cache is keyed by the cells the shapes own; a
     // clone shares those cells, so the cache serves the rules this run executes. A SPARQL
     // 1.2 RL rule set declares no `sh:pattern`.
@@ -867,8 +920,18 @@ pub fn run_rules(
         crate::RuleSource::Srl(_) => Arc::default(),
     };
     Configuration::detached(profile, pattern_limits, owner)
-        .run(|| crate::rules::run_rules(source, data, limits, knobs))
-        .map_err(|error| error.into_public(XPathValidationError::Shapes))
+        .run(|| crate::rules::run_rules_with_options(source, data, options))
+        .map_err(|error| match error.into_parts() {
+            (Some(cause), Some(ShapesError::RuleExecution(execution))) => {
+                XPathValidationError::RuleExecution {
+                    cause: Box::new(cause.into_public()),
+                    coordinates: Box::new(execution.coordinates),
+                }
+            }
+            (Some(cause), _) => cause.into_public(),
+            (None, Some(error)) => XPathValidationError::Shapes(error),
+            (None, None) => unreachable!("a refused rule run retains its cause"),
+        })
 }
 
 /// Evaluate one node expression under an explicit dated XPath law and finite limits.

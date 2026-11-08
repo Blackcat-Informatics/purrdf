@@ -30,7 +30,7 @@ fn native_and_compact_statement_queries_keep_answers_and_candidate_work() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(128),
             )
             .unwrap();
@@ -58,7 +58,7 @@ fn native_and_compact_statement_queries_keep_answers_and_candidate_work() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(128),
             )
             .unwrap();

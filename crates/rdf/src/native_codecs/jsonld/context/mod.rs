@@ -9,6 +9,8 @@
 //! No code in this module performs network I/O or supplies a vocabulary default.
 
 mod compiler;
+mod selection;
+pub(in crate::native_codecs::jsonld) use compiler::is_control;
 mod options;
 mod strict;
 #[cfg(test)]
@@ -57,6 +59,17 @@ pub struct JsonLdContextLimits {
 }
 
 impl JsonLdContextLimits {
+    /// The fixed resource envelope shared by all public context compilation.
+    pub const DEFAULT: Self = Self {
+        context_bytes: DEFAULT_MAX_CONTEXT_BYTES,
+        registry_documents: DEFAULT_MAX_REGISTRY_DOCUMENTS,
+        registry_bytes: DEFAULT_MAX_REGISTRY_BYTES,
+        terms: DEFAULT_MAX_TERMS,
+        nesting: DEFAULT_MAX_NESTING,
+        expansion_work: DEFAULT_MAX_EXPANSION_WORK,
+        definition_complexity: DEFAULT_MAX_DEFINITION_COMPLEXITY,
+    };
+
     /// Maximum UTF-8 bytes in one supplied context or registry document.
     pub const fn max_context_bytes(self) -> usize {
         self.context_bytes
@@ -72,7 +85,7 @@ impl JsonLdContextLimits {
         self.registry_bytes
     }
 
-    /// Maximum UTF-8 bytes accepted by the shared serialization-options document.
+    /// Maximum UTF-8 bytes accepted by shared context-bearing options documents.
     ///
     /// The envelope may contain one local context, the full aggregate offline
     /// registry, and bounded registry keys/JSON structure.
@@ -121,15 +134,7 @@ impl JsonLdContextLimits {
 
 impl Default for JsonLdContextLimits {
     fn default() -> Self {
-        Self {
-            context_bytes: DEFAULT_MAX_CONTEXT_BYTES,
-            registry_documents: DEFAULT_MAX_REGISTRY_DOCUMENTS,
-            registry_bytes: DEFAULT_MAX_REGISTRY_BYTES,
-            terms: DEFAULT_MAX_TERMS,
-            nesting: DEFAULT_MAX_NESTING,
-            expansion_work: DEFAULT_MAX_EXPANSION_WORK,
-            definition_complexity: DEFAULT_MAX_DEFINITION_COMPLEXITY,
-        }
+        Self::DEFAULT
     }
 }
 
@@ -245,6 +250,7 @@ pub struct JsonLdTermDefinition {
     direction_mapping: Option<JsonLdNullable<JsonLdDirection>>,
     containers: BTreeSet<JsonLdContainer>,
     index_mapping: Option<String>,
+    index_term: Option<String>,
     nest: Option<String>,
     scoped_context: Option<Value>,
     scoped_context_base: Option<String>,
@@ -303,6 +309,10 @@ impl JsonLdTermDefinition {
         self.index_mapping.as_deref()
     }
 
+    pub(in crate::native_codecs::jsonld) fn index_lexical(&self) -> Option<&str> {
+        self.index_term.as_deref()
+    }
+
     /// `@nest` keyword or alias used by the term.
     pub fn nest(&self) -> Option<&str> {
         self.nest.as_deref()
@@ -323,6 +333,7 @@ impl JsonLdTermDefinition {
 struct ActiveContext {
     original_base_iri: Option<String>,
     base_iri: Option<String>,
+    base_defined: bool,
     vocab_mapping: Option<String>,
     default_language: Option<String>,
     default_direction: Option<JsonLdDirection>,
@@ -336,6 +347,7 @@ impl ActiveContext {
         Self {
             original_base_iri: base_iri.clone(),
             base_iri,
+            base_defined: false,
             vocab_mapping: None,
             default_language: None,
             default_direction: None,
@@ -348,12 +360,27 @@ impl ActiveContext {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct InverseSelection {
-    types: BTreeMap<String, String>,
-    languages: BTreeMap<String, String>,
-    fallback: BTreeMap<String, String>,
+    types: BTreeMap<String, Vec<String>>,
+    languages: BTreeMap<String, Vec<String>>,
+    fallback: BTreeMap<String, Vec<String>>,
 }
 
 type InverseContext = BTreeMap<String, BTreeMap<String, InverseSelection>>;
+
+/// Explicit syntax and admission controls for an offline context document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonLdContextFormat {
+    /// Strict JSON with the fixed context decoding limits.
+    Json,
+    /// YAML-LD Basic with caller-supplied native selection and admission controls.
+    Yaml(super::YamlLdOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextDocument {
+    bytes: Arc<[u8]>,
+    format: JsonLdContextFormat,
+}
 
 /// Immutable collection of caller-supplied context documents keyed by absolute IRI.
 ///
@@ -362,7 +389,7 @@ type InverseContext = BTreeMap<String, BTreeMap<String, InverseSelection>>;
 /// exists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonLdContextRegistry {
-    documents: Arc<BTreeMap<String, Arc<[u8]>>>,
+    documents: Arc<BTreeMap<String, ContextDocument>>,
     total_bytes: usize,
 }
 
@@ -377,6 +404,19 @@ impl JsonLdContextRegistry {
         Self::new_with_limits(documents, JsonLdContextLimits::default())
     }
 
+    /// Construct a mixed immutable registry with an explicit format per document.
+    ///
+    /// Original bytes count against the same fixed registry ceilings as JSON.
+    /// Documents are decoded when used; no format inference or external lookup occurs.
+    pub fn new_with_formats<I, K, B>(documents: I) -> Result<Self, RdfDiagnostic>
+    where
+        I: IntoIterator<Item = (K, B, JsonLdContextFormat)>,
+        K: Into<String>,
+        B: Into<Vec<u8>>,
+    {
+        Self::retain_documents(documents, JsonLdContextLimits::default())
+    }
+
     fn new_with_limits<I, K, B>(
         documents: I,
         limits: JsonLdContextLimits,
@@ -386,9 +426,26 @@ impl JsonLdContextRegistry {
         K: Into<String>,
         B: Into<Vec<u8>>,
     {
+        Self::retain_documents(
+            documents
+                .into_iter()
+                .map(|(iri, bytes)| (iri, bytes, JsonLdContextFormat::Json)),
+            limits,
+        )
+    }
+
+    fn retain_documents<I, K, B>(
+        documents: I,
+        limits: JsonLdContextLimits,
+    ) -> Result<Self, RdfDiagnostic>
+    where
+        I: IntoIterator<Item = (K, B, JsonLdContextFormat)>,
+        K: Into<String>,
+        B: Into<Vec<u8>>,
+    {
         let mut retained = BTreeMap::new();
         let mut total_bytes = 0usize;
-        for (iri, bytes) in documents {
+        for (iri, bytes, format) in documents {
             if retained.len() == limits.max_registry_documents() {
                 return Err(context_limit(format!(
                     "offline context registry exceeds {} documents",
@@ -414,7 +471,11 @@ impl JsonLdContextRegistry {
                     limits.max_registry_bytes()
                 )));
             }
-            if retained.insert(iri.clone(), Arc::from(bytes)).is_some() {
+            let document = ContextDocument {
+                bytes: Arc::from(bytes),
+                format,
+            };
+            if retained.insert(iri.clone(), document).is_some() {
                 return Err(context_error(format!(
                     "duplicate offline context document IRI `{iri}`"
                 )));
@@ -436,13 +497,13 @@ impl JsonLdContextRegistry {
         self.documents.is_empty()
     }
 
-    /// Aggregate number of retained JSON bytes.
+    /// Aggregate number of retained original document bytes, in either format.
     pub const fn total_bytes(&self) -> usize {
         self.total_bytes
     }
 
-    fn get(&self, iri: &str) -> Option<&[u8]> {
-        self.documents.get(iri).map(AsRef::as_ref)
+    fn get(&self, iri: &str) -> Option<&ContextDocument> {
+        self.documents.get(iri)
     }
 }
 
@@ -555,6 +616,48 @@ impl CompiledJsonLdContext {
         self.active.base_iri.as_deref()
     }
 
+    pub(in crate::native_codecs) fn original_document_iri(&self) -> Option<&str> {
+        self.active.original_base_iri.as_deref()
+    }
+
+    pub(in crate::native_codecs::jsonld) fn with_frame_base_fallback(
+        &self,
+        base: Option<&str>,
+    ) -> Result<Self, RdfDiagnostic> {
+        if let Some(base) = base {
+            purrdf_iri::BaseIri::parse(base)
+                .map_err(|cause| context_error(format!("invalid framing base: {cause}")))?;
+        }
+        let mut context = self.clone();
+        if context.active.base_iri.is_none() && !context.active.base_defined {
+            context.active.base_iri = base.map(str::to_owned);
+            if context.active.original_base_iri.is_none() {
+                context.active.original_base_iri = base.map(str::to_owned);
+            }
+        }
+        Ok(context)
+    }
+
+    /// Compile an output context with independent retrieval and semantic bases.
+    /// The retrieval URL resolves offline context references; the initial semantic
+    /// base governs document IRIs until the context's own base or null replaces it.
+    /// # Errors
+    /// Preserves native context, absolute-IRI and compilation-limit refusals.
+    pub fn compile_with_bases(
+        context: &Value,
+        retrieval_base: Option<&str>,
+        output_base: Option<&str>,
+        registry: &JsonLdContextRegistry,
+    ) -> Result<Self, RdfDiagnostic> {
+        compiler::compile_with_bases(
+            context,
+            retrieval_base,
+            output_base,
+            registry,
+            JsonLdContextLimits::default(),
+        )
+    }
+
     /// Active vocabulary mapping, when configured.
     pub fn vocab_mapping(&self) -> Option<&str> {
         self.active.vocab_mapping.as_deref()
@@ -604,7 +707,54 @@ impl CompiledJsonLdContext {
 
     /// Apply a node-local context over this compiled active context.
     pub fn apply_local_context(&self, context: &Value) -> Result<Self, RdfDiagnostic> {
-        compiler::apply_context(self, context, self.base_iri(), false)
+        compiler::apply_context(self, context, self.base_iri(), false, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_document_context(
+        &self,
+        context: &Value,
+        document_url: Option<&str>,
+    ) -> Result<Self, RdfDiagnostic> {
+        compiler::apply_context(self, context, document_url, false, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_type_scope(
+        &self,
+        definition: &JsonLdTermDefinition,
+        propagate: bool,
+    ) -> Result<Self, RdfDiagnostic> {
+        // Structural callers filter immutable definitions for a scoped context.
+        compiler::apply_context(
+            self,
+            definition
+                .scoped_context
+                .as_ref()
+                .expect("type-scoped definition"),
+            definition.scoped_context_base.as_deref(),
+            false,
+            propagate,
+        )
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_property_scope(
+        &self,
+        definition: &JsonLdTermDefinition,
+    ) -> Result<Self, RdfDiagnostic> {
+        // Structural callers filter immutable definitions for a scoped context.
+        compiler::apply_context(
+            self,
+            definition
+                .scoped_context
+                .as_ref()
+                .expect("property-scoped definition"),
+            definition.scoped_context_base.as_deref(),
+            true,
+            true,
+        )
+    }
+
+    pub(in crate::native_codecs::jsonld) fn previous_context(&self) -> Option<Self> {
+        compiler::previous_context(self)
     }
 
     /// Active context inherited by a nested node object under `@propagate` rules.
@@ -633,7 +783,7 @@ impl CompiledJsonLdContext {
     /// positions consult the inverse context and prefix definitions; document
     /// positions compact against `@base` where the round-trip is exact.
     pub fn compact_iri(&self, iri: &str, vocab: bool) -> Result<String, RdfDiagnostic> {
-        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None)
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None, true)
     }
 
     /// Compact an absolute vocabulary IRI using explicit inverse-context value-shape
@@ -647,7 +797,60 @@ impl CompiledJsonLdContext {
         vocab: bool,
         selection: Option<&JsonLdTermSelection>,
     ) -> Result<String, RdfDiagnostic> {
-        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, selection)
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, selection, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn compact_document_iri(
+        &self,
+        iri: &str,
+        vocab: bool,
+        relative: bool,
+    ) -> Result<String, RdfDiagnostic> {
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None, relative)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn compact_property_iri(
+        &self,
+        iri: &str,
+        value: &Value,
+        reverse: bool,
+        json_eligible: bool,
+        used_lists: &[String],
+    ) -> Result<String, RdfDiagnostic> {
+        selection::compact(self, iri, value, reverse, json_eligible, used_lists)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn property_uses_explicit_values(
+        &self,
+        term: &str,
+        value: &Value,
+    ) -> Result<bool, RdfDiagnostic> {
+        selection::explicit_values(self, term, value)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn property_keeps_index(
+        &self,
+        term: &str,
+        value: &Value,
+    ) -> Result<bool, RdfDiagnostic> {
+        selection::keep_index(self, term, value)
+    }
+
+    fn compact_property_accepting(
+        &self,
+        iri: &str,
+        selection: &JsonLdTermSelection,
+        accept: impl Fn(&str) -> bool,
+    ) -> Result<String, RdfDiagnostic> {
+        compiler::compact_iri_accepting(
+            &self.active,
+            &self.inverse,
+            iri,
+            true,
+            Some(selection),
+            true,
+            accept,
+        )
     }
 }
 
@@ -769,6 +972,19 @@ fn validate_absolute_iri(iri: &str, description: &str) -> Result<(), RdfDiagnost
             "invalid {description} `{iri}`: {source}"
         ))),
     }
+}
+
+/// Admit the reference written verbatim into a single-line YAML editor comment.
+pub(super) fn validate_yaml_schema_url(schema_url: &str) -> Result<(), RdfDiagnostic> {
+    if schema_url.is_empty()
+        || schema_url.chars().any(char::is_whitespace)
+        || purrdf_iri::parse(schema_url).is_err()
+    {
+        return Err(context_error(format!(
+            "invalid YAML-LD schema IRI reference `{schema_url}`"
+        )));
+    }
+    Ok(())
 }
 
 fn context_error(message: impl Into<String>) -> RdfDiagnostic {

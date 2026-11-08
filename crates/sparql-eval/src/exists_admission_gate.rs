@@ -1251,10 +1251,10 @@ mod tests {
             base_iri: None,
             version: None,
         };
-        let prepared = crate::PreparedQuery::rewritten(query, crate::QueryOptions::EMPTY)
+        let prepared = crate::PreparedQuery::rewritten(query, &crate::QueryOptions::EMPTY)
             .expect("no property-function/aggregate registry to fingerprint");
         let engine = crate::NativeSparqlEngine::new();
-        engine.query_prepared(ds, &prepared, &[], crate::QueryOptions::EMPTY)
+        engine.query_prepared(ds, &prepared, &[], &crate::QueryOptions::EMPTY)
     }
 
     #[test]
@@ -2560,7 +2560,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    crate::engine::QueryOptions::EMPTY,
+                    &crate::engine::QueryOptions::EMPTY,
                     &governors,
                 )
                 .expect("the query parses and evaluates under every fuel level");

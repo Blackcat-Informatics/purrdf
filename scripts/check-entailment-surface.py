@@ -257,13 +257,13 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "cli": ("--conclusion",),
     },
     # The evaluation limits, one `MaterializeLimits` on the boundary: every host spells
-    # the stored-fact and join-step limits as its own two arguments.
+    # the stored-fact, join-step and term-arena limits as its own three arguments.
     "limits": {
-        "python": ("max_stored_facts", "max_join_steps"),
-        "wasm": ("max_stored_facts", "max_join_steps"),
-        "dts": ("maxStoredFacts", "maxJoinSteps"),
-        "capi": ("max_stored_facts", "max_join_steps"),
-        "cli": ("--max-stored-facts", "--max-join-steps"),
+        "python": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "wasm": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "dts": ("maxStoredFacts", "maxJoinSteps", "maxTermArenaBytes"),
+        "capi": ("max_stored_facts", "max_join_steps", "max_term_arena_bytes"),
+        "cli": ("--max-stored-facts", "--max-join-steps", "--max-term-arena-bytes"),
     },
     "imports": {
         "python": ("imports",),
@@ -294,11 +294,11 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
 # The `purrdf entails` flags that answer to no boundary parameter and to no service, and
 # are therefore the subcommand's own plumbing. `--report` is the certificate target every
 # reasoning subcommand carries; `--from` is the CLI's own format resolution, which runs in
-# FRONT of a boundary that parses one media type; `OUT` is positional and so is not a flag
-# at all. (`--base` is not plumbing: it is how the CLI spells `premise_iris`.) A flag
+# FRONT of a boundary that parses one media type; YAML-LD controls configure those role
+# readers too. `OUT` is positional; `--base` spells `premise_iris`. A flag
 # outside this list and outside the two tables above is a capability with no boundary
 # behind it, and fails the gate.
-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from"})
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--yamlld-input-options", "--conclusion-yamlld-input-options", "--import-yamlld-input-options"})
 
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
@@ -1113,8 +1113,8 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "bindings/python/src/py_entail.rs",
         lambda text: _swap(
             text,
-            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]",
-            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None, max_term_arena_bytes=None))]",
         ),
     ),
     (

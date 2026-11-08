@@ -19,16 +19,17 @@ for one of those identities.
 ## API and refusal
 
 The core, RDF and umbrella crates expose `DatasetStateDigest` and the
-non-exhaustive `DatasetStateError<Error, Evidence>`. `from_view` accepts a
+non-exhaustive `DatasetStateError<Error, Evidence>`. `from_view` requires an explicit `CanonicalizationControl` and accepts a
 `FallibleDatasetView`, including a frozen `RdfDataset`, composite, delta and
 paged query views. The result contains 32 bytes and supports `as_bytes`, `to_hex`
 and `Display`.
 
 ```rust
-use purrdf::{DatasetStateDigest, RdfDatasetBuilder};
+use purrdf::{CanonicalizationControl, DatasetStateDigest, RdfDatasetBuilder, SearchPolicy};
 
 let dataset = RdfDatasetBuilder::new().freeze()?;
-let identity = DatasetStateDigest::from_view(&dataset)?;
+let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+let identity = DatasetStateDigest::from_view(&dataset, &mut control)?;
 println!("{identity}");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -42,15 +43,22 @@ lookup for a CDT blank reference returns `IncoherentEmbeddedBlank`; a literal
 whose datatype does not resolve to an IRI returns `InvalidTerm`. Unrepresentable
 sizes return `Capacity`.
 
-Canonical search has the unchanged numeric `RDFC_CALL_LIMIT` bound, charged
-for visited search states, candidate expansion and explicit automorphism checks.
-Refinement has a separate finite input-derived bound: every nonterminal round
+Canonical search requires an explicit finite or unlimited per-run policy.
+Dataset-state charging law version 1 charges a visited search state, candidate
+consideration and explicit automorphism check as distinct events. It does not use
+the RDFC frame/permutation law. A structurally discrete state needs one search
+node regardless of blank count. A rejected event adds no charge.
+`SearchBudgetExceeded` carries the actual finite limit and charged work and
+publishes no approximation or partial identity. Stop checks cover capture,
+rendering, refinement, search and digest output; the caller's ordered control
+receipts retain actual work, phase and observed control refusals on every return.
+Counter capacity refuses with typed evidence rather than wrapping.
+
+Refinement has a separate finite input-derived invariant: every nonterminal round
 strictly increases the number of nonempty cells, so `n + 1` rounds suffice for
-`n` blanks, including the stable check and the empty state. Ordered color buckets
-visit the blanks once per round. A structurally discrete state therefore needs
-one search node regardless of its blank count. `SearchBudgetExceeded` publishes
-no approximation or partial identity. The old RDFC algorithm and its work
-accounting do not change.
+`n` blanks, including the stable check and empty state. Violating that law returns
+`RefinementInvariant`, never a claimed caller-budget exhaustion. The version 1
+canonical payload, final BLAKE3 preimage and twelve frozen vectors are unchanged.
 
 Retained capture/search workspace is admitted before allocation and released
 before returning the digest. Rendering, incidence and partition scaffolding use

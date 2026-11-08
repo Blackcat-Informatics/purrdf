@@ -628,6 +628,12 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
+        let annotation_range = ctx.annotation_range.as_ref().and_then(|ranges| {
+            ranges.iter().find(|range| {
+                matches!(&cp.o, Pos::Slot(slot)
+                if working.vars().get(*slot).is_some_and(|variable| range.matches(variable)))
+            })
+        });
         // All driving ordinals are ordered once, then swept against the native
         // partition. Publication still follows the original input-row order.
         let sweep = window
@@ -742,6 +748,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                     // shows only when the scope admits the default graph (unchanged),
                     // and a `GRAPH :g`-scoped reifier shows only under that named graph.
                     let components = components_of(&cp.o, |part| query_id(part, row));
+                    let range_admission = crate::expr::AnnotationRangeMemory::new(ctx);
                     emit_virtual_candidates(
                         ctx.dataset,
                         cp,
@@ -751,6 +758,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                         components,
                         reifies_id,
                         *gm,
+                        annotation_range.map(|range| range.range(&ctx.now, &range_admission)),
                         |quad| {
                             if acc.is_full() || ctx.stop_check().is_some() {
                                 return ControlFlow::Break(());
@@ -771,6 +779,9 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                             }
                         },
                     );
+                    if let Some(error) = range_admission.take_failure() {
+                        acc.fail(error);
+                    }
                 }
                 // A FROM/USING-merged default graph: union the per-graph reads, but
                 // RDF-merge unions *triples*, so a triple present in two merged graphs
@@ -2997,6 +3008,7 @@ fn emit_virtual_candidates<D: DatasetView>(
     components: [Option<D::Id>; 3],
     reifies_id: Option<D::Id>,
     gm: GraphMatch<D::Id>,
+    range: Option<purrdf_core::AnnotationValueRange<'_>>,
     emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
@@ -3007,7 +3019,7 @@ fn emit_virtual_candidates<D: DatasetView>(
     // object match.
     let predicate_can_reify =
         reifies_id.is_some_and(|reifies| p.is_none_or(|bound| bound == reifies));
-    statement_layer::visit_quads(
+    statement_layer::visit_quads_range(
         dataset,
         StatementProbe {
             s,
@@ -3017,6 +3029,7 @@ fn emit_virtual_candidates<D: DatasetView>(
             graph: gm,
             scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
         },
+        range,
         emit,
     );
 }
@@ -3633,11 +3646,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             // Leaves that hold no BGP: there is no triple-pattern join order to choose and
             // no base cardinality to probe.
             GraphPattern::Values { variables, bindings } => {
-                survey.record(pattern, PlanEstimate {
-                    rows: bindings.len() as u64,
-                    peak_rows: bindings.len() as u64,
-                    columns: variables.len() as u64,
-                });
+                survey.record(
+                    pattern,
+                    PlanEstimate::new(
+                        bindings.len() as u64,
+                        bindings.len() as u64,
+                        variables.len() as u64,
+                    ),
+                );
             }
             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
         }
@@ -3647,11 +3663,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
 
 /// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
 /// row, and an inner pattern that is never evaluated.
-const EMPTY_SCOPE: PlanEstimate = PlanEstimate {
-    rows: 0,
-    peak_rows: 0,
-    columns: 0,
-};
+const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0);
 
 /// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
 /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
@@ -3754,11 +3766,11 @@ fn forecast_bgp<D: DatasetView>(
             compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
         )?
     };
-    let estimate = PlanEstimate {
+    let estimate = PlanEstimate::new(
         rows,
         peak_rows,
-        columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-    };
+        u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+    );
     Ok((schema, estimate, order))
 }
 
@@ -3948,14 +3960,7 @@ fn record_call_estimate(
     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
     // arity beyond `u64` is already past any ceiling a caller can express.
     let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
-    survey.record(
-        node,
-        PlanEstimate {
-            rows,
-            peak_rows: rows,
-            columns,
-        },
-    );
+    survey.record(node, PlanEstimate::new(rows, rows, columns));
     Ok(())
 }
 
@@ -6886,11 +6891,11 @@ mod survey_tests {
             } => {
                 survey.record(
                     pattern,
-                    PlanEstimate {
-                        rows: bindings.len() as u64,
-                        peak_rows: bindings.len() as u64,
-                        columns: variables.len() as u64,
-                    },
+                    PlanEstimate::new(
+                        bindings.len() as u64,
+                        bindings.len() as u64,
+                        variables.len() as u64,
+                    ),
                 );
                 Ok(())
             }

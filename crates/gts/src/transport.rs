@@ -49,7 +49,7 @@ use std::fmt;
 use std::io::{self, Chain, Cursor, Read};
 
 use purrdf_deflate::GzipReader;
-use structured_zstd::decoding::{BlockDecodingStrategy, FrameDecoder};
+use purrdf_zstd::decoding::{BlockDecodingStrategy, FrameDecoder};
 
 mod refusal;
 use refusal::ZstdRefusal;
@@ -73,7 +73,7 @@ const ZSTD_SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
 pub enum TransportEncoding {
     /// gzip (RFC 1952), decoded by the workspace's native `purrdf-deflate`.
     Gzip,
-    /// zstd (RFC 8878): frames decoded by the pure-Rust `structured-zstd` frame
+    /// zstd (RFC 8878): frames decoded by the pure-Rust `purrdf-zstd` frame
     /// decoder, sequenced frame by frame here.
     Zstd,
 }
@@ -99,7 +99,7 @@ impl fmt::Display for TransportEncoding {
 /// A truncated stream, a corrupt frame, and a stream that is not the claimed
 /// encoding at all all arrive here — every one of them as an error, never as a
 /// short read.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError {
     /// The encoding whose decoder failed.
     pub encoding: TransportEncoding,
@@ -114,14 +114,6 @@ impl TransportError {
         self.cause.message()
     }
 }
-
-impl PartialEq for TransportError {
-    fn eq(&self, other: &Self) -> bool {
-        self.encoding == other.encoding
-            && (self.cause == other.cause || self.message() == other.message())
-    }
-}
-impl Eq for TransportError {}
 
 impl fmt::Display for TransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -279,7 +271,7 @@ enum TransportReaderInner<R: Read> {
 /// A `Read` over zstd data that decodes it frame by frame (RFC 8878 §3.1).
 ///
 /// Between frames it reads the next four-byte magic number itself: a Zstandard
-/// frame is handed to `structured-zstd`'s [`FrameDecoder`], which reads exactly that
+/// frame is handed to `purrdf-zstd`'s [`FrameDecoder`], which reads exactly that
 /// frame; a skippable frame's user data is skipped by its `Frame_Size`; a clean end
 /// of input after at least one frame ends the stream; anything else — a partial
 /// magic number, or bytes that begin no frame — is refused.
@@ -324,8 +316,8 @@ impl<R: Read> Read for Counted<R> {
 /// Decoded bytes one decode step asks the frame decoder for.
 const ZSTD_STEP: usize = 128 * 1024;
 
-fn zstd_error(message: impl fmt::Display) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+fn zstd_error(cause: purrdf_zstd::decoding::errors::FrameDecoderError) -> io::Error {
+    purrdf_hash::error::io_error(io::ErrorKind::InvalidData, cause)
 }
 
 impl<R: Read> ZstdFrames<R> {
@@ -661,9 +653,9 @@ mod tests {
     }
 
     fn zstd(payload: &[u8]) -> Vec<u8> {
-        structured_zstd::encoding::compress_to_vec(
+        purrdf_zstd::encoding::compress_to_vec(
             payload,
-            structured_zstd::encoding::CompressionLevel::Fastest,
+            purrdf_zstd::encoding::CompressionLevel::Fastest,
         )
     }
 

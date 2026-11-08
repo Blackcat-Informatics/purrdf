@@ -85,18 +85,18 @@ fn main() {
     measure("prepare_compiler_algebra_including_clone", &cold, || {
         for _ in 0..REPETITIONS {
             black_box(
-                cold.prepare_algebra(prepared.query().clone(), QueryOptions::EMPTY)
+                cold.prepare_algebra(prepared.query().clone(), &QueryOptions::EMPTY)
                     .unwrap(),
             );
         }
     });
     // Warm the independent order cache before comparing repeated execution.
-    warm.query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+    warm.query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     measure("execute_prepared", &warm, || {
         for _ in 0..REPETITIONS {
             black_box(
-                warm.query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                warm.query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap(),
             );
         }
@@ -116,7 +116,7 @@ fn main() {
             );
         }
     });
-    cold.query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+    cold.query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     measure("execute_uncached_text", &cold, || {
         for _ in 0..REPETITIONS {
@@ -158,7 +158,7 @@ fn main() {
                     &*data,
                     &prepared,
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &state,
                 )
                 .unwrap(),

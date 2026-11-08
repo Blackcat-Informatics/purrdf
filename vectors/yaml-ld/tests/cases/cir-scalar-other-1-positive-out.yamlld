@@ -1,0 +1,24 @@
+%TAG !xsd! http://www.w3.org/2001/XMLSchema%23
+---
+- http://example.com/yint:
+  - "@value": 123
+  http://example.com/yfloat:
+  - "@value": 123.45
+  http://example.com/ystring:
+  - "@value": string
+  http://example.com/ybool:
+  - "@value": true
+  http://example.com/integer:
+  - "@value": 123
+  http://example.com/decimal:
+  - "@value": 123.456
+  http://example.com/double:
+  - "@value": 123.456e78
+  http://example.com/bool:
+  - "@value": true
+  http://example.com/date:
+  - "@value": 2022-08-08
+  http://example.com/time:
+  - "@value": "12:00:00.000"
+  http://example.com/dateTime:
+  - "@value": 2022-08-08T12:00:00.000

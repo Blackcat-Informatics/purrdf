@@ -26,12 +26,14 @@ const D_CHUNKING: Domain = Domain::new(b"purrdf.purremb.v1.chunking\0");
 const D_SPACE: Domain = Domain::new(b"purrdf.purremb.v1.vector-space\0");
 const D_TARGET_IDENTITY: Domain = Domain::new(b"purrdf.purremb.v1.target-identity\0");
 const D_TARGET: Domain = Domain::new(b"purrdf.purremb.v1.target\0");
-pub(super) const D_TARGET_SET: Domain = Domain::new(b"purrdf.purremb.v1.target-set\0");
+/// Target-set content hash domain.
+pub const D_TARGET_SET: Domain = Domain::new(b"purrdf.purremb.v1.target-set\0");
 const D_RELATION_ROLE: Domain = Domain::new(b"purrdf.purremb.v1.relation-role\0");
-pub(super) const D_MATRIX_CONTENT: Domain = Domain::new(b"purrdf.purremb.v1.matrix-content\0");
+/// Stored matrix content hash domain.
+pub const D_MATRIX_CONTENT: Domain = Domain::new(b"purrdf.purremb.v1.matrix-content\0");
 const D_MATRIX: Domain = Domain::new(b"purrdf.purremb.v1.matrix\0");
-pub(super) const D_PROJECTION_CONTENT: Domain =
-    Domain::new(b"purrdf.purremb.v1.projection-content\0");
+/// Effective projection content hash domain.
+pub const D_PROJECTION_CONTENT: Domain = Domain::new(b"purrdf.purremb.v1.projection-content\0");
 const D_PROJECTION: Domain = Domain::new(b"purrdf.purremb.v1.projection\0");
 const D_EXTERNAL_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.external-contract\0");
 const D_EXTERNAL: Domain = Domain::new(b"purrdf.purremb.v1.external-binding\0");
@@ -448,41 +450,43 @@ impl purrdf_hash::Digest for Sha256Digest {
 /// domain's bytes, then every field framed by [`purrdf_hash::frame`] — its
 /// length in eight little-endian bytes, then its bytes — under SHA-256.
 ///
-/// [`hash_fold`] folds fields it holds; the writer and the verifier stream
+/// Identity constructors fold whole fields; the writer and the verifier stream
 /// the matrix and projection contents and a target set's rows through the same
 /// fold, opening a long field with [`begin_field`](Self::begin_field) and
 /// absorbing its bytes in pieces with [`update`](Self::update).
 #[derive(Clone)]
-pub(super) struct FramedHasher {
+pub struct FramedHasher {
     hasher: Sha256Digest,
 }
 
+purrdf_hash::debug_non_exhaustive!(FramedHasher {});
+
 impl FramedHasher {
     /// A fold under `domain`, its bytes absorbed.
-    pub(super) fn new(domain: Domain) -> Self {
+    pub fn new(domain: Domain) -> Self {
         let mut hasher = Sha256Digest::default();
         purrdf_hash::Digest::update(&mut hasher, domain.as_bytes());
         Self { hasher }
     }
 
     /// Absorb one whole field, framed.
-    pub(super) fn field(&mut self, bytes: &[u8]) {
+    pub fn field(&mut self, bytes: &[u8]) {
         purrdf_hash::frame::frame_le_into(&mut self.hasher, bytes);
     }
 
     /// Open a field of `length` bytes whose bytes follow through
     /// [`update`](Self::update): the frame's length prefix alone.
-    pub(super) fn begin_field(&mut self, length: u64) {
+    pub fn begin_field(&mut self, length: u64) {
         purrdf_hash::Digest::update(&mut self.hasher, &length.to_le_bytes());
     }
 
     /// Absorb bytes of the field [`begin_field`](Self::begin_field) opened.
-    pub(super) fn update(&mut self, bytes: &[u8]) {
+    pub fn update(&mut self, bytes: &[u8]) {
         purrdf_hash::Digest::update(&mut self.hasher, bytes);
     }
 
     /// The fold's digest.
-    pub(super) fn finish(self) -> [u8; 32] {
+    pub fn finish(self) -> [u8; 32] {
         self.hasher.0.finalize().into()
     }
 }

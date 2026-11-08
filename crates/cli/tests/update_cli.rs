@@ -9,6 +9,332 @@ use support::run;
 const INSERT: &str =
     "INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }";
 
+/// Primary YAML selection and admission happen before UPDATE or output acquisition.
+#[test]
+fn configured_yamlld_update_selects_documents_and_refuses_before_output() {
+    use support::{code, path, stderr, stdout, write_file};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nurn:value: one\n---\n'@id': second\nurn:value: two\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let update = "INSERT { ?s <urn:seen> true } WHERE { ?s <urn:value> ?o }";
+    let mut args = vec![
+        "update",
+        "--data",
+        &input,
+        "--base",
+        "https://example.org/",
+        "--to",
+        "nquads",
+    ];
+    let mut first_args = args.clone();
+    first_args.push(update);
+    let first = run(&first_args);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(stdout(&first).contains("<https://example.org/first> <urn:seen>"));
+    assert!(!stdout(&first).contains("https://example.org/second"));
+    args.extend(["--yamlld-input-options", &all, update]);
+    let selected = run(&args);
+    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+    for subject in ["first", "second"] {
+        assert!(stdout(&selected).contains(&format!("<https://example.org/{subject}> <urn:seen>")));
+    }
+
+    let output = write_file(dir.path(), "output.nq", "unchanged destination");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "update",
+        "--data",
+        &input,
+        "--yamlld-input-options",
+        &limited,
+        "--output",
+        &output,
+        update,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let missing = path(dir.path(), "missing");
+    for format in ["turtle", "jsonld", "pack", "gts"] {
+        let refused = run(&[
+            "update",
+            "--data",
+            &missing,
+            "--from",
+            format,
+            "--yamlld-input-options",
+            &all,
+            "--output",
+            &output,
+            update,
+        ]);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged destination"
+        );
+    }
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let refused = run(&[
+        "update",
+        "--data",
+        &missing,
+        "--from",
+        "yamlld",
+        "--yamlld-input-options",
+        &malformed,
+        "--output",
+        &output,
+        update,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
+/// Exact inputs reach every CLI execution/source route and one random stream
+/// advances across the request's operations instead of restarting each WHERE.
+#[test]
+fn supplied_update_coordinates_replay_across_operations_and_routes() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
+    use support::{code, pipe, stderr, stdout, write_file};
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let text = "<http://example.org/old> <http://example.org/p> <http://example.org/value> .";
+    let input = write_file(dir.path(), "coordinates.ttl", text);
+    let pack = write_file(dir.path(), "coordinates.purrpck", "");
+    let built = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &input,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
+    assert_eq!(code(&built), 0, "{}", stderr(&built));
+    let update = ["a", "b"]
+        .map(|subject| {
+            format!(
+                "INSERT {{ <http://example.org/{subject}> <http://example.org/time> ?t ; \
+         <http://example.org/random> ?r ; <http://example.org/uuid> ?u ; \
+         <http://example.org/str> ?v }} WHERE {{ BIND(NOW() AS ?t) \
+         BIND(RAND() AS ?r) BIND(UUID() AS ?u) BIND(STRUUID() AS ?v) \
+         FILTER(REGEX(\"ok\", \"^ok$\")) }}"
+            )
+        })
+        .join("; ");
+    let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
+    let other = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    let answer = |source: &str,
+                  now: Option<&str>,
+                  seed: Option<&str>,
+                  lane: &[&str],
+                  canonical_search: Option<&str>| {
+        let mut args = vec!["update", "--data", source, "--to", "ntriples"];
+        if let Some(policy) = canonical_search {
+            args.extend([
+                "--canonical-search",
+                policy,
+                "--canonicalization-receipts",
+                canonical_conditional_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]);
+        }
+        if source == "-" {
+            args.extend(["--from", "turtle"]);
+        }
+        if let Some(now) = now {
+            args.extend(["--now", now]);
+        }
+        if let Some(seed) = seed {
+            args.extend(["--entropy-seed", seed]);
+        }
+        args.extend_from_slice(lane);
+        args.push(&update);
+        let out = if source == "-" {
+            pipe(&args, text)
+        } else {
+            run(&args)
+        };
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let body = stdout(&out);
+        let mut cells = Vec::new();
+        for subject in ["a", "b"] {
+            for predicate in ["time", "random", "uuid", "str"] {
+                let prefix =
+                    format!("<http://example.org/{subject}> <http://example.org/{predicate}> ");
+                cells.push(
+                    body.lines()
+                        .find_map(|line| line.strip_prefix(&prefix))
+                        .expect("inserted coordinate value")
+                        .to_owned(),
+                );
+            }
+        }
+        cells
+    };
+    let first = answer(&input, Some(time), Some("0"), &[], None);
+    assert!(first[0].contains(time));
+    assert_eq!(first[0], first[4]);
+    for index in 1..4 {
+        assert_ne!(first[index], first[index + 4]);
+    }
+    for (source, canonical_search) in [
+        (&input[..], None),
+        (&pack[..], Some("unlimited")),
+        ("-", None),
+    ] {
+        for lane in [
+            &[][..],
+            &["--fuel", "1000000"][..],
+            &["--no-ceiling"][..],
+            &["--xpath-regex", "xpath-3.1-2017-03-21"][..],
+        ] {
+            assert_eq!(
+                answer(source, Some(time), Some("0"), lane, canonical_search),
+                first
+            );
+        }
+    }
+    let later = answer(&input, Some(other), Some("0"), &[], None);
+    let seeded = answer(&input, Some(time), Some("1"), &[], None);
+    let time_only = answer(&input, Some(time), None, &[], None);
+    let seed_only = answer(&input, None, Some("0"), &[], None);
+    assert_eq!(answer(&input, None, None, &[], None).len(), 8);
+    for index in 0..8 {
+        if index % 4 == 0 {
+            assert!(later[index].contains(other));
+            assert_eq!(seeded[index], first[index]);
+            assert_eq!(time_only[index], first[index]);
+        } else {
+            assert_eq!(later[index], first[index]);
+            assert_ne!(seeded[index], first[index]);
+            assert_eq!(seed_only[index], first[index]);
+        }
+    }
+}
+
+/// Invalid coordinates precede source reads; later failure or a governor trip
+/// keeps both the source and an existing destination untouched.
+#[test]
+fn supplied_update_coordinates_preserve_atomic_errors_and_governor_evidence() {
+    use support::{code, stderr, write_file};
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let input = fixture(dir.path());
+    let before = std::fs::read(&input).unwrap();
+    let output = write_file(dir.path(), "destination.nt", "unchanged destination");
+    let missing = dir.path().join("missing.ttl");
+    for (flag, value) in [
+        ("--now", "invalid"),
+        ("--entropy-seed", "-1"),
+        ("--entropy-seed", "18446744073709551616"),
+    ] {
+        let out = run(&[
+            "update",
+            "--data",
+            missing.to_str().unwrap(),
+            "--output",
+            &output,
+            "--to",
+            "ntriples",
+            flag,
+            value,
+            INSERT,
+        ]);
+        assert_eq!(code(&out), 2, "{}", stderr(&out));
+        assert!(stderr(&out).contains(flag));
+        assert!(!stderr(&out).contains("missing.ttl"));
+        assert_eq!(out.stdout, [] as [u8; 0]);
+    }
+    let absorbed = run(&[
+        "update",
+        "--data",
+        &input,
+        "--to",
+        "ntriples",
+        "--fuel",
+        "1000000",
+        "--now",
+        "2020-01-01T00:00:00Z",
+        "--entropy-seed",
+        "0",
+        "INSERT { <http://example.org/a> <http://example.org/time> ?t } WHERE {
+         BIND(NOW() AS ?t) BIND(1 / 0 AS ?bad) }",
+    ]);
+    assert_eq!(code(&absorbed), 0, "{}", stderr(&absorbed));
+    assert!(stderr(&absorbed).contains("purrdf-expression-errors 1\nabsorbed err:FOAR0001 1\n"));
+    let update = "INSERT { <http://example.org/a> <http://example.org/time> ?t } \
+        WHERE { BIND(NOW() AS ?t) }; CREATE GRAPH <http://example.org/g>; \
+        CREATE GRAPH <http://example.org/g>";
+    for lane in [&[][..], &["--fuel", "1000000"][..], &["--fuel", "0"][..]] {
+        let mut args = vec![
+            "update",
+            "--data",
+            &input,
+            "--output",
+            &output,
+            "--to",
+            "ntriples",
+            "--now",
+            "2020-01-01T00:00:00Z",
+            "--entropy-seed",
+            "0",
+        ];
+        args.extend_from_slice(lane);
+        args.push(update);
+        let out = run(&args);
+        assert_eq!(
+            code(&out),
+            if lane.last() == Some(&"0") { 3 } else { 1 },
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(out.stdout, [] as [u8; 0]);
+        if code(&out) == 3 {
+            assert!(stderr(&out).contains("tripped fuel-exhausted"));
+            assert!(stderr(&out).contains("mutation none"));
+        }
+        assert_eq!(std::fs::read(&input).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged destination"
+        );
+    }
+}
+
 fn fixture(dir: &std::path::Path) -> String {
     let path = dir.join("input.ttl");
     std::fs::write(
@@ -26,7 +352,7 @@ fn update_applies_then_serializes_the_committed_dataset() {
     let output = run(&["update", "--data", &input, "--to", "ntriples", INSERT]);
 
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(output.stderr, [] as [_; 0]);
+    assert_eq!(support::execution_diagnostics(&output, "not-started"), "");
     let body = String::from_utf8(output.stdout).expect("UTF-8 output");
     assert!(body.contains("<http://example.org/old>"), "{body}");
     assert!(body.contains("<http://example.org/new>"), "{body}");
@@ -48,7 +374,7 @@ fn governed_update_trip_writes_no_dataset_and_exits_three() {
         "a tripped mutation emits no dataset"
     );
     assert!(!std::path::Path::new(target).exists());
-    let report = String::from_utf8(output.stderr).expect("UTF-8 report");
+    let report = support::execution_diagnostics(&output, "not-started");
     assert!(report.starts_with("purrdf-governor-report 1\n"), "{report}");
     assert!(report.contains("\noperation update\n"), "{report}");
     assert!(report.contains("\ntripped fuel-exhausted\n"), "{report}");

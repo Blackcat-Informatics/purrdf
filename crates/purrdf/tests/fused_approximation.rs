@@ -17,6 +17,7 @@
 //! and the test would pass while proving nothing about composition.
 
 use purrdf_hnsw::fixture::params;
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -171,11 +172,15 @@ fn profile() -> retrieval::FusionProfile {
     for stratum in [TEXT_STRATUM, HNSW_STRATUM] {
         weights.insert(
             retrieval::Iri::parse(stratum).expect("the fixture stratum IRI is valid"),
-            retrieval::Fixed::ONE,
+            PRECISION_12.score(PRECISION_12.scale()),
         );
     }
-    retrieval::FusionProfile::with_decay(weights, retrieval::DecayRule::ReciprocalRank { k: 60 })
-        .expect("the fixture fusion profile is valid")
+    retrieval::FusionProfile::with_decay(
+        weights,
+        retrieval::DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
+    )
+    .expect("the fixture fusion profile is valid")
 }
 
 fn search() -> retrieval::SearchResult {
@@ -315,7 +320,7 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
         if row.contributions.iter().any(|(s, _, _)| *s == hnsw) {
             named_by_hnsw += 1;
             assert!(
-                *inflation > retrieval::Fixed::ZERO,
+                *inflation > PRECISION_12.score(0),
                 "a row the approximate stratum named may have been promoted by \
                  a row it missed, so its contribution from that stratum is \
                  suspect: {:?}",
@@ -324,7 +329,7 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
         } else {
             assert_eq!(
                 *inflation,
-                retrieval::Fixed::ZERO,
+                PRECISION_12.score(0),
                 "and a row it never named was promoted by nothing: {:?}",
                 row.entity
             );
@@ -338,7 +343,10 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
 
     // Non-vacuous, and in the direction that matters: a real approximate
     // producer must be able to COST certainty, or the number is decorative.
-    let certain = result.trailer.certain_prefix(&result.rows);
+    let certain = result
+        .trailer
+        .certain_prefix(&result.rows)
+        .expect("valid emitted intervals");
     assert!(
         certain < result.rows.len(),
         "the approximate stratum contributed to rows whose intervals now \
@@ -357,7 +365,10 @@ fn the_answer_bounds_each_row_and_names_its_certain_prefix() {
     // and that is the honest floor rather than a defect.
     let control = text_only_search();
     assert_eq!(
-        control.trailer.certain_prefix(&control.rows),
+        control
+            .trailer
+            .certain_prefix(&control.rows)
+            .expect("valid emitted intervals"),
         control.rows.len(),
         "the same corpus through the exhaustive producer alone certifies every \
          row it returns, so the shortfall above is the approximation's and not \
@@ -400,10 +411,14 @@ fn text_only_search() -> retrieval::SearchResult {
     registry.register_ranked(TEXT_PRODUCER, Arc::new(relation), declaration);
 
     let mut weights = BTreeMap::new();
-    weights.insert(stratum(TEXT_STRATUM), retrieval::Fixed::ONE);
+    weights.insert(
+        stratum(TEXT_STRATUM),
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
     let profile = retrieval::FusionProfile::with_decay(
         weights,
         retrieval::DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
     )
     .expect("the fixture fusion profile is valid");
     let statistics = NoStatistics;

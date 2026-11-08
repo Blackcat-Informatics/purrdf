@@ -1,0 +1,14 @@
+# tag:yaml.org,2002 scalars
+"@context":
+  "@vocab": http://example.com/
+  values:
+    "@container": "@list"
+"@id": http://example.org/test#example
+values:
+  - !!bool true
+  - !!bool false
+  - !!int -42
+  - !!int 0o77
+  - !!int 0xfeedface
+  - !!float 12.34e56
+  - !!str string

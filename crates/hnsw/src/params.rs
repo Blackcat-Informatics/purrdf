@@ -13,7 +13,7 @@
 //! checked before a single distance is computed, and a violation names the parameter and
 //! the reason rather than surfacing later as a short or malformed graph.
 
-use crate::error::{HnswError, Result};
+use crate::error::{ArithmeticRefusal, HnswError, Result};
 
 /// The four required HNSW parameters.
 ///
@@ -157,10 +157,16 @@ impl Params {
         // Every product the build performs, checked once, here.
         let elements = rows
             .checked_mul(dims)
-            .ok_or(HnswError::ArithmeticOverflow)?;
+            .ok_or(ArithmeticRefusal::MatrixElements {
+                rows,
+                dimensions: dims,
+            })?;
         let _ = elements
             .checked_mul(size_of::<f64>())
-            .ok_or(HnswError::ArithmeticOverflow)?;
+            .ok_or(ArithmeticRefusal::MatrixBytes {
+                elements,
+                element_bytes: size_of::<f64>(),
+            })?;
 
         #[cfg(target_pointer_width = "32")]
         self.admits_on_32_bit(rows, dims)?;
@@ -211,52 +217,101 @@ impl Params {
         const F64_BYTES: u64 = 8;
         /// A 32-bit `Vec` header: pointer, capacity, length.
         const VEC_HEADER_BYTES: u64 = 12;
+        /// Both headers of a node, in the stated 32-bit layout.
+        const NODE_HEADER_BYTES: u64 = 2 * VEC_HEADER_BYTES;
         /// A 32-bit `Ranked`: an `f64` and a `usize`, padded to the `f64` alignment.
         const RANKED_BYTES: u64 = 16;
-        let vectors = u64::try_from(rows)
-            .ok()
-            .and_then(|r| r.checked_mul(u64::try_from(dims).ok()?))
-            .and_then(|e| e.checked_mul(F64_BYTES))
-            .ok_or(HnswError::ArithmeticOverflow)?;
-        let norms = u64::try_from(rows)
-            .ok()
-            .and_then(|r| r.checked_mul(F64_BYTES))
-            .ok_or(HnswError::ArithmeticOverflow)?;
+        let row_count = u64::try_from(rows)
+            .map_err(|cause| ArithmeticRefusal::RowsConversion { rows, cause })?;
+        let dimensions =
+            u64::try_from(dims).map_err(|cause| ArithmeticRefusal::DimensionsConversion {
+                dimensions: dims,
+                cause,
+            })?;
+        let elements =
+            row_count
+                .checked_mul(dimensions)
+                .ok_or(ArithmeticRefusal::VectorElements {
+                    rows: row_count,
+                    dimensions,
+                })?;
+        let vectors = elements
+            .checked_mul(F64_BYTES)
+            .ok_or(ArithmeticRefusal::VectorBytes {
+                elements,
+                element_bytes: F64_BYTES,
+            })?;
+        let norms = row_count
+            .checked_mul(F64_BYTES)
+            .ok_or(ArithmeticRefusal::NormBytes {
+                rows: row_count,
+                norm_bytes: F64_BYTES,
+            })?;
         // One `Vec` header per node for its layer list, plus one per layer it occupies.
-        let node_records = u64::try_from(rows)
-            .ok()
-            .and_then(|r| r.checked_mul(VEC_HEADER_BYTES.checked_mul(2)?))
-            .ok_or(HnswError::ArithmeticOverflow)?;
+        let node_records =
+            row_count
+                .checked_mul(NODE_HEADER_BYTES)
+                .ok_or(ArithmeticRefusal::NodeBytes {
+                    rows: row_count,
+                    node_bytes: NODE_HEADER_BYTES,
+                })?;
 
         let cap = u64::from(crate::level::level_cap(rows, self.m));
-        let base = u64::try_from(self.m).map_err(|_| HnswError::ArithmeticOverflow)?;
-        let mut population = u64::try_from(rows).map_err(|_| HnswError::ArithmeticOverflow)?;
+        let base =
+            u64::try_from(self.m).map_err(|cause| ArithmeticRefusal::BranchingConversion {
+                branching: self.m,
+                cause,
+            })?;
+        let mut population = row_count;
         let mut edges: u64 = 0;
         for layer in 0..=cap {
-            let degree = if layer == 0 {
-                u64::try_from(self.m0)
-            } else {
-                u64::try_from(self.m)
-            }
-            .map_err(|_| HnswError::ArithmeticOverflow)?;
+            let bound = if layer == 0 { self.m0 } else { self.m };
+            let degree =
+                u64::try_from(bound).map_err(|cause| ArithmeticRefusal::DegreeConversion {
+                    layer,
+                    degree: bound,
+                    cause,
+                })?;
+            let next = population
+                .checked_mul(degree)
+                .ok_or(ArithmeticRefusal::LayerEdges {
+                    layer,
+                    population,
+                    degree,
+                })?;
             edges = edges
-                .checked_add(
-                    population
-                        .checked_mul(degree)
-                        .ok_or(HnswError::ArithmeticOverflow)?,
-                )
-                .ok_or(HnswError::ArithmeticOverflow)?;
+                .checked_add(next)
+                .ok_or(ArithmeticRefusal::AccumulatedEdges {
+                    layer,
+                    accumulated: edges,
+                    next,
+                })?;
             population /= base.max(1);
         }
         let edge_bytes = edges
             .checked_mul(RANKED_BYTES)
-            .ok_or(HnswError::ArithmeticOverflow)?;
+            .ok_or(ArithmeticRefusal::EdgeBytes {
+                edges,
+                edge_bytes: RANKED_BYTES,
+            })?;
 
-        vectors
+        let vector_norm_bytes = vectors
             .checked_add(norms)
-            .and_then(|t| t.checked_add(node_records))
-            .and_then(|t| t.checked_add(edge_bytes))
-            .ok_or(HnswError::ArithmeticOverflow)
+            .ok_or(ArithmeticRefusal::VectorAndNormBytes { vectors, norms })?;
+        let prior_bytes = vector_norm_bytes.checked_add(node_records).ok_or(
+            ArithmeticRefusal::WithNodeBytes {
+                accumulated: vector_norm_bytes,
+                nodes: node_records,
+            },
+        )?;
+        let total =
+            prior_bytes
+                .checked_add(edge_bytes)
+                .ok_or(ArithmeticRefusal::WithEdgeBytes {
+                    accumulated: prior_bytes,
+                    edges: edge_bytes,
+                })?;
+        Ok(total)
     }
 }
 
@@ -389,7 +444,7 @@ mod tests {
 
     #[test]
     fn the_thirty_two_bit_estimate_is_the_same_on_every_host() {
-        // Stated in explicit 32-bit widths, so a 64-bit host computing it for a wasm32
+        // Stated in explicit 32-bit widths, so a 64-bit host computing it for a `wasm32`
         // target gets the number that target would see rather than its own layout.
         let params = Params::new(16, 32, 64, 16).expect("valid");
         let vectors_and_norms = 1_000_u64 * 256 * 8 + 1_000 * 8;

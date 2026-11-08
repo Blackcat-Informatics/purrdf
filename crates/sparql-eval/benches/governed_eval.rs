@@ -92,7 +92,7 @@ fn run_plain(
     prepared: &PreparedQuery,
 ) -> usize {
     let result = engine
-        .query_prepared(dataset, prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(dataset, prepared, &[], &QueryOptions::EMPTY)
         .expect("benchmark query evaluates");
     result_size(&result)
 }
@@ -108,7 +108,7 @@ fn run_governed(
             &**dataset,
             prepared,
             &[] as &[(String, TermValue)],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             governors,
         )
         .expect("governed benchmark query evaluates");
@@ -224,7 +224,7 @@ fn bench_linear_paths(c: &mut Bench) {
         let dataset = builder.freeze().expect("freeze linear-path dataset");
         let results = queries.each_ref().map(|(_, prepared)| {
             NativeSparqlEngine::new()
-                .query_prepared(&dataset, prepared, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, prepared, &[], &QueryOptions::EMPTY)
                 .expect("linear-path answer")
         });
         let answers = results.each_ref().map(|result| match result {
@@ -296,7 +296,7 @@ fn bench_governed_row_loops(c: &mut Bench) {
             for (governed, governor) in &governors {
                 if let Some(guard) = &guard {
                     let result = engine
-                        .query_prepared(&dataset, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared(&dataset, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("full row-loop answer");
                     guard.check(&result);
                     if let Some(governor) = governor {
@@ -305,7 +305,7 @@ fn bench_governed_row_loops(c: &mut Bench) {
                                 &*dataset,
                                 &prepared,
                                 &[] as &[(String, TermValue)],
-                                QueryOptions::EMPTY,
+                                &QueryOptions::EMPTY,
                                 governor,
                             )
                             .expect("full governed row-loop answer");
@@ -475,7 +475,7 @@ fn bench_union_preparation(c: &mut Bench) {
             .expect("preparation source");
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_algebra(source.clone(), QueryOptions::EMPTY)
+            .prepare_algebra(source.clone(), &QueryOptions::EMPTY)
             .expect("preparation plan");
         eprintln!(
             "union preparation count={count} retained_bytes={}",
@@ -485,7 +485,7 @@ fn bench_union_preparation(c: &mut Bench) {
             bencher.iter(|| {
                 std::hint::black_box(
                     engine
-                        .prepare_algebra(source.clone(), QueryOptions::EMPTY)
+                        .prepare_algebra(source.clone(), &QueryOptions::EMPTY)
                         .expect("prepared"),
                 )
             });

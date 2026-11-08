@@ -1,0 +1,6 @@
+# Fail to load a non-well-formed stream
+"@context":
+  "@vocab": "http://schema.org/"
+  "countries": "http://publication.europa.eu/resource/authority/country/"
+"@id": http://example.org/ex
+name: "String with no trailing quote

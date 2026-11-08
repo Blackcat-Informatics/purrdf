@@ -5,6 +5,21 @@
 
 use crate::{ExecutionPolicy, GeoError, MetricWorkObserver, Rat};
 
+/// Admit the source before reader creation and preserve the original operational
+/// refusal when a scanner reports an interrupted read in its place.
+pub(crate) fn parse_in_policy<T>(
+    source_bytes: usize,
+    policy: ExecutionPolicy,
+    parse: impl FnOnce(&std::cell::RefCell<ParseAdmission<'_, '_, '_>>) -> Result<T, GeoError>,
+) -> Result<T, GeoError> {
+    let admission = std::cell::RefCell::new(ParseAdmission::new(source_bytes, policy, None)?);
+    let result = parse(&admission);
+    if let Some(error) = admission.borrow_mut().take_error() {
+        return Err(error);
+    }
+    result
+}
+
 /// One original physical account for a native carrier's containers and text.
 ///
 /// The caller keeps this account alive until every produced payload is destroyed

@@ -48,24 +48,24 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
-| SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C sparql10 + sparql11 + sparql12 + first-party | 1393 | 0 | 0 | 0 | GREEN |
+| SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C `sparql10` + `sparql11` + `sparql12` + first-party | 1393 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0 unlisted vendored files | W3C data-r2 files no upstream manifest lists | 1 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0 cases superseded by RDF 1.2 | W3C data-r2 extended evaluation root | 1 | 0 | 0 | 0 | GREEN |
 | SPARQL CONSTRUCT (first-party corpus) | purrdf-construct (first-party) | 29 | 0 | 0 | 0 | GREEN |
 | SPARQL DESCRIBE (first-party corpus) | purrdf-describe (first-party) | 16 | 0 | 0 | 0 | GREEN |
 | SPARQL CDT (SEP-0009, vendored corpus) | awslabs/SPARQL-CDTs | 658 | 0 | 0 | 0 | GREEN |
-| SPARQL execution governors | purrdf-sparql-governors (first-party) | 54 | 0 | 0 | 0 | GREEN |
+| SPARQL execution governors | purrdf-sparql-governors (first-party) | 57 | 0 | 0 | 0 | GREEN |
 | SPARQL embedding kNN (first-party) | purrdf-embedding-knn (first-party) | 15 | 0 | 0 | 0 | GREEN |
-| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 92 | 0 | 0 | 0 | GREEN |
+| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 93 | 0 | 0 | 0 | GREEN |
 | GeoSPARQL 1.1 determinism corpus | purrdf-geo (first-party; OGC 22-047r1) | 20 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 262 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C shacl12-test-suite | 590 | 1 | 1 | 0 | GREEN |
-| SHACL 1.2 unlisted vendored files | W3C shacl12-test-suite files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C `shacl12-test-suite` | 590 | 1 | 1 | 0 | GREEN |
+| SHACL 1.2 unlisted vendored files | W3C `shacl12-test-suite` files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | Community SHACL dated profiles (REC 2017 / WD 2026) | community-proposed corpus, agent-reviewed | 115 | 0 | 0 | 0 | GREEN |
-| SHACL prepared-product equivalence | W3C data-shapes + shacl12-test-suite + first-party corpus | 407 | 0 | 0 | 0 | GREEN |
+| SHACL prepared-product equivalence | W3C data-shapes + `shacl12-test-suite` + first-party corpus | 407 | 0 | 0 | 0 | GREEN |
 | XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 292 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 20 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
@@ -74,11 +74,13 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
-| rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 4232 | 4 | 4 | 0 | GREEN |
+| rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 4284 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
-The Python rows retain the last complete broad-suite snapshot. Contextual SPARQL
+The RDFLib row states the required scoreboard under native XSD string-subtype
+value equality, including seven explicit semantic differences checked by strict
+xfail. The Python binding row retains its last complete broad-suite snapshot. Contextual SPARQL
 semantics are checked by the Rust `rdflib_contextual` target. Focused Python
 checks cover receiver dispatch, keyword extraction, term and result carriers,
 exceptions and shadow imports; their totals do not refresh the broad-suite rows.
@@ -134,21 +136,216 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | CSVW | W3C CSVW manifests, `crates/rdf/tests/fixtures/csvw-w3c/` | **270 / 270** RDF cases · **282 / 282** validation cases · 0 xfail; production output also accepted by locked `csvw==4.1.0` |
 | OBO Graphs view | official OBO Graphs 0.3.2 JSON Schema | production advanced-object fixture accepted; deliberate node/chain corruptions rejected |
 | Research-object carriers | five adversarial native fixtures plus shared semantic matrix | **5 / 5** native fixtures import with non-empty located ledgers · **25 / 25** shared-semantic source/target paths stabilize; Frictionless output validates against the vendored Data Package v1 schema |
-| SPARQL 1.0/1.1/1.2 | full W3C sparql10 (data-r2) + sparql11 (query+update) + sparql12 + entailment, via `purrdf-sparql-conformance` | **1393** pass · 0 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the first-party `purrdf-property-functions` manifest walks the relation seam's access-pattern lattice, its multi-output and empty-argument-vector shapes, and a call driven by graph data, and — through a relation that declares only `bf` — mode restriction, a written order the feasibility pass must REORDER before it can run, a fully bound call served by subsumption, and the seam's two hard errors (an unregistered call IRI and a chain with no feasible total order), each pinned by the text of the diagnostic that names it; the relation tuples themselves are read out of a fixture graph via `MemoryRelation::from_graph` rather than written as Rust; the first-party `purrdf-extend` manifest additionally walks nine temporal arithmetic cases through the shipped stack — instant difference, instant plus a yearMonth duration, sum/mixed-subtype/scaled/ratio duration cases, a timezone-mix case whose SRX omits the binding rather than serializing an error, duration equality's totality, and a FILTER threshold — proving the SEP-0002 operator surface end to end rather than only at the crate boundary; the same manifest also walks six `LATERAL` (SEP-0006) cases — the SEP's own worked examples (including the scoping oracle proving Project-boundary narrowing, not mere textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal scope-restriction pair; the same manifest also walks nine SEP-0007 `EXISTS`/`NOT EXISTS` cases through the shipped stack — a `GRAPH ?g` correlated through the definition path, the `OPTIONAL`-padding law proven both as `EXISTS` (always true) and its `NOT EXISTS` twin (always false), nested `EXISTS`/`NOT EXISTS` through filter-only groups without over-capturing the inner's own fresh variable, a correlated `LIMIT 1` sub-select only the per-row definition path answers correctly, a correlated variable occurring only in a `MINUS` right operand, and the Part 3 assignment restriction's illegal `BIND`, `VALUES`, and `SELECT`-list projection-target trio as negative syntax tests; nothing is ledgered: the results comparer reads two numeric literals of the same datatype by value, so the upstream fixtures' inconsistent spellings of a computed number no longer register) |
+| SPARQL 1.0/1.1/1.2 | full W3C `sparql10` (data-r2) + `sparql11` (query+update) + `sparql12` + entailment, via `purrdf-sparql-conformance` | **1393** pass · 0 typed xfail · 0 fail (all W3C `service` federation cases green; SPARQL 1.1 query+update fully vendored; SPARQL 1.2 RDF-star triple-term/reifier/annotation surface fully passing; the first-party `purrdf-property-functions` manifest walks the relation seam's access-pattern lattice, its multi-output and empty-argument-vector shapes, and a call driven by graph data, and — through a relation that declares only `bf` — mode restriction, a written order the feasibility pass must REORDER before it can run, a fully bound call served by subsumption, and the seam's two hard errors (an unregistered call IRI and a chain with no feasible total order), each pinned by the text of the diagnostic that names it; the relation tuples themselves are read out of a fixture graph via `MemoryRelation::from_graph` rather than written as Rust; the first-party `purrdf-extend` manifest additionally walks nine temporal arithmetic cases through the shipped stack — instant difference, instant plus a yearMonth duration, sum/mixed-subtype/scaled/ratio duration cases, a timezone-mix case whose SRX omits the binding rather than serializing an error, duration equality's totality, and a FILTER threshold — proving the SEP-0002 operator surface end to end rather than only at the crate boundary; the same manifest also walks six `LATERAL` (SEP-0006) cases — the SEP's own worked examples (including the scoping oracle proving Project-boundary narrowing, not mere textual substitution), a shared-variable-injection case, and the SEP's own legal/illegal scope-restriction pair; the same manifest also walks nine SEP-0007 `EXISTS`/`NOT EXISTS` cases through the shipped stack — a `GRAPH ?g` correlated through the definition path, the `OPTIONAL`-padding law proven both as `EXISTS` (always true) and its `NOT EXISTS` twin (always false), nested `EXISTS`/`NOT EXISTS` through filter-only groups without over-capturing the inner's own fresh variable, a correlated `LIMIT 1` sub-select only the per-row definition path answers correctly, a correlated variable occurring only in a `MINUS` right operand, and the Part 3 assignment restriction's illegal `BIND`, `VALUES`, and `SELECT`-list projection-target trio as negative syntax tests; nothing is ledgered: the results comparer reads two numeric literals of the same datatype by value, so the upstream fixtures' inconsistent spellings of a computed number no longer register) |
 | SPARQL CONSTRUCT (first-party corpus) | first-party corpus, `crates/sparql-conformance/corpus/construct/` | **29 / 29** cases · 0 ledgered. Both `CONSTRUCT` forms, paired case for case — every one of the 10 triple-form evaluation cases has a `graph`-prefixed quad-form counterpart, and the corpus test checks the pairing rather than asserting it. The SPARQL 1.1 §16.2 **triple**-producing form (rewrite, `CONSTRUCT WHERE` short form, unbound-variable skip, the §16.2 subject rule on BOTH terms a subject position refuses — a literal AND an RDF 1.2 triple term, which annotated data puts in reach of an ordinary triple pattern — at BOTH depths it applies, the asserted subject and the subject of a triple term nested in an object (graded apart because an ill-formed asserted subject is refused downstream whatever the template rule says, while an ill-formed nested one is not: an engine enforcing the model only at the asserted level emits it at exit status zero into a document its own readers refuse to parse, and persists it on an `UPDATE` path), per-row blank freshness, a `GRAPH`-scoped `WHERE`, solution modifiers, and an RDF 1.2 reifier + annotation template) expects Turtle — so a statement that gained a graph term would stop matching — and the **quad**-producing `CONSTRUCT GRAPH <iri>` form expects N-Quads carrying a graph the template names on every line. Nine quad-form cases have no triple-form twin by nature: `graphReifierScope` pins the RDF 1.2 statement layer's **per-graph keying** — one reifier id, one annotation predicate, two graphs, an annotation in the graph that declares the reifier and an ordinary quad in the graph that does not — which needs two graphs to say anything at all, and 8 syntax verdicts grade the quad-template grammar itself, bounding it from **both** sides: 1 positive spelling that parses and 7 refused spellings established empirically against the parser — a missing, literal or blank-node graph name (the name is a `VarOrIri`), a nested `GRAPH` block or one missing its braces (a block body is a `TriplesTemplate`), a `GRAPH` block in the `CONSTRUCT` short form (whose one block is read twice, as template and as `WHERE` algebra), and a property path inside a `GRAPH` block (a template asserts triples, inside a block exactly as outside one) |
 | SPARQL DESCRIBE (first-party corpus) | first-party corpus, `crates/sparql-conformance/corpus/describe/` | **16 / 16** cases · 0 ledgered. §16.4 leaves the description implementation-defined, so no vendored manifest grades a `DESCRIBE` — this corpus is the form's only conformance measurement, pinning the engine's documented **Symmetric Concise Bounded Description** clause by clause: outgoing edges, incoming edges, the blank-node closure, the RDF 1.2 statement layer (the reifiers whose reified triple's subject **or** object lies in the closure, and their annotations — measured on both sides of that disjunction, with the object side isolated on a term that is the subject of nothing and whose reified triple is unasserted, and composed with the blank closure through a blank reifier and a blank annotation object), the three target-resolution rules (concrete IRI, bound variable, `*`), that a non-IRI binding describes nothing, that an unmentioned subject is empty rather than an error, and that a described statement stays in the graph it came from at **every** layer — the base quad, the reifier declaration and the annotation alike. That last claim is carried by three cases read over **TriG** and expected as N-Quads, so every expected row pins a graph: the clause-4 cases above all read a default-graph-only fixture, whose graph-less expectations cannot observe where a described statement lands, only that it was selected. Those three fix the extractor's selection/emission split: a reifier declaration is selected by its reified triple's subject-or-object membership in the closure and by **nothing else** — graph membership takes no part in the selection — and is then re-emitted into the graph that declared it, so a declaration made in one graph about a triple asserted in another is kept, and kept where it was declared; and an annotation rides with the declaration it annotates rather than with the reifier resource, which one reifier id declared in two graphs, annotated in each under the same predicate, measures |
 | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs`, `vectors/sparql-cdt/` | **658 / 658** cases · 0 ledgered. Six groups: the `cdt:List` and `cdt:Map` function libraries (287 + 196), the `UNFOLD` graph pattern (42), the `FOLD` aggregate (30), `ORDER BY` over composite values (27), and blank-node identity inside composite lexical forms (76). This is an **independent oracle**: until it ran, every claim about this engine's CDT behavior rested on tests written beside the implementation by the same hand, which grade the engine against itself. Read it together with the [lexical-space divergence](#sep-0009-lexical-space-purrdf-reads-two-forms-the-spec-does-not) below — a number in this column cannot express it, because upstream ships no vector that exercises it |
-| Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group, via `purrdf-sparql-conformance` | **70 / 70** · 0 ledgered — RDF/RDFS/OWL-RL chase, open-world OWL-Direct via the SHOIQ(D) tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing |
+| Entailment (SPARQL regimes) | W3C `sparql11` `entailment/` group, via `purrdf-sparql-conformance` | **70 / 70** · 0 ledgered — RDF/RDFS/OWL-RL chase, open-world OWL-Direct via the SHOIQ(D) tableau, RIF-Core rule engine, and RDF-axiomatic predicate typing |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 test suite, `crates/sparql-conformance/entailment-suite/w3c-owl2/` | **262 / 262** agreeing verdicts · 0 typed-ledger divergences · 0 unledgered · 0 stale. Consistency-shaped corpus (226 `otest:ConsistencyTest` + 36 `otest:InconsistencyTest`), so it grades the DL/tableau lane only; the upstream manifest's entailment tests are graded by the row below. It is also a **subset** — 262 of the 482 consistency-shaped cases upstream — and of the 220 it leaves out, **172 the tableau decided when the exclusion was measured** (108 consistent + 64 inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20 reasoner, 5 parse) and 23 carry no RDF/XML premise. Those five figures are a DATED measurement recorded in `census.tsv`'s `dl_probe` column (see that suite's `PROVENANCE.md` for the date and conditions), not a live one: the harness reads the column and does not re-run the reasoner over the excluded cases, so this row cannot detect a regression among them |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment corpus, `crates/sparql-conformance/entailment-suite/w3c-owl2-rl/` | **50 / 50** agreeing · 0 typed-ledger divergences · 0 unledgered · 0 stale. Negative lane **23 / 23**: **no unsoundness** — the chase never derived a triple W3C publishes as *not* entailed. Read that number with its composition, which the harness prints: **3 of the 23 are decided refutations** and **20 are named admissions** (5 `premise-outside-rl`, 10 `conclusion-outside-rl`, 5 `construct-not-read`). All 23 make the soundness observation the lane grades; 3 of them are additionally entitled to call it a proof of non-entailment. Positive lane **27 / 27**, and the typed-divergence ledger is EMPTY (0 schema-conclusion, 0 negative-conclusion, 0 construct-outside-rl, 0 imports-unresolved); **0 are actionable** (0 missing-rule) |
 | Entailment rule tables | `purrdf-entail` `rules()` / `implemented()` | `OWL-RL` **78 / 78** (OWL 2 Profiles §4.3 Tables 4–9) · `RDFS` **18 / 18** · `RDF` **3 / 3** · `D` **5 / 5** (§4.3 Table 8). This is **rule-table coverage, not entailment conformance** — the two are measured separately, and the row above is the second one: on this vendored W3C corpus, the OWL 2 RL entailment tests score 27 of 27 positive and 23 of 23 negative. Neither column counts an **extension** — the one rule the `OWL-RL` lane fires that no specification table states (`ext-eq-diff-sym`, symmetry of `owl:differentFrom`) is `extensions(Regime::OwlRl)`, is in neither `rules()` nor `implemented()`, and is rendered on its own `extension` line in every report. Every materializable regime is rule-complete; the four existential rules (`rdfD1`, `rdfD1a`, `rdfs14`, `rdfs14a`) fire through the restricted chase and their surrogate blank nodes are withheld at the materialization boundary rather than answered. Per-rule detail is generated and drift-guarded: [`docs/book/src/entailment-rules.md`](book/src/entailment-rules.md) |
-| SPARQL execution governors | first-party frozen corpus, `vectors/sparql-governors/` | **54 / 54** pinned cases · 0 ledgered. **46 of them are band cases**, and the enumeration is exactly this: a **zero**, a **boundary** (the ceiling IS the measured cost, and must be admitted) and an **over-bound** (the measured cost minus one, and must trip) for each of the five caller-settable numeric dimensions (fuel, answer rows, intermediate cells, scratch bytes, remote requests) = 15; the same three for a deterministic injected deadline signal = 3; the same three for the two *engine-observed* property-function charge points taken **together** = 3; a boundary and an over-bound each for the two RDF 1.2 reifier lanes (fuel, answer rows) = 4, plus all three for the CONSTRUCTed reification layer = 3; a boundary and an over-bound each for the three lanes that take that engine-observed pair **apart** = 6 — one isolating `property-function-invocation` (twelve invocations of a relation that emits nothing, so the band carries zero row charges), one isolating `property-function-row` (one invocation emitting twelve rows), and one driving 1200 rows, above the evaluator's fork threshold, where the metered measurement runs on the sequential chunk driver and the band on the parallel one, so the boundary itself is the parity claim; a boundary and an over-bound each for the two lanes that take the **aggregate** pair apart = 4 — one isolating `aggregate-invocation` (twelve aggregate expressions folding one implicit group whose input matches nothing, so the band carries zero accumulation charges) and one isolating `aggregate-accumulation` (one aggregate expression folding twelve rows into one implicit group, so the band carries exactly one invocation charge); and a boundary and an over-bound each for the two lanes that exercise a **registered custom aggregate** rather than a built-in = 4 — `aggregate-custom-fuel-*` folds the identical group shape `aggregate-accumulation-*` does through the custom path instead, so the two lanes' fuel is directly comparable (and is, byte for byte: 45 either way), and `aggregate-custom-scratch-bytes-*` drives 1200 rows into one implicit group, above the within-group chunk threshold, banding the custom accumulator's declared `ScratchBytes` state bound — the one dimension no built-in aggregate ever charges, and the one whose within-group chunk plan is now a pure function of the group's row count rather than of the host's thread count. The isolating lanes carry no `zero` member on purpose: a zero fuel ceiling trips before any relation or aggregate expression is resolved, so a zero band would pin a case in which the seam never fires. The schedule's third property-function point, `property-function-work`, is *reported* by the relation rather than counted by the evaluator, and every relation in this corpus is a scripted fixture with nothing to report — so it appears as `property-function-work 0` in each decomposition below and is banded by the surface that reports it non-zero — the embedding kNN relation, whose four governor cases are in the `SPARQL embedding kNN` row above — rather than here. The two additional temporal-exact fuel bands pin 21-place dateTime/dayTimeDuration arithmetic and SECONDS under profile v18, with the completing boundary and one-below refusal. The two numeric-default fuel bands pin full-scale terminating division, half-even repeating division and the changed tower charge under profile v17. Numeric boundaries are derived from `QueryGovernors::METERED`; deadline boundaries are derived from the complete run's stop-poll count; every boundary is re-derived on each run, never authored. The remaining 8 cases name seams rather than bands: the federated `SERVICE` transport seam (3), the property-function relation seam's deaf/cooperating pair (2), a fuel ceiling that lands **between** an invocation and its first row — host code entered, one row pulled, that row refused at admission (1), a real wall-deadline smoke case that pins only that a trip happened and named the deadline, which is the whole of what a time-dependent trip guarantees (1), and `exists-inner-counters` — an authored, generous fuel ceiling naming the `EXISTS`/`NOT EXISTS` evidence seam, exercising all three counters (`exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`) at once with its `.charges` decomposition read straight off `explain_query`'s ledger, the same way the two aggregate-isolating lanes are (1). Each deterministic case pins its outcome discriminant, its certified rows and certificate class, and — recorded **separately**, so a schedule change that cut in the same place is still visible — what it spent; each relation case, the two aggregate-isolating cases, AND the two custom-aggregate lanes additionally pin the metered fuel decomposed **per charge point**, which is what makes the isolating lanes isolating rather than merely differently shaped. The two custom-aggregate lanes reach that decomposition through `NativeSparqlEngine::explain_query_with_options` (with `QueryOptions::aggregates` populated) — the injected-seam explain entry a REGISTERED custom aggregate needs, the exact counterpart the same entry (with `QueryOptions::property_functions` populated instead) is for a scripted relation |
-| SPARQL embedding kNN | first-party, `crates/sparql-eval/tests/embedding_knn_e2e.rs` + `knn_wasm_determinism.rs` | **15 / 15** cases · 0 ledgered. Counts **test functions, not fixtures** — the lane grades a *seam*, not a document format, so it has no corpus: every fixture is a PURREMB artifact sealed in-process by `purrdf-core`'s own writer and reached only through query text. 12 are the e2e surface — rank order, an unregistered IRI reading as an ordinary triple pattern, join-back by basic graph pattern, the `LIMIT`-is-a-prefix law at every k, byte identity across two independently built artifacts, the true k-nearest of a crowded space, four governor cases pinning that the search is charged in proportion to the candidates **examined** rather than the rows returned, and two pinning the generation a space attests — one artifact under one binding attests one generation, and the same artifact under different term bindings attests a different one, because the map from a row to the term it stands for is a host argument and a matrix-only identity would call those two spaces the same index. Those four are why this row exists beside the governor row: `property-function-work` is *reported by the relation* rather than counted by the evaluator, and every relation in `vectors/sparql-governors/` is a scripted fixture with nothing to report, so this is the only surface that bands that charge point non-zero. The remaining three are native arithmetic pins, including cosine and squared-Euclidean lane trees: five neighbours and their exact `xsd:double` distance lexicals held as Rust literals rather than recomputed — a test that recomputes its expectation with the kernel under test agrees with any kernel at all — so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here rather than surfacing as a mystery reordering in a browser. These numeric expectations run natively; actual WASM dispatch and SIMD kernels are selected separately by `make wasm-test` |
+| SPARQL execution governors | first-party frozen corpus, `vectors/sparql-governors/` | **57 / 57** pinned cases · 0 ledgered. **49 of them are band cases**, and the enumeration is exactly this: a **zero**, a **boundary** (the ceiling IS the measured cost, and must be admitted) and an **over-bound** (the measured cost minus one, and must trip) for each of the six caller-settable numeric dimensions (fuel, answer rows, intermediate cells, scratch bytes, remote requests, UDF depth) = 18; the same three for a deterministic injected deadline signal = 3; the same three for the two *engine-observed* property-function charge points taken **together** = 3; a boundary and an over-bound each for the two RDF 1.2 reifier lanes (fuel, answer rows) = 4, plus all three for the CONSTRUCTed reification layer = 3; a boundary and an over-bound each for the three lanes that take that engine-observed pair **apart** = 6 — one isolating `property-function-invocation` (twelve invocations of a relation that emits nothing, so the band carries zero row charges), one isolating `property-function-row` (one invocation emitting twelve rows), and one driving 1200 rows, above the evaluator's fork threshold, where the metered measurement runs on the sequential chunk driver and the band on the parallel one, so the boundary itself is the parity claim; a boundary and an over-bound each for the two lanes that take the **aggregate** pair apart = 4 — one isolating `aggregate-invocation` (twelve aggregate expressions folding one implicit group whose input matches nothing, so the band carries zero accumulation charges) and one isolating `aggregate-accumulation` (one aggregate expression folding twelve rows into one implicit group, so the band carries exactly one invocation charge); and a boundary and an over-bound each for the two lanes that exercise a **registered custom aggregate** rather than a built-in = 4 — `aggregate-custom-fuel-*` folds the identical group shape `aggregate-accumulation-*` does through the custom path instead, so the two lanes' fuel is directly comparable (and is, byte for byte: 45 either way), and `aggregate-custom-scratch-bytes-*` drives 1200 rows into one implicit group, above the within-group chunk threshold, banding the custom accumulator's declared `ScratchBytes` state bound — the one dimension no built-in aggregate ever charges, and the one whose within-group chunk plan is now a pure function of the group's row count rather than of the host's thread count. The isolating lanes carry no `zero` member on purpose: a zero fuel ceiling trips before any relation or aggregate expression is resolved, so a zero band would pin a case in which the seam never fires. The schedule's third property-function point, `property-function-work`, is *reported* by the relation rather than counted by the evaluator, and every relation in this corpus is a scripted fixture with nothing to report — so it appears as `property-function-work 0` in each decomposition below and is banded by the surface that reports it non-zero — the embedding kNN relation, whose four governor cases are in the `SPARQL embedding kNN` row above — rather than here. The two additional temporal-exact fuel bands pin 21-place dateTime/dayTimeDuration arithmetic and SECONDS under profile v18, with the completing boundary and one-below refusal. The two numeric-default fuel bands pin full-scale terminating division, half-even repeating division and the changed tower charge under profile v17. Numeric boundaries are derived from `QueryGovernors::METERED`; deadline boundaries are derived from the complete run's stop-poll count; every boundary is re-derived on each run, never authored. The remaining 8 cases name seams rather than bands: the federated `SERVICE` transport seam (3), the property-function relation seam's deaf/cooperating pair (2), a fuel ceiling that lands **between** an invocation and its first row — host code entered, one row pulled, that row refused at admission (1), a real wall-deadline smoke case that pins only that a trip happened and named the deadline, which is the whole of what a time-dependent trip guarantees (1), and `exists-inner-counters` — an authored, generous fuel ceiling naming the `EXISTS`/`NOT EXISTS` evidence seam, exercising all three counters (`exists-probe-answered`, `exists-definition-answered`, `exists-inner-solutions-consumed`) at once with its `.charges` decomposition read straight off `explain_query`'s ledger, the same way the two aggregate-isolating lanes are (1). Each deterministic case pins its outcome discriminant, its certified rows and certificate class, and — recorded **separately**, so a schedule change that cut in the same place is still visible — what it spent; each relation case, the two aggregate-isolating cases, AND the two custom-aggregate lanes additionally pin the metered fuel decomposed **per charge point**, which is what makes the isolating lanes isolating rather than merely differently shaped. The two custom-aggregate lanes reach that decomposition through `NativeSparqlEngine::explain_query_with_options` (with `QueryOptions::aggregates` populated) — the injected-seam explain entry a REGISTERED custom aggregate needs, the exact counterpart the same entry (with `QueryOptions::property_functions` populated instead) is for a scripted relation |
+| SPARQL embedding kNN | first-party, `crates/purrdf/tests/embedding_knn_e2e.rs` + `knn_wasm_determinism.rs` | **15 / 15** cases · 0 ledgered. Counts **test functions, not fixtures** — the lane grades a *seam*, not a document format, so it has no corpus: every fixture is a PURREMB artifact sealed in-process by `purrdf::embedding`'s own writer and reached only through query text. 12 are the e2e surface — rank order, an unregistered IRI reading as an ordinary triple pattern, join-back by basic graph pattern, the `LIMIT`-is-a-prefix law at every k, byte identity across two independently built artifacts, the true k-nearest of a crowded space, four governor cases pinning that the search is charged in proportion to the candidates **examined** rather than the rows returned, and two pinning the generation a space attests — one artifact under one binding attests one generation, and the same artifact under different term bindings attests a different one, because the map from a row to the term it stands for is a host argument and a matrix-only identity would call those two spaces the same index. Those four are why this row exists beside the governor row: `property-function-work` is *reported by the relation* rather than counted by the evaluator, and every relation in `vectors/sparql-governors/` is a scripted fixture with nothing to report, so this is the only surface that bands that charge point non-zero. The remaining three are native arithmetic pins, including cosine and squared-Euclidean lane trees: five neighbours and their exact `xsd:double` distance lexicals held as Rust literals rather than recomputed — a test that recomputes its expectation with the kernel under test agrees with any kernel at all — so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here rather than surfacing as a mystery reordering in a browser. These numeric expectations run natively; actual WASM dispatch and SIMD kernels are selected separately by `make wasm-test` |
 | GeoSPARQL 1.1 determinism corpus | first-party, `purrdf_geo::determinism::CORPUS` | **20 / 20** geometries · 0 ledgered. Counts corpus geometries, not test functions. Their WKT/GeoJSON bytes, DE-9IM matrices, exact planar measures and IEEE encodings fold into the single `GOLDEN_DIGEST` in `crates/geo/tests/determinism.rs`; the conformance matrix compares the printed digest with that frozen source value. The polygon/mixed-collection length correction includes polygon boundaries and selects the greatest dimension-total; its deliberate byte change is documented beside the golden. This row grades deterministic planar output, not independent OGC semantic conformance or the geographic numerical corpus. No OGC GeoSPARQL conformance suite is vendored or claimed. The twelve first-party SHACL cases mirror the published validator using caller-selected `example.org` vocabulary; nine query-rewrite, nine scalar-function and four layout cases run separately in `make check`. The explicit carrier-only scalar adapter registers twelve construction/serialization refusals and checks representative named errors rather than plausible default answers. The standard geographic adapter additionally implements `transform`, `buffer` and `metricBuffer` through its selected operation/profile law; nine construction/serialization functions remain named hard errors. The neutral geographic kernel's numerical, geometry, cover, ownership and host cases are separate acceptance, not additional entries in this twenty-geometry row. Native digest execution, release WASM compilation and actual portable/SIMD geographic transcript execution are distinct checks (`make check`, `make wasm`, `make geo-determinism`). |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
-| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Last complete broad-suite snapshot: **81** pass · 5 strict-xfail (ledgered) |
-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4232** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot). The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
+| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
+| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4284** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
+
+## Native YAML-LD Basic
+
+The native YAML-LD reader targets the
+[YAML-LD 1.0 Working Draft of 24 October 2026](https://www.w3.org/TR/2026/WD-yaml-ld-10-20261024/).
+`yamlld_to_jsonld`, the YAML-LD codec and default dataset parsing share one
+bytes-to-Basic-value adapter. `YamlLdOptions` exposes first-document selection
+by default, `extract_all_scripts` for all documents, and explicit lexical and
+semantic admission bounds. The selected value enters the existing JSON-LD
+expander directly; it is not serialized and parsed again for RDF construction.
+String conversion separately admits escaped JSON output and writer scratch
+under `max_serialization_bytes`, in addition to the already admitted Basic
+value. Direct RDF parsing does not serialize or spend that allowance. The byte
+input ceiling is checked before UTF-8 decoding scans the input.
+
+The native `native_codecs::jsonld::parse_yamlld_with_context` entry takes an
+explicit `CompiledJsonLdContext` and `YamlLdOptions`. Compile the context with
+`CompiledJsonLdContext::compile_with_registry` to supply initial terms, a caller
+document IRI for relative identifiers and an immutable offline context registry.
+Inline context and base directives use the shared JSON-LD engine; context lookup
+does not acquire network or filesystem documents. YAML admission and first/all
+selection remain controlled by the supplied options. The native
+`yaml_mapping_keys::configured_yamlld_context_reaches_shared_expansion` case
+checks this boundary. It does not qualify foreign context-input controls or the
+pinned W3C expansion family.
+
+Native offline registries accept mixed document formats through
+`JsonLdContextRegistry::new_with_formats` and explicit
+`JsonLdContextFormat::Json` or `JsonLdContextFormat::Yaml(YamlLdOptions)` tags.
+The existing `new` constructor and foreign options schema retain strict JSON
+decoding. Original document bytes retain the fixed registry and loaded-byte
+ceilings; YAML admission controls and shared context compilation budgets also
+apply. Relative context references, imports and scoped contexts resolve through
+the same immutable registry. Context documents still require an `@context`
+wrapper, and imports require its object form. All-document YAML selection
+produces an array and therefore fails that wrapper requirement. Formats are
+never inferred, and no network or filesystem documents are acquired. The native
+`mixed_context_registry_reuses_yaml_admission_and_shared_resolution` case checks
+mixed resolution and YAML input admission; it does not qualify the remaining
+pinned context fixtures or foreign context-input controls.
+
+The implementation applies the draft's document-loading and mapping-key
+requirements in two phases. The complete stream must have valid YAML syntax,
+acyclic document-local aliases, mapping/sequence/null roots and string mapping
+keys. The mapping-key requirement is that each key is a scalar whose resolved
+tag is `tag:yaml.org,2002:str`; decoded string identity also determines duplicate
+keys. These checks apply to unselected documents. Deferred lexical key ingestion
+preserves entries until that resolved identity can be checked.
+
+Semantic construction then applies the draft's first-document or all-document
+selection. Only selected values undergo Core scalar-tag validation, non-finite
+number refusal and exact numeric materialization. Consequently a later mapping
+with a non-finite or unsupported tagged value does not fail first-document
+construction, while a later invalid key, root or cyclic alias does. This is the
+native interpretation of loading the complete stream before constructing the
+selected JSON-LD values; loading is not eager construction of every document.
+Absent streams, explicit empty documents and resolved null roots contribute no
+RDF statements. All-document arrays are traversed as document entries, including
+nested arrays and null, while arrays inside JSON literals stay literal.
+
+| Obligation | Native diagnostic |
+| --- | --- |
+| Invalid UTF-8 bytes | `invalid-encoding`, with the original byte index in its message and line/column in its location |
+| A key does not resolve to a string scalar | `mapping-key-error` |
+| Invalid YAML, duplicate keys, unsupported roots, cycles or selected scalar construction | `loading-document-failed` |
+| Input, document, node, depth, numeric, allocation, output or physical storage exhaustion | Explicit `native-yaml-*` refusal retaining the typed YAML or storage cause |
+
+The consuming Lex projection resumes the exact retained arena account,
+including document metadata, and admits validation scratch, prepared values,
+alias copies and final output while that arena is alive. One numeric account
+covers global key/root classification and selected value construction. Prepared
+alias targets produce independent JSON copies without materializing numeric
+spellings again. Expanded selected nodes and collection depth are bounded;
+unselected value graphs do not consume those construction bounds.
+
+Native cases live in `crates/lex/tests/yaml_syntax.rs`,
+`crates/rdf/tests/yaml_mapping_keys.rs` and
+`crates/rdf/tests/relative_iri_base.rs`. They cover selection and phase refusals,
+combined admission, native routing, JSON-LD entry arrays, explicit blank-label
+sharing and anonymous alias copies. Their scope is the native Basic input path.
+
+Native `expand_jsonld_with_context` and `expand_yamlld_with_context` return the
+expanded JSON-LD document as an owned value array. JSON and YAML dataset parsing
+use this same stage before context-free node-map construction and RDF lowering.
+The stage implements ordinary document expansion from the
+[JSON-LD 1.1 API Recommendation of 16 July 2020](https://www.w3.org/TR/2020/REC-json-ld11-api-20200716/#expansion-algorithm).
+It preserves nested and repeated node objects, anonymous objects without minted
+identifiers, list order, indexes, graph/reverse/included structure and original
+JSON values, including `@json` payloads. RDF lexical conversion and node merging
+occur afterward. Standard unmapped-property dropping replaces the earlier
+undefined-property refusal. Unmapped index metadata succeeds structurally and
+is explicitly refused by RDF lowering; custom index mappings emit RDF properties.
+
+`JsonLdExpansionLimits::max_allocation_bytes` controls a new, separate native
+construction account, defaulting to 32 GiB. Output copies and working buffers
+are admitted before allocation, with released scratch refunded after destruction.
+The original decoded JSON/Basic value and native context/compiler/resolver state and native normalization scratch
+remain outside this account. JSON input still has its existing 4 GiB, depth 128
+and 33,554,432-value limits; YAML retains its explicit phase limits. This is not
+a combined process-memory limit or the serializer's separate working envelope.
+The native structural APIs accept explicit limits; ordinary dataset parsing
+uses their default. Foreign signatures and input-options schemas are unchanged.
+
+The native `configured_yamlld_context_reaches_shared_expansion` case includes an
+expected structural oracle and native resource refusal. The
+`pinned_w3c_structural_expansion_samples` case compares unchanged comment,
+acyclic-alias and two-document-stream fixtures with their expected structures
+using the actual manifest selection. These are samples, not a qualified Expand
+family. The pinned scalar context document is a bare vocabulary mapping without
+the required remote `@context` wrapper; its corpus-policy question remains
+unqualified. No wrapper is synthesized and registry/import invariants remain.
+This native capability does not establish full JSON-LD or YAML-LD conformance,
+HTML document loading, framing or compaction algorithm coverage.
+
+Native `flatten_jsonld_with_context` and `flatten_yamlld_with_context` implement
+context-free flattening under sections 7.1 and 7.2 of the same Recommendation.
+They accept a compiled input context and explicit expansion and flatten limits;
+YAML also retains its existing Basic selection options. The result is an owned
+JSON array, with graph and node records ordered lexically. No output context is
+selected and no output compaction occurs. The shared expanded-JSON node map also
+feeds actual RDF parsing, before typed RDF term conversion and materialization.
+It merges identifiers per graph, extracts nested nodes, handles reverse/included
+nodes, retains indexes with conflicting-index refusal, preserves empty named
+graphs and list duplicates, and suppresses equivalent ordinary property values.
+Node and value indexes remain in flattened output; list indexes are omitted as
+section 7.2 requires. The shared map separately records semantic index presence
+for RDF's explicit losslessness refusal, without inspecting opaque JSON payloads.
+RDF numeric conversion follows section 8.2 by value, independently of equivalent
+JSON number spellings. Integral magnitudes below `10^21` retain exact integer
+lexicals unless explicitly typed as doubles; actual doubles use the native conversion.
+Compaction permits raw JSON coercion only for a single unannotated payload under
+an alias that does not force an outer array. Other property groups and annotated
+values use existing typed lexical routes, while RDF lists retain their list form.
+Original literal and opaque JSON values remain intact. Native triple wrappers
+remain atomic terms, with annotations attached to their original occurrences;
+annotation roots stay detached while their nested ordinary nodes retain graph scope.
+Normative flattening remaps explicit and anonymous blank identifiers. The RDF
+issuer preserves encoded label/scope identity and reserves original blank-label
+strings, using the same deterministic traversal and fresh-label prefix. Incidental
+anonymous numbering can change with the shared traversal order.
+
+`JsonLdFlattenLimits::max_allocation_bytes` defaults explicitly to 32 GiB for
+new node-map, issuer, comparison, work and output storage. Native allocations
+are admitted before construction and scratch is destroyed before its refund.
+Expanded input is retained under its separate account and is never refunded
+against this allowance. Decoded input, compiler/resolver storage and later RDF
+materialization remain separate; this is no combined operation-memory cap.
+Dataset parsing uses the default flatten allowance. The native
+`context_free_flattening_preserves_nodes_and_native_terms` case uses exact JSON
+structures, JSON/YAML agreement and refusal/valid neighbors. Existing native RDF
+lens and pinned ToRDF coverage exercise the shared production consumer. This
+does not qualify the pinned Flatten fixture, which also needs output-context
+compaction with `compactArrays: false`, or establish complete suite conformance.
+
+The upstream YAML-LD corpus is pinned at repository revision
+`fafcf7ae69d5e5cb7402e71dfd5cd2c03c18f29f`, the publication-day cutoff, under
+[`vectors/yaml-ld`](../vectors/yaml-ld/PROVENANCE.md). Its unchanged manifest has
+97 entries. The native `yaml_mapping_keys::pinned_w3c_normative_rdf_construction`
+case selects all eleven normative positive `jld:ToRDFTest` entries, decoding the
+actual `extractAllScripts` option and comparing native RDF construction with
+pinned N-Quads by dataset isomorphism. It covers anchor-name independence,
+shared explicit blank nodes across documents, mixed empty/nonempty streams,
+standalone and zero-document streams, and leading/trailing empty documents.
+The two informative Extended YAML ToRDF entries are explicitly excluded. The
+other 81 normative cases and other required upstream suites remain unqualified
+by this family; the full corpus inventory is preserved for those remaining
+contracts. This is not a complete YAML-LD Basic conformance claim.
+
+Source-cover RDF export and strict reconstruction are implemented through the
+`purrdf::yaml` facade and shared host boundary. Native
+`crates/yaml/tests/roundtrip.rs` exercises lexical retention, cover integrity,
+identity and reprojection. The existing `convert_cli` case
+`yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds` drives
+export/root-output/reconstruct through the executable, including explicit bounds
+and exact original bytes. This lexical source workflow is independent of Basic
+semantic construction; see [the codec documentation](book/src/concepts/codecs.md#exact-yaml-source-reconstruction).
+
+Configured semantic input controls are delivered through the shared boundary,
+foreign bindings and CLI reader roles documented in
+[YAML input options](YAML_INPUT_OPTIONS.md). Focused native host cases cover the
+CLI role forwarding and pre-acquisition refusals. Initial contexts and mixed
+offline registry documents compile at the shared boundary with the effective
+caller base. The native `configured_yamlld_input_context_preserves_rdf_base_and_admission`
+case checks configured RDF, base metadata, registry admission and native base
+compatibility. The `convert_cli::configured_yamlld_context_options_reach_retrieval_and_caller_bases`
+case checks the existing options-file route and refusal output atomicity.
+The existing `convert_cli`
+cases `expanded_jsonld_and_yamlld_cli_bytes_are_frozen` and
+`configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema` pin
+expanded output bytes and compare configured JSON-LD/YAML-LD canonical datasets.
+These are scoped implementation checks, not a complete conformance verdict.
+The complete upstream matrix for the pinned Basic draft and remaining
+deterministic semantic-output acceptance remain open.
+[Context and carrier documentation](book/src/concepts/jsonld.md#yaml-ld-semantic-translation)
+distinguishes standard Basic processing from the RDF 1.2 carrier additions.
 
 ## Where the suites live
 
@@ -261,11 +458,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
   consistency-shaped cases the DL corpus excludes, what the tableau actually did
   with it — so no exclusion is silent. Both are frozen by
   `scripts/conformance-frozen/sparql-conformance-w3c-owl2-rl.sha256`.
-- `crates/sparql-eval/tests/embedding_knn_e2e.rs` and
-  `crates/sparql-eval/tests/knn_wasm_determinism.rs` — the embedding kNN lane.
+- `crates/purrdf/tests/embedding_knn_e2e.rs` and
+  `crates/purrdf/tests/knn_wasm_determinism.rs` — the embedding kNN lane.
   **There is no corpus directory**, deliberately: the lane grades the PURREMB
   kNN property-function seam, and its fixtures are PURREMB artifacts sealed
-  in-process by `purrdf-core`'s own writer rather than files on disk. The
+  in-process by `purrdf::embedding`'s writer rather than files on disk. The
   determinism cases' expectations are pinned Rust literals for the same reason
   frozen vectors would be — recomputing them with the kernel under test would
   agree with any kernel at all. These arithmetic probes run natively; `make wasm-test` selects the actual
@@ -331,7 +528,7 @@ cargo test -p purrdf-sparql-conformance                # W3C SPARQL
 cargo test -p purrdf-sparql-conformance --test governor_corpus      # frozen governor corpus
 cargo test -p purrdf-sparql-conformance --test construct_corpus     # first-party CONSTRUCT corpus
 cargo test -p purrdf-sparql-conformance --test describe_corpus      # first-party DESCRIBE corpus
-cargo test -p purrdf-sparql-eval --test embedding_knn_e2e --test knn_wasm_determinism  # embedding kNN lane
+cargo test -p purrdf --test embedding_knn_e2e --test knn_wasm_determinism  # embedding kNN lane
 cargo run -p purrdf-geo --example geo_digest            # the geo determinism corpus digest (the matrix row)
 cargo test -p purrdf-geo                               # the whole GeoSPARQL 1.1 lane (graded by `make check`)
 make wasm-test                                        # focused WASM target probes (own gate)
@@ -376,19 +573,24 @@ reason):
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
   `purrdf.compat` parity ledger (**4** strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
-  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**5** strict
+  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**7** strict
   xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
   fails the run.
 
-  All five rdflib entries are PurRDF being **stricter** than rdflib, not PurRDF
-  gaps. One is an upstream test typo that projects a non-group-key variable under
-  `GROUP BY`. The other four are `BatchAddGraph` tests that name terms with bare
+  Five entries are PurRDF being **stricter** than rdflib. One is an upstream
+  test typo that projects a non-group-key variable under `GROUP BY`. Four are
+  `BatchAddGraph` tests that name terms with bare
   relative `URIRef`s: rdflib's `URIRef` is an unvalidated `str` subclass, while
   the PurRDF IR carries no base, so a relative reference has no knowable identity
   there and is refused with `iri-relative-no-base`. Closing them would mean either
   inventing a base — which would differ per machine and leak local paths into
   published RDF — or admitting unrepresentable terms into the store, so unlike
-  every other ledger entry these four are **not** expected to shrink.
+  implementation gaps these four are **not** expected to shrink. Two further
+  entries concern value equality across `xsd:string`, `xsd:normalizedString`
+  and `xsd:token`: the native engine compares their shared character-sequence
+  values after whitespace mapping, while RDFLib expects different datatype IRIs
+  to make `Literal.eq` false. `Literal.__eq__` retains distinct RDF term identity.
+  All seven cases still execute; unexpected passes and stale keys fail the gate.
 - The Rust harnesses embed their ledgers in-code (e.g. the SHACL `w3c_conformance`
   xfail table, the SPARQL `purrdf-sparql-conformance` `xfail` module, the codec
   allowlist) and assert each entry still fails.

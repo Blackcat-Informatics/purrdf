@@ -367,8 +367,8 @@ fn a_write_failure_carries_its_classification() {
         "a genuine write failure must NOT be classified as a downstream hangup; \
          got {broken:?}"
     );
-    let retained = broken.clone();
-    drop(broken);
+    drop(result);
+    let retained = broken;
     let fields = purrdf_testkit::error_capture::Capture::read(&retained);
     assert_eq!(fields.code, "sparql-results-write");
     let drain = fields.child("cause");

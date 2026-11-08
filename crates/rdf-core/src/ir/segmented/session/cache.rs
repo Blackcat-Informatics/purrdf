@@ -81,7 +81,9 @@ impl State {
                 .find(hash_of(&key), |entry| entry.key == key)
                 .expect("recency link names a retained block");
             next = entry.newer;
-            if Arc::strong_count(&entry.block) != 1 && entry.block.encoded[0] != format::QUADS {
+            if Arc::strong_count(&entry.block) != 1
+                && !matches!(entry.block.encoded[0], format::QUADS | format::REVERSE)
+            {
                 continue;
             }
             let evictions = self

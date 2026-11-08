@@ -13,6 +13,38 @@ use purrdf_datalog::store::{Bound, RelationStore};
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
+fn indexed_removal_and_warm_object_probes_allocate_nothing() {
+    let mut store = RelationStore::default();
+    for index in 0..4096 {
+        store.insert(&format!("s{index}"), "p", "o", "").unwrap();
+    }
+    let rows: Vec<_> = store.rows_from(0).collect();
+    let object = store.term_id("o").unwrap();
+    let mut warm = store.select("p", "", Bound::Object(object));
+    while warm.next().is_some() {}
+    let mut removed = [None; 3];
+    let window = CurrentThreadWindow::open();
+    for (slot, position) in [0, 2048, 4095].into_iter().enumerate() {
+        removed[slot] = store.remove_ids(rows[position].1).unwrap();
+    }
+    let mut cursor = store.select("p", "", Bound::Object(object));
+    let mut observed = 0;
+    while cursor.next().is_some() {
+        observed += 1;
+    }
+    let allocation = window.close();
+    assert_eq!(
+        removed,
+        [Some(rows[0].0), Some(rows[2048].0), Some(rows[4095].0)]
+    );
+    assert_eq!(observed, 4093);
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.retained_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+}
+
+#[test]
 fn consolidated_object_order_serves_the_actual_cycle_join() {
     let atom = |s, p, o| ClauseAtom::positive(ClauseTerm::var(s), p, ClauseTerm::var(o));
     let program = compile(vec![DlClause::datalog(

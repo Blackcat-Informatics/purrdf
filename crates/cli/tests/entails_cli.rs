@@ -833,6 +833,9 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
 /// each command is the importing premise, which uses the very same pair and succeeds.
 #[test]
 fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let importing = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
@@ -889,7 +892,18 @@ fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
                 &pair,
                 "ASK { ?s ?p ?o }",
             ]),
-            owned(&["consistency", "--import", &pair, premise]),
+            owned(&[
+                "consistency",
+                "--import",
+                &pair,
+                premise,
+                "--canonical-search",
+                "unlimited",
+                "--canonicalization-receipts",
+                canonical_receipt_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]),
         ]
     };
     for args in commands(&plain) {
@@ -1007,6 +1021,16 @@ fn query_entailment_closes_over_the_import_table() {
 /// recorded over the merge checks against the same command line.
 #[test]
 fn consistency_decides_the_imports_closure() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+    let canonical_receipt_4 = canonical_receipt_dir.path().join("request-4.json");
+    let canonical_receipt_5 = canonical_receipt_dir.path().join("request-5.json");
+    let canonical_receipt_6 = canonical_receipt_dir.path().join("request-6.json");
+    let canonical_receipt_7 = canonical_receipt_dir.path().join("request-7.json");
+    let canonical_receipt_8 = canonical_receipt_dir.path().join("request-8.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
@@ -1030,7 +1054,16 @@ fn consistency_decides_the_imports_closure() {
     );
     let pair = format!("http://example.org/schema={schema}");
 
-    let o = run(&["consistency", &premise]);
+    let o = run(&[
+        "consistency",
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(
         stderr(&o).contains("owl:imports <http://example.org/schema>"),
@@ -1039,7 +1072,18 @@ fn consistency_decides_the_imports_closure() {
     );
     assert!(stdout(&o).is_empty(), "{}", stdout(&o));
 
-    let o = run(&["consistency", "--import", &pair, &premise]);
+    let o = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "consistency --import: {}", stderr(&o));
     let decided = stdout(&o);
     assert!(decided.starts_with("consistency false\n"), "{decided}");
@@ -1051,7 +1095,19 @@ fn consistency_decides_the_imports_closure() {
 
     // The proof surface reasons over the same merge: recording a proof decides the same
     // verdict.
-    let o = run(&["consistency", "--proof", "--import", &pair, &premise]);
+    let o = run(&[
+        "consistency",
+        "--proof",
+        "--import",
+        &pair,
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "consistency --proof --import: {}",
@@ -1069,6 +1125,12 @@ fn consistency_decides_the_imports_closure() {
         "--check-proof",
         &negative_proof,
         &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_4
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(checked.status.success(), "{}", stderr(&checked));
     assert!(stdout(&checked).contains("\nanswer checked 0\n"));
@@ -1085,7 +1147,19 @@ fn consistency_decides_the_imports_closure() {
             "ex:tom a ex:Cat .\n",
         ),
     );
-    let o = run(&["consistency", "--proof", "--import", &pair, &consistent]);
+    let o = run(&[
+        "consistency",
+        "--proof",
+        "--import",
+        &pair,
+        &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_5
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "{}", stderr(&o));
     let proved = stdout(&o);
     assert!(proved.starts_with("consistency true\n"), "{proved}");
@@ -1094,7 +1168,18 @@ fn consistency_decides_the_imports_closure() {
         .expect("the proof document");
     let proof = write_file(dir, "proof.txt", &proved[at..]);
     // Without the pair the premise is a different ontology: the import is refused.
-    let o = run(&["consistency", "--check-proof", &proof, &consistent]);
+    let o = run(&[
+        "consistency",
+        "--check-proof",
+        &proof,
+        &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_6
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     let o = run(&[
         "consistency",
@@ -1103,6 +1188,12 @@ fn consistency_decides_the_imports_closure() {
         "--check-proof",
         &proof,
         &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_7
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1122,7 +1213,16 @@ fn consistency_decides_the_imports_closure() {
         "plain.ttl",
         "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat , ex:Dog .\n",
     );
-    let o = run(&["consistency", &plain]);
+    let o = run(&[
+        "consistency",
+        &plain,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_8
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert!(
         stdout(&o).starts_with("consistency true\n"),
@@ -1472,6 +1572,10 @@ fn an_inconsistent_premise_is_refused_with_its_witness() {
 /// rather than a text-only shortcut.
 #[test]
 fn every_input_syntax_reaches_the_boundary() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
@@ -1496,7 +1600,19 @@ fn every_input_syntax_reaches_the_boundary() {
 
     // A verified pack, through the same resolution.
     let pack = path(dir, "premise.purrpck");
-    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "pack",
+        &turtle,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "convert failed: {}", stderr(&o));
     let o = run(&[
         "entails",
@@ -1506,6 +1622,12 @@ fn every_input_syntax_reaches_the_boundary() {
         &pack,
         "--conclusion",
         &conclusion,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(o.status.success(), "pack premise: {}", stderr(&o));
     assert_eq!(stdout(&o), expected);
@@ -1531,12 +1653,28 @@ fn every_input_syntax_reaches_the_boundary() {
 /// base it is handed) — refused by name instead, naming the specific document.
 #[test]
 fn base_with_a_pack_document_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
     let pack = path(dir, "premise.purrpck");
-    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "pack",
+        &turtle,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "convert failed: {}", stderr(&o));
 
     let o = run(&[
@@ -1551,6 +1689,12 @@ fn base_with_a_pack_document_is_refused_by_name() {
         "http://example.org/base/",
         "--conclusion",
         &conclusion,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         o.status.code(),
@@ -1911,4 +2055,514 @@ fn entails_and_query_take_the_evaluation_limits() {
         "ASK { ?s ?p ?o }",
     ]);
     assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+    for call in [&entails as &dyn Fn(&[&str]) -> std::process::Output, &query] {
+        let refused = call(&["--max-term-arena-bytes", "0"]);
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("term arena bytes limit: ")
+                && stderr(&refused).contains("0 permitted")
+                && stderr(&refused)
+                    .trim_end()
+                    .ends_with("raise it with --max-term-arena-bytes"),
+            "{}",
+            stderr(&refused)
+        );
+        let answered = call(&["--max-term-arena-bytes", "16777216"]);
+        assert!(answered.status.success(), "{}", stderr(&answered));
+    }
+    let bare = run(&[
+        "query",
+        "--data",
+        premise.as_str(),
+        "--max-term-arena-bytes",
+        "0",
+        "ASK { ?s ?p ?o }",
+    ]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+}
+
+/// Role-specific YAML controls change only the selected graph and preflight before RDF I/O.
+#[test]
+fn configured_yamlld_controls_reach_entailment_roles() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
+    );
+    let first = write_file(
+        dir.path(),
+        "first.nq",
+        "<https://example.org/first> <https://example.org/p> \"one\" .\n",
+    );
+    let second = write_file(
+        dir.path(),
+        "second.nq",
+        "<https://example.org/second> <https://example.org/p> \"two\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (premise, conclusion, flag, configured_verdict) in [
+        (&yaml, &second, "--yamlld-input-options", "entailed"),
+        (
+            &first,
+            &yaml,
+            "--conclusion-yamlld-input-options",
+            "not-entailed",
+        ),
+    ] {
+        for configured in [false, true] {
+            let mut args = vec![
+                "entails",
+                "--regime",
+                "simple",
+                "--premise",
+                premise,
+                "--conclusion",
+                conclusion,
+            ];
+            if configured {
+                args.extend([flag, &all]);
+            }
+            let out = run(&args);
+            assert!(out.status.success(), "{}", stderr(&out));
+            let verdict = if configured {
+                configured_verdict
+            } else if configured_verdict == "entailed" {
+                "not-entailed"
+            } else {
+                "entailed"
+            };
+            assert!(
+                stdout(&out).contains(&format!("entailment {verdict}\n")),
+                "{}",
+                stdout(&out)
+            );
+        }
+    }
+    let missing = path(dir.path(), "missing.yamlld");
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--pattern",
+        &missing,
+        "--conclusion-yamlld-input-options",
+        &all,
+    ]);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let output = write_file(dir.path(), "answer.txt", "unchanged answer");
+    let report = write_file(dir.path(), "report.txt", "unchanged report");
+    let report_arg = format!("--report={report}");
+    let import = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--conclusion",
+        &missing,
+        "--import",
+        &import,
+        "--conclusion-yamlld-input-options",
+        &malformed,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(std::fs::read_to_string(output).unwrap(), "unchanged answer");
+    assert_eq!(std::fs::read_to_string(report).unwrap(), "unchanged report");
+}
+
+/// All premise readers receive per-import selection without changing mixed-format defaults.
+#[test]
+fn configured_yamlld_imports_reach_premise_readers() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let premise = write_file(
+        dir.path(),
+        "premise.ttl",
+        "@prefix ex: <http://example.org/> .\n@prefix owl: <http://www.w3.org/2002/07/owl#> .\nex:root a owl:Ontology ; owl:imports ex:main, ex:first, ex:default, ex:turtle .\nex:x a ex:A, ex:D .\n",
+    );
+    let entails_premise = write_file(
+        dir.path(),
+        "entails.ttl",
+        &std::fs::read_to_string(&premise)
+            .unwrap()
+            .replace("ex:x a ex:A, ex:D .", "ex:x a ex:A ."),
+    );
+    let conclusion = write_file(
+        dir.path(),
+        "conclusion.nq",
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n",
+    );
+    let imported = write_file(
+        dir.path(),
+        "main.yamlld",
+        "'@id': http://example.org/placeholder\nhttp://example.org/marker:\n  '@id': http://example.org/first\n---\n'@id': http://example.org/A\nhttp://www.w3.org/2000/01/rdf-schema#subClassOf:\n  '@id': http://example.org/B\nhttp://www.w3.org/2002/07/owl#disjointWith:\n  '@id': http://example.org/D\n",
+    );
+    let defaults = write_file(
+        dir.path(),
+        "default.yamlld",
+        "'@id': http://example.org/neighbor\nhttp://example.org/marker:\n  '@id': http://example.org/first\n---\n'@id': http://example.org/A\nhttp://www.w3.org/2000/01/rdf-schema#subClassOf:\n  '@id': http://example.org/Never\nhttp://www.w3.org/2002/07/owl#disjointWith:\n  '@id': http://example.org/A\n",
+    );
+    let turtle = write_file(
+        dir.path(),
+        "ordinary.ttl",
+        "@prefix ex: <http://example.org/> .\n@prefix owl: <http://www.w3.org/2002/07/owl#> .\nex:A a owl:Class ; <http://www.w3.org/2000/01/rdf-schema#subClassOf> ex:Always .\nex:B a owl:Class . ex:D a owl:Class .\n",
+    );
+    let imports = [
+        format!("http://example.org/main={imported}"),
+        format!("http://example.org/first={defaults}"),
+        format!("http://example.org/default={defaults}"),
+        format!("http://example.org/turtle={turtle}"),
+    ];
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = write_file(dir.path(), "first.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let first_control = format!("http://example.org/first={first}");
+    let receipt = path(dir.path(), "consistency-receipt.json");
+    for selected in [false, true] {
+        let selected_control = format!(
+            "http://example.org/main={}",
+            if selected { &all } else { &first }
+        );
+        for lane in ["reason", "convert", "query", "entails", "consistency"] {
+            let mut args = match lane {
+                "reason" => vec![lane, "--regime", "rdfs", "--to", "nquads"],
+                "convert" => vec![lane, "--entailment", "rdfs", "--to", "nquads"],
+                "query" => vec![lane, "--entailment", "rdfs", "--data", &premise],
+                "entails" => vec![
+                    lane,
+                    "--regime",
+                    "owl-rl",
+                    "--premise",
+                    &entails_premise,
+                    "--conclusion",
+                    &conclusion,
+                ],
+                _ => vec![
+                    lane,
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    &receipt,
+                ],
+            };
+            for import in &imports {
+                args.extend(["--import", import]);
+            }
+            args.extend([
+                "--import-yamlld-input-options",
+                &selected_control,
+                "--import-yamlld-input-options",
+                &first_control,
+            ]);
+            match lane {
+                "query" => args.push("ASK { <http://example.org/x> a <http://example.org/B> }"),
+                "entails" => (),
+                _ => args.push(&premise),
+            }
+            let out = run(&args);
+            assert!(out.status.success(), "{lane}: {}", stderr(&out));
+            let body = stdout(&out);
+            match lane {
+                "reason" | "convert" => {
+                    assert_eq!(body.contains("<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."), selected, "{lane}: {body}");
+                    assert!(body.contains("<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Always> ."), "{body}");
+                    assert!(!body.contains("<http://example.org/Never>"), "{body}");
+                }
+                "query" => assert!(body.contains(&format!("\"boolean\":{selected}")), "{body}"),
+                "entails" => assert!(
+                    body.contains(&format!(
+                        "entailment {}\n",
+                        if selected { "entailed" } else { "not-entailed" }
+                    )),
+                    "{body}"
+                ),
+                _ => assert!(
+                    body.starts_with(&format!("consistency {}\n", !selected)),
+                    "{body}"
+                ),
+            }
+        }
+    }
+    // The global explicit format still reaches an imported stdin, which remains its sole reader.
+    let yaml_premise = write_file(
+        dir.path(),
+        "premise.yamlld",
+        "'@graph':\n  - '@id': http://example.org/root\n    '@type': http://www.w3.org/2002/07/owl#Ontology\n    http://www.w3.org/2002/07/owl#imports:\n      '@id': http://example.org/main\n  - '@id': http://example.org/x\n    '@type': http://example.org/A\n",
+    );
+    let yaml_conclusion = write_file(
+        dir.path(),
+        "conclusion.yamlld",
+        "'@id': http://example.org/x\n'@type': http://example.org/B\n",
+    );
+    let control = format!("http://example.org/main={all}");
+    let out = support::pipe(
+        &[
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--from",
+            "yamlld",
+            "--premise",
+            &yaml_premise,
+            "--conclusion",
+            &yaml_conclusion,
+            "--import",
+            "http://example.org/main=-",
+            "--import-yamlld-input-options",
+            &control,
+        ],
+        &std::fs::read_to_string(imported).unwrap(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("entailment entailed\n"));
+}
+
+/// Every premise caller admits configurations before RDF or RIF, retaining refusal sinks.
+#[test]
+fn configured_premise_import_options_precede_source_acquisition() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing = path(dir.path(), "missing.ttl");
+    let missing_yaml = path(dir.path(), "missing.yamlld");
+    let missing_rif = path(dir.path(), "missing.xml");
+    let conclusion = path(dir.path(), "missing.nq");
+    let all = write_file(dir.path(), "valid.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat(16_385));
+    let imports = [
+        format!("http://example.org/a={missing_yaml}"),
+        format!("http://example.org/b={missing_yaml}"),
+    ];
+    let valid_control = format!("http://example.org/a={all}");
+    let malformed_control = format!("http://example.org/b={malformed}");
+    let oversized_control = format!("http://example.org/b={oversized}");
+    let output = write_file(dir.path(), "output.txt", "unchanged output");
+    let report = write_file(dir.path(), "report.txt", "unchanged report");
+    let report_arg = format!("--report={report}");
+    for lane in ["reason", "convert", "query", "entails", "consistency"] {
+        let mut args = match lane {
+            "reason" => vec![
+                lane,
+                "--regime",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--to",
+                "nquads",
+                &report_arg,
+            ],
+            "convert" => vec![
+                lane,
+                "--entailment",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--to",
+                "nquads",
+                &report_arg,
+            ],
+            "query" => vec![
+                lane,
+                "--entailment",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--data",
+                &missing,
+                &report_arg,
+            ],
+            "entails" => vec![
+                lane,
+                "--regime",
+                "simple",
+                "--premise",
+                &missing,
+                "--conclusion",
+                &conclusion,
+                &report_arg,
+            ],
+            _ => vec![lane],
+        };
+        for import in &imports {
+            args.extend(["--import", import]);
+        }
+        args.extend([
+            "--import-yamlld-input-options",
+            &valid_control,
+            "--import-yamlld-input-options",
+            &malformed_control,
+        ]);
+        match lane {
+            "query" => args.push("ASK { ?s ?p ?o }"),
+            "entails" => args.push(&output),
+            "consistency" => args.push(&missing),
+            _ => args.extend([missing.as_str(), output.as_str()]),
+        }
+        let refused = run(&args);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{lane}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("rdf-input-options"),
+            "{lane}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged output"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&report).unwrap(),
+            "unchanged report"
+        );
+    }
+    let oversized_run = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &imports[0],
+        "--import",
+        &imports[1],
+        "--import-yamlld-input-options",
+        &valid_control,
+        "--import-yamlld-input-options",
+        &oversized_control,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(
+        oversized_run.status.code(),
+        Some(1),
+        "{}",
+        stderr(&oversized_run)
+    );
+    assert!(stderr(&oversized_run).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report).unwrap(),
+        "unchanged report"
+    );
+    let absent_control = format!("http://example.org/a={malformed}");
+    for mode in ["convert", "canonical", "query", "explain"] {
+        let mut args = match mode {
+            "convert" => vec!["convert", "--to", "nquads"],
+            "canonical" => vec!["convert", "--canonical"],
+            "query" => vec!["query", "--data", &missing],
+            _ => vec![
+                "query",
+                "--explain",
+                "--entailment",
+                "rdfs",
+                "--data",
+                &missing,
+            ],
+        };
+        args.extend([
+            "--import",
+            &imports[0],
+            "--import-yamlld-input-options",
+            &absent_control,
+        ]);
+        if mode == "convert" || mode == "canonical" {
+            args.extend([missing.as_str(), output.as_str()]);
+        } else {
+            args.push("ASK { ?s ?p ?o }");
+        }
+        let refused = run(&args);
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{mode}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("--entailment"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged output"
+        );
+    }
+    let premise = write_file(
+        dir.path(),
+        "premise.ttl",
+        "<http://example.org/root> a <http://www.w3.org/2002/07/owl#Ontology> ; <http://www.w3.org/2002/07/owl#imports> <http://example.org/a> .\n",
+    );
+    let imported = write_file(
+        dir.path(),
+        "import.yamlld",
+        "'@id': http://example.org/s\nhttp://example.org/p: value\n",
+    );
+    let graph = write_file(dir.path(), "empty.nq", "");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let import = format!("http://example.org/a={imported}");
+    let control = format!("http://example.org/a={limited}");
+    let limited_run = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &graph,
+        "--import",
+        &import,
+        "--import-yamlld-input-options",
+        &control,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(
+        limited_run.status.code(),
+        Some(1),
+        "{}",
+        stderr(&limited_run)
+    );
+    assert!(
+        stderr(&limited_run).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&limited_run)
+    );
+    assert_eq!(stdout(&limited_run), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report).unwrap(),
+        "unchanged report"
+    );
 }

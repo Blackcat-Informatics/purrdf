@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any
 
 from purrdf import retrieval
-
+SCALE12 = 10**12
 EX = "https://example.org/"
 
 NOTE = f"{EX}note"
@@ -79,7 +79,7 @@ TOP_K = 3
 OBSERVED_KEYS = frozenset(
     {
         "separates_to",
-        "ranks_pulled",
+        "ranks_pulled", "rows_pulled", "shared_ranks_observed",
         "collisions_observed",
         "exclusion_lookups",
         "rows_materialised",
@@ -156,7 +156,7 @@ def _search(
         weights={NOTE_STRATUM: weight, TITLE_STRATUM: weight},
         statistics=STATISTICS,
         k=K,
-        decay=TRUNCATED,
+        decay=TRUNCATED, scale_digits=12,
         top_k=TOP_K,
     )
 
@@ -206,7 +206,7 @@ def test_every_stratum_reports_exactly_the_documented_counters() -> None:
     """
     corpus = _corpus()
     for producers in (_declared(), _undeclared()):
-        answer = _search(corpus, producers, retrieval.SCALE)
+        answer = _search(corpus, producers, SCALE12)
         assert set(answer["observed_resolution"]) == {NOTE_STRATUM, TITLE_STRATUM}
         for stratum, observed in answer["observed_resolution"].items():
             assert set(observed) == OBSERVED_KEYS, (
@@ -239,8 +239,8 @@ def test_the_read_counters_move_between_a_cheap_run_and_a_corpus_cost_run() -> N
     a constant.
     """
     corpus = _corpus()
-    cheap = _search(corpus, _declared(), retrieval.SCALE)
-    costly = _search(corpus, _undeclared(), retrieval.SCALE)
+    cheap = _search(corpus, _declared(), SCALE12)
+    costly = _search(corpus, _undeclared(), SCALE12)
 
     # The premise: the two runs return the identical answer, so nothing below is
     # a difference in what was asked for.
@@ -313,8 +313,8 @@ def test_the_exclusion_lookup_counter_moves_with_what_the_producers_declared() -
     number for both — or zero for both — would be measuring nothing.
     """
     corpus = _corpus()
-    asking = _search(corpus, _undeclared(), retrieval.SCALE)
-    settled = _search(corpus, _declared(), retrieval.SCALE)
+    asking = _search(corpus, _undeclared(), SCALE12)
+    settled = _search(corpus, _declared(), SCALE12)
 
     asked = sum(
         _counter(asking, stratum, "exclusion_lookups")
@@ -366,7 +366,7 @@ def test_the_collision_counter_moves_with_the_law_and_not_with_the_corpus() -> N
     both.
     """
     corpus = _corpus()
-    separating = _search(corpus, _declared(), retrieval.SCALE)
+    separating = _search(corpus, _declared(), SCALE12)
     colliding = _search(corpus, _declared(), 1)
 
     for stratum in (NOTE_STRATUM, TITLE_STRATUM):

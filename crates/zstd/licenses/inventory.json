@@ -1,0 +1,34 @@
+{
+  "components": [
+    {
+      "id": "structured-zstd-native",
+      "license": "Apache-2.0",
+      "notices": [
+        "third-party/structured-zstd-native/0-LICENSE",
+        "third-party/structured-zstd-native/1-NOTICE"
+      ],
+      "paths": [
+        "crates/zstd/src/**"
+      ],
+      "provenance": [
+        "crates/zstd/PROVENANCE.md",
+        "crates/zstd/UPSTREAM-SHA256.json"
+      ],
+      "scope": "modified inherited Zstandard codec and dictionary trainer; original Apache grant retained, fixed product and local modifications documented in the accompanying notice",
+      "source": "https://crates.io/crates/structured-zstd/0.0.49"
+    }
+  ],
+  "files": {
+    "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
+    "NOTICE.txt": "269779c48c54f24e720866d85dcc111f8e3fb2acdd7beca49eda1646d745bf1e",
+    "third-party/structured-zstd-native/0-LICENSE": "5150a07aead61dc34bc33bca091dd91a7fbe1c6c0458da14a4d72030abe30b00",
+    "third-party/structured-zstd-native/1-NOTICE": "ba21bda21a598fe47ef2348a601ef7480566bae8fd5f02e67989a162b77dbdcd"
+  },
+  "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "Apache-2.0",
+  "profile": "purrdf-zstd",
+  "schema": 1
+}

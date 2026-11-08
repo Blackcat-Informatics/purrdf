@@ -1,0 +1,18 @@
+[
+  {
+    "@id": "https://example.org/first",
+    "https://example.org/value": [
+      {
+        "@value": "first"
+      }
+    ]
+  },
+  {
+    "@id": "https://example.org/second",
+    "https://example.org/value": [
+      {
+        "@value": "second"
+      }
+    ]
+  }
+]

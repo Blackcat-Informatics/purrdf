@@ -754,12 +754,12 @@ fn commit_items<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
     point: Option<ChargePoint>,
     committing: Committing,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     withheld: Option<u64>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<(Vec<S>, Option<ItemTrip>), EvalError> {
-    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let mut rows = rows.into_iter();
+    let mut out = crate::parallel::reserve_concatenated_rows(Vec::new(), [rows.len()])?;
     let Some(state) = ctx.governor_state().cloned() else {
         for row in rows {
             out.push(admit_row(ctx, row)?);
@@ -972,10 +972,11 @@ fn count_worker_mints_to<D: DatasetView + Sync>(
 #[inline(always)]
 fn admit_rows<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
-    rows: Vec<R>,
+    rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
     out: Vec<S>,
     mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
 ) -> Result<Vec<S>, EvalError> {
+    let rows = rows.into_iter();
     let mut out = crate::parallel::reserve_concatenated_rows(out, [rows.len()])?;
     for row in rows {
         out.push(admit_row(ctx, row)?);
@@ -1427,7 +1428,7 @@ impl ItemLedger {
     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         _chunks: impl IntoIterator<Item = Self>,
         out: Vec<S>,
         admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
@@ -1449,7 +1450,7 @@ impl ItemLedger {
     pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
-        rows: Vec<R>,
+        rows: impl IntoIterator<Item = R, IntoIter: ExactSizeIterator>,
         chunks: impl IntoIterator<Item = Self>,
         mut admit_row: impl FnMut(&mut EvalCtx<'_, D>, R) -> Result<S, EvalError>,
     ) -> Result<(Vec<S>, Option<usize>), EvalError> {
@@ -1552,7 +1553,9 @@ mod tests {
             let expected = rows.clone();
             let pointer = rows.as_ptr();
             let capacity = rows.capacity();
-            let consumed = ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension));
+            let consumed = std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                state.consumed_in(ResourceDimension::ALL[index])
+            });
             let (rows, resume) = checkpoint
                 .commit_rows(&mut ctx, rows, [])
                 .expect("identity admission");
@@ -1561,7 +1564,9 @@ mod tests {
             assert_eq!(rows, expected);
             assert_eq!(resume, None);
             assert_eq!(
-                ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
+                std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                    state.consumed_in(ResourceDimension::ALL[index])
+                }),
                 consumed
             );
         }
@@ -1688,7 +1693,9 @@ mod tests {
                 (
                     rows,
                     state.tripped(),
-                    ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
+                    std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                        state.consumed_in(ResourceDimension::ALL[index])
+                    }),
                     ctx.scratch.minted_bytes(),
                 )
             };
@@ -1792,8 +1799,9 @@ mod tests {
                             (
                                 rows,
                                 state.tripped(),
-                                ResourceDimension::ALL
-                                    .map(|dimension| state.consumed_in(dimension)),
+                                std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                                    state.consumed_in(ResourceDimension::ALL[index])
+                                }),
                                 ctx.scratch.minted_bytes(),
                             ),
                             forked,

@@ -9,6 +9,7 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use purrdf_events::{
     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId,
@@ -36,7 +37,7 @@ struct CountingSink {
 }
 
 impl StreamingSink for CountingSink {
-    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {
         self.terms += 1;
     }
 

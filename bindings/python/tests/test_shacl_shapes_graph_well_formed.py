@@ -97,6 +97,6 @@ def test_py_every_run_reports_the_mandatory_diagnostic() -> None:
 
         rules = purrdf.shapes.apply_rules(_IN_002_DATA, shapes)
         assert rules["diagnostics"] == diagnostics
-        entailed = purrdf.shapes.entail(shapes, _IN_002_DATA)
+        entailed = purrdf.shapes.entail(shapes, _IN_002_DATA, canonical_search="1000000").value
         assert entailed["diagnostics"] == diagnostics
         assert "<http://example.com/ns#seen>" in entailed["ntriples"]

@@ -64,7 +64,7 @@ fn run(query: &str) -> Result<Vec<String>, RdfDiagnostic> {
             substitutions: &[],
         },
         &resolver,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )?
     else {
         panic!("a SELECT answers with solutions");

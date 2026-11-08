@@ -77,71 +77,33 @@ CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 # Keyed by receiver rather than by line number so the table survives edits above
 # it: a reasoned exemption should not need renewing every time the file moves.
 ALLOWLIST: dict[tuple[str, str], str] = {
+    ("crates/rdf/src/native_codecs/text_parse.rs", "terms"): "The native parser rolls back its just-appended unpublished atom when indexing refuses. This is an in-memory term table, never an emitted byte stream.",
+    ("crates/rdf/src/native_codecs/text_parse.rs", "reifiers"): "The native statement fold removes its unindexed trailing reifier row on refusal before any source association or dataset publication. These are semantic rows, not emitted bytes.",
+    ("crates/sparql-results/src/json_read.rs", "items"): "The native decoder cleanup consumes original input-owned payloads and restores a refused payload into its vacant admitted slot. The array is cleanup ownership, never serialized output.",
     ("crates/sparql-results/src/json_read.rs", "scratch.open"): "Native decoder cleanup destroys unfinished binding/triple frames before refunding their original allocation. No emitted bytes are held or changed.",
     ("crates/sparql-results/src/json_read.rs", "solutions.rows"): "The native decoder ownership regression destroys decoded rows before releasing their original array allocation; these are input values, never emitted bytes.",
     ("crates/sparql-results/src/json_read.rs", "row"): "The native decoder ownership regression destroys decoded term cells before releasing the row's original array allocation; no output stream is touched.",
     ("crates/sparql-results/src/json_read.rs", "solutions.variables"): "The native decoder ownership regression releases decoded variable strings before their original array allocation; no serialized document is involved.",
-    (
-        "crates/rdf/src/native_codecs/ser_model.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/json.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/json_read.rs",
-        "open",
-    ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
-    (
-        "crates/sparql-results/src/json_read.rs",
-        "scratch.bound",
-    ): "The SPARQL-JSON READER's per-row scratch of which variable columns already have a cell, cleared and resized at the start of each `results.bindings` entry so the buffer is reused across rows. It is decoder bookkeeping over input; the reader emits nothing.",
-    (
-        "crates/sparql-results/src/xml.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/xml_read.rs",
-        "frames",
-    ): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
-    (
-        "crates/rdf/src/native_codecs/rdfxml.rs",
-        "pending",
-    ): "The RDF/XML READER's depth-first work stack over the parsed element tree, "
-    "which collects a document's `xmlns` declarations. It holds input elements "
-    "still to visit, not output.",
-    (
-        "crates/rdf/src/native_codecs/rdfxml.rs",
-        "stack",
-    ): "The RDF/XML writer's open-element stack. Popping it closes a tag; the "
-    "bytes for that tag were already emitted and are not touched.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/context/compiler.rs",
-        "self.remote_stack",
-    ): "The JSON-LD context compiler's remote-context stack, which exists to "
-    "detect cyclic `@context` IRIs. It holds IRIs under consideration, not output.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "stack",
-    ): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` "
-    "values over a heap stack of open lists and pops a frame once every item is "
-    "folded. It holds in-memory values under construction, not output.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "work",
-    ): "The carrier value's `Drop` work list: nested `@list` values are freed over "
-    "a heap list so depth costs no stack. Nothing here is emitted.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "self.work",
-    ): "The `Parts` iterator's pre-order work list over a carrier value's terms and "
-    "annotation nodes. It is a read-only tree walk; nothing popped was written.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/context/mod.rs",
-        "work",
-    ): "The context canonicalizer's work list over a parsed JSON context, checking "
-    "every object for a repeated member. It walks input values, not output.",
+    ("crates/rdf/src/native_codecs/ser_model.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/json.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/json_read.rs", "open"): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
+    ("crates/sparql-results/src/json_read.rs", "scratch.bound"): "The SPARQL-JSON READER's per-row scratch of which variable columns already have a cell, cleared and resized at the start of each `results.bindings` entry so the buffer is reused across rows. It is decoder bookkeeping over input; the reader emits nothing.",
+    ("crates/sparql-results/src/xml.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/xml_read.rs", "frames"): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
+    ("crates/rdf/src/native_codecs/rdfxml.rs", "pending"): "The RDF/XML READER's depth-first work stack over the parsed element tree, which collects a document's `xmlns` declarations. It holds input elements still to visit, not output.",
+    ("crates/rdf/src/native_codecs/rdfxml.rs", "stack"): "The RDF/XML writer's open-element stack. Popping it closes a tag; the bytes for that tag were already emitted and are not touched.",
+    ("crates/rdf/src/native_codecs/jsonld/context/compiler.rs", "self.remote_stack"): "The JSON-LD context compiler's remote-context stack, which exists to detect cyclic `@context` IRIs. It holds IRIs under consideration, not output.",
+    ("crates/rdf/src/native_codecs/jsonld/structural.rs", "walk.tasks"): "The structural expander consumes pending traversal tasks; no task is an emitted byte buffer.",
+    ("crates/rdf/src/native_codecs/jsonld/structural.rs", "walk.results"): "The structural expander takes its final owned JSON value from an internal result stack before returning; no serialization occurs.",
+    ("crates/rdf/src/native_codecs/jsonld/structural.rs", "self.results"): "Continuation tasks consume admitted child JSON values from an internal result stack, before any RDF lowering or serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/structural.rs", "values"): "The value-object constructor takes a sole datatype from an unpublished JSON array; it never changes emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "tasks"): "The node-map interpreter consumes pending expansion tasks; no task is an emitted byte buffer.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "self.results"): "Node-map continuations consume normalized child JSON values from a private result stack before any serialization or RDF conversion.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "pending"): "Blank-label reservation and graph-root validation visit borrowed JSON input and result values; these work lists never contain emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "stack"): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` values over a heap stack of open lists and pops a frame once every item is folded. It holds in-memory values under construction, not output.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "work"): "The carrier value's `Drop` work list: nested `@list` values are freed over a heap list so depth costs no stack. Nothing here is emitted.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "self.work"): "The `Parts` iterator's pre-order work list over a carrier value's terms and annotation nodes. It is a read-only tree walk; nothing popped was written.",
+    ("crates/rdf/src/native_codecs/jsonld/context/mod.rs", "work"): "The context canonicalizer's work list over a parsed JSON context, checking every object for a repeated member. It walks input values, not output.",
     (
         "crates/rdf/src/native_codecs/jsonld.rs",
         "work",
@@ -178,6 +140,30 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "self.raw",
     ): "The line reader's INPUT buffer, reused across lines. This is the parse path; "
     "there is no document being emitted here to take anything back from.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.tasks"): "The typed RDF projector consumes pending Node, Term and annotation construction frames. These tasks contain borrowed carrier references, not emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.results"): "The typed RDF projector transfers its final owned JSON input from a construction result stack before generic compaction or byte serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "tasks"): "Typed projection scheduling consumes a reversed Vec of pending tasks while retaining its admitted capacity until explicit release. No task holds emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "self.results"): "Projection continuations consume unpublished JSON children to assemble fields, arrays and attached annotations before the generic compactor receives them.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "work"): "Canonical RDF JSON eligibility traverses a newly parsed lexical value and inspects number spellings before choosing its projection. This work list never contains emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "walk.tasks"): "The generic compactor consumes pending traversal and continuation frames over borrowed input. Frames are not an emitted byte buffer.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "walk.results"): "The generic compactor takes its final owned lexical JSON value from an internal result stack before root finishing and any byte serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "values"): "Singleton collection compaction takes the sole unpublished JSON value from its owned array after checking its length; no serialized bytes are changed.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "self.results"): "Compaction continuations consume owned child JSON values from an internal result stack before assembling their unpublished parent value.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "terms"): "Type-scope processing consumes sorted compacted type names from admitted planning scratch before constructing the node. These strings are lookup keys, not an output stream.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "used_lists"): "Per-property List-term ownership keys are destroyed before releasing their admitted planning array. They are selector bookkeeping, not emitted text.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "explicit_terms"): "Per-property explicit-array encoding keys are destroyed after planning before the admitted key array is released. They never hold emitted document bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "self.tasks"): "Parent scheduling temporarily moves pending child frames beneath their continuation. Only traversal order changes; no output bytes are read or modified.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "children"): "The temporary child-task staging stack is consumed in its original scheduling order while retaining admitted capacity until release; no task has been serialized.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "items"): "Map-key extraction takes the first value from an unpublished JSON metadata array while retaining residual values. The array is document construction, never a drained byte stream.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "reversed"): "Reverse-property promotion consumes unpublished owned object members before attaching them to the compacted node. The member vector is not serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "walk.tasks"): "Framing consumes pending semantic construction frames before returning its document value; these are not emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "walk.results"): "Framing transfers its final unpublished lexical value from a private result stack before generic compaction or serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "tasks"): "Frame validation and matching consume borrowed pattern work frames, never an output stream.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "self.results"): "Framing continuations consume unpublished semantic child values to construct their parent objects and arrays.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "self.ancestors"): "The framing ancestor stack records graph and subject indexes to refuse circular embeddings; it contains no document bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "results"): "Iterative matching combines temporary boolean decisions and consumes its final decision; no output buffer is involved.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "scan"): "Subject-copy admission and blank-identity counting consume read-only semantic traversal frames, not serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "cleanup"): "Blank-identifier pruning traverses an unpublished owned JSON value before compaction; no emitted document is rewound.",
 }
 
 

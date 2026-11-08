@@ -34,7 +34,7 @@ fn entry_ceiling_evicts_least_recently_used_but_retained_handles_still_execute()
     assert!(!Arc::ptr_eq(&b, &cache.prepare(B, None).unwrap()));
     assert_eq!(cache.stats().evictions, 2);
     let result = NativeSparqlEngine::new()
-        .query_prepared(&three_subjects_one_value(), &b, &[], QueryOptions::EMPTY)
+        .query_prepared(&three_subjects_one_value(), &b, &[], &QueryOptions::EMPTY)
         .unwrap();
     assert!(matches!(result, SparqlResult::Boolean(true)));
 }
@@ -60,7 +60,7 @@ fn byte_ceiling_and_oversize_admission_bound_storage_without_poisoning_useful_pl
             &three_subjects_one_value(),
             &large,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap();
     assert!(matches!(result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
@@ -106,7 +106,7 @@ fn typed_preparation_admits_registry_calls_before_execution() {
         version: None,
     };
     let engine = NativeSparqlEngine::new();
-    assert!(engine.prepare_algebra(query, QueryOptions::EMPTY).is_err());
+    assert!(engine.prepare_algebra(query, &QueryOptions::EMPTY).is_err());
     assert_eq!(engine.plan_cache_stats().misses, 0);
 }
 
@@ -116,7 +116,7 @@ fn prepared_operation_preserves_substitutions_without_text_cache_access() {
     let query = purrdf_sparql_algebra::SparqlParser::new()
         .parse_query(A)
         .unwrap();
-    let prepared = engine.prepare_algebra(query, QueryOptions::EMPTY).unwrap();
+    let prepared = engine.prepare_algebra(query, &QueryOptions::EMPTY).unwrap();
     let dataset = three_subjects_one_value();
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     for name in ["a", "b"] {
@@ -129,7 +129,7 @@ fn prepared_operation_preserves_substitutions_without_text_cache_access() {
                 &*dataset,
                 &prepared,
                 &substitutions,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
             )
             .unwrap();
@@ -152,7 +152,7 @@ fn prepared_workers_charge_one_shared_budget_and_do_not_multiply_it() {
             &*dataset,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &metered,
         )
         .unwrap();
@@ -168,7 +168,7 @@ fn prepared_workers_charge_one_shared_budget_and_do_not_multiply_it() {
                         &*dataset,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &shared,
                     )
                 })
@@ -213,7 +213,7 @@ fn join_order_eviction_replans_without_reusing_answers() {
         .unwrap();
     for (plan, expected_rows) in [(&a, 3), (&other, 1), (&a, 3)] {
         let result = engine
-            .query_prepared(&dataset, plan, &[], QueryOptions::EMPTY)
+            .query_prepared(&dataset, plan, &[], &QueryOptions::EMPTY)
             .unwrap();
         assert!(
             matches!(result, SparqlResult::Solutions { rows, .. } if rows.len() == expected_rows)

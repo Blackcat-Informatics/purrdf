@@ -319,7 +319,7 @@ impl<'a> Projector<'a> {
         let _ = document.to_canonical_json(self.config)?;
         self.enforce_output_budget(&document)?;
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", "obo-graphs-0.3.2")
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         Ok(OboGraphsProjection {
             document,
@@ -2201,7 +2201,14 @@ mod tests {
         let dataset = fixture(false);
         let configuration = config(2_000);
         let resident = project_obo_graphs(dataset.as_ref(), &configuration).expect("resident");
-        let pack = PackBuilder::build_bytes(&dataset).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&pack).expect("view");
         let packed = project_obo_graphs(&view, &configuration).expect("packed");
         assert_eq!(resident.document, packed.document);

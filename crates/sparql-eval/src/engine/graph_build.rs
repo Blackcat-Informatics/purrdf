@@ -96,7 +96,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
         let staged = self.stage_construct(
@@ -136,7 +136,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         destination: &mut RdfDatasetBuilder,
     ) -> Result<GraphBuildStats, GraphBuildError> {
@@ -171,7 +171,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         state: &Arc<GovernorState>,
         destination: &mut RdfDatasetBuilder,
     ) -> FallibleGraphBuildResult<D::Error, D::Evidence>
@@ -193,7 +193,7 @@ impl NativeSparqlEngine {
             })?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
-            .options(dataset, options)
+            .options(dataset, *options)
             .map_err(|diagnostic| {
                 super::fallible_admission_failure(
                     dataset,
@@ -201,32 +201,38 @@ impl NativeSparqlEngine {
                 )
                 .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
             })?;
+        let mut capture = crate::QueryCoordinates::NotStarted;
         let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
             substitutions,
-            options,
+            &options,
             destination,
             Some(state),
             super::Sequencing::for_view::<D>(),
             &workspace,
+            &mut capture,
         );
         if let Some(error) = workspace.take_failure() {
             return Err(super::fallible_admission_failure(
                 dataset,
                 super::bounded_workspace::AdmissionError::Operational(error),
             )
-            .map_evidence(|view| GovernedEvidence::new(view, state.evidence())));
+            .map_evidence(|view| {
+                GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone())
+            }));
         }
         let result = match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
                 Err(FallibleSparqlError::Operational {
                     error,
-                    evidence: GovernedEvidence::new(evidence, state.evidence()),
+                    evidence: GovernedEvidence::new(evidence, state.evidence())
+                        .with_coordinates(capture.clone()),
                 })
             }
             ViewOperationStatus::Ready { evidence } => {
-                let evidence = GovernedEvidence::new(evidence, state.evidence());
+                let evidence = GovernedEvidence::new(evidence, state.evidence())
+                    .with_coordinates(capture.clone());
                 let evaluation = evaluation
                     .and_then(|staged| publish(staged, destination, Some(state.evidence())));
                 match evaluation {
@@ -245,7 +251,10 @@ impl NativeSparqlEngine {
                             Some(&workspace),
                         )
                         .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, state.evidence())
+                                    .with_coordinates(capture.clone())
+                            })
                         })
                         .map(|_| unreachable!("a native failure cannot publish a graph"))
                     }
@@ -257,16 +266,20 @@ impl NativeSparqlEngine {
                             Some(&workspace),
                         )
                         .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, state.evidence())
+                                    .with_coordinates(capture.clone())
+                            })
                         })?;
-                        let (result, _) = super::retain_query_result(
-                            dataset,
-                            empty,
-                            Some(&workspace),
-                        )
-                        .map_err(|error| {
-                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
-                        })?;
+                        let (result, _) =
+                            super::retain_query_result(dataset, empty, Some(&workspace)).map_err(
+                                |error| {
+                                    error.map_evidence(|view| {
+                                        GovernedEvidence::new(view, state.evidence())
+                                            .with_coordinates(capture.clone())
+                                    })
+                                },
+                            )?;
                         Err(FallibleSparqlError::BudgetExhausted {
                             tripped,
                             partial: crate::PartialAnswers::Certain(
@@ -296,7 +309,7 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
@@ -308,16 +321,18 @@ impl NativeSparqlEngine {
             options,
         )?;
         let publication = crate::user_fn::RefusalPublication::default();
-        let options = publication.options(dataset, options)?;
+        let options = publication.options(dataset, *options)?;
+        let mut capture = crate::QueryCoordinates::NotStarted;
         let evaluation = self.stage_construct_admitted(
             dataset,
             prepared,
             substitutions,
-            options,
+            &options,
             destination,
             state,
             sequencing,
             &workspace,
+            &mut capture,
         );
         publication.finish(evaluation, |error| {
             matches!(
@@ -344,11 +359,12 @@ impl NativeSparqlEngine {
         dataset: &'d D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+        capture: &mut crate::QueryCoordinates,
     ) -> Result<StagedGraph, GraphBuildError> {
         let capability = workspace.capability();
         let prefix = crate::template::destination_mint_prefix_admitted(
@@ -363,9 +379,9 @@ impl NativeSparqlEngine {
         .map_err(GraphBuildError::Evaluation)?;
         let options = QueryOptions {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
-            ..options
+            ..*options
         };
-        self.admit_construct(dataset, prepared, substitutions, options, state, workspace)?;
+        self.admit_construct(dataset, prepared, substitutions, &options, state, workspace)?;
         let substituted = if substitutions.is_empty() {
             None
         } else {
@@ -382,13 +398,27 @@ impl NativeSparqlEngine {
             .as_ref()
             .map_or(&prepared.query, |value| &value.query);
         let ctx = self
-            .eval_ctx(dataset, workspace, options)
+            .eval_ctx(dataset, workspace, &options)
             .map_err(GraphBuildError::Evaluation)?;
-        let mut ctx = apply_query_options(ctx, options).map_err(graph_evaluation_failure)?;
+        let mut ctx = apply_query_options(ctx, &options).map_err(graph_evaluation_failure)?;
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
         ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
+        *capture = crate::QueryCoordinates::started(
+            &ctx.now,
+            ctx.rng_state,
+            options.now.is_some(),
+            options.entropy_seed.is_some(),
+        )
+        .map_err(GraphBuildError::Evaluation)?;
+        *capture = super::coordinates::capture_query(
+            &ctx,
+            prepared,
+            crate::substitute::Prebindings::Owned(substitutions),
+            &options,
+        )
+        .map_err(GraphBuildError::Evaluation)?;
         let evaluated = (|| {
             crate::eval::prepare_query_context(query, &mut ctx)?;
             let Query::Construct {
@@ -410,7 +440,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'_, '_>,
+        options: &QueryOptions<'_, '_>,
         state: Option<&Arc<GovernorState>>,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<(), GraphBuildError> {

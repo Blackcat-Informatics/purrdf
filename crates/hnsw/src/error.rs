@@ -10,6 +10,8 @@
 
 use std::fmt;
 
+mod arithmetic;
+pub use arithmetic::ArithmeticRefusal;
 mod matrix;
 pub use matrix::MatrixRefusal;
 mod payload;
@@ -21,6 +23,22 @@ pub use profile::{CoordinateValue, ProfileRefusal};
 
 /// A result whose error is an [`HnswError`].
 pub type Result<T> = std::result::Result<T, HnswError>;
+
+/// One matrix component's original IEEE 754 width and complete bit pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentValue {
+    /// Original `binary32` bits, including sign and any NaN payload.
+    Binary32Bits(u32),
+    /// Original `binary64` bits, including sign and any NaN payload.
+    Binary64Bits(u64),
+}
+
+impl purrdf_hash::error::StructuredError for ComponentValue {
+    purrdf_hash::error_visit! {
+        Binary32Bits(bits) => "hnsw-component-binary32" { "value" => Float32Bits(*bits) },
+        Binary64Bits(bits) => "hnsw-component-binary64" { "value" => Float64Bits(*bits) },
+    }
+}
 
 /// Original container refusal or unresolved coordinates at the HNSW adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +146,8 @@ pub enum HnswError {
         row: usize,
         /// The component's column.
         column: usize,
+        /// The original component, before widening or formatting.
+        value: ComponentValue,
     },
 
     /// A vector has zero L2 norm under a metric that divides by it.
@@ -136,10 +156,12 @@ pub enum HnswError {
         row: usize,
     },
 
-    /// A distance left the finite binary64 range.
+    /// A distance left the finite `binary64` range.
     NonFiniteDistance {
         /// The candidate row whose distance overflowed.
         row: usize,
+        /// The original result observed by the shared arithmetic.
+        cause: purrdf_core::distance::NonFinite,
     },
 
     /// A row index is outside the matrix.
@@ -235,7 +257,7 @@ pub enum HnswError {
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
 
     /// A checked arithmetic operation overflowed.
-    ArithmeticOverflow,
+    ArithmeticOverflow(ArithmeticRefusal),
 
     /// The index footprint would exceed the target's addressable memory.
     AddressSpaceExceeded {
@@ -295,9 +317,14 @@ impl purrdf_hash::error::StructuredError for HnswError {
             "minimum" => Unsigned(*minimum as u128), "reason" => Text(reason),
         },
         ParameterValidation { cause } => "hnsw-parameter-validation" { "cause" => Cause(cause) },
-        NonFiniteComponent { row, column } => "hnsw-non-finite-component" { "row" => Unsigned(*row as u128), "column" => Unsigned(*column as u128) },
+        NonFiniteComponent { row, column, value } => "hnsw-non-finite-component" {
+            "row" => Unsigned(*row as u128), "column" => Unsigned(*column as u128),
+            "value" => Record(value),
+        },
         ZeroNorm { row } => "hnsw-zero-norm" { "row" => Unsigned(*row as u128) },
-        NonFiniteDistance { row } => "hnsw-non-finite-distance" { "row" => Unsigned(*row as u128) },
+        NonFiniteDistance { row, cause } => "hnsw-non-finite-distance" {
+            "row" => Unsigned(*row as u128), "cause" => Cause(cause),
+        },
         RowOutOfBounds { index, max } => "hnsw-row-out-of-bounds" { "index" => Unsigned(*index as u128), "max" => Unsigned(*max as u128) },
         UnsupportedMetric { metric } => "hnsw-unsupported-metric" { "metric" => Record(metric) },
         EmptyGraph => "hnsw-empty-graph" {},
@@ -309,7 +336,7 @@ impl purrdf_hash::error::StructuredError for HnswError {
         },
         ArithmeticBuildMismatch { recorded, here } => "hnsw-arithmetic-build-mismatch" { "recorded" => Record(recorded), "here" => Record(here) },
         FloatEnvironment(cause) => "hnsw-float-environment" { "cause" => Cause(cause) },
-        ArithmeticOverflow => "hnsw-arithmetic-overflow" {},
+        ArithmeticOverflow(cause) => "hnsw-arithmetic-overflow" { "cause" => Cause(cause) },
         AddressSpaceExceeded { required, maximum } => "hnsw-address-space-exceeded" {
             "required" => ByteCount(u128::from(*required)), "maximum" => ByteCount(u128::from(*maximum)),
         },
@@ -337,7 +364,11 @@ impl fmt::Display for HnswError {
             Self::ParameterValidation { cause } => {
                 write!(f, "parameters do not describe this matrix: {cause}")
             }
-            Self::NonFiniteComponent { row, column } => write!(
+            Self::NonFiniteComponent {
+                row,
+                column,
+                value: _,
+            } => write!(
                 f,
                 "row {row} component {column} is not finite; a distance over it has no \
                  defined ranking"
@@ -346,7 +377,7 @@ impl fmt::Display for HnswError {
                 f,
                 "row {row} has zero L2 norm and the declared metric divides by it"
             ),
-            Self::NonFiniteDistance { row } => write!(
+            Self::NonFiniteDistance { row, .. } => write!(
                 f,
                 "the distance to row {row} left the finite binary64 range"
             ),
@@ -404,7 +435,7 @@ impl fmt::Display for HnswError {
                 f,
                 "the floating-point environment cannot run the distance arithmetic: {error}"
             ),
-            Self::ArithmeticOverflow => write!(f, "index arithmetic overflowed"),
+            Self::ArithmeticOverflow(cause) => cause.fmt(f),
             Self::AddressSpaceExceeded { required, maximum } => write!(
                 f,
                 "the index would need {required} bytes, which exceeds the {maximum} \
@@ -445,6 +476,8 @@ impl std::error::Error for HnswError {
         match self {
             Self::Workspace(error) => Some(error),
             Self::FloatEnvironment(error) => Some(error),
+            Self::NonFiniteDistance { cause, .. } => Some(cause),
+            Self::ArithmeticOverflow(cause) => Some(cause),
             Self::Embedding { cause } => Some(cause),
             Self::ParameterValidation { cause } => Some(cause),
             Self::InvalidPayload { reason } => Some(reason),
@@ -458,6 +491,7 @@ impl std::error::Error for HnswError {
 purrdf_lex::variant_from!(HnswError {
     Workspace(purrdf_sparql_eval::EvalError),
     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+    ArithmeticOverflow(ArithmeticRefusal),
 });
 
 impl From<purrdf_core::EmbeddingError> for HnswError {
@@ -476,7 +510,7 @@ impl From<purrdf_core::EmbeddingError> for HnswError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_core::distance::{BuildIdentity, BuildShape};
+    use purrdf_core::distance::{Arithmetic as _, BuildIdentity, BuildShape, Exact};
 
     /// An `x86_64` shape with `features`, under `identity`.
     fn shape(features: &[&str], identity: BuildIdentity) -> BuildShape {
@@ -497,9 +531,25 @@ mod tests {
             HnswError::ParameterValidation {
                 cause: MatrixRefusal::ZeroRows { dimensions: 8 },
             },
-            HnswError::NonFiniteComponent { row: 0, column: 1 },
+            HnswError::NonFiniteComponent {
+                row: 0,
+                column: 1,
+                value: ComponentValue::Binary32Bits(f32::NAN.to_bits()),
+            },
             HnswError::ZeroNorm { row: 2 },
-            HnswError::NonFiniteDistance { row: 3 },
+            HnswError::NonFiniteDistance {
+                row: 3,
+                cause: Exact::resolve()
+                    .unwrap()
+                    .distance(
+                        purrdf_core::distance::Measure::SquaredEuclidean,
+                        &[f64::MAX],
+                        0.0,
+                        &[-f64::MAX],
+                        0.0,
+                    )
+                    .unwrap_err(),
+            },
             HnswError::RowOutOfBounds { index: 9, max: 8 },
             HnswError::UnsupportedMetric {
                 metric: purrdf_core::DistanceMetric::Extension {
@@ -548,7 +598,10 @@ mod tests {
                     },
                 },
             ),
-            HnswError::ArithmeticOverflow,
+            HnswError::ArithmeticOverflow(ArithmeticRefusal::MatrixElements {
+                rows: usize::MAX,
+                dimensions: 2,
+            }),
             HnswError::AddressSpaceExceeded {
                 required: 10,
                 maximum: 5,

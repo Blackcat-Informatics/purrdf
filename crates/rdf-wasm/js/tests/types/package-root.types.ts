@@ -111,8 +111,8 @@ const compiledContext = new CompiledJsonLdContext(
   }),
 );
 const compacted: string = matched.serializeWithContext("jsonld", compiledContext);
-const canonical: string = matched.canonicalize();
-const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
+const canonicalResult = matched.canonicalize("unlimited"); const canonical: string = canonicalResult.value; const canonicalizationJson: string = canonicalResult.canonicalizationJson; canonicalResult.free();
+const sameResult = matched.isomorphic(Dataset.parse(serialized, "nquads"), "unlimited"); const same: boolean = sameResult.value; sameResult.free();
 const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify({
   profile: "lpg-csv",
   config: {
@@ -186,22 +186,22 @@ const visualSvg: VisualSvgDocument = matched.visualSvg({
   tableFields: ["statement", "assertedIn", "diagnostics"],
   svg: { title: "RDF 1.2 statements", embedMetadata: true },
 });
-const queryJson: string = matched.query("ASK { ?s ?p ?o }");
+const queryJson: string = matched.query("ASK { ?s ?p ?o }").body;
 const engine = new QueryEngine();
 const blankScope: BlankScopeMode = engine.blankScope;
 engine.blankScope = "merge";
 const select: SelectResult = engine.select(matched, "SELECT ?s WHERE { ?s ?p ?o }");
 const maybeTerm: RdfTerm | undefined = select.rows.take(0)?.s;
-const ask: boolean = engine.ask(matched, "ASK { ?s ?p ?o }");
+const ask: boolean = engine.ask(matched, "ASK { ?s ?p ?o }").boolean;
 const graph: Dataset = engine.construct(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
-);
-const rawResults: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", { format: "json" });
+).dataset;
+const rawResults: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", { format: "json" }).body;
 const rawResultsWithProvenance: string = engine.queryRaw(matched, "ASK { ?s ?p ?o }", {
   format: "json",
   provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
-});
+}).body;
 const decodedProvenance: ProvenanceInfo = provenanceFromJson(
   rawResultsWithProvenance,
   "prov",
@@ -213,11 +213,11 @@ const rawGraph: string = engine.queryRaw(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
   { format: "nquads" },
-);
+).body;
 const updated: Dataset = engine.update(
   new Dataset(),
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
-);
+).dataset;
 const dimensions: string[] = governorDimensions();
 const cancel = new CancellationToken();
 // @ts-expect-error governor keys are accepted only by governed entry points
@@ -249,7 +249,7 @@ const entailed: EntailmentQueryOutcome = engine.queryEntailmentGoverned(
   { fuel: 100_000, program: null, importIris: [], importDocuments: [], premiseIris: [] },
 );
 const entailmentPhase: "answered" | "closure-stopped" = entailed.phase;
-const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");
+const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }").body;
 
 // The asynchronous twins.
 const asyncAvailable: boolean = hasAsyncQueries();
@@ -308,29 +308,29 @@ const asyncResult: Promise<QueryResult> = engine.queryAsync(matched, "ASK { ?s ?
 const asyncSelect: Promise<SelectResult> = engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", {
   localServices: { "https://example.org/local": matched },
 });
-const asyncAsk: Promise<boolean> = engine.askAsync(matched, "ASK { ?s ?p ?o }", { base: "https://example.org/" });
+const asyncAsk: Promise<boolean> = engine.askAsync(matched, "ASK { ?s ?p ?o }", { base: "https://example.org/" }).then(result => result.boolean);
 const asyncConstruct: Promise<Dataset> = engine.constructAsync(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
-);
-const asyncDescribe: Promise<Dataset> = engine.describeAsync(matched, "DESCRIBE <https://example.org/s>");
+).then(result => result.dataset);
+const asyncDescribe: Promise<Dataset> = engine.describeAsync(matched, "DESCRIBE <https://example.org/s>").then(result => result.dataset);
 const asyncRaw: Promise<string> = engine.queryRawAsync(matched, "ASK { ?s ?p ?o }", {
   format: "json",
   provenanceNamespace: { prefix: "prov", iri: "https://example.org/ns/prov#" },
-});
+}).then(result => result.body);
 const asyncRawConfigured: Promise<string> = engine.queryRawAsync(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
   { format: "jsonld", optionsJson: JSON.stringify({ version: 1, mode: "derived" }) },
-);
-const asyncRawBytes: Promise<Uint8Array> = engine.queryRawBytesAsync(matched, "ASK { ?s ?p ?o }");
+).then(result => result.body);
+const asyncRawBytes: Promise<Uint8Array> = engine.queryRawBytesAsync(matched, "ASK { ?s ?p ?o }").then(result => result.body);
 const asyncRawWithContext: Promise<string> = engine.queryRawWithContextAsync(
   matched,
   "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
   "jsonld",
   compiledContext,
   { yamlSchemaUrl: null },
-);
+).then(result => result.body);
 const asyncGoverned: AsyncQueryOutcome = await engine.queryGovernedAsync(
   matched,
   "SELECT ?s WHERE { ?s ?p ?o }",
@@ -340,7 +340,7 @@ const asyncExplained: Promise<string> = engine.explainQueryAsync(
   matched,
   "SELECT ?s WHERE { ?s ?p ?o }",
   { base: "https://example.org/", resolveService, signal: controller.signal, yieldEveryPolls: 0 },
-);
+).then(result => result.body);
 const shaclOptions: AsyncShaclOptions = {
   resolveService,
   signal: controller.signal,
@@ -382,7 +382,7 @@ const asyncShaclEntailed: Promise<ShaclEntailment> = shaclEntailAsync(
   10n,
   undefined,
   undefined,
-  undefined,
+  undefined, "unlimited",
   shaclOptions,
 );
 const asyncRules: Promise<ShaclRulesInference> = shaclApplyRulesAsync(
@@ -415,7 +415,7 @@ const asyncNodes: Promise<ShaclNodeExprOutcome> = shaclEvalNodeExprAsync(
   undefined,
   { yieldEveryPolls: 0 },
 );
-const shaclProduct: Uint8Array = shaclPackProduct(shaclShapes);
+const productResult = shaclPackProduct(shaclShapes, undefined, undefined, undefined, undefined, "unlimited"); const shaclProduct: Uint8Array = productResult.value; productResult.free();
 const asyncProductSarif: Promise<string> = shaclProductValidateToSarifAsync(shaclProduct, shaclData, shaclOptions);
 const asyncProductRebuilt: Promise<string> = shaclProductValidateToSarifRebuildAsync(shaclProduct, shaclData);
 const asyncProductExpected: Promise<string> = shaclProductValidateToSarifExpectingAsync(
@@ -445,14 +445,14 @@ const asyncUpdated: Promise<Dataset> = engine.updateAsync(
   new Dataset(),
   "LOAD <https://example.org/doc.ttl>",
   { resolveLoad },
-);
+).then(result => result.dataset);
 const asyncApplied: AsyncUpdateOutcome = await engine.updateGovernedAsync(
   new Dataset(),
   "INSERT DATA { <https://example.org/u> <https://example.org/p> <https://example.org/o> }",
   { fuel: 100_000 },
 );
 const appliedEvidence: AsyncEvidence = asyncApplied.evidence.async;
-const datasetAsync: Promise<string> = matched.queryAsync("ASK { ?s ?p ?o }", { resolveService });
+const datasetAsync: Promise<string> = matched.queryAsync("ASK { ?s ?p ?o }", { resolveService }).then(result => result.body);
 const datasetId: bigint = matched.id;
 const datasetGeneration: bigint = matched.generation;
 // @ts-expect-error dataset identity is exact bigint, not a binary64 number
@@ -479,7 +479,7 @@ if (result.kind === "ask") {
 }
 
 void stream;
-void canonical;
+void [canonical, canonicalizationJson];
 void lossText;
 void lossStatementRows;
 void lossDirectional;
@@ -526,7 +526,7 @@ void asyncExplained;
 void asyncSarif;
 void asyncSarifBased;
 void asyncChange;
-void asyncShaclEntailed;
+void asyncShaclEntailed.then(result => { const receipts: string = result.canonicalizationJson; result.free(); return receipts; });
 void asyncProductSarif;
 void asyncProductRebuilt;
 void asyncProductExpected;
@@ -541,8 +541,8 @@ void datasetId;
 void datasetGeneration;
 
 // Result aliases and the governed mode are available through each typed twin.
-engine.queryRaw(dataset, "SELECT * WHERE {}", { format: "sparql-json" });
-engine.queryRawAsync(dataset, "SELECT * WHERE {}", { format: "sparql-xml" });
+engine.queryRaw(dataset, "SELECT * WHERE {}", { format: "sparql-json" }).body;
+engine.queryRawAsync(dataset, "SELECT * WHERE {}", { format: "sparql-xml" }).then(result => result.body);
 engine.queryGoverned(dataset, "SELECT * WHERE {}", { noCeiling: true });
 engine.queryGovernedAsync(dataset, "SELECT * WHERE {}", { noCeiling: false });
 engine.queryEntailmentGoverned(dataset, "SELECT * WHERE {}", "rdfs", { noCeiling: true });

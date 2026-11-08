@@ -63,6 +63,25 @@ pub enum CausalSupportKind {
     RoleLicence,
 }
 
+impl purrdf_hash::error::StructuredError for CausalSupportKind {
+    purrdf_hash::error_visit! {
+        Recording => "owl-proof-causal-recording" {},
+        CurrentSupport => "owl-proof-causal-current-support" {},
+        Undecided => "owl-proof-causal-undecided" {},
+        Unclosed => "owl-proof-causal-unclosed" {},
+        Fact => "owl-proof-causal-fact" {},
+        Path => "owl-proof-causal-path" {},
+        Effect => "owl-proof-causal-effect" {},
+        Key => "owl-proof-causal-key" {},
+        Membership => "owl-proof-causal-membership" {},
+        Clash => "owl-proof-causal-clash" {},
+        Input => "owl-proof-causal-input" {},
+        Syntax => "owl-proof-causal-syntax" {},
+        Schema => "owl-proof-causal-schema" {},
+        RoleLicence => "owl-proof-causal-role-licence" {},
+    }
+}
+
 pub(crate) fn support_error(run: usize, clash: usize, error: &slice::Error) -> DlProofError {
     use crate::owl_dl::roles::LicenceError;
     let kind = match error {

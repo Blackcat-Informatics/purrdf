@@ -171,12 +171,19 @@ fn source_admission_sees_a_late_function_body_without_extending_its_cache_snapsh
         .constraints
         .push(Constraint::Expression {
             expr: NodeExpr::CustomCall {
-                func: Arc::clone(&function),
+                func: function.iri.clone(),
                 args: vec![],
             },
             messages: vec![],
             severity: None,
         });
+    let mut declarations = shapes.owner.functions.to_vec();
+    declarations.push(Arc::clone(&function));
+    let owner =
+        crate::shapes::ModelOwner::from_declarations(Arc::clone(&shapes.owner.index), declarations)
+            .unwrap();
+    shapes.owner = Arc::clone(&owner);
+    shapes.node_shapes[0].owner = Some(owner);
     let configuration =
         PreparedShapes::new(Arc::new(shapes)).xpath_configuration(Profile::Xpath31, Limits::new());
     configuration.admit_declared_patterns().unwrap();

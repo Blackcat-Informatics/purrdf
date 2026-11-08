@@ -218,11 +218,25 @@ prop_test! {
         let (x, y) = (Rational::from_str(&a).expect("valid"), Rational::from_str(&b).expect("valid"));
         let (ox, oy) = (oracle_rational_lexical(&a), oracle_rational_lexical(&b));
         prop_assert!(oracle_rational(&x).value_eq(&ox));
+        // Canonical rational zero folds the oracle's lexical negative zero.
+        let zero = Oracle::from_i128(0);
+        let rounded = if ox.is_zero() { &zero } else { &ox };
+        prop_assert_eq!(x.to_f64().to_bits(), rounded.to_f64().to_bits());
+        prop_assert_eq!(x.to_f32().to_bits(), rounded.to_f32().to_bits());
         prop_assert!(!x.denominator().is_negative() && !x.denominator().is_zero());
         prop_assert_eq!(x.numerator().gcd(x.denominator()), Integer::ONE, "reduced");
         prop_assert!(oracle_rational(&(&x + &y)).value_eq(&ox.add(&oy)));
         prop_assert!(oracle_rational(&(&x - &y)).value_eq(&ox.sub(&oy)));
         prop_assert!(oracle_rational(&(&x * &y)).value_eq(&ox.mul(&oy)));
+        match (x.recip(), Oracle::from_i128(1).div(&ox)) {
+            (Ok(inverse), Some(expected)) => {
+                prop_assert!(oracle_rational(&inverse).value_eq(&expected));
+                prop_assert!(!inverse.denominator().is_negative() && !inverse.denominator().is_zero());
+                prop_assert_eq!(inverse.numerator().gcd(inverse.denominator()), Integer::ONE, "canonical reciprocal");
+            }
+            (Err(ExactError::DivisionByZero), None) => {}
+            (got, expected) => prop_assert!(false, "{:?} vs {:?}", got, expected.is_some()),
+        }
         match (x.checked_div(&y), ox.div(&oy)) {
             (Ok(q), Some(expected)) => prop_assert!(oracle_rational(&q).value_eq(&expected)),
             (Err(ExactError::DivisionByZero), None) => {}
@@ -284,6 +298,13 @@ prop_test! {
     fn float_sources_convert_exactly(bits in any::<u64>()) {
         let double = f64::from_bits(bits);
         let single = f32::from_bits((bits >> 32) as u32);
+        match Rational::from_f32(single) {
+            Ok(rational) => prop_assert!(oracle_rational(&rational).value_eq(&Oracle::from_f32(single))),
+            Err(error) => {
+                prop_assert!(!single.is_finite());
+                prop_assert_eq!(error, ExactError::NotFinite);
+            }
+        }
         for (value, exact, back) in [
             (Decimal::from_f64(double), double.is_finite().then(|| Oracle::from_f64(double)), double),
             (
@@ -419,6 +440,14 @@ fn division_by_zero_is_refused_and_a_unit_divisor_is_not() {
     assert_eq!(Rational::from_str("0/1"), Ok(Rational::ZERO));
     assert_eq!(Rational::ZERO.recip(), Err(ExactError::DivisionByZero));
     assert_eq!(Rational::ONE.recip(), Ok(Rational::ONE));
+    let negative = Rational::from_str("-3/7").expect("negative rational");
+    assert_eq!(negative.recip(), Ok(Rational::from_str("-7/3").unwrap()));
+    for denominator in [Integer::ONE, Integer::from_i128(3)] {
+        let minimum = Rational::new(Integer::from_i128(i128::MIN), denominator.clone()).unwrap();
+        let inverse = minimum.recip().expect("nonzero minimum coefficient");
+        assert_eq!(inverse.numerator(), &-denominator);
+        assert_eq!(inverse.denominator(), &Integer::from(2_i128).pow(127));
+    }
     assert_eq!(
         Rational::ONE.checked_div(&Rational::ZERO),
         Err(ExactError::DivisionByZero)
@@ -480,6 +509,76 @@ fn integer_narrowing_refuses_and_exact_decimal_crosses_the_old_bound() {
     assert_eq!(rounded.canonical_lexical(), "0");
 }
 
+/// Inline normalization preserves exact values at word and signed boundaries,
+/// including wide trailing-zero runs and products that return to narrow storage.
+#[test]
+fn inline_decimal_normalization_preserves_boundary_products() {
+    let word_edge = i128::from(u64::MAX);
+    for coefficient in [
+        0,
+        1,
+        -1,
+        10,
+        -10,
+        word_edge - 5,
+        word_edge,
+        word_edge + 1,
+        word_edge + 5,
+        -(word_edge + 5),
+        10_i128.pow(37),
+        -10_i128.pow(37),
+        i128::MAX - 7,
+        i128::MAX - 6,
+        i128::MAX,
+        i128::MIN,
+        i128::MIN + 1,
+        i128::MIN + 8,
+    ] {
+        for scale in [0, 1, 2, 20, 38] {
+            let digits = format!("{:0>width$}", coefficient.unsigned_abs(), width = scale + 1);
+            let split = digits.len() - scale;
+            let sign = if coefficient < 0 { "-" } else { "" };
+            let lexical = format!("{sign}{}.{}", &digits[..split], &digits[split..]);
+            let expected = oracle(&lexical);
+            let scale = u32::try_from(scale).expect("fixture scale");
+            let constructed = Decimal::new(Integer::from_i128(coefficient), scale);
+            let product = Decimal::from_integer(Integer::from_i128(coefficient))
+                .try_mul(&Decimal::new(Integer::ONE, scale))
+                .expect("representable product scale");
+            assert_same(&constructed.canonical_lexical(), &expected, "normalization")
+                .expect("exact boundary value");
+            assert_same(&product.canonical_lexical(), &expected, "product")
+                .expect("exact boundary product");
+            assert_eq!(constructed, product);
+            assert_eq!(constructed.scale(), product.scale());
+        }
+    }
+
+    // Exact products cross the signed-word fast path, checked i128 path and
+    // spilled product path without changing canonical coefficient or scale.
+    let min_word = i128::from(i64::MIN);
+    let max_word = i128::from(i64::MAX);
+    for (left, right, scale) in [
+        (min_word, min_word, 0),
+        (min_word, max_word, 1),
+        (max_word, max_word, 20),
+        (min_word - 1, max_word, 38),
+        (max_word + 1, min_word, 2),
+        (i128::MAX, 10, 1),
+    ] {
+        let left = Decimal::new(Integer::from_i128(left), scale);
+        let right = Decimal::from_integer(Integer::from_i128(right));
+        let expected = oracle(&left.canonical_lexical()).mul(&oracle(&right.canonical_lexical()));
+        let product = left.try_mul(&right).expect("representable product scale");
+        assert_same(
+            &product.canonical_lexical(),
+            &expected,
+            "word-width product",
+        )
+        .expect("exact product across the machine-word boundary");
+    }
+}
+
 #[test]
 fn owl_rational_identifies_the_full_exact_decimal_branch_only() {
     let half = Rational::from_str("1/2").unwrap();
@@ -504,7 +603,12 @@ fn owl_rational_identifies_the_full_exact_decimal_branch_only() {
 
 #[test]
 fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
-    for refused in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    for refused in [
+        f64::NAN,
+        f64::from_bits(u64::MAX),
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
         assert_eq!(Decimal::from_f64(refused), Err(ExactError::NotFinite));
         assert_eq!(Rational::from_f64(refused), Err(ExactError::NotFinite));
         assert_eq!(
@@ -518,10 +622,22 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
         f64::MIN,
         f64::from_bits(1),
         -f64::from_bits(1),
+        f64::from_bits(2),
+        f64::from_bits((1_u64 << 52) - 1),
+        f64::MIN_POSITIVE,
+        f64::from_bits((1_u64 << 52) + 1),
+        2_f64.powi(1023),
         0.0,
         -0.0,
     ] {
         let decimal = Decimal::from_f64(accepted).expect("finite");
+        let rational = Rational::from_f64(accepted).expect("finite");
+        assert_eq!(rational.to_f64().to_bits(), (accepted + 0.0).to_bits());
+        assert!(oracle_rational(&rational).value_eq(&Oracle::from_f64(accepted)));
+        assert_eq!(rational, Rational::from_decimal(&decimal));
+        if accepted == 0.0 {
+            assert_eq!(rational, Rational::ZERO);
+        }
         assert_eq!(decimal.to_f64().to_bits(), (accepted + 0.0).to_bits());
         assert!(Integer::from_f64_truncated(accepted).is_ok());
     }
@@ -539,6 +655,40 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
         1074
     );
     assert!(Decimal::from_f32(f32::NAN).is_err());
+    for refused in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(Rational::from_f32(refused), Err(ExactError::NotFinite));
+    }
+    for accepted in [
+        0.0_f32,
+        -0.0,
+        f32::from_bits(1),
+        f32::from_bits((1 << 23) - 1),
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::MIN,
+    ] {
+        let rational = Rational::from_f32(accepted).expect("finite");
+        assert_eq!(rational.to_f32().to_bits(), (accepted + 0.0).to_bits());
+        assert!(oracle_rational(&rational).value_eq(&Oracle::from_f32(accepted)));
+    }
+    let halfway_single = Rational::from_str("16777217/16777216").unwrap();
+    assert_eq!(halfway_single.to_f32().to_bits(), 1.0_f32.to_bits());
+    assert_eq!((-halfway_single).to_f32().to_bits(), (-1.0_f32).to_bits());
+    let halfway_double = Rational::from_str("9007199254740993/9007199254740992").unwrap();
+    assert_eq!(halfway_double.to_f64().to_bits(), 1.0_f64.to_bits());
+    assert_eq!((-halfway_double).to_f64().to_bits(), (-1.0_f64).to_bits());
+    let negative_half_single =
+        Rational::new(-Integer::ONE, Integer::from(2_i128).pow(150)).unwrap();
+    assert_eq!(
+        negative_half_single.to_f32().to_bits(),
+        (-0.0_f32).to_bits()
+    );
+    let negative_half_double =
+        Rational::new(-Integer::ONE, Integer::from(2_i128).pow(1075)).unwrap();
+    assert_eq!(
+        negative_half_double.to_f64().to_bits(),
+        (-0.0_f64).to_bits()
+    );
     assert_eq!(
         Decimal::from_f32(0.1).expect("finite").to_string(),
         "0.100000001490116119384765625"
@@ -732,8 +882,13 @@ fn admitted_small_exact_division_uses_one_initial_grant() {
 #[test]
 fn lexical_refusals_have_valid_neighbours() {
     for refused in [
-        "", "+", "-", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",
+        "", "+", "-", ".", "1.2.3", "1e5", " 1", "1 ", "0x10", "\u{0661}", "--1", "1/2",
     ] {
+        assert!(!purrdf_xsd::numeric::is_decimal_lexical(refused));
+        assert!(matches!(
+            Decimal::try_from_lexical(refused),
+            Err(purrdf_xsd::exact::ExactParseError::InvalidLexical { .. })
+        ));
         assert!(
             matches!(
                 Decimal::from_str(refused),
@@ -747,13 +902,27 @@ fn lexical_refusals_have_valid_neighbours() {
         );
     }
     for accepted in [".5", "1.", "+0", "-0", "-.0", "007.700", "0000"] {
+        assert!(purrdf_xsd::numeric::is_decimal_lexical(accepted));
         assert!(Decimal::from_str(accepted).is_ok(), "{accepted:?}");
     }
-    assert_eq!(Decimal::from_str("-0.0").expect("valid").to_string(), "0");
-    assert_eq!(
-        Decimal::from_str("007.700").expect("valid").to_string(),
-        "7.7"
-    );
+    for (lexical, expected) in [
+        ("-0.0", "0"),
+        ("007.700", "7.7"),
+        ("+0009999999999999999999.000", "9999999999999999999"),
+        ("99999999999999999999", "99999999999999999999"),
+        ("-99999999999999999999", "-99999999999999999999"),
+        (
+            "-170141183460469231731687303715884105728",
+            "-170141183460469231731687303715884105728",
+        ),
+    ] {
+        let value = Decimal::from_str(lexical).expect("valid");
+        assert_eq!(value.canonical_lexical(), expected);
+        assert_eq!(
+            Decimal::try_from_lexical(lexical).expect("native parse"),
+            value
+        );
+    }
     for refused in ["", "1.0", "+", "1_000", "１"] {
         assert!(Integer::from_str(refused).is_err(), "{refused:?}");
     }

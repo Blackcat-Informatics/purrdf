@@ -56,12 +56,15 @@ fn compile(
 ) {
     let shapes = from_dataset(&turtle::data(PREFIXES, "")).expect("shapes graph");
     let ontology = turtle::data(PREFIXES, ontology);
-    compile_schema_with_class_expressions(&SchemaCompileRequest::new(
-        &shapes,
-        namespaces,
-        ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))
+    compile_schema_with_class_expressions(
+        &SchemaCompileRequest::new(
+            &shapes,
+            namespaces,
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
     .expect("the ontology compiles")
 }
 
@@ -579,12 +582,15 @@ fn shacl_datatypes_stay_judged_by_tag() {
     .expect("shapes");
     let ontology = turtle::data(PREFIXES, "ex:A a owl:Class .");
     let ns = example();
-    let compilation = compile_schema(&SchemaCompileRequest::new(
-        &shapes,
-        &ns,
-        ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))
+    let compilation = compile_schema(
+        &SchemaCompileRequest::new(
+            &shapes,
+            &ns,
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
     .expect("compiles");
     judge(
         &compilation.compiled.schema_json,

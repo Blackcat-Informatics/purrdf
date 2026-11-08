@@ -1,0 +1,28 @@
+---
+- "@id": http://example.org/test#example
+  "@type":
+  - http://example.com/t1
+  http://example.com/this-is#not:
+    - "@value": "a comment"
+  http://example.com/notacomment:
+  - "@value": |
+      --- >
+      line1
+      # no comment
+      line3
+  http://example.com/key:
+  - "@value": value
+  http://example.com/art:
+  - "@value": |
+      # ASCII Art
+      --- |
+        \//||\/||
+        // ||  ||__
+  http://example.com/commentonly:
+  - "@value": "# Comment only.\n"
+  http://example.com/hr:
+  - "@value": Mark McGwire
+  - "@value": Sammy Sosa
+  http://example.com/rbi:
+  - "@value": Sammy Sosa
+  - "@value": Ken Griffey

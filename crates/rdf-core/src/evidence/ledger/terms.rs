@@ -20,9 +20,7 @@ impl ViewTermId for LedgerTermId {
         self.0 as u128
     }
 
-    fn encode_computed(scratch_index: u32) -> u128 {
-        (1_u128 << 127) | u128::from(scratch_index)
-    }
+    crate::wide_computed_join_key_method!();
 }
 
 /// Original term strings stay borrowed; flat descriptors and their lookup order

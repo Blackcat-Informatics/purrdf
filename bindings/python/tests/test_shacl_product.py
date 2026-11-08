@@ -52,7 +52,7 @@ _NOT_TURTLE = "@@@ this is not turtle @@@"
 
 def _pack() -> bytes:
     """Pack ``_SHAPES`` the three-step way: parse, prepare, encode."""
-    return purrdf.shapes.Shapes(_SHAPES).prepare().to_product()
+    return purrdf.shapes.Shapes(_SHAPES).prepare().to_product(canonical_search="1000000").value
 
 
 # ── 1. Round-trip parity ────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ def test_certify_corroborates_a_genuine_product() -> None:
     """``certify()`` independently recomputes the shapes dataset's canonical
     identity and agrees with the binding the product carries; it raises nothing
     for a product that was never tampered with."""
-    purrdf.shapes.ShapesProduct.open(_pack()).certify()
+    purrdf.shapes.ShapesProduct.open(_pack()).certify(canonical_search="1000000").value
 
 
 # ── 2. One-call parity ───────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ def test_pack_product_matches_the_three_step_route_byte_for_byte() -> None:
     """The one-call ``pack_product`` and ``Shapes(...).prepare().to_product()`` are
     the same composition, so they must produce identical bytes, not merely
     equivalent ones."""
-    one_call = purrdf.shapes.pack_product(_SHAPES)
+    one_call = purrdf.shapes.pack_product(_SHAPES, canonical_search="1000000").value
     three_step = _pack()
     assert one_call == three_step
 
@@ -142,11 +142,11 @@ def test_a_shapes_document_that_does_not_parse_names_no_dimension() -> None:
     proves ``.dimension`` is not just always populated: it is genuinely absent
     exactly when nothing was admitted."""
     with pytest.raises(purrdf.shapes.ShapesProductError) as refused:
-        purrdf.shapes.pack_product(_NOT_TURTLE)
+        purrdf.shapes.pack_product(_NOT_TURTLE, canonical_search="1000000").value
     assert refused.value.dimension is None
 
     # The neighbouring VALID case: a shapes document that DOES parse still packs.
-    purrdf.shapes.pack_product(_SHAPES)
+    purrdf.shapes.pack_product(_SHAPES, canonical_search="1000000").value
 
 
 # ── 5. A restored preparation names the artifact it came from ──────────────────

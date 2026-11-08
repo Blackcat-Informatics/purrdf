@@ -1,0 +1,5 @@
+# Document in UTF-8
+"@context":
+  "@vocab": http://example.com/
+"@id": http://example.org/test#example
+"@type": t1

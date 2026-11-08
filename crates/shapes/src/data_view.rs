@@ -3,6 +3,9 @@
 
 //! Shared native carriers for SHACL, with compact validation-local term handles.
 
+mod admission;
+pub use admission::ViewAdmissionError;
+
 use purrdf_core::TermBox;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -146,15 +149,25 @@ where
         + 'static,
 {
     /// The retention charge of a `count`-term adapter, refused past `limits`.
-    fn admit(count: usize, limits: ViewLimits) -> Result<usize, String> {
-        let auxiliary_bytes = count
-            .checked_mul(size_of::<D::Id>() * 3 + size_of::<TermId>() * 2 + 16)
-            .ok_or("SHACL term mapping size overflow")?;
-        if count > limits.max_terms
-            || count >= u32::MAX as usize
+    fn admit(count: u64, limits: ViewLimits) -> Result<usize, ViewAdmissionError> {
+        let bytes_per_term = size_of::<D::Id>() * 3 + size_of::<TermId>() * 2 + 16;
+        let local_count = usize::try_from(count).map_err(|cause| {
+            ViewAdmissionError::mapping(count, limits, bytes_per_term, None, Some(cause))
+        })?;
+        let auxiliary_bytes = local_count.checked_mul(bytes_per_term).ok_or_else(|| {
+            ViewAdmissionError::mapping(count, limits, bytes_per_term, None, None)
+        })?;
+        if local_count > limits.max_terms
+            || local_count >= u32::MAX as usize
             || auxiliary_bytes > limits.max_auxiliary_bytes
         {
-            return Err("SHACL view exceeds term or auxiliary retention limit".to_owned());
+            return Err(ViewAdmissionError::mapping(
+                count,
+                limits,
+                bytes_per_term,
+                Some(auxiliary_bytes),
+                None,
+            ));
         }
         Ok(auxiliary_bytes)
     }
@@ -163,11 +176,8 @@ where
         source: Arc<D>,
         ids: impl FnOnce(&D) -> Box<[D::Id]>,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(
-            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
-            limits,
-        )?;
+    ) -> Result<Self, ViewAdmissionError> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
         let ids = ids(&source);
         let local_ids = ids
             .iter()
@@ -191,11 +201,8 @@ where
         lower: fn(D::Id) -> Option<usize>,
         lift: fn(usize) -> D::Id,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(
-            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
-            limits,
-        )?;
+    ) -> Result<Self, ViewAdmissionError> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
         let added_local = added
             .iter()
             .copied()
@@ -372,7 +379,7 @@ impl ShaclDatasetView {
         source: Arc<CompositeDatasetView>,
         projected: bool,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         let dense = Dense::new(source, |source| source.term_ids().collect(), limits)?;
         Ok(Self::new(Source::Composite(dense), projected))
     }
@@ -393,7 +400,7 @@ impl ShaclDatasetView {
         source: Arc<DeltaDatasetView>,
         projected: bool,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         let base = source.base().as_ref().term_count();
         let added = source.added_term_ids().collect();
         let dense = Dense::layered(
@@ -461,7 +468,7 @@ impl ShaclDatasetView {
         &self,
         terms: Arc<RdfDataset>,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         debug_assert_eq!(terms.quad_count(), 0, "a term supplement carries no rows");
         let extra = ::purrdf_rdf::ir::CompositeSource::new(terms);
         let (composite, wrapped_delta) = match &self.source {
@@ -490,7 +497,7 @@ impl ShaclDatasetView {
                 self.wrapped_delta.clone(),
             ),
         };
-        let composite = composite.map_err(|error| error.to_string())?;
+        let composite = composite.map_err(ViewAdmissionError::composite)?;
         let dense = Dense::new(
             Arc::new(composite),
             |source| source.term_ids().collect(),
@@ -923,6 +930,62 @@ impl DatasetView for ShaclDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Infallible> {
+        let source = match &self.source {
+            Source::Native(source) => source.snapshot_identity()?,
+            Source::Composite(dense) => dense.source.snapshot_identity()?,
+            Source::Delta(dense) => dense.source.snapshot_identity()?,
+        };
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        const DOMAIN: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-shapes/data-view-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Streaming::<1024>::new();
+        hash.update(DOMAIN.as_bytes());
+        hash.update(source.as_bytes());
+        hash.update(&[
+            u8::from(self.projected),
+            u8::from(self.statements_projected),
+        ]);
+        match self.selected_graph {
+            None => {
+                hash.update(&[0]);
+            }
+            Some(graph) => match self.resolve_term(graph) {
+                TermRef::Iri(iri) => {
+                    hash.update(&[1]);
+                    purrdf_hash::frame::frame_le_with(iri.as_bytes(), &mut |bytes| {
+                        hash.update(bytes);
+                    });
+                }
+                TermRef::Blank { label, scope } => {
+                    hash.update(&[2]);
+                    hash.update(&scope.0.to_le_bytes());
+                    purrdf_hash::frame::frame_le_with(label.as_bytes(), &mut |bytes| {
+                        hash.update(bytes);
+                    });
+                }
+                // RDF graph names have exactly these two native representations.
+                // A caller selecting another term has not supplied a graph identity.
+                TermRef::Literal { .. } | TermRef::Triple { .. } => return Ok(None),
+            },
+        }
+        Ok(Some(purrdf_hash::hex::Digest32::new(
+            *hash.finalize().as_bytes(),
+        )))
+    }
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
+    {
+        match &self.source {
+            Source::Native(source) => source.reserve_owned_workspace(bytes),
+            Source::Composite(dense) => dense.source.reserve_owned_workspace(bytes),
+            Source::Delta(dense) => dense.source.reserve_owned_workspace(bytes),
+        }
+    }
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.quads_for_pattern(None, None, None, GraphMatch::Any)
     }
@@ -1070,14 +1133,6 @@ impl DatasetView for ShaclDatasetView {
             usize::MAX
         })
     }
-    fn annotations_of_with_graph(
-        &self,
-        reifier: TermId,
-    ) -> impl Iterator<Item = (TermId, TermId, Option<TermId>)> + '_ {
-        self.annotation_quads()
-            .filter(move |q| q.s == reifier)
-            .map(|q| (q.p, q.o, q.g))
-    }
     fn named_graphs(&self) -> impl Iterator<Item = TermId> + '_ {
         let graphs = match &self.source {
             Source::Native(source) => Either::Left(source.named_graphs()),
@@ -1117,7 +1172,8 @@ impl ShaclRead for ShaclDatasetView {
     fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
         match &self.source {
             Source::Native(source) => source.term_id_by_iri(iri),
-            _ => self.term_id_by_value(&TermValue::iri(iri)).unwrap(),
+            Source::Composite(dense) => dense.source.lookup_iri(iri).map(|id| dense.id(id)),
+            Source::Delta(dense) => dense.source.lookup_iri(iri).map(|id| dense.id(id)),
         }
     }
     fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {

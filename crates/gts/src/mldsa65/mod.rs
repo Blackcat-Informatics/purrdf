@@ -127,7 +127,7 @@ impl SecretPolys {
     }
     fn transform(&mut self) {
         for poly in &mut self.0 {
-            math::ntt(poly);
+            math::Field::ntt(poly);
         }
     }
 }
@@ -188,11 +188,11 @@ impl VerifyingKey {
             for value in high.iter_mut() {
                 *value <<= 13;
             }
-            math::ntt(&mut high);
+            math::Field::ntt(&mut high);
             for ((value, c), t) in poly.iter_mut().zip(&challenge.0[0]).zip(high.iter()) {
-                *value = math::sub(*value, math::mul(*c, *t));
+                *value = math::Field::sub(*value, math::Field::mul(*c, *t));
             }
-            math::inverse(poly);
+            math::Field::inverse(poly);
         }
         drop(high);
         drop(challenge);
@@ -344,7 +344,7 @@ impl SigningKey {
             let mut w = matrix_product(&matrix, &transformed.0);
             drop(transformed);
             for poly in &mut w.0 {
-                math::inverse(poly);
+                math::Field::inverse(poly);
             }
             let mut w_high = SecretPolys::zeros(K);
             for (high, poly) in w_high.0.iter_mut().zip(&w.0) {
@@ -378,7 +378,7 @@ impl SigningKey {
                 for (((low, residual), w), product) in
                     out.iter_mut().zip(residual).zip(w).zip(product)
                 {
-                    *residual = math::sub(*w, math::canonical(*product));
+                    *residual = math::Field::sub(*w, math::Field::canonical(*product));
                     *low = math::decompose(*residual).1;
                 }
             }
@@ -401,7 +401,7 @@ impl SigningKey {
                 for (((hint, residual), product), w_high) in
                     hints.iter_mut().zip(residual).zip(product).zip(w_high)
                 {
-                    let adjusted = math::add(*residual, math::canonical(*product));
+                    let adjusted = math::Field::add(*residual, math::Field::canonical(*product));
                     *hint = i32::from(math::decompose(adjusted).0 != *w_high);
                     weight += *hint;
                 }
@@ -509,7 +509,7 @@ fn matrix_product(matrix: &[Poly], vector: &[Poly]) -> SecretPolys {
                 .zip(&matrix[row * L + column])
                 .zip(&vector[column])
             {
-                *out = math::add(*out, math::mul(*a, *s));
+                *out = math::Field::add(*out, math::Field::mul(*a, *s));
             }
         }
     }
@@ -531,9 +531,10 @@ fn derive_public(rho: &[u8], secrets: &[Poly]) -> Result<(VerifyingKey, SecretPo
             .zip(&mut low.0)
             .enumerate()
     {
-        math::inverse(poly);
+        math::Field::inverse(poly);
         for ((value, secret), low) in poly.iter_mut().zip(s2).zip(low) {
-            let (high, bottom) = math::power_round(math::add(*value, math::canonical(*secret)));
+            let (high, bottom) =
+                math::power_round(math::Field::add(*value, math::Field::canonical(*secret)));
             *value = high;
             *low = bottom;
         }
@@ -551,11 +552,11 @@ fn challenge_products(challenge: &Poly, secrets: &[Poly]) -> SecretPolys {
     let mut products = SecretPolys::zeros(secrets.len());
     for (product, secret) in products.0.iter_mut().zip(secrets) {
         for ((out, c), s) in product.iter_mut().zip(challenge).zip(secret) {
-            *out = math::mul(*c, *s);
+            *out = math::Field::mul(*c, *s);
         }
-        math::inverse(product);
+        math::Field::inverse(product);
         for value in product {
-            *value = math::centered(*value);
+            *value = math::Field::centered(*value);
         }
     }
     products

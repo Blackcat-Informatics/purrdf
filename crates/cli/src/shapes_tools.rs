@@ -44,6 +44,7 @@ use crate::argv_documents::{
 };
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
+use crate::rdf_imports::RdfImportPlan;
 use crate::shapes_source::{
     read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
 };
@@ -51,6 +52,10 @@ use crate::{format, ledger, report, sink, source};
 
 /// The resolved `rules` flags.
 pub(crate) struct RulesOptions<'a> {
+    /// Raw supplied time, decoded before any rule or data source is read.
+    pub(crate) now: Option<&'a str>,
+    /// Raw supplied initial rule-sequence seed.
+    pub(crate) entropy_seed: Option<&'a str>,
     /// `--shapes`: the shapes graph whose rules run, or `-`.
     pub(crate) shapes: Option<&'a str>,
     /// `--shapes-from`.
@@ -65,6 +70,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) srl_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable: the rule source's imports.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--check[=LEVEL]`: check the `--srl` rule set to this level and evaluate nothing.
     pub(crate) check: Option<srl::CheckLevel>,
     /// `--explain`: where the proof goes, if anywhere.
@@ -82,6 +89,10 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
+    /// YAML-LD Basic options for the primary data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--to`: the output format override.
     pub(crate) to: Option<CliRdfFormat>,
     /// `--base`: the data graph's parse base and the output's base.
@@ -111,7 +122,36 @@ enum RuleSource<'a> {
 pub(crate) fn run_rules(
     options: &RulesOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    if options.shapes_yamlld_input_options.is_some()
+        && (options.shapes.is_none() || options.srl.is_some() || options.check.is_some())
+    {
+        return Err(CliError::Usage(
+            "--shapes-yamlld-input-options requires --shapes and conflicts with --srl and --check"
+                .to_owned(),
+        ));
+    }
+    if !options.import_yamlld_input_options.is_empty()
+        && (options.shapes.is_none() || options.srl.is_some() || options.check.is_some())
+    {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --shapes and conflicts with --srl and --check"
+                .to_owned(),
+        ));
+    }
+    let coordinates =
+        purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
+            .map_err(|error| {
+                let flag = match &error {
+                    purrdf_validate::query::CoordinateInputError::Now(_) => "--now",
+                    purrdf_validate::query::CoordinateInputError::EntropySeed(_) => {
+                        "--entropy-seed"
+                    }
+                    _ => "rule coordinates",
+                };
+                CliError::Usage(format!("{flag}: {error}"))
+            })?;
     if options.shapes_graph.is_some() && options.shapes.is_none() {
         return Err(CliError::Usage(
             "--shapes-graph names the graph a SHACL shapes graph's rules see the shapes graph \
@@ -121,6 +161,16 @@ pub(crate) fn run_rules(
         ));
     }
     if let Some(level) = options.check {
+        if options.yamlld_input_options.is_some() {
+            return Err(CliError::Usage(
+                "--check reads no data and cannot consume --yamlld-input-options".to_owned(),
+            ));
+        }
+        if options.now.is_some() || options.entropy_seed.is_some() {
+            return Err(CliError::Usage(
+                "--check executes no rules and cannot consume --now or --entropy-seed".to_owned(),
+            ));
+        }
         return run_srl_check(options, level, ledger_target);
     }
     let srl_pairs = if options.srl.is_some() {
@@ -133,9 +183,35 @@ pub(crate) fn run_rules(
         ("--shapes", options.shapes),
         ("--srl", options.srl),
     ]));
-    readers.extend(import_readers(&srl_pairs));
+    readers.extend(import_readers(srl_pairs.iter().copied()));
     refuse_shared_stdin(&readers)?;
+    let import_plan = RdfImportPlan::prepare(
+        if options.shapes.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
     let data_format = format::resolve(options.from, options.input)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+    let shapes_input_options = options
+        .shapes_yamlld_input_options
+        .map(|controls| {
+            let path = options.shapes.ok_or_else(|| {
+                CliError::Usage("--shapes-yamlld-input-options requires --shapes".to_owned())
+            })?;
+            source::read_yamlld_input_options(
+                controls,
+                &[format::resolve(options.shapes_from, path)?],
+            )
+        })
+        .transpose()?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     format::refuse_unconsumable_base(
         options.base,
@@ -172,7 +248,13 @@ pub(crate) fn run_rules(
         }
     };
 
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
     let limits = purrdf::shapes::RuleLimits {
         max_term_generating_rounds: options.max_term_generating_rounds,
@@ -180,6 +262,7 @@ pub(crate) fn run_rules(
         max_stored_facts: options.max_stored_facts,
         max_join_steps: options.max_join_steps,
     };
+    let execution = coordinates.into_rule_options(&limits, cli_limit_knobs());
     let inference: Inference = match &rule_source {
         RuleSource::Shapes {
             path,
@@ -187,8 +270,15 @@ pub(crate) fn run_rules(
             base,
             shapes_graph,
         } => {
-            let root = read_shapes_document(path, *format, base.as_deref(), "--shapes")?;
-            let table = shapes_imports(&root, options.imports)?;
+            let root = read_shapes_document(
+                path,
+                *format,
+                base.as_deref(),
+                "--shapes",
+                shapes_input_options.as_deref(),
+                canonical,
+            )?;
+            let table = shapes_imports(&root, &import_plan, canonical)?;
             let shapes = purrdf::shapes::shapes::from_dataset_with_base(
                 &root.dataset,
                 None,
@@ -204,7 +294,7 @@ pub(crate) fn run_rules(
             rules_run(
                 purrdf::shapes::RuleSource::Shapes(&shapes),
                 data.as_ref(),
-                &limits,
+                &execution,
                 options.xpath_regex,
                 &format!("--shapes {path}"),
             )?
@@ -220,13 +310,17 @@ pub(crate) fn run_rules(
             rules_run(
                 purrdf::shapes::RuleSource::Srl(&document),
                 data.as_ref(),
-                &limits,
+                &execution,
                 options.xpath_regex,
                 &format!("--srl {path}"),
             )?
         }
     };
 
+    eprintln!(
+        "purrdf-execution {}",
+        purrdf_validate::query::rule_execution_receipt_json(inference.coordinates())
+    );
     let inferred = inference.inferred_dataset()?;
     let ledger = sink::write_rdf(
         &*inferred,
@@ -235,6 +329,7 @@ pub(crate) fn run_rules(
         options.base,
         data_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     eprintln!("rules inferred {}", inference.inferred().len());
     // A shapes graph's mandatory diagnostics — every empty `sh:in` / `sh:xone` list — as
@@ -244,7 +339,7 @@ pub(crate) fn run_rules(
         eprintln!("shacl diagnostic {diagnostic}");
     }
     if options.explain.is_requested() {
-        report::surface_rendered(&options.explain, &inference.proof_text())?;
+        report::surface_rendered(&options.explain, &inference.proof_text(), canonical)?;
     }
     ledger::surface(ledger_target, &ledger)
 }
@@ -258,26 +353,40 @@ pub(crate) fn run_rules(
 fn rules_run(
     source: purrdf::shapes::RuleSource<'_>,
     data: &purrdf_core::RdfDataset,
-    limits: &purrdf::shapes::RuleLimits,
+    options: &purrdf::shapes::RuleOptions,
     xpath_regex: Option<Profile>,
     context: &str,
 ) -> Result<Inference, CliError> {
     let Some(profile) = xpath_regex else {
-        return purrdf::shapes::run_rules(source, data, limits, cli_limit_knobs())
-            .map_err(|error| CliError::Runtime(format!("{context}: {error}")));
+        return purrdf::shapes::run_rules_with_options(source, data, options).map_err(|error| {
+            emit_rule_failure(&error);
+            CliError::Runtime(format!("{context}: {error}"))
+        });
     };
-    purrdf::shapes::xpath::run_rules(
-        source,
-        data,
-        limits,
-        cli_limit_knobs(),
-        profile,
-        Limits::new(),
-    )
-    .map_err(|error| match error {
-        XPathValidationError::Shapes(error) => CliError::Runtime(format!("{context}: {error}")),
-        other => xpath_regex_error(profile, &other),
-    })
+    purrdf::shapes::xpath::run_rules_with_options(source, data, options, profile, Limits::new())
+        .map_err(|error| match error {
+            XPathValidationError::RuleExecution { cause, coordinates } => {
+                eprintln!(
+                    "purrdf-execution {}",
+                    purrdf_validate::query::rule_execution_receipt_json(&coordinates)
+                );
+                xpath_regex_error(profile, &cause)
+            }
+            XPathValidationError::Shapes(error) => {
+                emit_rule_failure(&error);
+                CliError::Runtime(format!("{context}: {error}"))
+            }
+            other => xpath_regex_error(profile, &other),
+        })
+}
+
+fn emit_rule_failure(error: &purrdf::shapes::ShapesError) {
+    if let Some(coordinates) = error.execution_coordinates() {
+        eprintln!(
+            "purrdf-execution {}",
+            purrdf_validate::query::rule_execution_receipt_json(coordinates)
+        );
+    }
 }
 
 /// A refusal only the `--xpath-regex` law raises, as the runtime failure (exit 1) it
@@ -410,6 +519,8 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) shapes_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// The expression selector: `--expr`, `--expr-at`/`--expr-via`, `--expr-turtle` or
     /// `--expr-turtle-file`.
     pub(crate) expr: ExprFlags<'a>,
@@ -422,6 +533,10 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// `--from`.
     pub(crate) from: Option<CliRdfFormat>,
+    /// YAML-LD Basic options for the primary data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--base`.
     pub(crate) base: Option<&'a str>,
     /// The data-graph path `IN`, or `-`.
@@ -470,6 +585,7 @@ pub(crate) fn run_node_expr(
     options: &NodeExprOptions<'_>,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     refuse_text_report_flags("node-expr", ledger_target, jsonld_options)?;
     refuse_shared_stdin(&[
@@ -477,11 +593,25 @@ pub(crate) fn run_node_expr(
         ("--shapes".to_owned(), options.shapes),
     ])?;
     let data_format = format::resolve(options.from, options.input)?;
+    let import_plan = RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     format::refuse_unconsumable_base(
         options.base,
         &[format::BaseUse::parse(data_format, "the --from data graph")],
     )?;
     let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
+    let shapes_input_options = options
+        .shapes_yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[shapes_format]))
+        .transpose()?;
     let shapes_base =
         crate::validate::shapes_document_base(options.shapes, shapes_format, options.shapes_base)?;
     // Every argv term is decided before a document is read: a malformed one is the command
@@ -528,9 +658,17 @@ pub(crate) fn run_node_expr(
         shapes_format,
         shapes_base.as_deref(),
         "--shapes",
+        shapes_input_options.as_deref(),
+        canonical,
     )?;
-    let table = shapes_imports(&root_document, options.imports)?;
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let table = shapes_imports(&root_document, &import_plan, canonical)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     let selector = match (argv_selector, options.expr.expr_turtle_file) {
         (Some(selector), _) => selector,
         (None, Some(path)) => {
@@ -583,7 +721,7 @@ pub(crate) fn run_node_expr(
         text.push_str(&term.to_string());
         text.push('\n');
     }
-    sink::write_out(options.output, text.as_bytes())?;
+    sink::write_out_with_request(options.output, text.as_bytes(), canonical)?;
     eprintln!("node-expr outputs {}", evaluated.outputs.len());
     // The shapes graph's mandatory diagnostics, which every run reports: one `shacl
     // diagnostic RULE SHAPE` line each, exactly as `validate` and `rules` print them. They
@@ -597,12 +735,16 @@ pub(crate) fn run_node_expr(
 
 /// The resolved `shapes lint` flags.
 pub(crate) struct LintOptions<'a> {
+    /// YAML-LD Basic options for the root shapes document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--from`: the shapes-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the shapes document's base.
     pub(crate) base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--box-role-vocab`.
     pub(crate) box_role_vocab: Option<&'a str>,
     /// `--shapes-graph`.
@@ -618,9 +760,20 @@ pub(crate) fn run_lint(
     options: &LintOptions<'_>,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
+    let import_plan = RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[format]))
+        .transpose()?;
     let base = match format {
         SourceFormat::Native(native) => {
             source::effective_base(options.input, native, options.base)?
@@ -636,10 +789,20 @@ pub(crate) fn run_lint(
                 )));
             }
         },
+        _ => {
+            return Err(format::unsupported_format(format, "the shapes input"));
+        }
     };
     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
-    let root = read_shapes_document(options.input, format, base.as_deref(), "shapes lint")?;
-    let table = shapes_imports(&root, options.imports)?;
+    let root = read_shapes_document(
+        options.input,
+        format,
+        base.as_deref(),
+        "shapes lint",
+        input_options.as_deref(),
+        canonical,
+    )?;
+    let table = shapes_imports(&root, &import_plan, canonical)?;
     let report = lint::lint(
         &root.dataset,
         &root.prefixes,
@@ -650,7 +813,7 @@ pub(crate) fn run_lint(
         &table,
     )
     .map_err(|error| shapes_error(error, "shapes lint", &root, "--base"))?;
-    sink::write_out(options.output, report.render().as_bytes())?;
+    sink::write_out_with_request(options.output, report.render().as_bytes(), canonical)?;
     eprintln!("shapes lint clean {}", report.is_clean());
     eprintln!("shapes lint findings {}", report.findings());
     if report.is_clean() {

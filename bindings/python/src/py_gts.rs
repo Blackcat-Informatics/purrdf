@@ -64,6 +64,16 @@ struct SliceArtifactRow {
     content: Vec<u8>,
 }
 
+/// Preserve a GTS native failure's fields with its existing Python message.
+pub(crate) fn native_gts_error(error: impl purrdf_lex::error::NativeError + 'static) -> PyErr {
+    let message = error.to_string();
+    let diagnostic =
+        purrdf_validate::native_error::diagnostic("gts-operation-refused", error, None);
+    Python::attach(|py| {
+        crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+    })
+}
+
 /// Build a frozen [`RdfDataset`] from a flat native quad list (verbatim, no RDF 1.2
 /// statement-layer fold). Used so the production [`RdfBundle`] carries the actual hot
 /// graph (not a placeholder) while it gates the artifact index.
@@ -210,7 +220,7 @@ fn secret_array(secret: Option<&Bound<'_, PyBytes>>) -> PyResult<Option<[u8; 32]
 /// Takes plain `&[u8]` so callers can run it inside [`Python::detach`] (GIL
 /// released); the error is a lazily-materialized `ValueError`.
 fn parse_rdf(data: &[u8], format: PyRdfFormat, base: Option<&str>) -> PyResult<Vec<RdfQuad>> {
-    parse_quads(data, rdf_format(format), base)
+    parse_quads(data, rdf_format(format), base, None)
         .map_err(|e| crate::py_store::presentation::value_error(format!("parse error: {e}"), &e))
 }
 
@@ -247,9 +257,7 @@ fn snapshot_gts_bytes(
 ) -> PyResult<Vec<u8>> {
     let dataset = parse_rdf_dataset(data, format, base)?;
     let mut builder = SnapshotBuilder::default();
-    builder
-        .add_dataset(&dataset)
-        .map_err(PyValueError::new_err)?;
+    builder.add_dataset(&dataset).map_err(native_gts_error)?;
     let plan = MediumPlan::dist_default(transform.as_deref());
     emit_gts(
         &builder,
@@ -263,7 +271,7 @@ fn snapshot_gts_bytes(
         DEFAULT_RSYNCABLE_THRESHOLD,
         &plan,
     )
-    .map_err(PyValueError::new_err)
+    .map_err(native_gts_error)
 }
 
 /// Produce a GTS snapshot from serialized RDF bytes (Turtle/N-Quads, parsed
@@ -542,7 +550,7 @@ impl IngestSources<'_> {
             let dataset = parse_rdf_dataset(data, format, self.document_base)?;
             builder
                 .add_dataset_scoped(&dataset, graph_name, scope)
-                .map_err(PyValueError::new_err)?;
+                .map_err(native_gts_error)?;
         }
         Ok(())
     }
@@ -766,7 +774,7 @@ fn compile_gts_core(
             rsyncable_threshold,
             &plan,
         )
-        .map_err(PyValueError::new_err)?;
+        .map_err(native_gts_error)?;
         Ok((bytes, report))
     })
 }
@@ -951,9 +959,7 @@ fn snapshot_content_id_native(
     py.detach(move || {
         let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
         let mut builder = SnapshotBuilder::default();
-        builder
-            .add_dataset(&dataset)
-            .map_err(PyValueError::new_err)?;
+        builder.add_dataset(&dataset).map_err(native_gts_error)?;
         Ok(builder.snapshot_content_id())
     })
 }
@@ -974,9 +980,7 @@ fn feedback_bundle_native(
     let bytes: Vec<u8> = py.detach(move || {
         let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
         let mut builder = SnapshotBuilder::default();
-        builder
-            .add_dataset(&dataset)
-            .map_err(PyValueError::new_err)?;
+        builder.add_dataset(&dataset).map_err(native_gts_error)?;
         emit_gts(
             &builder,
             "dist",
@@ -989,7 +993,7 @@ fn feedback_bundle_native(
             DEFAULT_RSYNCABLE_THRESHOLD,
             &MediumPlan::dist_default(None),
         )
-        .map_err(PyValueError::new_err)
+        .map_err(native_gts_error)
     })?;
     Ok(PyBytes::new(py, &bytes).unbind())
 }

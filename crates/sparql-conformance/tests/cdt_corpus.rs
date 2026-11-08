@@ -42,6 +42,9 @@ fn manifest() -> PathBuf {
 /// Run all 658 vendored SEP-0009 cases, honoring the shared xfail ledger.
 #[test]
 fn sparql_cdt_corpus() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let manifest = manifest();
     assert!(
         manifest.is_file(),
@@ -52,7 +55,7 @@ fn sparql_cdt_corpus() {
     let total = purrdf_sparql_conformance::manifest::load(&manifest)
         .unwrap_or_else(|e| panic!("load the SEP-0009 aggregator manifest: {e}"))
         .len();
-    let summary = purrdf_sparql_conformance::run_manifest(&manifest)
+    let summary = purrdf_sparql_conformance::run_manifest(&manifest, &mut control)
         .unwrap_or_else(|e| panic!("run the SEP-0009 corpus: {e}"));
 
     println!(

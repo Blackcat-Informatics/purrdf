@@ -11,10 +11,14 @@
 //! `"unverified"` and `encrypt`-class frames degrade to `missing-key` opaque
 //! nodes. Callers that hold content keys can use [`read_with_options`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
 use std::io::Read;
+use std::sync::Arc;
+
+use crate::term_table::TermsRef;
 
 mod fold_error;
 use fold_error::FoldError;
@@ -25,19 +29,26 @@ pub use append_error::AppendError;
 mod payload_error;
 use payload_error::{PayloadCause, PayloadError};
 
-use purrdf_lex::cbor::{self, Value};
+mod reifier_index;
+use reifier_index::ReifierIndex;
+
+use purrdf_lex::cbor::{self, BorrowedItem, EncodedItem, Value, ValueRef};
+mod encoded_frame;
+mod replay;
+use encoded_frame::{BlobBytes, Payload, StreamItem};
 
 use crate::codec::{
     Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
 };
 use crate::model::{
     AnnotationRow, BlobEntry, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow,
-    Signature, StreamableInfo, Suppression, Term, TermKind, Triple3, language_tag_refusal,
+    Signature, StreamableInfo, Suppression, Term, TermKind, language_tag_refusal,
 };
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
-    RowDecode, RowError, check_quad_positions, decode_annotation_row, decode_reifier_row,
+    RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
+    decode_reifier_row, numeric_row,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
@@ -59,6 +70,19 @@ pub(crate) fn text_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
     v.and_then(Value::as_text).unwrap_or(default)
 }
 
+/// Borrow raw blob bytes and move decoded transform output without copying.
+fn payload_bytes(value: Payload<'_>) -> Result<Option<Cow<'_, [u8]>>, PayloadError> {
+    match value {
+        Payload::Value(value) => value
+            .map(ValueRef::bytes)
+            .transpose()
+            .map(Option::flatten)
+            .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause))),
+        Payload::Blob(bytes) => Ok(Some(bytes)),
+        Payload::Encoded(_) => unreachable!("blob decoding returns bytes, never an RDF item"),
+    }
+}
+
 fn diag_code_for(reason: &str) -> &'static str {
     match reason {
         "missing-key" => "MissingKey",
@@ -68,7 +92,8 @@ fn diag_code_for(reason: &str) -> &'static str {
 
 /// Resolve public blob metadata's digest using the reader's identity convention.
 ///
-/// Accepts text with or without the `blake3:` prefix, or a 32-byte digest value.
+/// Accepts 64 lowercase hexadecimal digits with or without the `blake3:` prefix,
+/// or a 32-byte digest value.
 /// The original metadata is borrowed and unchanged. This only resolves the
 /// declaration; callers authenticating payloads must compare the result with the
 /// decoded content digest and reject ambiguous metadata keys separately.
@@ -78,87 +103,13 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
         return None;
     };
     match map_get(entries, "digest") {
-        Some(Value::Text(text)) if text.starts_with("blake3:") => Some(text.clone()),
-        Some(Value::Text(text)) => Some(["blake3:", text].concat()),
+        Some(Value::Text(text)) => {
+            let hex = text.strip_prefix("blake3:").unwrap_or(text);
+            purrdf_hash::hex::decode_32_canonical(hex).map(|digest| digest_label(&digest))
+        }
         Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
-}
-
-/// The `(s, p, o)` a triple TERM would resolve to once `pending` is recorded.
-///
-/// This MUST mirror [`Graph::triple_of`] spelling for spelling. `triple_of` is
-/// the one place a folded quoted triple's components are resolved, and every
-/// walker of those components — the segment union, the canonical writer, every
-/// projection to text — recurses through it. A spelling this function fails to
-/// follow is a loop the fold admits and the first such walker then dies on.
-fn pending_binding(graph: &Graph, term_id: usize, pending: (usize, Triple3)) -> Option<Triple3> {
-    let term = graph.terms.get(term_id)?;
-    if term.kind != TermKind::Triple {
-        return None;
-    }
-    // A self-describing triple term (`tt`) can only name already-introduced
-    // components, so it is acyclic by construction and takes precedence.
-    if let Some(triple) = term.triple {
-        return Some(triple);
-    }
-    // Otherwise the components come from the statement layer, through the
-    // reifier id the term names — or, when it names none, through its OWN id
-    // (§7.1: a self-bound triple term may leave `rf` implicit). The row being
-    // read is not recorded yet, so substitute it for the id it binds.
-    let rid = term.reifier.unwrap_or(term_id);
-    if rid == pending.0 {
-        return Some(pending.1);
-    }
-    graph.reifier(rid)
-}
-
-fn term_depends_on_anchor(
-    graph: &Graph,
-    term_id: usize,
-    anchor: usize,
-    pending: (usize, Triple3),
-    seen: &mut FastSet<usize>,
-) -> bool {
-    if term_id == anchor {
-        return true;
-    }
-    if !seen.insert(term_id) {
-        return false;
-    }
-    let Some(triple) = pending_binding(graph, term_id, pending) else {
-        return false;
-    };
-    <[usize; 3]>::from(triple)
-        .into_iter()
-        .any(|component| term_depends_on_anchor(graph, component, anchor, pending, seen))
-}
-
-/// Would recording `(rid, triple)` let some quoted-triple term contain itself?
-///
-/// The anchors are the terms whose components this row would supply: those
-/// naming `rid` through `rf`, and — because a self-bound triple term may leave
-/// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
-/// is recorded rather than refused.
-fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
-    let mut seen: FastSet<usize> = FastSet::default();
-    graph
-        .terms
-        .iter()
-        .enumerate()
-        .filter(|(tid, term)| {
-            term.kind == TermKind::Triple
-                && (term.reifier == Some(rid)
-                    || (*tid == rid && term.reifier.is_none() && term.triple.is_none()))
-        })
-        .any(|(anchor, _)| {
-            <[usize; 3]>::from(triple).into_iter().any(|component| {
-                // Each probe starts from an empty set; clearing the hoisted
-                // set reuses its table instead of allocating one per component.
-                seen.clear();
-                term_depends_on_anchor(graph, component, anchor, (rid, triple), &mut seen)
-            })
-        })
 }
 
 /// Diagnostic code for a payload refused by a caller-supplied byte ceiling.
@@ -187,13 +138,13 @@ pub const FRAME_BUDGET_DIAGNOSTIC: &str = "FrameBudget";
 /// identity, and so decide how a selector resolves.
 fn refused_identity(
     chain: &[Codec],
-    d: Option<&Value>,
+    d: Option<cbor::ByteChunks<'_>>,
     pub_meta: Option<&Value>,
 ) -> (Option<String>, bool) {
     if chain.is_empty()
-        && let Some(raw) = d.and_then(Value::as_bytes)
+        && let Some(raw) = d
     {
-        return (Some(digest_str(raw)), true);
+        return (Some(crate::wire::digest_chunks(raw)), true);
     }
     (pub_meta.and_then(public_blob_digest), false)
 }
@@ -285,10 +236,13 @@ impl FrameContext<'_> {
         let Some(bytes) = source.get(start..end) else {
             return false;
         };
-        let Ok(Ok(map)) = cbor::decode(bytes, cbor::Limits::DEFAULT).map(Value::into_map) else {
+        let Ok((item, used)) = cbor::borrowed_prefix(bytes, cbor::Limits::DEFAULT) else {
             return false;
         };
-        content_id(&map) == self.content_id
+        if used != bytes.len() {
+            return false;
+        }
+        crate::wire::content_id_encoded(item).is_ok_and(|id| id == self.content_id)
     }
 }
 
@@ -299,22 +253,24 @@ impl FrameContext<'_> {
 /// occurrence may replace a digest's public metadata; absent metadata preserves
 /// earlier metadata under the ordinary cross-segment union contract.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct BlobPayload<'a> {
     /// Zero-based segment containing this occurrence.
     pub segment_index: u64,
     /// Declared content digest, or the computed digest when not declared.
     pub digest: &'a str,
+    /// The reader verified this identity from decoded bytes before this event.
+    pub digest_computed: bool,
     /// Public metadata available at this occurrence, independent of RDF rows.
     pub metadata: Option<&'a Value>,
     /// True only when this occurrence explicitly declares public metadata.
     /// False distinguishes inherited segment metadata from a new declaration.
     pub metadata_declared: bool,
     /// Decoded bytes for an empty codec chain, otherwise transformed wire bytes.
-    /// `None` exposes a metadata-only occurrence without inventing a payload.
-    pub bytes: Option<&'a [u8]>,
+    /// `BlobContent::Absent` exposes an occurrence without readable bytes.
+    pub bytes: BlobContent<'a>,
     /// Whether the occurrence contains a payload field at all. A present field
-    /// with `bytes == None` is malformed, distinct from a metadata-only update.
+    /// with `BlobContent::Absent` is malformed, distinct from a metadata-only update.
     pub payload_present: bool,
     /// Original blob byte-string length before any eager decoding. For a snapshot
     /// entry this is the embedded blob length, excluding its enclosing RDF frame.
@@ -324,7 +280,78 @@ pub struct BlobPayload<'a> {
     pub codecs: &'a [Codec],
 }
 
-/// One inline blob occurrence a sink's byte ceiling refused before decoding.
+/// Inline bytes backed by admitted source chunks or seekable staging storage.
+pub enum BlobContent<'a> {
+    /// A metadata-only occurrence, with no payload bytes.
+    Absent,
+    /// Original definite or indefinite CBOR byte-string chunks.
+    Chunks(cbor::ByteChunks<'a>),
+    /// Decoded snapshot bytes replayed without retaining a complete buffer.
+    Reader {
+        /// Bounded reader positioned at the start of the payload.
+        source: &'a mut dyn Read,
+        /// Exact decoded payload length, verified by the reader.
+        len: usize,
+    },
+}
+
+purrdf_hash::debug_non_exhaustive!(['a] BlobContent<'a> {});
+
+impl<'a> BlobContent<'a> {
+    /// Whether no payload was supplied, distinct from an empty byte string.
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+    /// Exact bytes in this source, before applying any declared codecs.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Absent => 0,
+            Self::Chunks(bytes) => bytes.byte_len(),
+            Self::Reader { len, .. } => *len,
+        }
+    }
+    /// Whether the supplied payload has no bytes.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Borrow source-backed chunks when this occurrence uses contiguous input.
+    pub fn chunks(&self) -> Option<cbor::ByteChunks<'a>> {
+        match self {
+            Self::Chunks(bytes) => Some(*bytes),
+            _ => None,
+        }
+    }
+    /// Read either backing without concatenating it in memory.
+    pub fn reader(&mut self) -> Option<&mut (dyn Read + '_)> {
+        match self {
+            Self::Absent => None,
+            Self::Chunks(bytes) => Some(bytes),
+            Self::Reader { source, .. } => Some(&mut **source),
+        }
+    }
+}
+
+/// Typed reason a reader could not provide one inline blob occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlobRefusalKind {
+    /// A caller-supplied payload byte ceiling.
+    ByteBudget,
+    /// A recognized codec/key capability is unavailable.
+    UnavailableCapability,
+}
+
+/// Recover the original typed refusal from a native payload diagnostic.
+/// Storage failures and diagnostics without their original cause return `None`.
+#[must_use]
+pub fn blob_refusal_kind(diagnostic: &Diagnostic) -> Option<BlobRefusalKind> {
+    let crate::model::DiagnosticCause::Native(cause) = diagnostic.cause.as_ref()? else {
+        return None;
+    };
+    let error: &(dyn std::error::Error + 'static) = &***cause;
+    error.downcast_ref::<PayloadError>()?.blob_refusal_kind()
+}
+
+/// One inline blob occurrence refused by a byte ceiling or missing capability.
 ///
 /// Reported so a selecting consumer still learns a candidate was present. It
 /// carries everything decidable without spending the bytes: the container's
@@ -333,6 +360,8 @@ pub struct BlobPayload<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct BlobRefusal<'a> {
+    /// Original typed admission reason.
+    pub kind: BlobRefusalKind,
     /// Zero-based segment containing this occurrence.
     pub segment_index: u64,
     /// Declared content digest, when the container published one.
@@ -362,10 +391,17 @@ pub struct BlobRefusal<'a> {
 /// project rows into a table can usually consume the segment-local ids directly
 /// with the segment index as the scope.
 pub trait StreamingSink {
+    /// Supply provisional replay storage for bounded transformed-frame decoding.
+    /// A supplied failure is fatal; it never selects resident fallback storage.
+    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn cbor::ReplayStorage>>> {
+        None
+    }
     /// Per-frame provenance, fired once per frame before its rows are processed.
     fn frame(&mut self, _ctx: FrameContext<'_>) {}
-    /// Accepted term row.
-    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {}
+    /// Accepted term row, shared with the reader's segment validation table.
+    /// The reader releases its owner after segment validation; a sink may keep
+    /// this handle without copying the term's strings.
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {}
     /// Accepted quad row.
     fn quad(&mut self, _segment_index: u64, _quad: Quad) {}
     /// Accepted reifier row.
@@ -511,6 +547,8 @@ fn absorb_segment_result(result: &mut StreamingReadResult, segment: &Graph) {
 /// Mutable fold state; one per segment (and shared by the snapshot handler).
 struct Folder<'g, 's, 'k> {
     g: &'g mut Graph,
+    // Present only for streaming folds; materialized folds write Graph::terms.
+    shared_terms: Option<&'g mut Vec<Arc<Term>>>,
     sink: Option<&'s mut dyn StreamingSink>,
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: u64,
@@ -533,9 +571,19 @@ struct Folder<'g, 's, 'k> {
     // legacy `rf`-only quoted-triple term, which is checked once the segment is
     // fully folded (see `report_ambiguous_reifiers`).
     rebound_reifiers: Vec<(usize, u64)>,
+    // Anchors and first bindings by reifier id, plus distinct rows only when
+    // materializing `g.reifiers`, so a `reifies` row never scans either table.
+    reifier_index: ReifierIndex,
 }
 
 impl Folder<'_, '_, '_> {
+    fn terms(&self) -> TermsRef<'_> {
+        match self.shared_terms.as_deref() {
+            Some(terms) => TermsRef::Shared(terms),
+            None => TermsRef::Owned(&self.g.terms),
+        }
+    }
+
     /// Report the ONE shape a multi-bound reifier id can still break: a
     /// quoted-triple term that carries no `tt` of its own and resolves its
     /// components through that id, so the file asks for a single term with two
@@ -549,10 +597,10 @@ impl Folder<'_, '_, '_> {
         let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
             .into_iter()
             .filter(|&(rid, _)| {
-                self.g.terms.iter().any(|term| {
-                    term.kind == TermKind::Triple
-                        && term.triple.is_none()
-                        && term.reifier == Some(rid)
+                let terms = self.terms();
+                self.reifier_index.anchors(rid).iter().any(|&tid| {
+                    let term = &terms[tid];
+                    term.triple.is_none() && term.reifier == Some(rid)
                 })
             })
             .collect();
@@ -592,6 +640,7 @@ impl Folder<'_, '_, '_> {
     /// Report a payload the sink's own ceiling refused, before any decode.
     fn emit_blob_refusal(
         &mut self,
+        kind: BlobRefusalKind,
         digest: Option<&str>,
         digest_computed: bool,
         declared_metadata: Option<&Value>,
@@ -603,6 +652,7 @@ impl Folder<'_, '_, '_> {
             return;
         };
         sink.blob_refused(BlobRefusal {
+            kind,
             segment_index,
             digest,
             digest_computed,
@@ -615,10 +665,10 @@ impl Folder<'_, '_, '_> {
     fn emit_blob(
         &mut self,
         digest: &str,
-        bytes: Option<&[u8]>,
+        digest_computed: bool,
+        bytes: Option<cbor::ByteChunks<'_>>,
         codecs: &[Codec],
         declared_metadata: Option<&Value>,
-        payload_present: bool,
         encoded_len: usize,
     ) {
         // Only a sink can observe the meta, so look it up only when one is
@@ -632,10 +682,11 @@ impl Folder<'_, '_, '_> {
         sink.blob_payload(BlobPayload {
             segment_index: self.segment_index,
             digest,
+            digest_computed,
             metadata: declared_metadata.or(meta),
             metadata_declared: declared_metadata.is_some(),
-            bytes,
-            payload_present,
+            payload_present: bytes.is_some(),
+            bytes: bytes.map_or(BlobContent::Absent, BlobContent::Chunks),
             encoded_len,
             codecs,
         });
@@ -673,10 +724,20 @@ impl Folder<'_, '_, '_> {
     }
 
     /// Resolve a frame's logical payload (§6.1); error on missing capability.
-    fn payload(&self, frame: &[(Value, Value)], blob: bool) -> Result<Value, PayloadError> {
-        let d = map_get(frame, "d");
+    fn payload<'frame>(
+        &self,
+        frame: &'frame [(Value, Value)],
+        blob: bool,
+        data: Option<ValueRef<'frame>>,
+    ) -> Result<Payload<'frame>, PayloadError> {
+        let d = data;
+        let bytes = d
+            .map(ValueRef::bytes)
+            .transpose()
+            .map(Option::flatten)
+            .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause)))?;
         if blob
-            && let Some(Value::Bytes(bytes)) = d
+            && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = self
                 .sink
                 .as_deref()
@@ -691,7 +752,7 @@ impl Folder<'_, '_, '_> {
         if let Some(Value::Array(ids)) = map_get(frame, "x")
             && !ids.is_empty()
         {
-            let Some(Value::Bytes(db)) = d else {
+            let Some(db) = bytes.as_deref() else {
                 return Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes));
             };
             let chain = self.resolve_codecs(ids)?;
@@ -716,13 +777,14 @@ impl Folder<'_, '_, '_> {
                 decode_chain(&chain, db)?
             };
             if blob {
-                return Ok(Value::Bytes(decoded));
+                return Ok(Payload::Blob(Cow::Owned(decoded)));
             }
-            return cbor::decode(&decoded, cbor::Limits::DEFAULT)
+            return EncodedItem::from_bytes(decoded, cbor::Limits::DEFAULT)
+                .map(Payload::Encoded)
                 .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
         }
         if blob
-            && let Some(Value::Bytes(bytes)) = d
+            && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = self
                 .sink
                 .as_deref()
@@ -734,370 +796,547 @@ impl Folder<'_, '_, '_> {
                 limit,
             }));
         }
-        Ok(d.cloned().unwrap_or(Value::Null))
+        Ok(Payload::Value(d))
     }
 
     /// Fold one already-verified frame into the graph.
     ///
     /// Total: a missing capability degrades to an opaque node, and a corrupt
     /// payload degrades to a `damaged` opaque node — the reader never aborts.
-    fn fold_frame(&mut self, frame: &[(Value, Value)], index: u64) {
+    fn fold_frame(&mut self, frame: &[(Value, Value)], index: u64, data: Option<ValueRef<'_>>) {
         // Borrowed from `frame` (a parameter, not `self`), so the `&mut self`
         // handler calls below are unaffected and no per-frame `String` is made.
         let ftype = text_or(map_get(frame, "t"), "");
         if ftype == "blob" {
-            self.h_blob_frame(frame, index);
+            self.h_blob_frame(frame, index, data);
             return;
         }
-        let payload = match self.payload(frame, false) {
+        if ftype == "snapshot"
+            && self.content_key.is_none()
+            && let Some(Value::Array(ids)) = map_get(frame, "x")
+            && !ids.is_empty()
+            && let Some(scratch) = self
+                .sink
+                .as_deref_mut()
+                .and_then(StreamingSink::frame_scratch)
+        {
+            if let Err(error) = self.spool_snapshot(frame, index, data, ids, scratch) {
+                self.failed_payload(frame, ftype, index, error);
+            }
+            return;
+        }
+        let payload = match self.payload(frame, false, data) {
             Err(error) => {
-                self.opaque(frame, ftype, error.opaque_reason());
-                let detail = error.diagnostic_detail();
-                self.diag_native(
-                    error.diagnostic_code(FRAME_BUDGET_DIAGNOSTIC),
-                    error,
-                    detail,
-                    index,
-                );
+                self.failed_payload(frame, ftype, index, error);
                 return;
             }
             Ok(p) => p,
         };
-        match ftype {
-            "terms" => self.h_terms(&payload, index),
-            "quads" => self.h_quads(&payload, index),
-            "reifies" => self.h_reifies(&payload, index),
-            "annot" => self.h_annot(&payload, index),
-            "meta" => self.h_meta(&payload),
-            "suppress" => self.h_suppress(&payload),
-            "snapshot" => self.h_snapshot(&payload, index),
-            "index" => self.h_index(&payload, index),
-            "opaque" => self.h_opaque(&payload),
-            _ => {
-                self.opaque(frame, ftype, "unknown-frame-type");
-                self.diag(
-                    FoldError::UnknownFrameType {
-                        frame_type: ftype.to_string(),
-                    },
-                    index,
-                );
+        let folded = (|| -> Result<(), cbor::DecodeError> {
+            match ftype {
+                "terms" => self.h_terms(payload.view(), index, TermIdBase(0))?,
+                "quads" => self.h_quads(payload.view(), index, TermIdBase(0))?,
+                "reifies" => self.h_reifies(payload.view(), index, TermIdBase(0))?,
+                "annot" => self.h_annot(payload.view(), index, TermIdBase(0))?,
+                "meta" => self.h_meta(payload.view().to_value()?.as_ref()),
+                "suppress" => self.h_suppress(payload.view().to_value()?.as_ref()),
+                "snapshot" => self.h_snapshot(payload.view(), index)?,
+                "index" => self.h_index(payload.view().to_value()?.as_ref(), index),
+                "opaque" => self.h_opaque(payload.view().to_value()?.as_ref()),
+                _ => {
+                    self.opaque(frame, ftype, "unknown-frame-type");
+                    self.diag(
+                        FoldError::UnknownFrameType {
+                            frame_type: ftype.to_string(),
+                        },
+                        index,
+                    );
+                }
             }
+            Ok(())
+        })();
+        if let Err(cause) = folded {
+            self.damaged_payload(frame, ftype, index, cause);
         }
+    }
+
+    fn damaged_payload(
+        &mut self,
+        frame: &[(Value, Value)],
+        frame_type: &str,
+        index: u64,
+        cause: cbor::DecodeError,
+    ) {
+        self.failed_payload(
+            frame,
+            frame_type,
+            index,
+            PayloadError::Damaged(PayloadCause::Cbor(cause)),
+        );
+    }
+
+    fn failed_payload(
+        &mut self,
+        frame: &[(Value, Value)],
+        frame_type: &str,
+        index: u64,
+        error: PayloadError,
+    ) {
+        self.opaque(frame, frame_type, error.opaque_reason());
+        let detail = error.diagnostic_detail();
+        self.diag_native(
+            error.diagnostic_code(FRAME_BUDGET_DIAGNOSTIC),
+            error,
+            detail,
+            index,
+        );
     }
 
     // -- per-type handlers ---------------------------------------------------
 
-    fn h_terms(&mut self, payload: &Value, index: u64) {
-        let Value::Array(rows) = payload else { return };
+    fn damaged_row(&mut self, error: RowError, index: u64) {
+        let message = error.to_string();
+        self.diag_native("DamagedFrame", error, message, index);
+    }
+
+    fn term_reference(
+        &mut self,
+        value: Option<&Value>,
+        base: TermIdBase,
+        index: u64,
+    ) -> Option<i128> {
+        let value = value?;
+        match base.integer(value) {
+            Ok(value) => value,
+            Err(error) => {
+                // A bad reference must not renumber later positional terms.
+                self.damaged_row(error, index);
+                None
+            }
+        }
+    }
+
+    fn h_terms(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
         for raw in rows {
-            let Value::Map(entries) = raw else { continue };
-            let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
-            let value = map_get(entries, "v")
-                .and_then(Value::as_text)
-                .map(str::to_string);
-            // This row's id, read before any decode that can raise a diagnostic:
-            // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
-            // so the id a refusal quotes is the id this row goes on to take.
-            let tid = self.g.terms.len() as i128;
-            let term_id = self.g.terms.len();
-            // THE language-tag decode point. `"l"` is the only field of the wire
-            // format that becomes a `LANGTAG` token downstream, and this is the
-            // only place it is read: `h_snapshot` re-enters through this very
-            // function, `reader_union` and `compact` copy already-decoded
-            // `Term`s, and the event bridge (`event_stream::stream_events`)
-            // drives `read_to_sink_with_options`, i.e. this loop. So a tag that
-            // does not pass here reaches neither the fold view's N-Quads token
-            // (`purrdf_rdf::gts_view`'s `render_literal`) nor any `GtsEventSink`.
-            //
-            // Ask the grammar, on the profile every RDF codec and the IR kernel
-            // already name (`model::LANGUAGE_TAG_PROFILE`). A refusal is NOT a
-            // quiet coercion: it is a `DamagedFrame` diagnostic — the registry's
-            // code for a malformed payload, whose stated reader behaviour is
-            // "isolate the damaged item ..., surface a diagnostic, and fold
-            // survivors" (GTS-CONFORMANCE.md §6) — that quotes the term id, the
-            // production that rejected the tag, and the tag verbatim, so nothing
-            // about the refusal has to be guessed. The damaged item is the tag;
-            // the survivor is the literal's lexical form, which folds on under
-            // §7.1's `xsd:string` default. This is the same shape the sibling
-            // `"dir"` field already has directly below, where a value outside
-            // `"ltr" / "rtl"` is likewise not carried through.
-            //
-            // The Baseline Reader cannot answer a malformed tag any other way:
-            // `read` returns a `Graph`, not a `Result` (permissive-read "never
-            // panic ..., return graph state plus diagnostics", §7), and dropping
-            // the whole row is impossible because term ids are positional —
-            // `tid` is `self.g.terms.len()`, so skipping a row would renumber
-            // every later term in the segment.
-            // `lang_refused` distinguishes "there was no tag" from "there was a
-            // tag and the grammar refused it". The base-direction arm below
-            // needs that distinction: the two cases must not fold to the same
-            // outcome, because only one of them is a defect in the input.
-            let (lang, lang_refused) = match map_get(entries, "l").and_then(Value::as_text) {
-                Some(tag) => match language_tag_refusal(tag) {
-                    Some(code) => {
-                        self.diag(
-                            FoldError::Language {
-                                term: tid,
-                                tag: tag.to_string(),
-                                refusal: code,
-                            },
-                            index,
-                        );
-                        (None, true)
-                    }
-                    None => (Some(tag.to_string()), false),
-                },
-                None => (None, false),
-            };
-            // Same reasoning as the tag arm above, and the same failure shape. A
-            // value outside the closed `ltr`/`rtl` space cannot be carried
-            // through, and dropping it without saying so is worse than it looks:
-            // the term keeps its lexical form and its language, so an
-            // `rdf:dirLangString` quietly becomes an `rdf:langString` and the
-            // graph asserts a literal the container does not contain — hence the
-            // diagnostic. The writer filters direction before emitting it, so a
-            // value here can only have come from a foreign container, which is
-            // precisely the case a diagnostic is for.
-            let direction = match map_get(entries, "dir").and_then(Value::as_text) {
-                Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
-                Some(value) => {
-                    self.diag(
-                        FoldError::Direction {
-                            term: tid,
-                            direction: value.to_string(),
-                        },
-                        index,
-                    );
-                    None
-                }
-                None => None,
-            };
-            // A refused tag takes the base direction down with it. `direction`
-            // is only ever the second half of an `rdf:dirLangString`, so once
-            // the language is gone it describes nothing: carrying it on would
-            // build a term with a direction and no language, which is outside
-            // RDF 1.2's value space. Leaving it standing is not a harmless
-            // remnant either — it makes the importer downstream refuse with
-            // `gts-direction-without-language`, naming a defect the container
-            // never had and pointing away from the tag that actually failed.
-            //
-            // This is a consequence of a refusal, not a second input error, so
-            // it gets its own diagnostic rather than riding along silently on
-            // the tag's: dropping carried data without saying so is the
-            // documented mirror of over-refusal, and it costs a reader exactly
-            // the field it would need to understand the first diagnostic.
-            //
-            // Only a *refused* tag triggers this. A `"dir"` with no `"l"` at
-            // all is a genuine defect in the container, and the importer's
-            // `gts-direction-without-language` is then the correct name for it
-            // — so that case is left alone to be reported accurately.
-            let direction = match (lang_refused, direction) {
-                (true, Some(direction)) => {
-                    self.diag(
-                        FoldError::RefusedLanguageDirection {
-                            term: tid,
-                            direction,
-                        },
-                        index,
-                    );
-                    None
-                }
-                (_, direction) => direction,
-            };
-            let dt_raw = map_get(entries, "dt").and_then(as_i128);
-            let rf_raw = map_get(entries, "rf").and_then(as_i128);
-            // Sanitise refs: dt MUST name an already-introduced term, and rf
-            // normally does too (§7.5). A quoted-triple term may self-bind
-            // its reifier (`rf == term_id`) so the term can be used directly
-            // as an RDF 1.2 triple term while the following `reifies` frame
-            // supplies the SPO binding.
-            let sanitize_prior = |r: Option<i128>| match r {
-                Some(d) if (0..tid).contains(&d) => Some(d as usize),
-                _ => None,
-            };
-            let dt = sanitize_prior(dt_raw);
-            let rf = match rf_raw {
-                Some(d) if (0..tid).contains(&d) => Some(d as usize),
-                Some(d) if kind == TermKind::Triple && d == tid => Some(d as usize),
-                _ => None,
-            };
-            let dt_out_of_range = matches!(dt_raw, Some(d) if d >= tid);
-            let rf_out_of_range =
-                matches!(rf_raw, Some(d) if d >= tid && !(kind == TermKind::Triple && d == tid));
-            // `tt` — the quoted triple's OWN components (§7.1). Every id must
-            // name an already-introduced term, exactly like `dt`; a triple term
-            // therefore cannot contain itself, which is what makes `tt` the
-            // acyclic-by-construction spelling of a quoted triple.
-            let tt_raw = match map_get(entries, "tt") {
-                Some(Value::Array(ids)) if ids.len() == 3 => {
-                    Some([&ids[0], &ids[1], &ids[2]].map(as_i128))
-                }
-                _ => None,
-            };
-            let tt = match tt_raw {
-                Some([Some(s), Some(p), Some(o)])
-                    if kind == TermKind::Triple
-                        && [s, p, o].iter().all(|d| (0..tid).contains(d)) =>
-                {
-                    Some((s as usize, p as usize, o as usize))
-                }
-                _ => None,
-            };
-            let tt_out_of_range = tt.is_none()
-                && matches!(tt_raw, Some(ids) if ids.iter().any(|d| matches!(d, Some(d) if *d >= tid)));
-            if dt_out_of_range || rf_out_of_range || tt_out_of_range {
-                self.diag(
-                    FoldError::ForwardReference {
-                        term: tid,
-                        datatype: dt_raw,
-                        reifier: rf_raw,
-                        triple: tt_raw,
-                    },
-                    index,
-                );
-            }
-            self.g.terms.push(Term {
-                kind,
-                value,
-                datatype: dt,
-                lang,
-                direction,
-                reifier: rf,
-                triple: tt,
-            });
-            if let Some(sink) = self.sink.as_deref_mut() {
-                sink.term(self.segment_index, term_id, &self.g.terms[term_id]);
-            }
+            let raw = raw?.to_value()?;
+            self.h_term_row(raw.as_ref(), index, base);
         }
+        Ok(())
     }
 
-    fn h_quads(&mut self, payload: &Value, index: u64) {
-        let Value::Array(rows) = payload else { return };
-        for row in rows {
-            let Value::Array(items) = row else { continue };
-            if items.len() < 3 {
-                continue;
-            }
-            let (s, p, o) = (as_idx(&items[0]), as_idx(&items[1]), as_idx(&items[2]));
-            let has_graph = items.len() >= 4;
-            let gslot = if has_graph { as_idx(&items[3]) } else { None };
-            if s.is_none() || p.is_none() || o.is_none() || (has_graph && gslot.is_none()) {
-                let error = RowError::QuadIds {
-                    values: items.iter().take(4).map(as_i128).collect(),
-                    width: items.len(),
-                };
-                self.diag_native(
-                    "DamagedFrame",
-                    error,
-                    "quad has non-integer term ids".to_string(),
-                    index,
-                );
-                continue;
-            }
-            let (Some(s), Some(p), Some(o)) = (s, p, o) else {
-                continue;
-            };
-            if let Err(detail) = check_quad_positions(self.g, s, p, o, gslot) {
-                let message = detail.to_string();
-                self.diag_native("PositionConstraint", *detail, message, index);
-                continue;
-            }
-            let quad = (s, p, o, gslot);
-            if self.streamable {
-                self.provenance.observe(self.g, s, p, o);
-            }
-            self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
-            if self.materialize {
-                self.g.quads.push(quad);
-            }
-            // Layout bookkeeping (§3.3): a stream:digest quad describes an
-            // upcoming manifestation — record the IOU for the blob check.
-            if self.g.terms[p].value.as_deref() == Some(STREAM_DIGEST)
-                && let Some(obj) = &self.g.terms[o].value
-            {
-                self.described.insert(obj.clone());
-            }
-        }
-    }
-
-    fn h_reifies(&mut self, payload: &Value, index: u64) {
-        let Value::Array(rows) = payload else {
-            self.diag(FoldError::ReifiesArray { snapshot: false }, index);
+    fn h_term_row(&mut self, raw: &Value, index: u64, base: TermIdBase) {
+        let Value::Map(entries) = raw else {
             return;
         };
-        for row in rows {
-            let (rid, triple, gslot) = match decode_reifier_row(row, self.g) {
-                RowDecode::Skip => continue,
-                RowDecode::Row(row) => row,
-                RowDecode::Damaged(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("DamagedFrame", *detail, message, index);
-                    continue;
+        let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
+        let value = map_get(entries, "v")
+            .and_then(Value::as_text)
+            .map(str::to_string);
+        // This row's id, read before any decode that can raise a diagnostic:
+        // diagnostics leave the term table unchanged,
+        // so the id a refusal quotes is the id this row goes on to take.
+        let tid = self.terms().len() as i128;
+        let term_id = self.terms().len();
+        // THE language-tag decode point. `"l"` is the only field of the wire
+        // format that becomes a `LANGTAG` token downstream, and this is the
+        // only place it is read: `h_snapshot` re-enters through this very
+        // function, `reader_union` and `compact` copy already-decoded
+        // `Term`s, and the event bridge (`event_stream::stream_events`)
+        // drives `read_to_sink_with_options`, i.e. this loop. So a tag that
+        // does not pass here reaches neither the fold view's N-Quads token
+        // (`purrdf_rdf::gts_view`'s `render_literal`) nor any `GtsEventSink`.
+        //
+        // Ask the grammar, on the profile every RDF codec and the IR kernel
+        // already name (`model::LANGUAGE_TAG_PROFILE`). A refusal is NOT a
+        // quiet coercion: it is a `DamagedFrame` diagnostic — the registry's
+        // code for a malformed payload, whose stated reader behaviour is
+        // "isolate the damaged item ..., surface a diagnostic, and fold
+        // survivors" (GTS-CONFORMANCE.md §6) — that quotes the term id, the
+        // production that rejected the tag, and the tag verbatim, so nothing
+        // about the refusal has to be guessed. The damaged item is the tag;
+        // the survivor is the literal's lexical form, which folds on under
+        // §7.1's `xsd:string` default. This is the same shape the sibling
+        // `"dir"` field already has directly below, where a value outside
+        // `"ltr" / "rtl"` is likewise not carried through.
+        //
+        // The Baseline Reader cannot answer a malformed tag any other way:
+        // `read` returns a `Graph`, not a `Result` (permissive-read "never
+        // panic ..., return graph state plus diagnostics", §7), and dropping
+        // the whole row is impossible because term ids are positional —
+        // `tid` is `self.terms().len()`, so skipping a row would renumber
+        // every later term in the segment.
+        // `lang_refused` distinguishes "there was no tag" from "there was a
+        // tag and the grammar refused it". The base-direction arm below
+        // needs that distinction: the two cases must not fold to the same
+        // outcome, because only one of them is a defect in the input.
+        let (lang, lang_refused) = match map_get(entries, "l").and_then(Value::as_text) {
+            Some(tag) => match language_tag_refusal(tag) {
+                Some(code) => {
+                    self.diag(
+                        FoldError::Language {
+                            term: tid,
+                            tag: tag.to_string(),
+                            refusal: code,
+                        },
+                        index,
+                    );
+                    (None, true)
                 }
-                RowDecode::Position(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("PositionConstraint", *detail, message, index);
-                    continue;
-                }
-            };
-            // `rdf:reifies` is NOT functional: one reifier id legitimately
-            // binds several distinct triple terms (`r rdf:reifies <<s p o1>>`
-            // and `r rdf:reifies <<s p o2>>` are both assertable, in the same
-            // graph or in different ones). Every binding is therefore recorded;
-            // the only thing a rebind can still break is the LEGACY indirect
-            // spelling of a quoted-triple term (one that names this reifier id
-            // through `rf` and carries no `tt` of its own), whose meaning would
-            // become double-valued. That shape is flagged after the fold, once
-            // every term and every binding of the segment has been seen.
-            if matches!(self.g.reifier(rid), Some(existing) if existing != triple) {
-                self.rebound_reifiers.push((rid, index));
-            }
-            if reifier_binding_is_recursive(self.g, rid, triple) {
+                None => (Some(tag.to_string()), false),
+            },
+            None => (None, false),
+        };
+        // Same reasoning as the tag arm above, and the same failure shape. A
+        // value outside the closed `ltr`/`rtl` space cannot be carried
+        // through, and dropping it without saying so is worse than it looks:
+        // the term keeps its lexical form and its language, so an
+        // `rdf:dirLangString` quietly becomes an `rdf:langString` and the
+        // graph asserts a literal the container does not contain — hence the
+        // diagnostic. The writer filters direction before emitting it, so a
+        // value here can only have come from a foreign container, which is
+        // precisely the case a diagnostic is for.
+        let direction = match map_get(entries, "dir").and_then(Value::as_text) {
+            Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
+            Some(value) => {
                 self.diag(
-                    FoldError::RecursiveReifier {
-                        reifier: rid,
-                        triple,
+                    FoldError::Direction {
+                        term: tid,
+                        direction: value.to_string(),
                     },
                     index,
                 );
-                continue;
+                None
             }
-            self.g.set_reifier(rid, triple, gslot);
-            self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
+            None => None,
+        };
+        // A refused tag takes the base direction down with it. `direction`
+        // is only ever the second half of an `rdf:dirLangString`, so once
+        // the language is gone it describes nothing: carrying it on would
+        // build a term with a direction and no language, which is outside
+        // RDF 1.2's value space. Leaving it standing is not a harmless
+        // remnant either — it makes the importer downstream refuse with
+        // `gts-direction-without-language`, naming a defect the container
+        // never had and pointing away from the tag that actually failed.
+        //
+        // This is a consequence of a refusal, not a second input error, so
+        // it gets its own diagnostic rather than riding along silently on
+        // the tag's: dropping carried data without saying so is the
+        // documented mirror of over-refusal, and it costs a reader exactly
+        // the field it would need to understand the first diagnostic.
+        //
+        // Only a *refused* tag triggers this. A `"dir"` with no `"l"` at
+        // all is a genuine defect in the container, and the importer's
+        // `gts-direction-without-language` is then the correct name for it
+        // — so that case is left alone to be reported accurately.
+        let direction = match (lang_refused, direction) {
+            (true, Some(direction)) => {
+                self.diag(
+                    FoldError::RefusedLanguageDirection {
+                        term: tid,
+                        direction,
+                    },
+                    index,
+                );
+                None
+            }
+            (_, direction) => direction,
+        };
+        let dt_raw = self.term_reference(map_get(entries, "dt"), base, index);
+        let rf_raw = self.term_reference(map_get(entries, "rf"), base, index);
+        // Sanitise refs: dt MUST name an already-introduced term, and rf
+        // normally does too (§7.5). A quoted-triple term may self-bind
+        // its reifier (`rf == term_id`) so the term can be used directly
+        // as an RDF 1.2 triple term while the following `reifies` frame
+        // supplies the SPO binding.
+        let sanitize_prior = |r: Option<i128>| match r {
+            Some(d) if (0..tid).contains(&d) => Some(d as usize),
+            _ => None,
+        };
+        let dt = sanitize_prior(dt_raw);
+        let rf = match rf_raw {
+            Some(d) if (0..tid).contains(&d) => Some(d as usize),
+            Some(d) if kind == TermKind::Triple && d == tid => Some(d as usize),
+            _ => None,
+        };
+        let dt_out_of_range = matches!(dt_raw, Some(d) if d >= tid);
+        let rf_out_of_range =
+            matches!(rf_raw, Some(d) if d >= tid && !(kind == TermKind::Triple && d == tid));
+        // `tt` — the quoted triple's OWN components (§7.1). Every id must
+        // name an already-introduced term, exactly like `dt`; a triple term
+        // therefore cannot contain itself, which is what makes `tt` the
+        // acyclic-by-construction spelling of a quoted triple.
+        let tt_raw = match map_get(entries, "tt") {
+            Some(Value::Array(ids)) if ids.len() == 3 => Some(
+                [&ids[0], &ids[1], &ids[2]]
+                    .map(|value| self.term_reference(Some(value), base, index)),
+            ),
+            _ => None,
+        };
+        let tt = match tt_raw {
+            Some([Some(s), Some(p), Some(o)])
+                if kind == TermKind::Triple && [s, p, o].iter().all(|d| (0..tid).contains(d)) =>
+            {
+                Some((s as usize, p as usize, o as usize))
+            }
+            _ => None,
+        };
+        let tt_out_of_range = tt.is_none()
+            && matches!(tt_raw, Some(ids) if ids.iter().any(|d| matches!(d, Some(d) if *d >= tid)));
+        if dt_out_of_range || rf_out_of_range || tt_out_of_range {
+            self.diag(
+                FoldError::ForwardReference {
+                    term: tid,
+                    datatype: dt_raw,
+                    reifier: rf_raw,
+                    triple: tt_raw,
+                },
+                index,
+            );
+        }
+        let term = Term {
+            kind,
+            value,
+            datatype: dt,
+            lang,
+            direction,
+            reifier: rf,
+            triple: tt,
+        };
+        if let Some(terms) = self.shared_terms.as_deref_mut() {
+            let term = Arc::new(term);
+            terms.push(Arc::clone(&term));
+            self.reifier_index.observe_term(term_id, &term);
+            if let Some(sink) = self.sink.as_deref_mut() {
+                sink.term(self.segment_index, term_id, term);
+            }
+        } else {
+            self.g.terms.push(term);
+            self.reifier_index
+                .observe_term(term_id, &self.g.terms[term_id]);
         }
     }
 
-    fn h_annot(&mut self, payload: &Value, index: u64) {
-        let Value::Array(rows) = payload else { return };
+    fn h_quads(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
         for row in rows {
-            let annotation = match decode_annotation_row(row, self.g) {
-                RowDecode::Skip => continue,
+            self.h_quad_row(row?, index, base)?;
+        }
+        Ok(())
+    }
+
+    fn h_quad_row(
+        &mut self,
+        row: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(items) = numeric_row::<4>(row)? else {
+            return Ok(());
+        };
+        if items.width < 3 {
+            return Ok(());
+        }
+        let raw = match base.row::<4>(items.values) {
+            Ok(raw) => raw,
+            Err(error) => {
+                self.damaged_row(error, index);
+                return Ok(());
+            }
+        };
+        let [s, p, o, gslot] = raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
+        let has_graph = items.width >= 4;
+        if s.is_none() || p.is_none() || o.is_none() || (has_graph && gslot.is_none()) {
+            let error = RowError::QuadIds {
+                values: raw[..items.width.min(4)].to_vec(),
+                width: items.width,
+            };
+            self.damaged_row(error, index);
+            return Ok(());
+        }
+        let (Some(s), Some(p), Some(o)) = (s, p, o) else {
+            return Ok(());
+        };
+        if let Err(detail) = check_quad_positions(self.terms(), s, p, o, gslot) {
+            let message = detail.to_string();
+            self.diag_native("PositionConstraint", *detail, message, index);
+            return Ok(());
+        }
+        let quad = (s, p, o, gslot);
+        if self.streamable {
+            let terms = match self.shared_terms.as_deref() {
+                Some(terms) => TermsRef::Shared(terms),
+                None => TermsRef::Owned(&self.g.terms),
+            };
+            self.provenance.observe_terms(terms, s, p, o);
+        }
+        self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
+        if self.materialize {
+            self.g.quads.push(quad);
+        }
+        // Layout bookkeeping (§3.3): a stream:digest quad describes an
+        // upcoming manifestation — record the IOU for the blob check.
+        if self.terms()[p].value.as_deref() == Some(STREAM_DIGEST)
+            && let Some(obj) = self.terms()[o].value.clone()
+        {
+            self.described.insert(obj);
+        }
+        Ok(())
+    }
+
+    fn h_reifies(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            self.diag(FoldError::ReifiesArray { snapshot: false }, index);
+            return Ok(());
+        };
+        for row in rows {
+            self.h_reifier_row(row?, index, base)?;
+        }
+        Ok(())
+    }
+
+    fn h_reifier_row(
+        &mut self,
+        row: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let (rid, triple, gslot) =
+            match decode_reifier_row(numeric_row::<5>(row)?, self.terms(), base) {
+                RowDecode::Skip => return Ok(()),
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("DamagedFrame", *detail, message, index);
-                    continue;
+                    self.damaged_row(*detail, index);
+                    return Ok(());
                 }
                 RowDecode::Position(detail) => {
                     let message = detail.to_string();
                     self.diag_native("PositionConstraint", *detail, message, index);
-                    continue;
+                    return Ok(());
                 }
             };
-            self.with_sink(|segment_index, sink| sink.annotation(segment_index, annotation));
-            if self.materialize {
-                self.g.annotations.push(annotation);
-            }
+        // `rdf:reifies` is NOT functional: one reifier id legitimately
+        // binds several distinct triple terms (`r rdf:reifies <<s p o1>>`
+        // and `r rdf:reifies <<s p o2>>` are both assertable, in the same
+        // graph or in different ones). Every binding is therefore recorded;
+        // the only thing a rebind can still break is the LEGACY indirect
+        // spelling of a quoted-triple term (one that names this reifier id
+        // through `rf` and carries no `tt` of its own), whose meaning would
+        // become double-valued. That shape is flagged after the fold, once
+        // every term and every binding of the segment has been seen.
+        if matches!(self.reifier_index.first_binding(rid), Some(existing) if existing != triple) {
+            self.rebound_reifiers.push((rid, index));
         }
+        if self
+            .reifier_index
+            .binding_is_recursive(self.terms(), rid, triple)
+        {
+            self.diag(
+                FoldError::RecursiveReifier {
+                    reifier: rid,
+                    triple,
+                },
+                index,
+            );
+            return Ok(());
+        }
+        self.reifier_index
+            .record(self.g, (rid, triple, gslot), self.materialize);
+        self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
+        Ok(())
     }
 
-    fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64) {
-        let d = map_get(frame, "d");
+    fn h_annot(
+        &mut self,
+        payload: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let Some(rows) = payload.array()? else {
+            return Ok(());
+        };
+        for row in rows {
+            self.h_annotation_row(row?, index, base)?;
+        }
+        Ok(())
+    }
+
+    fn h_annotation_row(
+        &mut self,
+        row: ValueRef<'_>,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), cbor::DecodeError> {
+        let annotation = match decode_annotation_row(numeric_row::<4>(row)?, self.terms(), base) {
+            RowDecode::Skip => return Ok(()),
+            RowDecode::Row(row) => row,
+            RowDecode::Damaged(detail) => {
+                self.damaged_row(*detail, index);
+                return Ok(());
+            }
+            RowDecode::Position(detail) => {
+                let message = detail.to_string();
+                self.diag_native("PositionConstraint", *detail, message, index);
+                return Ok(());
+            }
+        };
+        self.with_sink(|segment_index, sink| sink.annotation(segment_index, annotation));
+        if self.materialize {
+            self.g.annotations.push(annotation);
+        }
+        Ok(())
+    }
+
+    fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64, data: Option<ValueRef<'_>>) {
+        let d = data.and_then(ValueRef::byte_chunks);
         let declared_metadata = map_get(frame, "pub");
+        let declared_digest = declared_metadata.and_then(public_blob_digest);
+        let malformed = if data.is_some() && d.is_none() {
+            Some(PayloadCause::BlobNotBytes)
+        } else if matches!(map_get(frame, "x"), Some(Value::Array(ids)) if !ids.is_empty())
+            && d.is_none()
+        {
+            Some(PayloadCause::TransformedNotBytes)
+        } else if d.is_none() && declared_digest.is_none() {
+            Some(PayloadCause::BlobMissingIdentity)
+        } else {
+            None
+        };
+        if let Some(cause) = malformed {
+            let error = PayloadError::Damaged(cause);
+            let detail = error.diagnostic_detail();
+            self.opaque(frame, "blob", error.opaque_reason());
+            self.diag_native(
+                error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                error,
+                detail,
+                index,
+            );
+            return;
+        }
         let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
-        let encoded_len = d.and_then(Value::as_bytes).map_or(0, <[u8]>::len);
+        let encoded_len = d.map_or(0, cbor::ByteChunks::byte_len);
         let chain = match map_get(frame, "x") {
             Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
                 Ok(chain) => chain,
@@ -1117,9 +1356,20 @@ impl Folder<'_, '_, '_> {
         };
 
         if chain.iter().any(|codec| codec.cls == "encrypt") {
-            match self.payload(frame, true).map(Value::into_bytes) {
-                Ok(Ok(bytes)) => {
-                    let digest = digest_str(&bytes);
+            let decoded = if self.content_key.is_some() {
+                self.payload(frame, true, data)
+                    .and_then(payload_bytes)
+                    .map(|bytes| {
+                        bytes.map(|bytes| (digest_str(&bytes), BlobBytes::Resident(bytes)))
+                    })
+            } else if let Some(bytes) = d {
+                self.blob_digest(&chain, bytes)
+                    .map(|digest| Some((digest, BlobBytes::Chunks(bytes))))
+            } else {
+                Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes))
+            };
+            match decoded {
+                Ok(Some((digest, bytes))) => {
                     if let Some(meta) = pub_meta {
                         self.blob_meta_index
                             .set(&mut self.g.blob_meta, digest.clone(), meta);
@@ -1131,27 +1381,32 @@ impl Folder<'_, '_, '_> {
                     ));
                     self.emit_blob(
                         &digest,
-                        Some(&bytes),
-                        &[],
-                        declared_metadata,
                         true,
+                        Some(bytes.chunks()),
+                        if self.content_key.is_some() {
+                            &[]
+                        } else {
+                            &chain
+                        },
+                        declared_metadata,
                         encoded_len,
                     );
                     if self.materialize {
                         self.blob_index.set(
                             &mut self.g.blobs,
                             digest.clone(),
-                            BlobEntry::bytes(bytes),
+                            BlobEntry::bytes(bytes.into_owned()),
                         );
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
                     let detail = error.diagnostic_detail();
-                    if matches!(&error, PayloadError::Budget(_)) {
+                    if let Some(kind) = error.blob_refusal_kind() {
                         let (refused_digest, digest_computed) =
                             refused_identity(&chain, d, pub_meta.as_ref());
                         self.emit_blob_refusal(
+                            kind,
                             refused_digest.as_deref(),
                             digest_computed,
                             declared_metadata,
@@ -1171,33 +1426,26 @@ impl Folder<'_, '_, '_> {
             return;
         }
 
-        if let Some(digest) = pub_meta.as_ref().and_then(public_blob_digest) {
+        if let Some(digest) = declared_digest {
             if let Some(meta) = pub_meta {
                 self.blob_meta_index
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
             }
-            self.emit_blob(
-                &digest,
-                d.and_then(Value::as_bytes),
-                &chain,
-                declared_metadata,
-                d.is_some(),
-                encoded_len,
-            );
-            if let Some(Value::Bytes(raw)) = d
+            self.emit_blob(&digest, false, d, &chain, declared_metadata, encoded_len);
+            if let Some(raw) = d
                 && self.materialize
             {
                 if chain.is_empty() {
                     self.blob_index.set(
                         &mut self.g.blobs,
                         digest.clone(),
-                        BlobEntry::bytes(raw.clone()),
+                        BlobEntry::bytes(raw.flatten().copied().collect()),
                     );
                 } else {
                     self.blob_index.set(
                         &mut self.g.blobs,
                         digest.clone(),
-                        BlobEntry::lazy(raw.clone(), chain),
+                        BlobEntry::lazy(raw.flatten().copied().collect(), chain),
                     );
                 }
             }
@@ -1206,12 +1454,19 @@ impl Folder<'_, '_, '_> {
             return;
         }
 
-        let Some(Value::Bytes(_)) = d else {
+        let Some(wire_bytes) = d else {
             return;
         };
-        match self.payload(frame, true).map(Value::into_bytes) {
-            Ok(Ok(bytes)) => {
-                let digest = digest_str(&bytes);
+        let decoded = if self.materialize {
+            self.payload(frame, true, data)
+                .and_then(payload_bytes)
+                .map(|bytes| bytes.map(|bytes| (digest_str(&bytes), BlobBytes::Resident(bytes))))
+        } else {
+            self.blob_digest(&chain, wire_bytes)
+                .map(|digest| Some((digest, BlobBytes::Chunks(wire_bytes))))
+        };
+        match decoded {
+            Ok(Some((digest, bytes))) => {
                 if let Some(meta) = pub_meta {
                     self.blob_meta_index
                         .set(&mut self.g.blob_meta, digest.clone(), meta);
@@ -1220,24 +1475,28 @@ impl Folder<'_, '_, '_> {
                     .push((index, digest.clone(), self.described.contains(&digest)));
                 self.emit_blob(
                     &digest,
-                    Some(&bytes),
-                    &[],
-                    declared_metadata,
                     true,
+                    Some(bytes.chunks()),
+                    if self.materialize { &[] } else { &chain },
+                    declared_metadata,
                     encoded_len,
                 );
                 if self.materialize {
-                    self.blob_index
-                        .set(&mut self.g.blobs, digest.clone(), BlobEntry::bytes(bytes));
+                    self.blob_index.set(
+                        &mut self.g.blobs,
+                        digest.clone(),
+                        BlobEntry::bytes(bytes.into_owned()),
+                    );
                 }
             }
             Ok(_) => {}
             Err(error) => {
                 let detail = error.diagnostic_detail();
-                if matches!(&error, PayloadError::Budget(_)) {
+                if let Some(kind) = error.blob_refusal_kind() {
                     let (refused_digest, digest_computed) =
                         refused_identity(&chain, d, pub_meta.as_ref());
                     self.emit_blob_refusal(
+                        kind,
                         refused_digest.as_deref(),
                         digest_computed,
                         declared_metadata,
@@ -1254,6 +1513,49 @@ impl Folder<'_, '_, '_> {
                 );
             }
         }
+    }
+
+    fn blob_digest(
+        &self,
+        codecs: &[Codec],
+        bytes: cbor::ByteChunks<'_>,
+    ) -> Result<String, PayloadError> {
+        if let Some(limit) = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::blob_encoded_limit)
+            && bytes.byte_len() > limit
+        {
+            return Err(PayloadError::Budget(PayloadCause::EncodedBlobLimit {
+                actual: bytes.byte_len(),
+                limit,
+            }));
+        }
+        let limit = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::blob_decode_limit)
+            .unwrap_or(usize::MAX);
+        if codecs.is_empty() && bytes.byte_len() > limit {
+            return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
+                actual: bytes.byte_len(),
+                limit,
+            }));
+        }
+        let mut reader = crate::codec::decode_chain_reader(codecs, bytes, limit)?;
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        let mut scratch = [0; 8192];
+        loop {
+            let count = match reader.read(&mut scratch) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
+            if count == 0 {
+                break;
+            }
+            hash.update(&scratch[..count]);
+        }
+        Ok(digest_label(hash.finalize().as_bytes()))
     }
 
     fn h_meta(&mut self, payload: &Value) {
@@ -1289,82 +1591,57 @@ impl Folder<'_, '_, '_> {
 
     /// Fold a self-contained snapshot (§10).
     ///
-    /// Shifts the snapshot's local term ids into the outer id space and
-    /// re-dispatches through the normal handlers, so a snapshot gets the SAME
-    /// semantic checks as the equivalent streamed frames.
-    fn h_snapshot(&mut self, payload: &Value, index: u64) {
-        let Value::Map(entries) = payload else { return };
-        let base = self.g.terms.len();
-        // Shift a valid local id into the outer space; pass non-ints through
-        // so the downstream handler's own checks reject them with diagnostics.
-        let sh = |v: &Value| -> Value {
-            match as_idx(v) {
-                Some(iv) => Value::from((iv + base) as u64),
-                None => v.clone(),
-            }
-        };
-        let sh_row = |row: &Value| -> Value {
-            match row {
-                Value::Array(items) => Value::Array(items.iter().map(sh).collect()),
-                other => other.clone(),
-            }
-        };
-
-        if let Some(Value::Array(snap_terms)) = map_get(entries, "terms") {
-            let shifted: Vec<Value> = snap_terms
-                .iter()
-                .map(|raw| match raw {
-                    Value::Map(term_entries) => Value::Map(
-                        term_entries
-                            .iter()
-                            .map(|(k, v)| match k.as_text() {
-                                Some("dt" | "rf") => (k.clone(), sh(v)),
-                                // `tt` is a 3-id row, so it shifts row-wise.
-                                Some("tt") => (k.clone(), sh_row(v)),
-                                _ => (k.clone(), v.clone()),
-                            })
-                            .collect(),
-                    ),
-                    other => other.clone(),
-                })
-                .collect();
-            self.h_terms(&Value::Array(shifted), index);
+    /// Decode local term ids against the captured outer base through the same
+    /// handlers and semantic checks as equivalent streamed frames. The source
+    /// payload remains borrowed; rebasing never builds another CBOR tree.
+    fn h_snapshot(&mut self, payload: ValueRef<'_>, index: u64) -> Result<(), cbor::DecodeError> {
+        if !payload.is_map() {
+            return Ok(());
         }
-        if let Some(Value::Array(quads)) = map_get(entries, "quads") {
-            self.h_quads(&Value::Array(quads.iter().map(sh_row).collect()), index);
+        let base = TermIdBase(self.terms().len());
+        if let Some(terms) = payload.get("terms")? {
+            self.h_terms(terms, index, base)?;
         }
-        match map_get(entries, "reifies") {
-            Some(Value::Map(_)) => {
+        if let Some(quads) = payload.get("quads")? {
+            self.h_quads(quads, index, base)?;
+        }
+        if let Some(reifies) = payload.get("reifies")? {
+            if reifies.is_map() {
                 self.diag(FoldError::ReifiesArray { snapshot: true }, index);
+            } else if reifies.array()?.is_some() {
+                self.h_reifies(reifies, index, base)?;
             }
-            Some(Value::Array(reifies)) => {
-                self.h_reifies(&Value::Array(reifies.iter().map(sh_row).collect()), index);
-            }
-            _ => {}
         }
-        if let Some(Value::Array(annot)) = map_get(entries, "annot") {
-            self.h_annot(&Value::Array(annot.iter().map(sh_row).collect()), index);
+        if let Some(annot) = payload.get("annot")? {
+            self.h_annot(annot, index, base)?;
         }
-        if let Some(Value::Map(blobs)) = map_get(entries, "blobs") {
+        if let Some(blobs) = payload.get("blobs")?
+            && let Some(blobs) = blobs.map()?
+        {
             let ceiling = self
                 .sink
                 .as_deref()
                 .and_then(StreamingSink::blob_decode_limit);
-            for (_, b) in blobs {
-                if let Value::Bytes(bytes) = b {
-                    let digest = digest_str(bytes);
-                    // An embedded entry obeys the same ceiling as a standalone
-                    // payload; without this a snapshot is a way to hand a
-                    // bounded consumer arbitrarily many unbounded blobs.
+            for entry in blobs {
+                let (_, value) = entry?;
+                if let Some(bytes) = value.byte_chunks() {
+                    let digest = crate::wire::digest_chunks(bytes);
                     if let Some(limit) = ceiling
-                        && bytes.len() > limit
+                        && bytes.byte_len() > limit
                     {
                         let error = PayloadError::Budget(PayloadCause::SnapshotBlobLimit {
-                            actual: bytes.len(),
+                            actual: bytes.byte_len(),
                             limit,
                         });
                         let detail = error.diagnostic_detail();
-                        self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
+                        self.emit_blob_refusal(
+                            BlobRefusalKind::ByteBudget,
+                            Some(&digest),
+                            true,
+                            None,
+                            bytes.byte_len(),
+                            &detail,
+                        );
                         self.diag_native(
                             error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                             error,
@@ -1377,19 +1654,26 @@ impl Folder<'_, '_, '_> {
                         self.blob_index.set(
                             &mut self.g.blobs,
                             digest.clone(),
-                            BlobEntry::bytes(bytes.clone()),
+                            BlobEntry::bytes(bytes.flatten().copied().collect()),
                         );
                     }
-                    self.emit_blob(&digest, Some(bytes), &[], None, true, bytes.len());
+                    self.emit_blob(&digest, true, Some(bytes), &[], None, bytes.byte_len());
                 }
             }
         }
-        if let Some(Value::Map(meta)) = map_get(entries, "meta") {
-            for (k, v) in meta {
-                let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
-                self.g.set_meta(key, v.clone());
+        if let Some(meta) = payload.get("meta")?
+            && let Some(meta) = meta.map()?
+        {
+            for entry in meta {
+                let (key, value) = entry?;
+                let key = match key.text()? {
+                    Some(text) => text.into_owned(),
+                    None => format!("{:?}", key.to_value()?.as_ref()),
+                };
+                self.g.set_meta(key, value.to_value()?.into_owned());
             }
         }
+        Ok(())
     }
 
     /// Record an intact `index` frame (§6.2) for the layout check (§3.3).
@@ -1740,7 +2024,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
         return g;
     }
     if bounds.len() > 1 && !options.allow_segments {
-        let mut g = read_segment_with_sink(&items[..bounds[1]], 0, 0, None, options.content_key);
+        let mut g = read_segment(&items[..bounds[1]], 0, options.content_key);
         g.diagnostics.push(
             Diagnostic {
                 cause: None,
@@ -1830,7 +2114,14 @@ pub fn read_to_sink_with_options(
     options: ReadOptions<'_>,
     sink: &mut dyn StreamingSink,
 ) -> StreamingReadResult {
-    read_to_sink_from_reader(std::io::Cursor::new(data), options, sink)
+    read_items(
+        &mut SliceItems {
+            remaining: data,
+            offset: 0,
+        },
+        options,
+        sink,
+    )
 }
 
 struct StreamingCountingReader<R> {
@@ -1861,9 +2152,12 @@ impl<R: Read> Read for StreamingCountingReader<R> {
 
 fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
-) -> Result<Option<(Value, u64, u64)>, TornAppendError> {
+) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
     let start = reader.pos;
-    match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
+    match cbor::read_encoded_from(&mut *reader, cbor::Limits::DEFAULT).and_then(|item| {
+        item.map(|item| encoded_frame::classify(encoded_frame::FrameItem::Owned(item)))
+            .transpose()
+    }) {
         Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
         Ok(None) => Ok(None),
         Err(cause) => Err(TornAppendError {
@@ -1873,8 +2167,58 @@ fn next_stream_item<R: Read>(
     }
 }
 
+trait ItemSource {
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError>;
+    fn address_exhausted(&self) -> Option<(u64, usize)> {
+        None
+    }
+}
+
+impl<R: Read> ItemSource for StreamingCountingReader<R> {
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
+        next_stream_item(self)
+    }
+    fn address_exhausted(&self) -> Option<(u64, usize)> {
+        self.address_exhausted
+    }
+}
+
+struct SliceItems<'a> {
+    remaining: &'a [u8],
+    offset: u64,
+}
+
+impl ItemSource for SliceItems<'_> {
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
+        if self.remaining.is_empty() {
+            return Ok(None);
+        }
+        let start = self.offset;
+        let (item, used) =
+            cbor::borrowed_prefix(self.remaining, cbor::Limits::DEFAULT).map_err(|cause| {
+                TornAppendError {
+                    offset: start,
+                    cause,
+                }
+            })?;
+        let item =
+            encoded_frame::classify(encoded_frame::FrameItem::Borrowed(item)).map_err(|cause| {
+                TornAppendError {
+                    offset: start,
+                    cause,
+                }
+            })?;
+        self.remaining = &self.remaining[used..];
+        self.offset += used as u64;
+        Ok(Some((item, start, self.offset)))
+    }
+}
+
 struct ActiveStreamingSegment {
     g: Graph,
+    // These owners outlive every validation callback in the segment, then drop
+    // before the resolver flushes it on the next segment's first RDF event.
+    shared_terms: Vec<Arc<Term>>,
     header: Vec<(Value, Value)>,
     expected_prev: Vec<u8>,
     frame_ids: Vec<Vec<u8>>,
@@ -1891,11 +2235,14 @@ struct ActiveStreamingSegment {
     // Carried across this segment's frames (each frame gets a fresh `Folder`)
     // so the ambiguity check runs once the whole segment has been seen.
     rebound_reifiers: Vec<(usize, u64)>,
+    // Carried across frames for the same reason: it indexes the whole
+    // segment's terms and reifier rows, not one frame's.
+    reifier_index: ReifierIndex,
 }
 
 impl ActiveStreamingSegment {
     fn new(
-        raw_header: &Value,
+        raw_header: Value,
         index_offset: u64,
         segment_index: u64,
         sink: &mut dyn StreamingSink,
@@ -1905,9 +2252,9 @@ impl ActiveStreamingSegment {
         let mut header = Vec::new();
         let mut expected_prev = Vec::new();
         let mut valid_header = false;
-        match unwrap_header(raw_header) {
+        match crate::wire::into_header(raw_header) {
             Ok(entries) => {
-                header.clone_from(entries);
+                header = entries;
                 valid_header = true;
                 let stored_hid: Option<Vec<u8>> = match map_get(&header, "id") {
                     Some(Value::Bytes(b)) => Some(b.clone()),
@@ -1974,6 +2321,7 @@ impl ActiveStreamingSegment {
         };
         Self {
             g,
+            shared_terms: Vec::new(),
             header,
             expected_prev,
             frame_ids: Vec::new(),
@@ -1988,21 +2336,24 @@ impl ActiveStreamingSegment {
             described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
+            reifier_index: ReifierIndex::default(),
         }
     }
 
     fn process_frame<'k>(
         &mut self,
-        raw: &Value,
+        raw: BorrowedItem<'_>,
         abs_index: u64,
         frame_start: u64,
         frame_end: u64,
         sink: &mut dyn StreamingSink,
         content_key: Option<&'k ContentKeyResolver<'k>>,
-    ) {
+    ) -> Result<(), cbor::DecodeError> {
         if !self.valid_header {
-            return;
+            return Ok(());
         }
+        let mut parsed = encoded_frame::Frame::new(raw)?;
+        let raw = &parsed.metadata;
         // Captured before any push below — the zero-based index of THIS
         // frame within the segment (mirrors `collect_frames` in
         // `replication.rs`).
@@ -2014,8 +2365,10 @@ impl ActiveStreamingSegment {
         let described = std::mem::take(&mut self.described);
         let blob_events = std::mem::take(&mut self.blob_events);
         let rebound_reifiers = std::mem::take(&mut self.rebound_reifiers);
+        let reifier_index = std::mem::take(&mut self.reifier_index);
         let mut folder = Folder {
             g: &mut self.g,
+            shared_terms: Some(&mut self.shared_terms),
             sink: Some(sink),
             content_key,
             segment_index: self.segment_index,
@@ -2030,6 +2383,7 @@ impl ActiveStreamingSegment {
             described,
             blob_events,
             rebound_reifiers,
+            reifier_index,
         };
         // `sink.frame()` is fired for THIS frame before any of its rows are
         // folded (the `StreamingSink::frame` contract), so index builders can
@@ -2043,7 +2397,10 @@ impl ActiveStreamingSegment {
                 Some(Value::Bytes(b)) => Some(b),
                 _ => None,
             };
-            let computed = content_id(frame);
+            let computed = parsed
+                .computed
+                .take()
+                .expect("an encoded map has its canonical content ID");
             let ftype = text_or(map_get(frame, "t"), "").to_string();
             if stored_id.map(|b| &b[..]) != Some(&computed[..]) {
                 let ctx_id = stored_id.cloned().unwrap_or_else(|| computed.clone());
@@ -2110,7 +2467,12 @@ impl ActiveStreamingSegment {
                         ),
                     });
                 }
-                folder.fold_frame(frame, abs_index);
+                let data = if parsed.borrowed_data {
+                    parsed.data
+                } else {
+                    map_get(frame, "d").map(ValueRef::Owned)
+                };
+                folder.fold_frame(frame, abs_index, data);
             }
         } else {
             folder.with_sink(|segment_index, sink| {
@@ -2133,6 +2495,7 @@ impl ActiveStreamingSegment {
         let described = std::mem::take(&mut folder.described);
         let blob_events = std::mem::take(&mut folder.blob_events);
         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
+        let reifier_index = std::mem::take(&mut folder.reifier_index);
         self.provenance = std::mem::take(&mut folder.provenance);
         drop(folder);
         self.catalog = catalog;
@@ -2142,6 +2505,8 @@ impl ActiveStreamingSegment {
         self.described = described;
         self.blob_events = blob_events;
         self.rebound_reifiers = rebound_reifiers;
+        self.reifier_index = reifier_index;
+        Ok(())
     }
 
     fn finish_into_result(
@@ -2156,6 +2521,7 @@ impl ActiveStreamingSegment {
             if !self.rebound_reifiers.is_empty() {
                 let mut folder = Folder {
                     g: &mut self.g,
+                    shared_terms: Some(&mut self.shared_terms),
                     sink: Some(sink),
                     content_key: None,
                     segment_index: self.segment_index,
@@ -2170,6 +2536,7 @@ impl ActiveStreamingSegment {
                     described: FastSet::default(),
                     blob_events: Vec::new(),
                     rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
+                    reifier_index: std::mem::take(&mut self.reifier_index),
                 };
                 folder.report_ambiguous_reifiers();
             }
@@ -2227,16 +2594,24 @@ pub fn read_to_sink_from_reader<R: Read>(
         pos: 0,
         address_exhausted: None,
     };
+    read_items(&mut reader, options, sink)
+}
+
+fn read_items(
+    reader: &mut impl ItemSource,
+    options: ReadOptions<'_>,
+    sink: &mut dyn StreamingSink,
+) -> StreamingReadResult {
     let mut result = StreamingReadResult::default();
     let mut torn_cause = None;
     let mut item_index = 0u64;
     let mut current: Option<ActiveStreamingSegment> = None;
     loop {
-        let (item, frame_start, frame_end) = match next_stream_item(&mut reader) {
+        let (item, frame_start, frame_end) = match reader.next() {
             Ok(Some(item)) => item,
             Ok(None) => break,
             Err(torn) => {
-                if let Some((position, read)) = reader.address_exhausted {
+                if let Some((position, read)) = reader.address_exhausted() {
                     push_result_diagnostic(
                         &mut result,
                         sink,
@@ -2255,7 +2630,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 break;
             }
         };
-        if is_header_item(&item) {
+        if let StreamItem::Header(item) = item {
             if let Some(segment) = current.take() {
                 if !options.allow_segments {
                     segment.finish_into_result(&mut result, sink);
@@ -2292,20 +2667,30 @@ pub fn read_to_sink_from_reader<R: Read>(
                 return result;
             }
             current = Some(ActiveStreamingSegment::new(
-                &item,
+                item,
                 item_index,
                 result.segment_heads.len() as u64,
                 sink,
             ));
         } else if let Some(segment) = current.as_mut() {
-            segment.process_frame(
-                &item,
+            let StreamItem::Frame(item) = item else {
+                unreachable!("headers are handled before frame dispatch");
+            };
+            if let Err(cause) = segment.process_frame(
+                item.view(),
                 item_index,
                 frame_start,
                 frame_end,
                 sink,
                 options.content_key,
-            );
+            ) {
+                result.torn = Some(frame_start);
+                torn_cause = Some(TornAppendError {
+                    offset: frame_start,
+                    cause,
+                });
+                break;
+            }
         } else {
             push_result_diagnostic(
                 &mut result,
@@ -2479,12 +2864,12 @@ fn fold_segments(
         use rayon::prelude::*;
         ranges
             .par_iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, None))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, None))
             .collect()
     } else {
         ranges
             .iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, content_key))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, content_key))
             .collect()
     }
 }
@@ -2509,14 +2894,13 @@ fn parallel_content_ids(items: &[(usize, Value)]) -> Vec<Option<Vec<u8>>> {
         .collect()
 }
 
-fn read_segment_with_sink(
+fn read_segment(
     items: &[(usize, Value)],
     index_offset: u64,
-    segment_index: u64,
-    mut sink: Option<&mut dyn StreamingSink>,
     content_key: Option<&ContentKeyResolver<'_>>,
 ) -> Graph {
     let mut g = Graph::default();
+    let mut sink = None;
     let (_, raw_header) = &items[0];
     let header = match unwrap_header(raw_header) {
         Ok(h) => h,
@@ -2586,13 +2970,14 @@ fn read_segment_with_sink(
     // cheap `prev`-equality check per frame.
     let mut computed_ids = parallel_content_ids(&items[1..]);
 
-    let (index_records, blob_events, restored_sink) = {
+    let (index_records, blob_events) = {
         let catalog = catalog_from(header);
         let mut folder = Folder {
             g: &mut g,
-            sink: sink.take(),
+            shared_terms: None,
+            sink: None,
             content_key,
-            segment_index,
+            segment_index: 0,
             materialize: true,
             streamable: map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
             provenance: crate::compact::ProvenanceSubjects::default(),
@@ -2603,6 +2988,7 @@ fn read_segment_with_sink(
             described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
+            reifier_index: ReifierIndex::default(),
         };
         for (index, (_, raw)) in items[1..].iter().enumerate() {
             let abs_index = (index as u64)
@@ -2671,16 +3057,11 @@ fn read_segment_with_sink(
                     ),
                 });
             }
-            folder.fold_frame(frame, abs_index);
+            folder.fold_frame(frame, abs_index, map_get(frame, "d").map(ValueRef::Owned));
         }
         folder.report_ambiguous_reifiers();
-        (folder.index_records, folder.blob_events, folder.sink)
+        (folder.index_records, folder.blob_events)
     };
-    sink = restored_sink;
-
-    if let Some(sink) = sink.as_deref_mut() {
-        sink.segment_head(segment_index, &expected_prev);
-    }
     g.segment_heads.push(expected_prev);
     let seg_meta = g.meta.clone();
     g.segment_meta.push(seg_meta);
@@ -2696,9 +3077,6 @@ fn read_segment_with_sink(
         index_offset,
         &mut sink,
     );
-    if let Some(sink) = sink {
-        sink.streamable_layout(segment_index, &info);
-    }
     g.segment_streamable.push(info);
     g
 }
@@ -2714,10 +3092,6 @@ mod transformed_payload_tests {
     #[test]
     fn streaming_offsets_cross_u32_and_refuse_terminal_overflow() {
         use super::{StreamingCountingReader, next_stream_item};
-        assert_eq!(
-            size_of::<Result<Option<(Value, u64, u64)>, super::TornAppendError>>(),
-            size_of::<Result<Option<(Value, u64, u64)>, u64>>()
-        );
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,

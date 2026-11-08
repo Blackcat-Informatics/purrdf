@@ -24,17 +24,39 @@ use crate::{NativeRdfFormat, RdfDataset, parse_dataset};
 /// layer is folded in: a `rdf:reifies` triple-term object becomes a reifier binding,
 /// and a reifier subject's other triples become annotations (matching the GTS
 /// producer's `add_rdf12` pass structure).
+///
+/// # Errors
+/// Returns the original native codec diagnostic, including its code, location,
+/// storage classification and retained native cause.
 pub fn dataset_from_bytes(
     bytes: &[u8],
     format: NativeRdfFormat,
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<Arc<RdfDataset>, crate::RdfDiagnostic> {
     let media_type = format.media_type();
-    parse_dataset(bytes, media_type, None).map_err(|e| format!("parse error: {e}"))
+    parse_dataset(bytes, media_type, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dataset_from_bytes_retains_original_diagnostic_after_input_drop() {
+        use purrdf_testkit::error_capture::Capture;
+        let (error, expected) = {
+            let bytes = b"<https://e/s> <https://e/p>".to_vec();
+            let error = dataset_from_bytes(&bytes, NativeRdfFormat::NTriples).unwrap_err();
+            let expected = parse_dataset(&bytes, "application/n-triples", None).unwrap_err();
+            (error, expected)
+        };
+        assert_eq!(error, expected);
+        assert_eq!(Capture::read(&error).code, Capture::read(&expected).code);
+        dataset_from_bytes(
+            b"<https://e/s> <https://e/p> <https://e/o> .",
+            NativeRdfFormat::NTriples,
+        )
+        .expect("the complete neighboring statement still parses");
+    }
 
     #[test]
     fn dataset_from_bytes_counts_quads() {

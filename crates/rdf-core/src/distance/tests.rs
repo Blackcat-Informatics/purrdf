@@ -16,6 +16,8 @@
 use super::binary64::Precision;
 use super::binary64_tests::soft;
 use super::*;
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::Capture;
 
 /// Every path this host can execute, as resolved handles.
 ///
@@ -201,6 +203,16 @@ fn bits(value: Option<f64>) -> Option<u64> {
     value.map(f64::to_bits)
 }
 
+/// Inspect the original observed result without rendering a refusal.
+pub(super) fn nonfinite_bits(cause: NonFinite) -> u64 {
+    let capture = Capture::read(&cause);
+    assert_eq!(capture.code, "distance-non-finite");
+    let ErrorValue::Float64Bits(bits) = capture.field("value") else {
+        panic!("the refused distance must retain its binary64 bits");
+    };
+    bits
+}
+
 // ---- the fixture -----------------------------------------------------------
 
 /// A seeded splitmix64 stream.
@@ -335,9 +347,9 @@ fn check_group<Q: Store, T: Store>(
             .collect();
         for &path in paths {
             executed.ran(path.path());
-            let mut out = vec![Some(f64::NAN); rows.len()];
+            let mut out = vec![Ok(f64::NAN); rows.len()];
             path.distances(measure, query_typed, query_norm, view, &mut out);
-            let got: Vec<Option<u64>> = out.iter().copied().map(bits).collect();
+            let got: Vec<Option<u64>> = out.iter().copied().map(|value| bits(value.ok())).collect();
             assert_eq!(
                 got,
                 expected,
@@ -345,11 +357,11 @@ fn check_group<Q: Store, T: Store>(
                 path.path()
             );
 
-            let mut indexed = vec![Some(f64::NAN); ids.len()];
+            let mut indexed = vec![Ok(f64::NAN); ids.len()];
             path.distances_indexed(measure, query_typed, query_norm, view, &ids, &mut indexed);
             for (&id, value) in ids.iter().zip(&indexed) {
                 assert_eq!(
-                    bits(*value),
+                    bits(value.ok()),
                     expected[id],
                     "{measure:?} indexed row {id} on {} at len {dims}, offset {offset}",
                     path.path()
@@ -360,7 +372,7 @@ fn check_group<Q: Store, T: Store>(
                 let pair =
                     path.distance(measure, query_typed, query_norm, view.row(row), norms[row]);
                 assert_eq!(
-                    bits(pair),
+                    bits(pair.ok()),
                     *want,
                     "{measure:?} pair row {row} on {} at len {dims}, offset {offset}",
                     path.path()
@@ -375,7 +387,7 @@ fn check_group<Q: Store, T: Store>(
                 );
                 let bounded = match bounded {
                     Bounded::Below(value) => Some(value.to_bits()),
-                    Bounded::NonFinite => None,
+                    Bounded::NonFinite(_) => None,
                     Bounded::Beyond => panic!("an infinite bound is never met"),
                 };
                 assert_eq!(
@@ -571,17 +583,24 @@ fn bounded_matches_full() {
             "{}: the 64-term checkpoint abandons",
             path.path()
         );
+        let Bounded::NonFinite(cause) = path.distance_bounded(
+            Measure::SquaredEuclidean,
+            &early,
+            0.0,
+            &zero,
+            0.0,
+            Bound::AtOrAbove(1e9),
+        ) else {
+            panic!(
+                "{}: the unreached bound must expose the non-finite term",
+                path.path()
+            );
+        };
+        assert!(f64::from_bits(nonfinite_bits(cause)).is_nan());
         assert_eq!(
-            path.distance_bounded(
-                Measure::SquaredEuclidean,
-                &early,
-                0.0,
-                &zero,
-                0.0,
-                Bound::AtOrAbove(1e9)
-            ),
-            Bounded::NonFinite,
-            "{}: a bound no checkpoint meets reaches the non-finite term",
+            path.distance(Measure::SquaredEuclidean, &early, 0.0, &zero, 0.0),
+            Err(cause),
+            "{}: the full fold retains the observed NaN instead of substituting infinity",
             path.path()
         );
     }
@@ -600,6 +619,10 @@ fn nonfinite_checked_before_bound() {
         let zero = vec![0.0_f64; len];
         for path in &paths {
             executed.ran(path.path());
+            let cause = path
+                .distance(Measure::SquaredEuclidean, &huge, 0.0, &zero, 0.0)
+                .unwrap_err();
+            assert_eq!(nonfinite_bits(cause), f64::INFINITY.to_bits());
             for bound in [
                 Bound::Above(f64::INFINITY),
                 // An infinity meets this bound, so a bound test that ran first would
@@ -609,17 +632,33 @@ fn nonfinite_checked_before_bound() {
             ] {
                 assert_eq!(
                     path.distance_bounded(Measure::SquaredEuclidean, &huge, 0.0, &zero, 0.0, bound),
-                    Bounded::NonFinite,
+                    Bounded::NonFinite(cause),
                     "{} at len {len} under {bound:?}",
                     path.path()
                 );
             }
-            assert_eq!(
-                path.distance(Measure::SquaredEuclidean, &huge, 0.0, &zero, 0.0),
-                None,
-                "{}: the full fold refuses it too",
-                path.path()
+            let view = RowsRef::new(&zero, 1, len, &[]).expect("one row");
+            let mut batch = [Ok(0.0)];
+            let mut indexed = [Ok(0.0)];
+            path.distances(Measure::SquaredEuclidean, &huge, 0.0, view, &mut batch);
+            path.distances_indexed(
+                Measure::SquaredEuclidean,
+                &huge,
+                0.0,
+                view,
+                &[0],
+                &mut indexed,
             );
+            assert_eq!(batch, [Err(cause)]);
+            assert_eq!(indexed, batch);
+            let dot = path
+                .distance(Measure::NegativeDot, &huge, 0.0, &huge, 0.0)
+                .unwrap_err();
+            assert_eq!(nonfinite_bits(dot), f64::NEG_INFINITY.to_bits());
+            let cosine = path
+                .distance(Measure::Cosine, &huge, 1e300, &huge, 1e300)
+                .unwrap_err();
+            assert!(f64::from_bits(nonfinite_bits(cosine)).is_nan());
 
             // The valid neighbour: large but finite still ranks.
             let mut large = vec![0.0_f64; len];
@@ -793,7 +832,7 @@ fn the_exact_code_resolves_without_avx512f() {
     let mut stream = Stream(0x5EED_0000_0000_0512);
     let a = stream.vector(4_099);
     let b = stream.vector(4_099);
-    let want = Some((-reference_dot(&a, &b)).to_bits());
+    let want = Ok((-reference_dot(&a, &b)).to_bits());
     let dot = |handle: Resolved<Exact>| {
         handle
             .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)

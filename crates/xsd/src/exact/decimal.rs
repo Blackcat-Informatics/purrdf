@@ -61,8 +61,14 @@ impl PreparedDecimalText {
         coefficient: &BigInt,
         scale: u32,
     ) -> Result<Self, crate::bigint::LimbScratchError> {
+        Self::from_digits(coefficient.prepare_decimal_digits()?, scale)
+    }
+
+    fn from_digits(
+        digits: crate::bigint::PreparedDecimalDigits,
+        scale: u32,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
         use crate::bigint::LimbScratchError::SizeOverflow;
-        let digits = coefficient.prepare_decimal_digits()?;
         let scale = usize::try_from(scale).map_err(|_| SizeOverflow)?;
         let body = if scale == 0 {
             digits.digits_len()
@@ -117,6 +123,11 @@ impl PreparedDecimalText {
         self.digits.heap_bytes()
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured canonical rendering must retain prepared widths through the destination writer"
+    )]
+    #[inline(always)]
     pub(crate) fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
         if self.digits.is_negative() {
             out.write_str("-")?;
@@ -269,6 +280,14 @@ pub fn append_scaled_integer_with_memory<S: purrdf_lex::allocation::Admission + 
 pub struct Decimal {
     unscaled: Integer,
     scale: u32,
+}
+
+impl purrdf_hash::error::StructuredError for Decimal {
+    purrdf_hash::error_visit! {
+        @record self { unscaled, scale } => "xsd-exact-decimal" {
+            "unscaled" => Record(&self.unscaled), "scale" => Unsigned(u128::from(self.scale)),
+        }
+    }
 }
 
 impl Decimal {
@@ -547,10 +566,9 @@ impl Decimal {
     /// Prepare decimal groups without coefficient text or a magnitude clone.
     /// # Errors
     /// Distinguishes physical native storage refusal from numerical errors.
+    #[inline]
     pub fn prepare_text(&self) -> Result<PreparedDecimalText, crate::bigint::LimbScratchError> {
-        self.unscaled.with_bigint(|coefficient| {
-            PreparedDecimalText::from_coefficient(coefficient, self.scale)
-        })
+        PreparedDecimalText::from_digits(self.unscaled.prepare_decimal_digits()?, self.scale)
     }
 
     /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
@@ -558,8 +576,14 @@ impl Decimal {
     /// (`"3"`, `"-2"`, `"0"`); any
     /// other keeps exactly its significant fractional digits (`"2.5"`, `"-0.025"`).
     #[must_use]
+    #[inline]
     pub fn canonical_lexical(&self) -> String {
-        self.to_string()
+        let prepared = self.prepare_text().expect("native decimal text storage");
+        let mut text = String::with_capacity(prepared.len());
+        prepared
+            .write_to(&mut text)
+            .expect("the exact decimal destination fits the prepared text");
+        text
     }
 
     /// The exact value of a finite `f64`: every binary floating-point value is a
@@ -586,7 +610,7 @@ impl Decimal {
             .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
     }
 
-    /// The exact decimal of a finite binary64 with staged native admission.
+    /// The exact decimal of a finite double with staged native admission.
     /// # Errors
     /// Keeps non-finite value failure separate from admission/allocation refusal.
     pub fn try_from_f64_admitted(
@@ -602,7 +626,7 @@ impl Decimal {
         )
     }
 
-    /// The exact decimal of a finite binary32, without decimal-text promotion.
+    /// The exact decimal of a finite float, without decimal-text promotion.
     /// # Errors
     /// Keeps non-finite value failure separate from admission/allocation refusal.
     pub fn try_from_f32_admitted(
@@ -613,6 +637,38 @@ impl Decimal {
     ) -> Result<Self, super::ExactOperationError> {
         Self::from_binary_admitted_using(
             decompose_f32(value).ok_or(ExactError::NotFinite)?,
+            &crate::bigint::scratch::Fallible,
+            admit,
+        )
+    }
+
+    /// The exact mathematical value `(-1)^negative × significand × 2^exponent`.
+    /// No floating-point rounding is involved, including below the least IEEE subnormal.
+    /// A zero significand yields canonical zero regardless of the sign.
+    /// Admission precedes every new coefficient/normalization destination; the caller
+    /// retains the granted storage with the result.
+    ///
+    /// An explicitly unbounded caller can admit every layout:
+    /// ```
+    /// use purrdf_xsd::exact::Decimal;
+    /// let value = Decimal::try_from_dyadic_admitted(false, 3, -1, &mut |_| Ok(()))?;
+    /// assert_eq!(value.canonical_lexical(), "1.5");
+    /// # Ok::<(), purrdf_xsd::exact::ExactOperationError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Preserves native checked layout, admission and allocator failures separately
+    /// from exact value-space failures. No partial numeric value is returned.
+    pub fn try_from_dyadic_admitted(
+        negative: bool,
+        significand: u64,
+        exponent: i32,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<Self, super::ExactOperationError> {
+        Self::from_binary_admitted_using(
+            (negative, significand, exponent),
             &crate::bigint::scratch::Fallible,
             admit,
         )
@@ -651,6 +707,7 @@ impl Decimal {
     /// `xs:double` cast, rounded once at any scale. A negative value that rounds
     /// to zero is `-0.0`.
     #[must_use]
+    #[inline]
     pub fn to_f64(&self) -> f64 {
         if let Some(value) = self.unscaled.as_i128()
             && self.scale <= MAX_I128_POW10
@@ -665,6 +722,12 @@ impl Decimal {
             Some(_) => return self.signed(0.0),
             None => {}
         }
+        self.ratio_to_f64()
+    }
+
+    /// Keep ratio conversion's register frame after the inline and range gates.
+    #[cold]
+    fn ratio_to_f64(&self) -> f64 {
         let bits = self.ratio_bits(&BINARY64);
         f64::from_bits(bits)
     }
@@ -726,7 +789,7 @@ impl Decimal {
             .expect("unbounded integer storage")
     }
 
-    /// Round directly to binary64 with admission before native conversion.
+    /// Round directly to double precision with admission before native conversion.
     /// # Errors
     /// Returns physical admission/allocation refusal without changing IEEE results.
     pub fn try_to_f64_admitted(
@@ -752,7 +815,7 @@ impl Decimal {
             .map(f64::from_bits)
     }
 
-    /// Round directly to binary32 with admission before native conversion.
+    /// Round directly to single precision with admission before native conversion.
     /// # Errors
     /// Returns physical admission/allocation refusal without double rounding.
     pub fn try_to_f32_admitted(
@@ -998,13 +1061,13 @@ impl Decimal {
     }
 
     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
-    /// trailing zero to strip is the common case, decided by one remainder.
+    /// trailing zero to strip is the common case, decided without division.
     #[inline]
     fn from_small(value: i128, scale: u32) -> Self {
         if value == 0 {
             return Self::ZERO;
         }
-        let has_trailing_zero = mod10(value.unsigned_abs()) == 0;
+        let has_trailing_zero = divide_by_ten_exact(value.unsigned_abs()).is_some();
         if scale == 0 || !has_trailing_zero {
             return Self {
                 unscaled: Integer::from_i128(value),
@@ -1043,6 +1106,11 @@ impl Decimal {
     /// [`ExactError::NonTerminating`] under [`DivisionPolicy::Exact`] for a
     /// quotient with no finite expansion; [`ExactError::ScaleOverflow`] for a
     /// quotient scale past `u32::MAX`.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured caller policy specialization must eliminate the public result boundary"
+    )]
+    #[inline(always)]
     pub fn div(&self, rhs: &Self, policy: DivisionPolicy) -> Result<Self, ExactError> {
         self.div_using(rhs, policy, &crate::bigint::scratch::Unbounded)
             .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
@@ -1135,6 +1203,11 @@ impl Decimal {
         }
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured constant division policies must specialize before arithmetic dispatch"
+    )]
+    #[inline(always)]
     fn div_using(
         &self,
         rhs: &Self,
@@ -1213,6 +1286,11 @@ impl Decimal {
     /// The quotient rounded to `scale` digits: with the operands
     /// `a·10^-sa` and `b·10^-sb`, the coefficient is
     /// `round(a · 10^(scale + sb − sa) / b)`.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured explicit rounding must stay constant across this storage delegate"
+    )]
+    #[inline(always)]
     fn div_rounded_using(
         &self,
         rhs: &Self,
@@ -1223,6 +1301,11 @@ impl Decimal {
         self.div_rounded_admitted_using(rhs, scale, rounding, storage, &mut |_| Ok(()))
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured rounding must reach the small quotient without dynamic forwarding"
+    )]
+    #[inline(always)]
     fn div_rounded_admitted_using(
         &self,
         rhs: &Self,
@@ -1675,10 +1758,16 @@ fn mul_parts_admitted_using(
     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Decimal, super::ExactOperationError> {
     let scale = ls.checked_add(rs).ok_or(ExactError::ScaleOverflow)?;
-    if let (Some(a), Some(b)) = (left.as_i128(), right.as_i128())
-        && let Some(product) = a.checked_mul(b)
-    {
-        return Ok(Decimal::from_small(product, scale));
+    if let (Some(a), Some(b)) = (left.as_i128(), right.as_i128()) {
+        let product = if let (Ok(a), Ok(b)) = (i64::try_from(a), i64::try_from(b)) {
+            // Widen before multiplication: every signed 64-bit product fits i128.
+            Some(i128::from(a) * i128::from(b))
+        } else {
+            a.checked_mul(b)
+        };
+        if let Some(product) = product {
+            return Ok(Decimal::from_small(product, scale));
+        }
     }
     admit(left.operation_layout(right, cost::IntegerOperation::Multiply)?)?;
     let product = left.mul_using(right, storage)?;
@@ -1686,6 +1775,11 @@ fn mul_parts_admitted_using(
     Ok(Decimal::new_using(product, scale, storage)?)
 }
 
+#[allow(
+    clippy::inline_always,
+    reason = "measured small quotient specialization must avoid the general integer storage frame"
+)]
+#[inline(always)]
 fn div_rounded_parts_admitted_using(
     left_parts: (&Integer, u32),
     right_parts: (&Integer, u32),
@@ -1696,12 +1790,33 @@ fn div_rounded_parts_admitted_using(
 ) -> Result<Decimal, super::ExactOperationError> {
     let (left, ls) = left_parts;
     let (right, rs) = right_parts;
-    let negative = left.is_negative() != right.is_negative();
     let shift = i64::from(scale) + i64::from(rs) - i64::from(ls);
     let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
-    if let Some(quotient) = div_rounded_small_parts(left, right, shift, rounding, negative) {
+    if let Some(quotient) = div_rounded_small_parts(left, right, shift, rounding) {
         return Ok(Decimal::from_small(quotient, scale));
     }
+    div_rounded_wide_parts_admitted_using(
+        (left, right),
+        (shift, digits, left.is_negative() != right.is_negative()),
+        scale,
+        rounding,
+        storage,
+        admit,
+    )
+}
+
+// Keep general integer storage and admission state out of the machine-word frame.
+#[cold]
+fn div_rounded_wide_parts_admitted_using(
+    operands: (&Integer, &Integer),
+    alignment: (i64, u32, bool),
+    scale: u32,
+    rounding: Rounding,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Decimal, super::ExactOperationError> {
+    let (left, right) = operands;
+    let (shift, digits, negative) = alignment;
     let copied = cost::live_integer_bytes(&[left, right])?;
     admit(cost::NumericOperationLayout::bytes(copied, copied)?)?;
     let (a, b) = (left.abs_using(storage)?, right.abs_using(storage)?);
@@ -1821,17 +1936,16 @@ fn aligned_small_parts(
     }
 }
 
+#[inline]
 fn div_rounded_small_parts(
     left: &Integer,
     right: &Integer,
     shift: i64,
     rounding: Rounding,
-    negative: bool,
 ) -> Option<i128> {
-    let (a, b) = (
-        left.as_i128()?.unsigned_abs(),
-        right.as_i128()?.unsigned_abs(),
-    );
+    let (a, b) = (left.as_i128()?, right.as_i128()?);
+    let negative = (a < 0) != (b < 0);
+    let (a, b) = (a.unsigned_abs(), b.unsigned_abs());
     let power = POW10.get(usize::try_from(shift.unsigned_abs()).ok()?)?;
     let (numerator, denominator) = if shift >= 0 {
         (a.checked_mul(*power)?, b)
@@ -1839,13 +1953,15 @@ fn div_rounded_small_parts(
         (a, b.checked_mul(*power)?)
     };
     let quotient = numerator / denominator;
-    let remainder = numerator - quotient * denominator;
-    // Twice the remainder against the denominator, as the remainder against
-    // what is left of the denominator: a scaled divisor can pass `2^127`, where
-    // doubling the remainder would overflow `u128`.
-    let half = remainder.cmp(&(denominator - remainder));
-    let magnitude = quotient
-        + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0));
+    let magnitude = if rounding == Rounding::TowardZero {
+        quotient
+    } else {
+        let remainder = numerator - quotient * denominator;
+        // Compare without doubling a remainder that may exceed half of u128.
+        let half = remainder.cmp(&(denominator - remainder));
+        quotient
+            + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0))
+    };
     let magnitude = i128::try_from(magnitude).ok()?;
     Some(if negative { -magnitude } else { magnitude })
 }
@@ -2114,13 +2230,18 @@ const POW10: [u128; 39] = {
     table
 };
 
-/// `x mod 10` from two 64-bit halves (`2^64 ≡ 6 (mod 10)`), so the
-/// trailing-zero test of a 128-bit coefficient costs two word remainders rather
-/// than a 128-bit division.
-const fn mod10(x: u128) -> u64 {
-    let high = (x >> 64) as u64;
-    let low = x as u64;
-    ((high % 10) * 6 + low % 10) % 10
+/// Exact division by ten over the full coefficient. Multiplying
+/// by the inverse of five modulo `2^128` maps every multiple of ten to an even
+/// value `2*k`. Rotation rejects odd values (their high bit exceeds the bound)
+/// and halves even ones. The bound ensures `10*k` fits, excluding modular wraps.
+const fn divide_by_ten_exact(x: u128) -> Option<u128> {
+    const INVERSE_FIVE: u128 = 0xcccc_cccc_cccc_cccc_cccc_cccc_cccc_cccd;
+    let quotient = x.wrapping_mul(INVERSE_FIVE).rotate_right(1);
+    if quotient <= u128::MAX / 10 {
+        Some(quotient)
+    } else {
+        None
+    }
 }
 
 /// `magnitude` with up to `limit` trailing decimal zeros removed, and how many
@@ -2148,14 +2269,12 @@ fn strip_zeros(magnitude: u128, limit: u32) -> (u128, u32) {
         return (u128::from(small), removed);
     }
     let mut value = magnitude;
-    while removed < limit && value != 0 && mod10(value) == 0 {
-        value /= 10;
+    while removed < limit && value != 0 {
+        let Some(quotient) = divide_by_ten_exact(value) else {
+            break;
+        };
+        value = quotient;
         removed += 1;
-    }
-    if removed > 0 {
-        // Back in u64 range, the rest strips cheaply.
-        let (value, more) = strip_zeros(value, limit - removed);
-        return (value, removed + more);
     }
     (value, removed)
 }
@@ -2376,42 +2495,53 @@ impl Decimal {
         lexical: &str,
         storage: &impl crate::bigint::scratch::Allocate,
     ) -> Result<Self, super::ExactParseError> {
-        if !crate::numeric::is_decimal_lexical(lexical) {
+        let Some((negative, whole, fraction)) = crate::numeric::decimal_lexical_parts(lexical)
+        else {
             return Err(super::ExactParseError::InvalidLexical {
                 kind: ExactKind::Decimal,
                 reason: "expected an optional sign then digits with at most one '.'",
             });
-        }
-        let negative = lexical.starts_with('-');
-        let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-        let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
+        };
         // Check the original lexical scale before reducing it. Fractional
         // trailing zeros are removed on borrowed slices, before coefficient
         // conversion; no concatenated text or later big normalization is needed.
         u32::try_from(fraction.len()).map_err(|_| super::ExactParseError::ScaleOverflow)?;
-        let fraction = fraction.trim_end_matches('0');
+        let fraction_end = fraction
+            .as_bytes()
+            .iter()
+            .rposition(|&byte| byte != b'0')
+            .map_or(0, |index| index + 1);
+        let fraction = &fraction[..fraction_end];
         let scale =
             u32::try_from(fraction.len()).map_err(|_| super::ExactParseError::ScaleOverflow)?;
-        let whole = whole.trim_start_matches('0');
+        let whole_start = whole
+            .as_bytes()
+            .iter()
+            .position(|&byte| byte != b'0')
+            .unwrap_or(whole.len());
+        let whole = &whole[whole_start..];
         let digits = whole
             .len()
             .checked_add(fraction.len())
             .ok_or(super::ExactParseError::ScaleOverflow)?;
-        let unscaled = if digits <= usize::try_from(MAX_I128_POW10).expect("a small constant") {
+        let unscaled = if digits <= crate::bigint::DECIMAL_CHUNK {
+            // Nineteen decimal digits fit u64; widen before restoring the sign.
+            let magnitude = whole
+                .bytes()
+                .fold(0_u64, |acc, digit| acc * 10 + u64::from(digit - b'0'));
+            let magnitude = fraction
+                .bytes()
+                .fold(magnitude, |acc, digit| acc * 10 + u64::from(digit - b'0'));
+            let magnitude = i128::from(magnitude);
+            Integer::from_i128(if negative { -magnitude } else { magnitude })
+        } else if digits <= usize::try_from(MAX_I128_POW10).expect("a small constant") {
             let magnitude = whole
                 .bytes()
                 .chain(fraction.bytes())
                 .fold(0_i128, |acc, digit| acc * 10 + i128::from(digit - b'0'));
             Integer::from_i128(if negative { -magnitude } else { magnitude })
         } else {
-            let magnitude = BigInt::from_decimal_bytes_using(
-                whole.bytes().chain(fraction.bytes()),
-                negative,
-                storage,
-            )
-            .map_err(super::ExactParseError::Storage)?
-            .expect("validated as a decimal lexical");
-            Integer::from_bigint(magnitude)
+            parse_wide_coefficient(whole, fraction, negative, storage)?
         };
         if unscaled.is_zero() {
             return Ok(Self::ZERO);
@@ -2420,6 +2550,21 @@ impl Decimal {
         // the trimmed fraction, which is nonzero. These parts are canonical.
         Ok(Self { unscaled, scale })
     }
+}
+
+// Keep the existing wide conversion tree and its storage frame off short inputs.
+#[cold]
+fn parse_wide_coefficient(
+    whole: &str,
+    fraction: &str,
+    negative: bool,
+    storage: &impl crate::bigint::scratch::Allocate,
+) -> Result<Integer, super::ExactParseError> {
+    let magnitude =
+        BigInt::from_decimal_bytes_using(whole.bytes().chain(fraction.bytes()), negative, storage)
+            .map_err(super::ExactParseError::Storage)?
+            .expect("validated as a decimal lexical");
+    Ok(Integer::from_bigint(magnitude))
 }
 
 super::error::lexical_entry! {
@@ -2431,6 +2576,8 @@ super::error::lexical_entry! {
     /// Distinguishes borrowed lexical/scale refusal from physical allocation.
     }
     from_str {
+    #[allow(clippy::inline_always, reason = "measured parse/render callers must retain the coefficient representation across this adapter")]
+    #[inline(always)]
     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
     /// length: an optional sign, then digits with at most one `.` and at least one
     /// digit (`.5`, `1.`, `-0012.3400`). No whitespace is trimmed, matching

@@ -55,10 +55,10 @@ fn prepared_joins_and_computed_terms_share_values_across_snapshot_layers() {
         let compacted = mutable.freeze().unwrap();
         for plan in &plans {
             let actual = engine
-                .query_prepared_view(&view, plan, &[], QueryOptions::EMPTY)
+                .query_prepared_view(&view, plan, &[], &QueryOptions::EMPTY)
                 .unwrap();
             let expected = engine
-                .query_prepared(&compacted, plan, &[], QueryOptions::EMPTY)
+                .query_prepared(&compacted, plan, &[], &QueryOptions::EMPTY)
                 .unwrap();
             let (
                 SparqlResult::Solutions {

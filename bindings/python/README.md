@@ -742,6 +742,25 @@ closures on the Rust side — the full-text index, the GeoSPARQL relations, the
 embedding kNN relation — do not cross this boundary; only these three
 data-shaped registrations do.
 
+## Execution receipt migration
+
+Ordinary and prepared query result objects now expose `execution_receipt_json`.
+Governed query and UPDATE outcomes expose the same property. Parse its JSON to
+read the actual effective time, decimal-string entropy seed, supplied-input flags,
+and nullable snapshot and execution identities. An absent identity is explicit;
+it is never reconstructed from request inputs or result bytes.
+
+`MutableDataset.update(...)` now returns an owned `UpdateOutcome` instead of
+`None`. Read `is_applied` and `execution_receipt_json`; ordinary UPDATE has
+`evidence is None`, since it retains ungoverned execution. An UPDATE without a
+WHERE context may apply with a `not-started` context receipt. Existing calls that
+ignore the return value continue to apply the same mutation.
+
+Rule entailment and application dictionaries include `execution_receipt_json`
+with rule identities and ordered query contexts. Errors after evaluation retain
+that property on the original Python exception class. Query rows, graph results,
+and exception receipts own their values after caller input objects are released.
+
 ## Typed SPARQL parse failures
 
 A query or update the parser refuses raises the same `ValueError`, with the same
@@ -910,20 +929,46 @@ rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
 rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-`gts_relational_rows_from_bytes` returns a `GtsRelationalRows` dict of five row
-lists. `gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
-`gts_to_parquet(data, out_dir)` write those five tables out — `terms`, `quads`,
-`reifiers`, `annotations`, `blobs` — in the projection's own row order, so
-exporting the same container twice produces the same content. `gts_to_parquet`
-writes one file per table and returns their paths in table order.
+`gts_relational_rows_from_bytes` is the folded inspection API. Canonical exports
+use `gts_columnar_rows_from_bytes(data, blob_limits=...)` and
+`gts_columnar_parquet_from_bytes(data, blob_limits=...)`, returning `(output, report)`.
+Every export requires `GtsBlobLimits` with all five keyword fields supplied, or
+the explicit string `"unbounded"`. Each limit accepts `None` for no ceiling.
 
-SQLite needs nothing beyond the standard library. The other two raise
-`ModuleNotFoundError` naming the extra when it is absent:
-
-```bash
-pip install 'purrdf[duckdb]'    # gts_to_duckdb
-pip install 'purrdf[parquet]'   # gts_to_parquet
+```python
+policy = purrdf.GtsBlobLimits(
+    max_encoded_bytes=16_000_000,
+    max_decoded_bytes=64_000_000,
+    max_total_decoded_bytes=256_000_000,
+    max_metadata_bytes=65_536,
+    max_frame_decoded_bytes=64_000_000,
+)
+result = purrdf.gts_to_parquet(gts_bytes, "tables", blob_limits=policy)
+print(result.paths, result.report.losses, result.report.omissions)
 ```
+
+`gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` return a frozen
+`GtsExportResult`: `paths` is a tuple in canonical table order and `report` is
+always present. Explicit blob ceilings, missing codec/key/decryptor capabilities,
+and final references without admitted inline bytes produce typed omissions and
+located `gts` to `columnar-v1` losses. Omission objects retain their original
+native causes as structured `kind`/`value` snapshots, plus source frame, digest
+proof, limits and usage. Opaque `pub` values follow the GTS `pub:any` envelope;
+recognized map fields are checked by their declared types. A present blob payload
+must be bytes; an external blob must declare a valid digest. Corruption,
+authentication failures, invalid recognized metadata fields,
+storage failures, RDF errors and non-blob frame refusals remain hard errors.
+
+This export is eager: admitted blobs, codec intermediates, relational rows and
+Parquet files still occupy memory. Logical usage counters describe admission
+charges, excluding dataset, frame, index and allocator ownership.
+`max_frame_decoded_bytes` bounds transformed frame decode buffers; raw/direct RDF
+rows and reader CBOR/frame working ownership are outside that charge. Bounded
+end-to-end streaming is unfinished; the policy is not a process-memory bound.
+
+SQLite uses the standard library. DuckDB requires `pip install 'purrdf[duckdb]'`.
+Parquet writing uses the native codec; `purrdf[parquet]` supplies PyArrow for
+reading the resulting files.
 
 The same entry points are grouped under `purrdf.gts` for discoverability.
 
@@ -971,15 +1016,15 @@ JSON documents cross these APIs as the documented `str` or `bytes`: JSON-LD,
 compiled contexts, projection configurations, loss matrices and proof/retrieval
 JSON accessors retain their document representation. The shared JSON reader retains number lexemes; each codec applies its specified
 conversion before emitting a document. JSON-LD numeric RDF values and `@json`
-fractions use the nearest finite binary64 spelling, while integers within the
+fractions use the nearest finite `binary64` spelling, while integers within the
 signed/unsigned 64-bit domain remain integers. Decode the emitted document to
 Python values with
 `json.loads(document, parse_int=int, parse_float=decimal.Decimal)` for exact
 integers and decimals; Python's default `json.loads` instead converts fractional
-and exponent lexemes to binary64 `float`. Neither Python decoding policy changes the emitted document or recovers digits
+and exponent lexemes to `binary64` `float`. Neither Python decoding policy changes the emitted document or recovers digits
 already rounded by a codec. RDF literal values remain lexical strings, including numeric literals. In expanded
 JSON-LD output, an `rdf:JSON` literal has a string `@value` containing its JSON
 lexical form; decode that string separately to obtain its Python object.
 Structured report/provenance APIs documented as dictionaries return dictionaries.
 The GTS fold view's `python_value` is a typed value conversion: integer cells are
-Python `int`, and IEEE binary64 cells are Python `float`.
+Python `int`, and IEEE `binary64` cells are Python `float`.

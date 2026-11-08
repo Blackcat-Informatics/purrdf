@@ -307,8 +307,10 @@ executable form rather than only in prose.
 
 Two digests are kept, and they answer different questions. The **index
 fingerprint** covers everything that can change an answer: the configuration, all
-four Unicode table versions, the document table, the dictionary, every posting
-with its positions, and every partition's statistics. The **source fingerprint**
+four Unicode table versions, the analyzer and ranking laws, enabled projections,
+and the exact source identity. These inputs determine the document table,
+dictionary, postings, positions and partition statistics. The index hashes these
+inputs directly, so computing its identity does not walk the derived corpus tables. The **source fingerprint**
 covers the walked `(graph, subject, predicate, literal)` rows for `GraphLanguage`,
 or `(subject, predicate, literal)` rows for `GraphFree`. The
 second exists because pairing an index with the wrong dataset is otherwise a
@@ -316,6 +318,55 @@ silent wrong answer rather than a failure — the relation emits well-formed
 document terms, those terms join by basic graph pattern against a dataset that
 never contained them, zero rows come out, and no layer has anything to report.
 Recomputing the source digest over the dataset in hand detects exactly that.
+
+The source identity uses the version 2 multiset law. Each row is hashed under
+`purrdf/source-row/v1` or `purrdf/triples/source-row/v1` using the core's
+self-delimiting canonical term bytes. Native sealed source metadata uses this
+same row law without reconstructing owned terms. The existing text term-sequence
+encoding and its published fingerprint remain unchanged. The 32-byte row hashes are interpreted as little-endian integers
+and summed modulo 2^256. The source fingerprint hashes its profile's `source/v2`
+domain, the exact row population as a 16-byte little-endian integer, and the
+32-byte little-endian sum. Thus order does not matter and identical rows in
+different physical layers contribute with their full multiplicity. Removing a
+known row subtracts its hash and decrements the population. This is a multiset
+fingerprint, not a signature or an authorization proof; validation still needs
+an independently observed source summary and actual added-row membership.
+The graph-aware index domain is version 6 and the graph-free index domain is
+version 3. Both bind the complete deterministic construction inputs rather than
+re-hashing the derived tables. The source identity includes original spellings
+and row multiplicity; equal corpus statistics alone cannot give equal identities.
+
+Document token buffers retain shared immutable spellings independently of the
+dictionary's sorted public ordinals. Reading a document's token occurrences
+looks up the current canonical ordinals through an iterator.
+Adding a word before an existing word therefore does not rewrite the retained
+document's tokens. Retired spellings release when their last snapshot or buffer
+owner releases; no historical ordinal map remains.
+
+Document, dictionary, posting, token, partition, field-length, subject-order,
+occurrence-order and Han-evidence tables share one immutable AVL sequence with
+at most 32 handles per leaf. Cloning shares their roots and buffers. An edit
+copies bounded leaves and affected paths, preserving previous snapshots.
+Postings refer to immutable documents; public document ranks are resolved against
+the current order. Partition and field statistics subtract replaced documents
+and add their replacements. Rank projection happens only for requested results;
+publishing an index does not materialize the retained streams or posting ranks.
+
+Surface sources, words, spans, document memberships, occurrences, scalar grams
+and phonetic codes use that same persistent table. Sources retain immutable
+document references and original aligned text. Source-local chunks share up to
+32 occurrence payloads; term records copy shallow references when a path changes.
+Grams and codes address shared spellings rather than dictionary ordinals.
+Borrowed public term views project only requested document IDs through the
+current document-order root. Removing a source subtracts its memberships and
+occurrences; a term's gram/code postings change only when the term appears or
+disappears. No corpus-wide source or term renumbering occurs during publication.
+
+Standalone surface generation uses `purrdf-text/surface-generation/v2` over the
+analyzer identity, optional coordinate binding, and exact source multiset. Source
+items use `purrdf-text/surface-source/v1`; public text construction's identities
+bind the caller's document ID and original text. Native surface construction uses
+the original RDF row identities and binds the enclosing index fingerprint.
 
 ## 9. Phrase and proximity compose in SPARQL
 

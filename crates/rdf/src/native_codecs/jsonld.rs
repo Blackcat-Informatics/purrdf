@@ -14,17 +14,36 @@
 //! explicitly sorted, so the document does not depend on input append order.
 
 mod carrier;
+mod compaction;
+pub use compaction::{
+    JsonLdCompactionLimits, JsonLdCompactionPolicy, compact_expanded_with_context,
+};
 /// Compiled JSON-LD 1.1 contexts, immutable offline registries, and configured
 /// serialization options shared by every JSON-LD/YAML-LD surface.
 pub mod context;
 mod derived;
 mod expand;
+mod framing;
+pub use framing::{
+    JsonLdEmbed, JsonLdFramingBase, JsonLdFramingLimits, JsonLdFramingPolicy,
+    frame_value_with_context,
+};
+mod node_map;
+pub use node_map::JsonLdFlattenLimits;
+mod structural;
+pub use structural::{JsonLdExpandedDocument, JsonLdExpansionLimits};
+pub(super) mod yaml;
+pub use yaml::{
+    YamlLdOptions, expand_yamlld_document_with_context, expand_yamlld_with_context,
+    flatten_yamlld_with_context, parse_yamlld_with_context, parse_yamlld_with_options,
+    yamlld_to_jsonld_with_options,
+};
 
 pub use context::{
-    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
-    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
-    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
-    JsonLdTypeMapping,
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextFormat,
+    JsonLdContextLimits, JsonLdContextRegistry, JsonLdDirection, JsonLdNullable,
+    JsonLdSerializeMode, JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection,
+    JsonLdTermSelectionKind, JsonLdTypeMapping,
 };
 
 use purrdf_core::sink::TextSink;
@@ -38,9 +57,9 @@ use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 use purrdf_lex::json::{Object, Value};
 
 use self::carrier::{
-    Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
-    Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm, Triple as CarrierTriple,
-    Value as CarrierValue,
+    CompactionPolicy, Document as CarrierDocument, Literal as CarrierLiteral,
+    NamedGraph as CarrierNamedGraph, Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm,
+    Triple as CarrierTriple, Value as CarrierValue,
 };
 
 use super::NativeRdfFormat;
@@ -61,6 +80,12 @@ use purrdf_iri::vocab::rdf::REST as RDF_REST;
 use purrdf_xsd::datatype::XSD_STRING;
 
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+
+fn ordered_object(mut members: Vec<(String, Value)>) -> Value {
+    members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    Value::Object(Object::from(members))
+}
+
 /// Schema reference for the YAML-LD language-server header when the output is
 /// consumed from the bundled `purrdf.gts` snapshot. The schema is shipped as
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
@@ -70,14 +95,25 @@ const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 // the carrier contract identical on wasm32 and native targets even when a ceiling exceeds the
 // target address space.
 const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024 * 1024);
+
+/// The native JSON-LD source decoder's existing logical document-byte bound.
+/// Host acquisition keeps its physical address/layout admission separate.
+pub const fn jsonld_document_max_bytes() -> u64 {
+    MAX_JSON_LD_DOCUMENT_BYTES.bytes()
+}
 // The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
 // large whole-ontology bundle (tens of millions of composed statements — the authored graph
 // + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays
 // within the decode envelope; the estimated working footprint keeps this a memory-safe
 // ceiling, not an unbounded one.
 const MAX_JSON_LD_CARRIER_ROWS: u64 = 33_554_432;
-// Source-carrier retained-text budget: the interned text actually held once.
-const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = ByteLimit::new(256_u64 * 1024 * 1024);
+// Source-carrier retained-text budget: the interned text actually held once. Sized to the
+// document ceiling because retained text and emitted text are the same order of magnitude;
+// they are not equal, since compaction, `@type`, list folding and implied datatypes all
+// drop text the carrier retains. A 256 MiB cap rejected a whole-ontology bundle carrying
+// several hundred MB of literal text. Construction memory is bounded separately by
+// `MAX_JSON_LD_CARRIER_WORKING_BYTES`, checked before the carrier indexes are sorted.
+const MAX_JSON_LD_CARRIER_TEXT_BYTES: ByteLimit = MAX_JSON_LD_DOCUMENT_BYTES;
 // Materialized-carrier WORKING-memory budget. The construction estimate
 // (`rows * ESTIMATED_CARRIER_ROW_BYTES + text`) * `COMPACTED_CARRIER_WORKING_COPIES` is a large
 // multiple of the retained text, so a whole-ontology bundle of tens of millions of occurrences
@@ -270,7 +306,7 @@ impl RdfCodec for JsonLdCodec {
 /// The YAML-LD-star codec — the registry's behavior seam for `application/ld+yaml`.
 ///
 /// Serialize walks the shared JSON-LD-star core then re-emits as YAML;
-/// parse bridges YAML→JSON ([`yamlld_to_jsonld`]) and reuses [`parse_jsonld`]. The
+/// parse constructs a Basic value and enters the shared JSON-LD value engine. The
 /// registry path uses the bundled schema reference (the custom-`schema_url` overload
 /// stays on the public [`serialize_dataset_to_yamlld`]).
 ///
@@ -285,8 +321,7 @@ impl RdfCodec for YamlLdCodec {
         base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let json = yamlld_to_jsonld(text.as_bytes())?;
-        parse_jsonld_into_scope(json.as_bytes(), base)
+        yaml::parse_into_scope(text.as_bytes(), base, &YamlLdOptions::DEFAULT, None)
     }
 
     fn serialize_into(
@@ -395,7 +430,7 @@ fn write_ser_graph(graph: &SerGraph, out: &mut TextSink<'_>) -> Result<(), RdfDi
     let carrier = build_carrier(graph, false)?;
     match base_only_context(graph)? {
         None => write_carrier_expanded(&carrier, out),
-        Some(context) => write_carrier_compacted(carrier, &context, out),
+        Some(context) => write_carrier_compacted(carrier, &context, CompactionPolicy::DEFAULT, out),
     }
 }
 
@@ -415,16 +450,34 @@ pub(crate) fn write_ser_graph_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => write_carrier_expanded(&carrier, out),
-            Some(context) => write_carrier_compacted(carrier, &context, out),
+            Some(context) => {
+                write_carrier_compacted(carrier, &context, CompactionPolicy::DEFAULT, out)
+            }
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(context), out)
+            write_carrier_compacted(
+                carrier,
+                merged.as_ref().unwrap_or(context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
+                },
+                out,
+            )
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(&context), out)
+            write_carrier_compacted(
+                carrier,
+                merged.as_ref().unwrap_or(&context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
+                },
+                out,
+            )
         }
     }
 }
@@ -492,10 +545,11 @@ fn write_carrier_expanded(
 fn write_carrier_compacted(
     carrier: CarrierDocument,
     context: &CompiledJsonLdContext,
+    policy: CompactionPolicy,
     out: &mut TextSink<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
-    carrier.write_compacted_json(&mut bounded, context)
+    carrier.write_compacted_json(&mut bounded, context, policy)
 }
 
 /// The whole-`String` spelling of [`write_carrier_compacted`].
@@ -504,7 +558,7 @@ fn serialize_carrier_compacted(
     context: &CompiledJsonLdContext,
 ) -> Result<String, RdfDiagnostic> {
     let mut out = TextSink::in_memory();
-    write_carrier_compacted(carrier, context, &mut out)?;
+    write_carrier_compacted(carrier, context, CompactionPolicy::DEFAULT, &mut out)?;
     finish_json_output(out)
 }
 
@@ -631,7 +685,7 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
         // finished, rather than being ended by a `drop` call that reads as a no-op.
         let mut bounded = BoundedJsonOutput::new(&mut out, MAX_JSON_LD_DOCUMENT_BYTES);
         write_yaml_header(schema_url, &mut bounded)?;
-        carrier.write_compacted_yaml(&mut bounded, context)?;
+        carrier.write_compacted_yaml(&mut bounded, context, CompactionPolicy::DEFAULT)?;
     }
     finish_json_output(out)
 }
@@ -648,7 +702,9 @@ fn write_ser_graph_to_yamlld(
     write_yaml_header(schema_url, &mut bounded)?;
     match base_only_context(graph)? {
         None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
-        Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+        Some(context) => {
+            carrier.write_compacted_yaml(&mut bounded, &context, CompactionPolicy::DEFAULT)
+        }
     }
 }
 
@@ -664,16 +720,32 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
-            Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+            Some(context) => {
+                carrier.write_compacted_yaml(&mut bounded, &context, CompactionPolicy::DEFAULT)
+            }
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(context))
+            carrier.write_compacted_yaml(
+                &mut bounded,
+                merged.as_ref().unwrap_or(context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
+                },
+            )
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(&context))
+            carrier.write_compacted_yaml(
+                &mut bounded,
+                merged.as_ref().unwrap_or(&context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
+                },
+            )
         }
     }
 }
@@ -694,6 +766,7 @@ fn write_yaml_header<W: IoWrite>(
     out: &mut W,
 ) -> Result<(), RdfDiagnostic> {
     let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);
+    context::validate_yaml_schema_url(url)?;
     out.write_all(b"# yaml-language-server: $schema=")
         .and_then(|()| out.write_all(url.as_bytes()))
         .and_then(|()| {
@@ -740,6 +813,18 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         }
         reifier_of.entry((s, p, o, g)).or_default().push(rid);
     }
+
+    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
+    let mut annotations_of: AnnotationIndex = BTreeMap::new();
+    for &(r, p, v, g) in &graph.annotations {
+        annotations_of.entry((r, g)).or_default().push((p, v));
+    }
+
+    // The working-memory estimate sums per-occurrence footprints, so it does not depend on
+    // the order within each index. Checking it before sorting keeps the sort keys, which
+    // copy term text, behind the same ceiling as the carrier they order.
+    validate_materialized_carrier_budget(graph, &annotations_of)?;
+
     // One O(1) reifier-binding snapshot for the whole carrier build.
     let bindings = graph.reifier_index();
     for list in reifier_of.values_mut() {
@@ -749,12 +834,6 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
         list.sort_by_cached_key(|a| {
             term_id(&graph.terms[*a]).expect("reifier must be IRI or blank node")
         });
-    }
-
-    // Annotation index: (reifier id, graph) -> sorted annotation (predicate, value) rows.
-    let mut annotations_of: AnnotationIndex = BTreeMap::new();
-    for &(r, p, v, g) in &graph.annotations {
-        annotations_of.entry((r, g)).or_default().push((p, v));
     }
     for list in annotations_of.values_mut() {
         // Sort by stable predicate @id then stable value key, not raw term ids. The
@@ -767,8 +846,6 @@ fn build_carrier(graph: &SerGraph, fold_lists: bool) -> Result<CarrierDocument, 
             )
         });
     }
-
-    validate_materialized_carrier_budget(graph, &annotations_of)?;
 
     let indexes = Indexes {
         reifier_of: &reifier_of,
@@ -1814,12 +1891,34 @@ pub(super) fn parse_jsonld_into_scope(
     json_bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
     let value = context::parse_document(json_bytes)?;
-    let in_force = expand::document_base(&value, &context)?;
-    // `value` is MOVED here: the base question is already answered, so the parsed
-    // document need not outlive the expansion that consumes it.
-    let dataset = expand_to_dataset(value, &context)?;
+    value_into_scope(value, base, None)
+}
+
+fn value_into_scope(
+    value: Value,
+    base: &mut purrdf_iri::BaseScope,
+    configured: Option<&CompiledJsonLdContext>,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let default;
+    let context = if let Some(context) = configured {
+        if context.original_document_iri() != scope_base(base) {
+            return Err(RdfDiagnostic::error(
+                "yamlld-input-context-base",
+                "compiled YAML-LD context document IRI must match the caller parse base",
+            ));
+        }
+        context
+    } else {
+        default = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
+        &default
+    };
+    let expanded = structural::expand(&value, context, JsonLdExpansionLimits::DEFAULT)?;
+    let in_force = expanded.document_base;
+    // Structural expansion owns its output; release the original decoded input
+    // before constructing the RDF node map.
+    drop(value);
+    let dataset = expand::expanded_to_dataset(expanded.value)?;
     // Only a document that MOVED the base rewrites the scope. When the two agree, the
     // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
     // truthful one; overwriting it would claim the document said something it did not.
@@ -1857,14 +1956,167 @@ pub fn parse_jsonld_with_context(
 
 /// Expand a parsed JSON-LD value under `context` and lower it into the frozen IR.
 ///
-/// The single expansion body both public parse entry points and the codec seam share, so
+/// The single expansion body the public parse entry points and codec seam share, so
 /// the base-reporting path cannot expand a document differently from the base-less one.
 fn expand_to_dataset(
     value: Value,
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let carrier = expand::expand_document(value, context)?;
-    expand::carrier_to_dataset(carrier)
+    let expanded = structural::expand(&value, context, JsonLdExpansionLimits::DEFAULT)?;
+    drop(value);
+    expand::expanded_to_dataset(expanded.value)
+}
+
+/// Expand native JSON-LD to its document structure before RDF node-map lowering.
+///
+/// Returns an array retaining nested nodes, indexes and original JSON values.
+/// Input/context admission remains separate from the explicit construction limit.
+/// # Errors
+/// Returns original input, context, structural or native construction refusals.
+pub fn expand_jsonld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    limits: &JsonLdExpansionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    expand_jsonld_document_with_context(bytes, context, limits).map(|expanded| expanded.value)
+}
+
+/// Expand JSON-LD while retaining the effective base from the original native walk.
+/// Input decoding and expansion retain their existing separate authorities.
+/// # Errors
+/// Preserves original input, context, structural and construction refusals.
+pub fn expand_jsonld_document_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    limits: &JsonLdExpansionLimits,
+) -> Result<JsonLdExpandedDocument, RdfDiagnostic> {
+    let value = context::parse_document(bytes)?;
+    structural::expand(&value, context, *limits)
+}
+
+/// Expand JSON-LD bytes under the input context, then compact under a distinct
+/// immutable output context. Each construction operation has its own allowance.
+/// # Errors
+/// Preserves native decoding, expansion, context, shape and construction refusals.
+pub fn compact_jsonld_with_context(
+    bytes: &[u8],
+    input_context: &CompiledJsonLdContext,
+    output_context: &CompiledJsonLdContext,
+    policy: &JsonLdCompactionPolicy,
+    expansion_limits: &JsonLdExpansionLimits,
+    compaction_limits: &JsonLdCompactionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_jsonld_with_context(bytes, input_context, expansion_limits)?;
+    compact_expanded_with_context(&expanded, output_context, policy, compaction_limits)
+}
+
+/// Expand selected YAML-LD bytes and compact through the same document body as
+/// JSON-LD. Input selection and expansion keep their existing separate controls.
+/// # Errors
+/// Preserves native YAML, expansion, context, shape and construction refusals.
+pub fn compact_yamlld_with_context(
+    bytes: &[u8],
+    input_context: &CompiledJsonLdContext,
+    output_context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+    policy: &JsonLdCompactionPolicy,
+    expansion_limits: &JsonLdExpansionLimits,
+    compaction_limits: &JsonLdCompactionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_yamlld_with_context(bytes, input_context, options, expansion_limits)?;
+    compact_expanded_with_context(&expanded, output_context, policy, compaction_limits)
+}
+
+/// Frame JSON-LD input and frame bytes through the shared native value operation.
+/// Context roles, offline lookup, output base and phase authorities are identical
+/// to [`frame_value_with_context`].
+/// # Errors
+/// Preserves original lexical, context, framing and storage diagnostics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Explicit independent document and context roles match the native framing operation."
+)]
+pub fn frame_jsonld_with_context(
+    input: &[u8],
+    frame: &[u8],
+    input_context: &CompiledJsonLdContext,
+    frame_context: &CompiledJsonLdContext,
+    frame_retrieval_base: Option<&str>,
+    output_base: JsonLdFramingBase<'_>,
+    policy: &JsonLdFramingPolicy,
+    limits: &JsonLdFramingLimits,
+) -> Result<Value, RdfDiagnostic> {
+    frame_value_with_context(
+        &context::parse_document(input)?,
+        &context::parse_document(frame)?,
+        input_context,
+        frame_context,
+        frame_retrieval_base,
+        output_base,
+        policy,
+        limits,
+    )
+}
+
+/// Frame selected YAML-LD input and frame documents using the same lexical
+/// projection and native framing operation as the JSON adapter.
+/// # Errors
+/// Preserves original YAML selection, context, framing and storage diagnostics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "YAML selection adds one explicit authority to the independent framing context roles."
+)]
+pub fn frame_yamlld_with_context(
+    input: &[u8],
+    frame: &[u8],
+    input_context: &CompiledJsonLdContext,
+    frame_context: &CompiledJsonLdContext,
+    frame_retrieval_base: Option<&str>,
+    output_base: JsonLdFramingBase<'_>,
+    options: &YamlLdOptions,
+    policy: &JsonLdFramingPolicy,
+    limits: &JsonLdFramingLimits,
+) -> Result<Value, RdfDiagnostic> {
+    frame_value_with_context(
+        &yaml::basic_value(input, options)?,
+        &yaml::basic_value(frame, options)?,
+        input_context,
+        frame_context,
+        frame_retrieval_base,
+        output_base,
+        policy,
+        limits,
+    )
+}
+
+/// Flatten native JSON-LD without choosing an output context or compacting.
+/// Input expansion and node-map construction use separate explicit limits.
+/// # Errors
+/// Returns original decoding, context, expansion, conflicting-index or construction refusals.
+pub fn flatten_jsonld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    expansion_limits: &JsonLdExpansionLimits,
+    flatten_limits: &JsonLdFlattenLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_jsonld_with_context(bytes, context, expansion_limits)?;
+    flatten_expanded(&expanded, flatten_limits)
+}
+
+/// Flatten expanded document structure through the native normative node-map body.
+/// Its construction allowance is independent of expansion and later compaction.
+/// # Errors
+/// Preserves original malformed-shape, conflicting-index and construction refusals.
+pub fn flatten_expanded(
+    expanded: &Value,
+    flatten_limits: &JsonLdFlattenLimits,
+) -> Result<Value, RdfDiagnostic> {
+    node_map::flatten(
+        node_map::Input::Borrowed(expanded),
+        *flatten_limits,
+        node_map::Issuance::Normative,
+    )
+    .map(|mapped| mapped.value)
 }
 
 /// Validate `iri` as an absolute IRI and return the native term.
@@ -1990,37 +2242,13 @@ pub fn jsonld_to_statement_metadata_nquads(
     String::from_utf8(buf).map_err(|e| decode(format!("N-Quads are not UTF-8: {e}")))
 }
 
-/// Convert YAML-LD-star bytes to JSON-LD-star JSON, hard-failing on YAML
-/// anchors/aliases (extended YAML is out of scope).
-///
-/// The conversion is purely structural: YAML scalars/sequences/mappings map one-to-one
-/// onto JSON, so the resulting JSON is consumable by [`parse_jsonld`] and the
-/// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
-/// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
-/// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
-/// The key refusal is the specification's: "every mapping key MUST be a YAML scalar
-/// whose resolved node tag in the representation graph is `tag:yaml.org,2002:str`.
-/// Otherwise, a mapping-key-error MUST be detected, and processing aborted" (YAML-LD,
-/// "Mapping Key Types"), so `1: a`, `true: a` and `null: a` are refused while `'1': a`
-/// and `!!str 1: a` are read. Mapping keys keep their document order and numbers their
-/// lexemes.
+/// Convert YAML-LD Basic bytes to JSON-LD JSON using first-document selection.
+/// The complete stream must have valid syntax, roots and resolved string keys;
+/// only selected values undergo Core scalar construction. Acyclic aliases produce
+/// independent JSON copies. Use [`yamlld_to_jsonld_with_options`] for all documents
+/// or explicit resource bounds. Mapping order and exact numeric values are retained.
 pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
-    let text = std::str::from_utf8(yaml_bytes)
-        .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;
-    let value = purrdf_lex::yaml::read_with(
-        text,
-        purrdf_lex::yaml::Limits {
-            aliases: false,
-            ..purrdf_lex::yaml::Limits::DEFAULT
-        },
-    )
-    .map_err(|e| match e.kind() {
-        purrdf_lex::yaml::ErrorKind::Alias => {
-            decode(format!("YAML-LD-star must not use anchors or aliases: {e}"))
-        }
-        _ => decode(format!("parse YAML-LD-star: {e}")),
-    })?;
-    Ok(purrdf_lex::json::write_compact(&value))
+    yamlld_to_jsonld_with_options(yaml_bytes, &YamlLdOptions::DEFAULT)
 }
 
 /// Downcast YAML-LD-star bytes to statement-metadata N-Quads in the caller's
@@ -2135,7 +2363,9 @@ mod carrier_law_tests {
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
         let initial =
             CompiledJsonLdContext::compile(&Object::new().into(), None).expect("empty context");
-        let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
+        let structure = structural::expand(&document, &initial, JsonLdExpansionLimits::DEFAULT)
+            .expect("structural expansion");
+        let reexpanded = expand::expanded_to_carrier(structure.value).expect("node map");
         assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
     }
 
@@ -2239,7 +2469,7 @@ mod yamlld_input {
 
     /// Each refused YAML-LD document beside the nearest accepted one.
     #[test]
-    fn yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours() {
+    fn yaml_ld_basic_refuses_invalid_keys_and_accepts_acyclic_aliases() {
         for (yaml, refusal) in [
             ("'@id': https://example.org/s\n", None),
             (
@@ -2253,7 +2483,7 @@ mod yamlld_input {
             ),
             (
                 "https://example.org/p: &a one\nhttps://example.org/q: *a\n",
-                Some("must not use anchors or aliases"),
+                None,
             ),
             (
                 "https://example.org/p: one & two\nhttps://example.org/q: '*a'\n",
@@ -2301,11 +2531,13 @@ mod parse_residency {
     ///
     /// The bar is a ratio against the document because the document is the only
     /// quantity a caller controls, and it is stated wide because it is separating two
-    /// measured regimes rather than pinning a number: on this fixture the peak was
-    /// 18.0x the document before the drain and is 9.2x after. A parse that went back
-    /// to holding both would land above 12x again.
+    /// measured regimes rather than pinning a number. The original input and strict
+    /// twelve-times-input ceiling remain fixed; the closed window reports its actual
+    /// peak beside the input size and ceiling.
     #[test]
     fn parsing_does_not_hold_the_tree_and_the_carrier_at_once() {
+        use std::io::Write as _;
+
         let mut builder = RdfDatasetBuilder::new();
         for i in 0..20_000 {
             let subject = builder
@@ -2336,6 +2568,14 @@ mod parse_residency {
             "the drain must not lose rows"
         );
         let ceiling = (bytes.len() as i64) * 12;
+        writeln!(
+            std::io::stdout().lock(),
+            "JSON-LD parse residency: input={} bytes, peak={} bytes, ceiling={} bytes",
+            bytes.len(),
+            measured.peak_working_bytes,
+            ceiling,
+        )
+        .expect("write the measured parse residency");
         assert!(
             measured.peak_working_bytes < ceiling,
             "parsing a {}-byte document peaked at {} live bytes ({:.1}x). Above 12x \
@@ -2409,6 +2649,16 @@ mod list_depth {
                 .expect("the nested lists serialize");
         assert_eq!(document.matches("@list").count(), 3);
         let parsed = parse_jsonld(document.as_bytes(), None).expect("the document parses back");
-        assert!(crate::datasets_isomorphic(&*parsed, &*dataset));
+        assert!(
+            crate::datasets_isomorphic(
+                &*parsed,
+                &*dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 }

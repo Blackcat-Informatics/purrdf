@@ -177,14 +177,14 @@ fn governed_offering(query: &str) -> Offering {
     let (env, _, offered) = recording_environment(None);
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_query_with_options(query, None, with_env(&env))
+        .prepare_query_with_options(query, None, &with_env(&env))
         .expect("the query prepares");
     match engine
         .query_prepared_governed_view(
             &*dataset(),
             &prepared,
             &[],
-            with_env(&env),
+            &with_env(&env),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("the governed lane evaluates")
@@ -218,11 +218,11 @@ fn open(
     let (env, minted) = environment(moves_after);
     let engine = NativeSparqlEngine::new();
     let prepared = engine
-        .prepare_query_with_options(query, None, with_env(&env))
+        .prepare_query_with_options(query, None, &with_env(&env))
         .expect("the query prepares");
     (
         engine
-            .open_call_cursor(&prepared, with_env(&env))
+            .open_call_cursor(&prepared, &with_env(&env))
             .map_err(|diagnostic| diagnostic.to_string()),
         minted,
     )
@@ -414,14 +414,14 @@ fn a_filter_over_the_call_is_applied_row_by_row_and_never_licenses_a_short_read(
         let (env, minted, offered) = recording_environment(None);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_query_with_options(&query, None, with_env(&env))
+            .prepare_query_with_options(&query, None, &with_env(&env))
             .expect("the query prepares");
         assert!(
             prepared.is_call_read(),
             "a row-by-row FILTER reads on demand — {query}"
         );
         let mut cursor = engine
-            .open_call_cursor(&prepared, with_env(&env))
+            .open_call_cursor(&prepared, &with_env(&env))
             .expect("the query is one call under row-for-row operators");
         assert_eq!(cursor.variables(), variables.as_slice(), "{query}");
         let data = dataset();
@@ -581,7 +581,7 @@ fn the_shape_predicate_agrees_with_the_open_and_opens_nothing() {
         let (env, minted) = environment(None);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_query_with_options(&query, None, with_env(&env))
+            .prepare_query_with_options(&query, None, &with_env(&env))
             .expect("the query prepares");
         assert_eq!(prepared.is_call_read(), admitted, "{query}");
         assert_eq!(
@@ -590,7 +590,7 @@ fn the_shape_predicate_agrees_with_the_open_and_opens_nothing() {
             "asking the shape opened no invocation — {query}"
         );
         assert_eq!(
-            engine.open_call_cursor(&prepared, with_env(&env)).is_ok(),
+            engine.open_call_cursor(&prepared, &with_env(&env)).is_ok(),
             admitted,
             "the predicate and the open agree — {query}"
         );
@@ -633,7 +633,7 @@ fn the_shape_names_the_calls_each_columns_values_come_from_before_and_after_plan
     let prepare = |query: &str| {
         let (env, _) = environment(None);
         NativeSparqlEngine::new()
-            .prepare_query_with_options(query, None, with_env(&env))
+            .prepare_query_with_options(query, None, &with_env(&env))
             .expect("the query prepares")
     };
     // Each column's alternatives, each the argument lists of the calls it is drawn

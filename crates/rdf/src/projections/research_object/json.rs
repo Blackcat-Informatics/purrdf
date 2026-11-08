@@ -108,20 +108,11 @@ impl OfflineJsonLdContext {
         &self.compiled
     }
 
-    /// Resolve a configured compact term to its absolute vocabulary IRI.
+    /// Resolve an explicitly configured profile term to its vocabulary IRI.
+    /// General JSON-LD IRI expansion also admits unchanged relative values;
+    /// profile role admission requires membership in this validated table.
     pub fn expand(&self, term: &str) -> Option<&str> {
-        let expanded = self.definitions.get(term).map(String::as_str);
-        if !term.contains(':') {
-            debug_assert_eq!(
-                self.compiled
-                    .expand_iri(term, true, false)
-                    .ok()
-                    .flatten()
-                    .as_deref(),
-                expanded
-            );
-        }
-        expanded
+        self.definitions.get(term).map(String::as_str)
     }
 }
 

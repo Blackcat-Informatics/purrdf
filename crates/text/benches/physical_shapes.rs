@@ -56,7 +56,7 @@ fn dictionary(bench: &mut Bench) {
                 .collect();
             let capability = WorkspaceCapability::resident();
             let cache = DictionaryCache::default();
-            let compiled = cache.get(&fixture.index, &entries, &capability).unwrap();
+            let compiled = cache.get(&*fixture.index, &entries, &capability).unwrap();
             let matches = compiled
                 .scan(fixture.index.clone(), None, &capability)
                 .unwrap();
@@ -88,7 +88,7 @@ fn dictionary(bench: &mut Bench) {
                 b.iter(|| {
                     black_box(
                         cache
-                            .get(&fixture.index, black_box(&entries), &capability)
+                            .get(&*fixture.index, black_box(&entries), &capability)
                             .unwrap(),
                     )
                 });
@@ -98,7 +98,7 @@ fn dictionary(bench: &mut Bench) {
                     cache.clear();
                     black_box(
                         cache
-                            .get(&fixture.index, black_box(&entries), &capability)
+                            .get(&*fixture.index, black_box(&entries), &capability)
                             .unwrap(),
                     )
                 });
@@ -126,11 +126,11 @@ fn windows(bench: &mut Bench) {
         for width in [0, 2, 16] {
             let query = window_query(&width.to_string());
             let literal = engine(true)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             let allocation = purrdf_alloc_probe::CurrentThreadWindow::open();
             let shaped = engine(false)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             let measured = allocation.close();
             assert_eq!(bytes(&shaped), bytes(&literal));
@@ -160,7 +160,7 @@ fn windows(bench: &mut Bench) {
                                     .query_with_options_view(
                                         &*dataset,
                                         request(black_box(&query)),
-                                        QueryOptions::EMPTY,
+                                        &QueryOptions::EMPTY,
                                     )
                                     .unwrap(),
                             )
@@ -201,11 +201,11 @@ fn buckets(bench: &mut Bench) {
                 "SELECT ?bucket (COUNT(*) AS ?count) (SUM(?n/3) AS ?total) (AVG(?n/3) AS ?mean) (SAMPLE(?n) AS ?first) WHERE {{ VALUES (?time ?n) {{ {values} }} BIND(<{target}>(?time) AS ?bucket) }} GROUP BY ?bucket"
             );
             let literal = engine(true)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             let allocation = purrdf_alloc_probe::CurrentThreadWindow::open();
             let shaped = engine(false)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             let measured = allocation.close();
             assert_eq!(bytes(&shaped), bytes(&literal));
@@ -240,7 +240,7 @@ fn buckets(bench: &mut Bench) {
                                     .query_with_options_view(
                                         &*dataset,
                                         request(black_box(&query)),
-                                        QueryOptions::EMPTY,
+                                        &QueryOptions::EMPTY,
                                     )
                                     .unwrap(),
                             )

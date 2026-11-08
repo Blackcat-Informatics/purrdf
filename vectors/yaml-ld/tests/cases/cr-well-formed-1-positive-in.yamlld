@@ -1,0 +1,5 @@
+# A cases well-formed YAML document
+"@context":
+  "@vocab": http://example.com/
+"@id": http://example.org/test#example
+"@type": t1

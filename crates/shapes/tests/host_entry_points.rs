@@ -214,11 +214,16 @@ fn lint_supersedes_what_shacl_1_2_core_makes_well_formed() {
 fn eval(root: &str, focus: &str, scope: &[(&str, &str)]) -> Result<Vec<String>, String> {
     let doc = document(TOOLS);
     let data = data();
-    let root = parse_term(root)?;
-    let focus = parse_term(focus)?;
+    let root = parse_term(root).map_err(|error| error.to_string())?;
+    let focus = parse_term(focus).map_err(|error| error.to_string())?;
     let scope: Vec<(String, Term)> = scope
         .iter()
-        .map(|(name, term)| Ok(((*name).to_owned(), parse_term(term)?)))
+        .map(|(name, term)| {
+            Ok((
+                (*name).to_owned(),
+                parse_term(term).map_err(|error| error.to_string())?,
+            ))
+        })
         .collect::<Result<_, String>>()?;
     evaluate(&FreeExpression {
         shapes: &doc.dataset,
@@ -287,7 +292,10 @@ fn a_scope_binding_that_could_never_be_read_is_refused() {
 #[test]
 fn a_term_argument_is_an_n_triples_term_or_an_absolute_iri() {
     let error = parse_term("ns#a").expect_err("relative");
-    assert!(error.contains("relative IRI reference"), "{error}");
+    assert!(
+        error.to_string().contains("relative IRI reference"),
+        "{error}"
+    );
     assert_eq!(
         parse_term("http://example.org/ns#a"),
         Ok(Term::NamedNode("http://example.org/ns#a".into()))

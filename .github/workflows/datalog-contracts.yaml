@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Datalog evaluation contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - .github/workflows/datalog-contracts.yaml
+      - crates/datalog/**
+      - crates/entail/src/engine.rs
+      - crates/entail/src/explain.rs
+      - crates/shapes/src/srl/eval.rs
+      - crates/shapes/tests/rule_capacity_limits.rs
+      - crates/cli/tests/shapes_tools_cli.rs
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 2
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+      - name: Execute public evaluator contracts
+        run: |
+          cargo test --locked -p purrdf-datalog --test rules_runtime
+          cargo test --locked -p purrdf-datalog --test structured_errors
+      # Host-wide suites run in the complete pull-request CI matrix. Development
+      # pushes exercise the changed engine before paying for those host builds.
+      - name: Measure model-only allocation and factor growth
+        run: cargo test --locked -p purrdf-datalog --test factor_allocation -- --nocapture
+      - name: Check evaluator, proof, store and scheduling regressions
+        run: cargo test --locked -p purrdf-datalog --lib
+      - name: Compare physical work in the entailment oracle
+        id: oracle
+        run: cargo test --locked -p purrdf-entail --test oracle -- --exact goldens_match_the_current_engine
+      - name: Render actual oracle reports for review after a mismatch
+        id: regenerated_oracle
+        if: failure() && steps.oracle.outcome == 'failure'
+        run: cargo test --locked -p purrdf-entail --test oracle -- --ignored --exact regenerate_goldens
+      - name: Retain complete source-bound oracle reports
+        if: failure() && steps.regenerated_oracle.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: datalog-entail-oracle-${{ github.sha }}
+          path: crates/entail/tests/goldens/*.golden
+          if-no-files-found: error

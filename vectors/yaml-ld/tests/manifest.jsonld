@@ -1,0 +1,1103 @@
+{
+  "@context": ["context.jsonld", {"@base": "basic-manifest"}],
+  "@id": "",
+  "@type": "mf:Manifest",
+  "name": "Tests using YAML-LD JSON Profile",
+  "description": "These tests implement the requirements for the [YAML-LD JSON Profile](https://w3c.github.io/yaml-ld/#yaml-ld-json-profile).",
+  "baseIri": "https://w3c.github.io/yaml-ld/tests/",
+  "sequence": [
+    {
+      "@id":  "#cir-document-content-1-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Document with scalar content.",
+      "purpose": "Document content MUST be a sequence, a mapping, or null.",
+      "req": "must",
+      "input": "cases/cir-document-content-1-negative-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id":  "#cir-mapping-key-1-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Mapping with integer key.",
+      "purpose": "A mapping key MUST be a string.",
+      "req": "must",
+      "input": "cases/mapping-key-must-be-string/integer.yamlld",
+      "expectErrorCode": "mapping-key-error"
+    },
+    {
+      "@id":  "#cir-mapping-key-2-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Mapping with an object key.",
+      "purpose": "A mapping key MUST be a string.",
+      "req": "must",
+      "input": "cases/mapping-key-must-be-string/object.yamlld",
+      "expectErrorCode": "mapping-key-error"
+    },
+    {
+      "@id":  "#cir-mapping-key-3-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Mapping with a list key.",
+      "purpose": "A mapping key MUST be a string.",
+      "req": "must",
+      "input": "cases/mapping-key-must-be-string/list.yamlld",
+      "expectErrorCode": "mapping-key-error"
+    },
+    {
+      "@id":  "#cir-mapping-key-4-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Mapping with a float key.",
+      "purpose": "A mapping key MUST be a string.",
+      "req": "must",
+      "input": "cases/mapping-key-must-be-string/float.yamlld",
+      "expectErrorCode": "mapping-key-error"
+    },
+    {
+      "@id":  "#cir-mapping-key-5-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Mapping with a null key.",
+      "purpose": "A mapping key MUST be a string.",
+      "req": "must",
+      "input": "cases/mapping-key-must-be-string/null.yamlld",
+      "expectErrorCode": "mapping-key-error"
+    },
+    {
+      "@id": "#cir-scalar-core-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "tag:yaml.org,2002 scalars",
+      "purpose": "Otherwise, the conversion result is mapped through the YAML Core Schema.",
+      "req": "must",
+      "option": {"extendedYAML": true, "normative": false},
+      "input": "cases/cir-scalar-core-1-positive-in.yamlld",
+      "expect": "cases/cir-scalar-core-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cir-scalar-i18n-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "language-tagged string with internationalization (ignored without extendedYAML)",
+      "purpose": "Otherwise, the conversion result is mapped through the YAML Core Schema.",
+      "req": "must",
+      "option": {"extendedYAML": true, "normative": false},
+      "input": "cases/cir-scalar-i18n-1-positive-in.yamlld",
+      "expect": "cases/cir-scalar-i18n-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cir-scalar-other-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Scalars with other node tags (ignored without extendedYAML)",
+      "purpose": "Otherwise, the conversion result is mapped through the YAML Core Schema.",
+      "req": "must",
+      "option": {"extendedYAML": true, "normative": false},
+      "input": "cases/cir-scalar-other-1-positive-in.yamlld",
+      "expect": "cases/cir-scalar-other-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cr-comments-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Various comment forms",
+      "purpose": "Comments are white space.",
+      "req": "must",
+      "input": "cases/cr-comments-1-positive-in.yamlld",
+      "expect": "cases/cr-comments-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cr-utf8-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "UTF-8 BOM",
+      "purpose": "A YAML-LD stream MUST be encoded in UTF-8, to ensure interoperability with [[JSON]].",
+      "req": "must",
+      "input": "cases/cr-utf8-1-positive-in.yamlld",
+      "expect": "cases/cr-utf8-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cr-utf8-2-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "UTF-16 BOM",
+      "purpose": "A YAML-LD stream MUST be encoded in UTF-8, to ensure interoperability with [[JSON]].",
+      "req": "must",
+      "input": "cases/cr-utf8-2-negative-in.yamlld",
+      "expectErrorCode": "invalid encoding"
+    },
+    {
+      "@id": "#cr-well-formed-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Load a well-formed document",
+      "purpose": "All YAML-LD streams MUST form a well-formed stream.",
+      "req": "must",
+      "input": "cases/cr-well-formed-1-positive-in.yamlld",
+      "expect": "cases/cr-well-formed-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#cr-well-formed-2-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Fail to load a non-well-formed stream",
+      "purpose": "All YAML-LD streams MUST form a well-formed stream.",
+      "req": "must",
+      "input": "cases/cr-well-formed-2-negative-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#aa-cycles-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Use of anchors and aliases",
+      "purpose": "A YAML-LD document MAY contain anchored nodes and alias nodes.",
+      "req": "may",
+      "input": "cases/aa-cycles-1-positive-in.yamlld",
+      "expect": "cases/aa-cycles-1-positive-out.yamlld"
+    },
+    {
+      "@id": "#aa-cycles-2-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Anchors and aliases with cycles",
+      "purpose": "A YAML-LD document ... MUST NOT contain cycles.",
+      "req": "must",
+      "input": "cases/aa-cycles-2-negative-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#aa-cycles-3-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Alias node resolution",
+      "purpose": "Alias nodes MUST be resolved by value to their target nodes.",
+      "req": "must",
+      "input": "cases/aa-cycles-3-positive-in.yamlld",
+      "expect": "cases/aa-cycles-3-positive-out.yamlld"
+    },
+    {
+      "@id": "#aa-information-1-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ToRDFTest"],
+      "name": "Anchor names do not convey semantic information",
+      "purpose": "Anchor names are a serialization detail and MUST NOT be used to convey relevant information.",
+      "req": "must",
+      "input": "cases/aa-information-1-positive-in.yamlld",
+      "expect": "cases/aa-information-1-positive-out.nq"
+    },
+    {
+      "@id": "#cir-scalar-core-2-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ToRDFTest"],
+      "name": "tag:yaml.org,2002 scalars (RDF)",
+      "purpose": "If t resolves with a prefix of `tag:yaml.org,2002:`, the conversion result is mapped through the YAML Core Schema.",
+      "req": "must",
+      "option": {"extendedYAML": true, "normative": false},
+      "input": "cases/cir-scalar-core-2-positive-in.yamlld",
+      "expect": "cases/cir-scalar-core-2-positive-out.nq"
+    },
+    {
+      "@id": "#cir-scalar-other-2-positive",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ToRDFTest"],
+      "name": "Scalars with other node tags (RDF)  (ignored without extendedYAML)",
+      "purpose": "Otherwise, the conversion result is an RDF literal.",
+      "req": "may",
+      "option": {"extendedYAML": true, "normative": false},
+      "input": "cases/cir-scalar-other-2-positive-in.yamlld",
+      "expect": "cases/cir-scalar-other-2-positive-out.nq"
+    },
+    {
+      "@id": "#cr-well-formed-3-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Undefined alias",
+      "purpose": "All document MUST use node aliases defined by a previous node.",
+      "req": "must",
+      "input": "cases/cr-well-formed-3-negative-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#html-and-yaml-streams",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents embedded into HTML.",
+      "req": "must",
+      "option": {"extractAllScripts": true},
+      "input": "cases/html/stream.html",
+      "expect": "cases/html/stream.yamlld"
+    },
+    {
+      "@id": "#mixed-script-types",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents embedded into HTML, having JSON-LD and YAML-LD documents in them.",
+      "req": "must",
+      "option": {"extractAllScripts": true},
+      "input": "cases/html/mixed-types.html",
+      "expect": "cases/html/stream.yamlld"
+    },
+    {
+      "@id": "#html-dedent-needed",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents embedded into HTML.",
+      "req": "must",
+      "option": {"extractAllScripts": true},
+      "input": "cases/html/dedent-needed.html",
+      "expect": "cases/html/stream.yamlld"
+    },
+    {
+      "@id": "#html-dedent-not-needed",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents embedded into HTML.",
+      "req": "must",
+      "option": {"extractAllScripts": true},
+      "input": "cases/html/dedent-not-needed.html",
+      "expect": "cases/html/stream.yamlld"
+    },
+    {
+      "@id": "#two-documents-from-stream",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents.",
+      "req": "must",
+      "option": {"extractAllScripts": true},
+      "input": "cases/streams/two-documents-in.yamlld",
+      "expect": "cases/streams/two-documents-out.yamlld"
+    },
+    {
+      "@id": "#one-document-from-stream",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML Stream with multiple documents.",
+      "req": "must",
+      "option": {"extractAllScripts": false},
+      "input": "cases/streams/two-documents-in.yamlld",
+      "expect": "cases/streams/one-document-out.yamlld"
+    },
+    {
+      "@id": "#shared-blank-node-from-stream",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "Shared explicit blank node identifier across YAML documents",
+      "purpose": "With extractAllScripts, constructed values form one JSON-LD document, so the same explicit blank node identifier identifies one blank node.",
+      "req": "must",
+      "option": {
+        "extractAllScripts": true
+      },
+      "input": "cases/streams/shared-blank-node-in.yamlld",
+      "expect": "cases/streams/shared-blank-node-out.nq"
+    },
+    {
+      "@id": "#empty-document-from-stream",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Empty middle document in a stream",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-document-out.yamlld"
+    },
+    {
+      "@id": "#empty-document-from-stream-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "Mixed stream preserves nonempty triples",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-document-out.nq"
+    },
+    {
+      "@id": "#empty-document",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "empty-document (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/standalone-empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#empty-document-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "empty-document (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/standalone-empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#empty-document-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "empty-document produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/standalone-empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#empty-document-rdf-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "empty-document produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/standalone-empty-document-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#root-null-null",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-null (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-null-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-null-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-null (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-null-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-title",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-title (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-title-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-title-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-title (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-title-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-upper",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-upper (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-upper-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-upper-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-upper (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-upper-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-tilde",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-tilde (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-tilde-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#root-null-tilde-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "root-null-tilde (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/root-null-tilde-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#zero-documents",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "zero-documents (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/zero-documents-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#zero-documents-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "zero-documents (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/zero-documents-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#zero-documents-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "zero-documents produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/zero-documents-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#zero-documents-rdf-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "zero-documents produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/zero-documents-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#whitespace-only",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "whitespace-only (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/whitespace-only-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#whitespace-only-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "whitespace-only (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/whitespace-only-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#comments-only",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "comments-only (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/comments-only-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#comments-only-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "comments-only (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/comments-only-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#all-empty",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "all-empty (first document)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/all-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#all-empty-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "all-empty (all documents)",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/all-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#all-empty-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "all-empty produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/all-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": false
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#all-empty-rdf-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "all-empty produces an empty RDF dataset",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/all-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/empty-out.nq"
+    },
+    {
+      "@id": "#leading-empty-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "leading-empty aggregated",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/leading-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/item-out.yamlld"
+    },
+    {
+      "@id": "#leading-empty-default",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "leading-empty under default processing",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/leading-empty-in.yamlld",
+      "expect": "cases/streams/empty-out.yamlld"
+    },
+    {
+      "@id": "#leading-empty-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "leading-empty preserves nonempty triples",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/leading-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/item-out.nq"
+    },
+    {
+      "@id": "#trailing-empty-all",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "trailing-empty aggregated",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/trailing-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/item-out.yamlld"
+    },
+    {
+      "@id": "#trailing-empty-default",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "trailing-empty under default processing",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/trailing-empty-in.yamlld",
+      "expect": "cases/streams/item-out.yamlld"
+    },
+    {
+      "@id": "#trailing-empty-rdf",
+      "@type": [
+        "jld:PositiveEvaluationTest",
+        "jld:ToRDFTest"
+      ],
+      "name": "trailing-empty preserves nonempty triples",
+      "purpose": "Empty documents contribute null; streams retain constructed values and select the first document by default.",
+      "req": "must",
+      "input": "cases/streams/trailing-empty-in.yamlld",
+      "option": {
+        "extractAllScripts": true
+      },
+      "expect": "cases/streams/item-out.nq"
+    },
+    {
+      "@id": "#root-string-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject string root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-string-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#root-integer-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject integer root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-integer-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#root-float-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject float root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-float-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#root-boolean-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject boolean root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-boolean-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#root-quoted-null-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject quoted-null root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-quoted-null-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#root-quoted-tilde-negative",
+      "@type": [
+        "jld:NegativeEvaluationTest",
+        "jld:ExpandTest"
+      ],
+      "name": "Reject quoted-tilde root",
+      "purpose": "Other scalar roots MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/streams/root-quoted-tilde-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#local-json-ld-context",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Load a context from a local file in JSON-LD format.",
+      "req": "must",
+      "option": {"extractAllScripts": false},
+      "input": "cases/local-context/jsonld-in.yamlld",
+      "expect": "cases/local-context/expanded.yamlld"
+    },
+    {
+      "@id": "#compact-local-json-ld-context",
+      "@type": ["jld:PositiveEvaluationTest", "jld:CompactTest"],
+      "name": "Load a context from a local file in JSON-LD format.",
+      "req": "must",
+      "option": {"extractAllScripts": false},
+      "input": "cases/local-context/expanded.yamlld",
+      "context": "cases/local-context/context.jsonld",
+      "expect": "cases/local-context/compacted.yamlld"
+    },
+    {
+      "@id": "#local-yaml-ld-context",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Load a context from a local file in YAML-LD format.",
+      "req": "must",
+      "option": {"extractAllScripts": false},
+      "input": "cases/local-context/yamlld-in.yamlld",
+      "expect": "cases/local-context/expanded.yamlld"
+    },
+    {
+      "@id": "#compact-local-yaml-ld-context",
+      "@type": ["jld:PositiveEvaluationTest", "jld:CompactTest"],
+      "name": "Load a context from a local file in YAML-LD format.",
+      "req": "must",
+      "option": {"extractAllScripts": false},
+      "input": "cases/local-context/expanded.yamlld",
+      "context": "cases/local-context/context.yamlld",
+      "expect": "cases/local-context/compacted.yamlld"
+    },
+    {
+      "@id": "#flatten",
+      "@type": ["jld:PositiveEvaluationTest", "jld:FlattenTest"],
+      "name": "compactArrays option",
+      "purpose": "Setting compactArrays to false causes single element arrays to be retained",
+      "option": {
+        "compactArrays": false
+      },
+      "input": "cases/flatten/0044-in.yamlld",
+      "context": "cases/flatten/0044-context.yamlld",
+      "expect": "cases/flatten/0044-out.yamlld"
+    },
+    {
+      "@id": "#frame-t0001",
+      "@type": ["jld:PositiveEvaluationTest", "jld:FrameTest"],
+      "name": "Library framing example",
+      "purpose": "Basic example used in playground and spec examples.",
+      "input": "cases/frame/0001-in.yamlld",
+      "frame": "cases/frame/0001-frame.yamlld",
+      "expect": "cases/frame/0001-out.yamlld"
+    },
+    {
+      "@id": "#core-bool-true",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Lowercase true is a boolean",
+      "purpose": "YAML Core Schema resolves true as boolean.",
+      "req": "must",
+      "input": "cases/yaml-schema/bool-true-in.yamlld",
+      "expect": "cases/yaml-schema/bool-true-out.yamlld"
+    },
+    {
+      "@id": "#core-bool-false",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Lowercase false is a boolean",
+      "purpose": "YAML Core Schema resolves false as boolean.",
+      "req": "must",
+      "input": "cases/yaml-schema/bool-false-in.yamlld",
+      "expect": "cases/yaml-schema/bool-false-out.yamlld"
+    },
+    {
+      "@id": "#core-bool-true-title",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Title-case True is a boolean",
+      "purpose": "YAML Core Schema resolves True as boolean true.",
+      "req": "must",
+      "input": "cases/yaml-schema/bool-true-title-in.yamlld",
+      "expect": "cases/yaml-schema/bool-true-out.yamlld"
+    },
+    {
+      "@id": "#core-bool-false-upper",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Uppercase FALSE is a boolean",
+      "purpose": "YAML Core Schema resolves FALSE as boolean false.",
+      "req": "must",
+      "input": "cases/yaml-schema/bool-false-upper-in.yamlld",
+      "expect": "cases/yaml-schema/bool-false-out.yamlld"
+    },
+    {
+      "@id": "#core-null-null",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "null is null",
+      "purpose": "YAML Core Schema resolves null as null.",
+      "req": "must",
+      "input": "cases/yaml-schema/null-null-in.yamlld",
+      "expect": "cases/yaml-schema/null-null-out.yamlld"
+    },
+    {
+      "@id": "#core-null-tilde",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Tilde ~ is null",
+      "purpose": "YAML Core Schema resolves ~ as null.",
+      "req": "must",
+      "input": "cases/yaml-schema/null-tilde-in.yamlld",
+      "expect": "cases/yaml-schema/null-null-out.yamlld"
+    },
+    {
+      "@id": "#core-null-upper",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Uppercase NULL is null",
+      "purpose": "YAML Core Schema resolves NULL as null.",
+      "req": "must",
+      "input": "cases/yaml-schema/null-upper-in.yamlld",
+      "expect": "cases/yaml-schema/null-null-out.yamlld"
+    },
+    {
+      "@id": "#core-int-decimal",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Decimal integer",
+      "purpose": "YAML Core Schema resolves decimal integers.",
+      "req": "must",
+      "input": "cases/yaml-schema/int-decimal-in.yamlld",
+      "expect": "cases/yaml-schema/int-decimal-out.yamlld"
+    },
+    {
+      "@id": "#core-int-octal",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Octal integer",
+      "purpose": "YAML Core Schema resolves 0o77 as integer 63.",
+      "req": "must",
+      "input": "cases/yaml-schema/int-octal-in.yamlld",
+      "expect": "cases/yaml-schema/int-octal-out.yamlld"
+    },
+    {
+      "@id": "#core-int-hex",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Hex integer",
+      "purpose": "YAML Core Schema resolves 0x3A as integer 58.",
+      "req": "must",
+      "input": "cases/yaml-schema/int-hex-in.yamlld",
+      "expect": "cases/yaml-schema/int-hex-out.yamlld"
+    },
+    {
+      "@id": "#core-float-basic",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Basic float",
+      "purpose": "YAML Core Schema resolves decimal floats.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-basic-in.yamlld",
+      "expect": "cases/yaml-schema/float-basic-out.yamlld"
+    },
+    {
+      "@id": "#core-float-scientific",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Scientific notation float",
+      "purpose": "YAML Core Schema resolves scientific notation floats.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-scientific-in.yamlld",
+      "expect": "cases/yaml-schema/float-scientific-out.yamlld"
+    },
+    {
+      "@id": "#core-date-ymd",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "Date-like scalar YYYY-MM-DD is a string",
+      "purpose": "YAML 1.2 Core Schema has no timestamp type; 2018-04-01 resolves to a plain string. Some YAML libraries may wish to parse this as a native date object, this should not happen.",
+      "req": "must",
+      "input": "cases/yaml-schema/date-ymd-in.yamlld",
+      "expect": "cases/yaml-schema/date-ymd-out.yamlld"
+    },
+    {
+      "@id": "#core-float-inf-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Infinity scalar causes error",
+      "purpose": "Float infinity (.inf) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-inf-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-float-neg-inf-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Negative infinity scalar causes error",
+      "purpose": "Float negative infinity (-.inf) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-neg-inf-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-float-plus-inf-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "Plus infinity scalar causes error",
+      "purpose": "Float plus infinity (+.inf) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-plus-inf-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-float-nan-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "NaN scalar causes error",
+      "purpose": "Float NaN (.nan) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-nan-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-float-nan-mixed-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "NaN scalar (.NaN) causes error",
+      "purpose": "Float NaN (.NaN) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-nan-mixed-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-float-nan-upper-negative",
+      "@type": ["jld:NegativeEvaluationTest", "jld:ExpandTest"],
+      "name": "NaN scalar (.NAN) causes error",
+      "purpose": "Float NaN (.NAN) cannot be represented in JSON and MUST cause loading document failed.",
+      "req": "must",
+      "input": "cases/yaml-schema/float-nan-upper-in.yamlld",
+      "expectErrorCode": "loading document failed"
+    },
+    {
+      "@id": "#core-yaml11-yes",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'yes' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize yes as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-yes-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-yes-out.yamlld"
+    },
+    {
+      "@id": "#core-yaml11-no",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'no' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize no as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-no-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-no-out.yamlld"
+    },
+    {
+      "@id": "#core-yaml11-on",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'on' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize on as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-on-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-on-out.yamlld"
+    },
+    {
+      "@id": "#core-yaml11-off",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'off' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize off as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-off-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-off-out.yamlld"
+    },
+    {
+      "@id": "#core-yaml11-yes-title",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'Yes' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize Yes as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-yes-title-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-yes-title-out.yamlld"
+    },
+    {
+      "@id": "#core-yaml11-yes-upper",
+      "@type": ["jld:PositiveEvaluationTest", "jld:ExpandTest"],
+      "name": "YAML 1.1 'YES' is a string",
+      "purpose": "YAML 1.2 Core Schema does not recognize YES as boolean; it is a plain string.",
+      "req": "must",
+      "input": "cases/yaml-schema/yaml11-yes-upper-in.yamlld",
+      "expect": "cases/yaml-schema/yaml11-yes-upper-out.yamlld"
+    }
+  ]
+}

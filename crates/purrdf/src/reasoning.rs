@@ -47,11 +47,15 @@ use purrdf_sparql_eval::{
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
-/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
-/// let hierarchy = session.classify().expect("decides"); // no second parse
+/// let mut canonical = purrdf::CanonicalizationControl::new(purrdf::RDFC_V2_CORPUS_POLICY, None);
+/// assert_eq!(session.consistency(&mut canonical).expect("decides").answer(), "consistency true\n");
+/// let hierarchy = session.classify(&mut canonical).expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
 /// ```
 pub use purrdf_validate::regime::ReasonerSession;
+
+/// Owned failures of reasoning requests through the shared string boundary.
+pub use purrdf_validate::regime::ReasoningError as ReasoningRequestError;
 
 /// Entailment behavior applied before evaluating one SPARQL query.
 ///
@@ -124,7 +128,7 @@ impl QueryEntailmentPlan {
     ///
     /// Returns the shared boundary diagnostic for an unknown regime, an invalid program,
     /// a missing RIF program, or a program supplied to a regime whose calculus is fixed.
-    pub fn parse(regime: &str, program: &str) -> Result<Self, String> {
+    pub fn parse(regime: &str, program: &str) -> Result<Self, ReasoningRequestError> {
         let parsed = purrdf_validate::regime::parse_regime(regime)?;
         let rules = purrdf_validate::regime::regime_rule_set(parsed, regime, program)?;
         Ok(Self {
@@ -156,6 +160,21 @@ pub enum ReasoningError<E = std::convert::Infallible> {
     Entailment(EntailError<E>),
     /// The caller-owned RDF view could not be imported and frozen completely.
     Materialization(purrdf_rdf::DatasetMaterializationError<E>),
+}
+
+impl<E: purrdf_lex::error::StructuredError> purrdf_lex::error::StructuredError
+    for ReasoningError<E>
+{
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_lex::error::ErrorVisitor<'error>) {
+        use purrdf_lex::error::{ErrorValue, StructuredError};
+        let (code, cause): (&'static str, &dyn StructuredError) = match self {
+            Self::Query(cause) => ("reasoning-query", cause),
+            Self::Entailment(cause) => ("reasoning-entailment", cause),
+            Self::Materialization(cause) => ("reasoning-materialization", cause),
+        };
+        visitor.variant(code);
+        visitor.value(Some("cause"), ErrorValue::Cause(cause));
+    }
 }
 
 impl<E: std::fmt::Display> std::fmt::Display for ReasoningError<E> {
@@ -411,7 +430,7 @@ pub fn query_with_entailment<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
 ) -> Result<(SparqlResult, ReasoningReport), ReasoningError<D::ReadError>> {
     // Parse first so invalid queries fail before potentially expensive closure work.
@@ -475,10 +494,8 @@ pub fn query_with_entailment<D: DatasetView>(
         })?),
         None => None,
     };
-    let options = match rebound_env.as_ref() {
-        Some(env) => options.with_env(env),
-        None => options,
-    };
+    let rebound_options = rebound_env.as_ref().map(|env| options.with_env(env));
+    let options = rebound_options.as_ref().unwrap_or(options);
     let prepared_query = if rebound.is_some() {
         engine.prepare_query_with_options(request.query, request.base_iri, options)?
     } else {
@@ -947,7 +964,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     entailment: QueryEntailment<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
@@ -989,7 +1006,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     dataset: &D,
     request: SparqlRequest<'_>,
     closure: &EntailmentClosure<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError<D::ReadError>> {
@@ -1067,10 +1084,8 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
         })?),
         None => None,
     };
-    let options = match rebound_env.as_ref() {
-        Some(env) => options.with_env(env),
-        None => options,
-    };
+    let rebound_options = rebound_env.as_ref().map(|env| options.with_env(env));
+    let options = rebound_options.as_ref().unwrap_or(options);
     let prepared_query = if rebound.is_some() {
         engine.prepare_query_with_options(request.query, request.base_iri, options)?
     } else {
@@ -1117,12 +1132,14 @@ fn withhold_surrogates_from_outcome(
             mut result,
             evidence,
             relations,
+            coordinates,
         } => {
             withhold_surrogate_triples(&mut result, surrogates)?;
             GovernedOutcome::Complete {
                 result,
                 evidence,
                 relations,
+                coordinates,
             }
         }
         GovernedOutcome::BudgetExhausted(exhausted) => {
@@ -1996,7 +2013,7 @@ mod tests {
             unreachable!()
         };
         *root = rewritten;
-        let error = PreparedQuery::rewritten(query, QueryOptions::EMPTY).unwrap_err();
+        let error = PreparedQuery::rewritten(query, &QueryOptions::EMPTY).unwrap_err();
         assert!(error.to_string().contains("contextual"), "{error}");
     }
 
@@ -2262,7 +2279,7 @@ mod tests {
                     substitutions: &[],
                 },
                 mode,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &ClosureRelations::NONE,
             )
         };
@@ -2307,18 +2324,21 @@ mod tests {
         let wrong_program = QueryEntailmentPlan::parse("rdfs", "not ignored")
             .expect_err("a fixed calculus cannot silently discard caller rules");
         assert!(
-            wrong_program.contains("takes no rule document"),
+            wrong_program.to_string().contains("takes no rule document"),
             "{wrong_program}"
         );
 
         let missing_rif = QueryEntailmentPlan::parse("rif", "")
             .expect_err("RIF has no caller-independent rule table");
-        assert!(missing_rif.contains("rule document"), "{missing_rif}");
+        assert!(
+            missing_rif.to_string().contains("rule document"),
+            "{missing_rif}"
+        );
 
         let unknown =
             QueryEntailmentPlan::parse("RDFS", "").expect_err("the cross-host spelling is exact");
         assert!(
-            unknown.contains("owl-direct") && unknown.contains("rif"),
+            unknown.to_string().contains("owl-direct") && unknown.to_string().contains("rif"),
             "{unknown}"
         );
     }
@@ -2335,7 +2355,7 @@ mod tests {
                 substitutions: &[],
             },
             mode,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap()
@@ -2387,7 +2407,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::D,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2406,7 +2426,7 @@ mod tests {
                     substitutions: &[],
                 },
                 QueryEntailment::Simple,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &ClosureRelations::NONE,
             )
             .unwrap()
@@ -2471,7 +2491,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),
@@ -2507,7 +2527,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdfs,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect_err("an unregistered custom aggregate must be refused, entailed or not");
@@ -2542,7 +2562,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::Rdf,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2632,7 +2652,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2677,7 +2697,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2721,7 +2741,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .unwrap();
@@ -2777,7 +2797,7 @@ mod tests {
                 substitutions: &[],
             },
             QueryEntailment::OwlDirect,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect("owl-direct answers")
@@ -2792,7 +2812,7 @@ mod tests {
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine
-            .query_prepared(&closure, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&closure, &prepared, &[], &QueryOptions::EMPTY)
             .expect("evaluate")
     }
 

@@ -296,6 +296,7 @@ fn registry(
                     datatype: XSD_INTEGER.to_owned(),
                 }),
             },
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             // This mock answers from a list it holds entire: its search names
@@ -906,6 +907,7 @@ fn registry_declaring(
                     datatype: XSD_INTEGER.to_owned(),
                 }),
             },
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             // This mock answers from a list it holds entire: its search names

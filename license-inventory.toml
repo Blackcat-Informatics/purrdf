@@ -4,10 +4,29 @@
 # Inherited material: grants and byte-preserved notice evidence.
 # Generated payloads are projections of this ledger and Cargo.lock, never hand edited.
 
+[[material]]
+id = "visual-hashing-native"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+source = "https://github.com/Blackcat-Informatics/visual-hashing/tree/519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776"
+scope = "modified inherited emoji alphabet, spoken labels and randomart rendering; upstream BLAKE3 is excluded and shared native BLAKE3 supplies the XOF"
+paths = ["crates/lex/src/visual_fingerprint.rs", "crates/lex/src/visual_fingerprint/**", "vectors/emojihash/**", "vectors/randomart/**"]
+notices = ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE-MULAN"]
+provenance = ["docs/provenance/visual-hashing.md"]
+
+[[material]]
+id = "structured-zstd-native"
+license = "Apache-2.0"
+source = "https://crates.io/crates/structured-zstd/0.0.49"
+scope = "modified inherited Zstandard codec and dictionary trainer; original Apache grant retained, fixed product and local modifications documented in the accompanying notice"
+paths = ["crates/zstd/src/**"]
+notices = ["crates/zstd/LICENSE", "crates/zstd/NOTICE"]
+provenance = ["crates/zstd/PROVENANCE.md", "crates/zstd/UPSTREAM-SHA256.json"]
+
 # Exact SPDX offers for separately noticed prose and generated data. Every other
 # first-party header must match workspace.package.license. The header gate
 # checks these paths and refuses stale or unchecked registrations.
 [header_offers]
+"crates/hash/src/word_id/data.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0"
 # The book is prose under the documentation grant.
 "docs/book/book.toml" = "CC-BY-4.0"
 # Generated Unicode data carries Unicode-3.0 beside the first-party offer.
@@ -15,6 +34,7 @@
 # LICENSING.md describes the combined grant.
 "crates/lex/src/unicode_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/lex/src/unicode/case_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+"crates/lex/src/unicode/fold_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/iri/src/idna_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/rdf-core/src/xsd_regex/blocks.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
@@ -27,11 +47,20 @@
 "crates/lex/src/html/entities.rs" = "BSD-3-Clause"
 
 [[material]]
+id = "eff-word-alphabet"
+license = "CC-BY-4.0"
+source = "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
+scope = "EFF-original long wordlist, selected alphabet and generated word data; original attribution and grant apply in addition to the independently written codec's first-party offer"
+paths = ["crates/hash/data/word-id/**", "crates/hash/src/word_id/data.rs", "crates/hash-conformance/data/word-id/**"]
+notices = ["LICENSES/CC-BY-4.0.txt", "crates/hash/data/word-id/EFF-NOTICE.txt"]
+provenance = ["crates/hash/data/word-id/PROVENANCE.md", "crates/hash/data/word-id/manifest.toml"]
+
+[[material]]
 id = "unicode"
 license = "Unicode-3.0"
 source = "https://www.unicode.org/Public/17.0.0/ucd/"
 scope = "generated and vendored Unicode data; terms apply in addition to the first-party grant"
-paths = ["crates/lex/src/unicode_tables.rs", "crates/lex/src/unicode/case_tables.rs", "crates/iri/src/idna_tables.rs", "crates/rdf-core/src/xsd_regex/blocks.rs", "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs", "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs", "crates/text/src/unicode_tables.rs", "crates/jsonschema/src/ecma/property_tables.rs", "crates/jsonschema/src/ecma/unicode_ranges.rs", "crates/iri/unicode/**", "crates/rdf-core/vendor/unicode/**"]
+paths = ["crates/lex/src/unicode_tables.rs", "crates/lex/src/unicode/case_tables.rs", "crates/lex/src/unicode/fold_tables.rs", "crates/iri/src/idna_tables.rs", "crates/rdf-core/src/xsd_regex/blocks.rs", "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs", "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs", "crates/text/src/unicode_tables.rs", "crates/jsonschema/src/ecma/property_tables.rs", "crates/jsonschema/src/ecma/unicode_ranges.rs", "crates/iri/unicode/**", "crates/rdf-core/vendor/unicode/**"]
 notices = ["LICENSES/Unicode-3.0.txt"]
 provenance = ["crates/iri/unicode/PROVENANCE.md", "LICENSING.md"]
 
@@ -124,6 +153,15 @@ scope = "source-only conformance data; original notices remain authoritative"
 paths = ["crates/rdf/tests/fixtures/jsonld-w3c-rec/**"]
 notices = ["LICENSES/W3C-software-document-2015.html", "LICENSES/W3C-test-suites-policy.html", "LICENSES/W3C-test-suite-license.html", "LICENSES/W3C-test-suite-BSD.html", "crates/rdf/tests/fixtures/jsonld-w3c-rec/LICENSE.md"]
 provenance = ["LICENSING.md"]
+
+[[material]]
+id = "toml-test"
+license = "MIT"
+source = "https://github.com/toml-lang/toml-test/tree/ff49d109861c1ad25af53f687f2aef19ab650600"
+scope = "source-only frozen TOML 1.1 grammar and typed-value conformance data; no parser implementation"
+paths = ["crates/toml/tests/suite/**"]
+notices = ["crates/toml/tests/suite/LICENSES/MIT.txt"]
+provenance = ["crates/toml/PROVENANCE.md"]
 
 [[material]]
 id = "rdfc"
@@ -318,3 +356,12 @@ scope = "Complete unmodified English conformance DATA only; the independent pros
 paths = ["crates/text/tests/stemming_vectors/voc.txt", "crates/text/tests/stemming_vectors/output.txt"]
 notices = ["crates/text/tests/stemming_vectors/LICENSES/Snowball-data-BSD-3-Clause.txt"]
 provenance = ["crates/text/tests/stemming_vectors/PROVENANCE.md"]
+
+[[material]]
+id = "hashbrown-native-table"
+license = "MIT OR Apache-2.0"
+source = "https://crates.io/crates/hashbrown/0.17.1"
+scope = "modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant"
+paths = ["crates/rdf-core/src/hash/table/**"]
+notices = ["crates/rdf-core/src/hash/table/LICENSES/MIT.txt", "crates/rdf-core/src/hash/table/LICENSES/Apache-2.0.txt", "crates/rdf-core/src/hash/table/NOTICE"]
+provenance = ["crates/rdf-core/src/hash/table/PROVENANCE.md", "crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json"]

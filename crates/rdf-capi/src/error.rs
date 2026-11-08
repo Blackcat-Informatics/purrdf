@@ -18,6 +18,8 @@ use crate::status::PurrdfStatus;
 /// boundary that has one — a named DIMENSION. Opaque to C.
 #[derive(Debug)]
 pub struct PurrdfError {
+    execution_receipt: Option<CString>,
+    details: Option<Box<FailureDetails>>,
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
     /// The prepared-shapes-product admission dimension this refusal names, when it
@@ -38,6 +40,22 @@ pub struct PurrdfError {
     diagnostic: Option<CString>,
 }
 
+/// Original native causes and optional canonicalization evidence. Neutral to the
+/// operation that produced the refusal.
+#[derive(Debug, Default)]
+struct FailureDetails {
+    canonicalization_json: Option<CString>,
+    native_cause_json: Option<CString>,
+    original_cause: Option<OriginalCause>,
+    inspection_failure: Option<purrdf_validate::native_error::InspectionError>,
+}
+
+#[derive(Debug)]
+enum OriginalCause {
+    Canonical(purrdf_core::CanonError),
+    Diagnostic(RdfDiagnostic),
+}
+
 /// The typed half of a [`PurrdfStatus::ShapesImportError`], kept as C strings so the
 /// accessors can hand out borrows valid until `purrdf_error_free`.
 #[derive(Debug)]
@@ -51,11 +69,38 @@ pub(crate) struct ImportRefusal {
 }
 
 impl PurrdfError {
+    /// Retain a reasoning request's complete native cause and existing plain text.
+    pub(crate) fn reasoning(error: purrdf_validate::regime::ReasoningError) -> Self {
+        let code = if purrdf_validate::canonical::native_canonical_cause(&error).is_some() {
+            PurrdfStatus::CanonicalizationError
+        } else {
+            PurrdfStatus::ParseError
+        };
+        let diagnostic = error.into_diagnostic();
+        let message = diagnostic.message.clone();
+        Self::from_owned_diagnostic_with_message(code, diagnostic, &message)
+    }
+
+    /// Preserve the original native canonicalization cause while mapping host text.
+    pub(crate) fn service(error: impl std::error::Error + 'static) -> Self {
+        Self::new(PurrdfStatus::ParseError, error.to_string()).retaining_cause(&error)
+    }
+
+    pub(crate) fn retaining_cause(mut self, error: &(dyn std::error::Error + 'static)) -> Self {
+        if let Some(cause) = purrdf_validate::canonical::native_canonical_cause(error) {
+            self.code = PurrdfStatus::CanonicalizationError;
+            self.details.get_or_insert_with(Box::default).original_cause =
+                Some(OriginalCause::Canonical(cause.clone()));
+        }
+        self
+    }
     /// Build an error from a status and a message. Interior NUL bytes in the
     /// message are replaced with spaces so the `CString` construction never
     /// fails.
     pub(crate) fn new(code: PurrdfStatus, message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
+            details: None,
             code,
             message: sanitized(&message.into()),
             dimension: None,
@@ -70,46 +115,84 @@ impl PurrdfError {
     /// as a `ParseError` with the engine's message.
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
+            purrdf_validate::ShapesError::ImportArrays(cause) => {
+                let diagnostic = purrdf_validate::native_error::diagnostic(
+                    "import-array-refused",
+                    cause,
+                    cause.storage_error(),
+                );
+                let message = diagnostic.message.clone();
+                Self::from_owned_diagnostic_with_message(
+                    PurrdfStatus::ParseError,
+                    diagnostic,
+                    &message,
+                )
+            }
+            purrdf_validate::ShapesError::ScopeBinding(cause) => {
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
+                let message = diagnostic.message.clone();
+                Self::from_owned_diagnostic_with_message(
+                    PurrdfStatus::ParseError,
+                    diagnostic,
+                    &message,
+                )
+            }
+            purrdf_validate::ShapesError::Canonical(cause) => Self::service(cause),
+            purrdf_validate::ShapesError::RuleExecution(error) => {
+                let receipt =
+                    purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+                let cause = error.into_cause();
+                let error = match cause {
+                    purrdf_rs::shapes::rules::RulesError::Shapes(error) => Self::shapes(error),
+                    other => Self::native_shacl(other),
+                };
+                error.with_execution_receipt(&receipt)
+            }
             purrdf_validate::ShapesError::Storage(error) => {
                 Self::from_diagnostic(PurrdfStatus::StorageError, &error.into())
             }
             purrdf_validate::ShapesError::Imports(error) => Self::shapes_import(&error),
-            purrdf_validate::ShapesError::Invalid(message) => {
-                Self::new(PurrdfStatus::ParseError, message)
+            other => Self::native_shacl(other),
+        }
+    }
+
+    fn native_shacl(error: impl purrdf_lex::error::NativeError + 'static) -> Self {
+        let diagnostic = purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+        let message = diagnostic.message.clone();
+        Self::from_owned_diagnostic_with_message(PurrdfStatus::ParseError, diagnostic, &message)
+    }
+
+    pub(crate) fn complete(error: purrdf_rs::shapes::report::CompleteValidationError) -> Self {
+        match error {
+            purrdf_rs::shapes::report::CompleteValidationError::Shapes(error) => {
+                Self::shapes(error)
             }
-            purrdf_validate::ShapesError::Processor(failure) => {
-                Self::new(PurrdfStatus::ParseError, failure.to_string())
-            }
-            purrdf_validate::ShapesError::ShaclJs(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::IllFormed(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::Prebinding(violation) => {
-                Self::new(PurrdfStatus::ParseError, violation.to_string())
-            }
-            purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
+            purrdf_rs::shapes::report::CompleteValidationError::RuleExecution {
+                cause,
+                coordinates,
+            } => Self::complete(*cause).with_execution_receipt(
+                &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
+            other => Self::native_shacl(other),
         }
     }
 
     /// The [`PurrdfStatus::ShapesImportError`] for `error`.
     pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
-        Self {
-            code: PurrdfStatus::ShapesImportError,
-            message: sanitized(&error.to_string()),
-            dimension: None,
-            diagnostic: None,
-            import: Some(ImportRefusal {
-                kind: sanitized(error.kind()),
-                iris: error.iris().into_iter().map(sanitized).collect(),
-            }),
-        }
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+        let message = diagnostic.message.clone();
+        let mut result = Self::from_owned_diagnostic_with_message(
+            PurrdfStatus::ShapesImportError,
+            diagnostic,
+            &message,
+        );
+        result.import = Some(ImportRefusal {
+            kind: sanitized(error.kind()),
+            iris: error.iris().into_iter().map(sanitized).collect(),
+        });
+        result
     }
 
     /// Build a prepared-shapes-product refusal, carrying the pinned kebab-case
@@ -120,6 +203,8 @@ impl PurrdfError {
     /// exactly how a renamed dimension would reach C hosts under its old name.
     pub(crate) fn product(dimension: Option<&'static str>, message: impl Into<String>) -> Self {
         Self {
+            execution_receipt: None,
+            details: None,
             code: PurrdfStatus::ShapesProductError,
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
@@ -137,6 +222,161 @@ impl PurrdfError {
         );
         error.diagnostic = Some(sanitized(&diagnostic.to_json().to_string()));
         error
+    }
+
+    /// Own the diagnostic and its original native cause through error_free.
+    /// A broken inspection protocol becomes an explicit failure while its
+    /// original diagnostic remains owned; it cannot become partial success.
+    pub(crate) fn from_owned_diagnostic(code: PurrdfStatus, diagnostic: RdfDiagnostic) -> Self {
+        Self::from_owned_diagnostic_text(code, diagnostic, None)
+    }
+
+    /// Retain the original diagnostic with a boundary's existing plain message.
+    pub(crate) fn from_owned_diagnostic_with_message(
+        code: PurrdfStatus,
+        diagnostic: RdfDiagnostic,
+        message: &str,
+    ) -> Self {
+        Self::from_owned_diagnostic_text(code, diagnostic, Some(message))
+    }
+
+    fn from_owned_diagnostic_text(
+        code: PurrdfStatus,
+        diagnostic: RdfDiagnostic,
+        message: Option<&str>,
+    ) -> Self {
+        let code = if diagnostic.storage_error().is_some() {
+            PurrdfStatus::StorageError
+        } else {
+            code
+        };
+        let inspected = diagnostic
+            .native_cause()
+            .map(|cause| purrdf_validate::native_error::to_json(cause))
+            .transpose();
+        let mut error = Self::from_diagnostic(code, &diagnostic);
+        if let Some(message) = message {
+            error.message = sanitized(message);
+        }
+        match inspected {
+            Ok(record) => {
+                let details = error.details.get_or_insert_with(Box::default);
+                details.native_cause_json = record.map(|record| sanitized(&record.to_string()));
+                details.original_cause = Some(OriginalCause::Diagnostic(diagnostic));
+            }
+            Err(failure) => {
+                let message = format!("{failure}; original refusal: {diagnostic}");
+                error = Self::from_diagnostic(
+                    PurrdfStatus::ParseError,
+                    &RdfDiagnostic::error("native-cause-inspection-failed", message),
+                );
+                let details = error.details.get_or_insert_with(Box::default);
+                details.original_cause = Some(OriginalCause::Diagnostic(diagnostic));
+                details.inspection_failure = Some(failure);
+            }
+        }
+        error
+    }
+
+    pub(crate) fn with_canonicalization(
+        mut self,
+        receipts: &str,
+        cause: Option<(purrdf_core::CanonError, String)>,
+    ) -> Self {
+        let canonical = self.details.get_or_insert_with(Box::default);
+        canonical.canonicalization_json = Some(sanitized(receipts));
+        if let Some((original, json)) = cause {
+            if canonical.original_cause.is_none() {
+                canonical.original_cause = Some(OriginalCause::Canonical(original));
+            }
+            if canonical.native_cause_json.is_none() && canonical.inspection_failure.is_none() {
+                canonical.native_cause_json = Some(sanitized(&json));
+            }
+        }
+        self
+    }
+
+    /// Attach the actual native receipt to the original classified failure.
+    pub(crate) fn with_execution_receipt(mut self, receipt: &str) -> Self {
+        self.execution_receipt = Some(sanitized(receipt));
+        self
+    }
+}
+
+impl std::fmt::Display for PurrdfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message.to_string_lossy())
+    }
+}
+
+impl std::error::Error for PurrdfError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        let details = self.details.as_ref()?;
+        if let Some(failure) = &details.inspection_failure {
+            return Some(failure);
+        }
+        match details.original_cause.as_ref()? {
+            OriginalCause::Canonical(cause) => Some(cause),
+            OriginalCause::Diagnostic(diagnostic) => Some(diagnostic),
+        }
+    }
+}
+
+/// Borrow a failed execution's JSON receipt, or null when no execution was attempted.
+///
+/// # Safety
+/// `error` must be null or a live error handle; the returned text lives with it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_execution_receipt_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        error
+            .as_ref()
+            .and_then(|error| error.execution_receipt.as_ref())
+            .map_or(std::ptr::null(), |receipt| receipt.as_ptr())
+    }
+}
+
+/// Borrow this canonicalization request's receipt JSON, including `[]` if no run
+/// started. Null denotes an error from another kind of operation.
+/// # Safety
+/// `error` must be null or a live error handle. The text lives until that handle is freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_canonicalization_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            error
+                .as_ref()
+                .and_then(|error| error.details.as_ref()?.canonicalization_json.as_ref())
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
+    }
+}
+
+/// Borrow the original native cause's closed fields as JSON.
+/// The original native cause and its admission grant remain owned until error_free.
+/// Null means no native cause record is available. An inspection failure is
+/// reported explicitly by the error status/message and diagnostic, never as success.
+/// # Safety
+/// `error` must be null or a live error handle. The text lives until that handle is freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_error_native_cause_json(
+    error: *const PurrdfError,
+) -> *const c_char {
+    unsafe {
+        ffi_guard!(std::ptr::null(), {
+            error
+                .as_ref()
+                .and_then(|error| {
+                    let canonical = error.details.as_ref()?;
+                    canonical.original_cause.as_ref()?;
+                    canonical.native_cause_json.as_ref()
+                })
+                .map_or(std::ptr::null(), |value| value.as_ptr())
+        })
     }
 }
 
@@ -241,6 +481,18 @@ mod tests {
         let expected = RdfDiagnostic::from(cause).to_json().to_string();
         assert_eq!(error.diagnostic.unwrap().to_str().unwrap(), expected);
         assert!(expected.contains("\"capacity\""));
+
+        let boundary = PurrdfError::from_owned_diagnostic_with_message(
+            PurrdfStatus::QueryError,
+            RdfDiagnostic::from(cause),
+            "entailment query failed: input\0unavailable",
+        );
+        assert_eq!(boundary.code, PurrdfStatus::StorageError);
+        assert_eq!(
+            boundary.message.to_str().unwrap(),
+            "entailment query failed: input unavailable"
+        );
+        assert_eq!(boundary.diagnostic.unwrap().to_str().unwrap(), expected);
     }
 
     #[test]

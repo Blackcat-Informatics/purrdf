@@ -189,17 +189,23 @@ impl Analyzer {
         let dictionary = match profile.segmentation() {
             Segmentation::EmptyLexicon => {
                 if !artifacts.is_empty() {
-                    return Err(TextError::config(
-                        "empty lexicon profile refuses artifact bytes",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::EmptyLexiconArtifacts {
+                            count: artifacts.len(),
+                        }
+                        .into_error(),
+                    );
                 }
                 None
             }
             Segmentation::Dictionary(dictionary) => {
                 if !artifacts.is_empty() {
-                    return Err(TextError::config(
-                        "caller dictionary profile refuses baseline artifacts",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::CallerDictionaryArtifacts {
+                            count: artifacts.len(),
+                        }
+                        .into_error(),
+                    );
                 }
                 let entries = dictionary
                     .weighted_entries()
@@ -218,10 +224,20 @@ impl Analyzer {
                     let hash = *purrdf_hash::blake3::hash(bytes).as_bytes();
                     let identity = purrdf_hash::hex::encode(&hash);
                     let Some(at) = expected.iter().position(|&id| id == identity) else {
-                        return Err(TextError::config("unexpected baseline artifact identity"));
+                        return Err(
+                            crate::configuration::ConfigurationRefusal::UnexpectedBaseline {
+                                identity: hash,
+                            }
+                            .into_error(),
+                        );
                     };
                     if std::mem::replace(&mut seen[at], true) {
-                        return Err(TextError::config("duplicate baseline artifact"));
+                        return Err(
+                            crate::configuration::ConfigurationRefusal::DuplicateBaseline {
+                                identity: hash,
+                            }
+                            .into_error(),
+                        );
                     }
                     let dictionary = Dictionary::from_artifact(hash, bytes)?;
                     for (word, cost) in dictionary.weighted_entries() {
@@ -234,9 +250,12 @@ impl Analyzer {
                     }
                 }
                 if !seen.into_iter().all(|present| present) {
-                    return Err(TextError::config(
-                        "standard analysis requires all five full baseline artifacts",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::MissingBaselines {
+                            present: seen,
+                        }
+                        .into_error(),
+                    );
                 }
                 Some(Arc::new(Dictionary::with_costs(entries)?))
             }
@@ -752,13 +771,20 @@ fn decode_owned<'a>(
         _diagnostics: diagnostic_owner,
     };
     if !owner.resolution.diagnostics.is_empty() {
-        // The diagnostic vector and every decoded buffer remain live and covered
-        // through rendering. Once this immutable message exists they can die.
-        return Err(query_error(
-            workspace,
-            NativeDiagnosticKind::Data,
-            format_args!("HTML reference errors: {:?}", owner.resolution.diagnostics),
-        )?);
+        let DecodedOwner {
+            resolution:
+                purrdf_lex::html::Resolution {
+                    decoded,
+                    diagnostics,
+                },
+            _text: text_owner,
+            _sources: source_owner,
+            _diagnostics: diagnostic_owner,
+        } = owner;
+        drop(decoded);
+        drop(text_owner);
+        drop(source_owner);
+        return Err(TextError::html_in(diagnostics, diagnostic_owner, workspace));
     }
     Ok(owner)
 }
@@ -803,7 +829,7 @@ fn normalize_into<A: Alignment>(
         &decoded_owner.resolution.decoded
     } else {
         resident_decoded =
-            purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
+            purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::html)?;
         &resident_decoded
     };
     admit_source_size_owned(decoded.text.len(), "decoded input", &scratch.workspace)?;

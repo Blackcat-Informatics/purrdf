@@ -518,7 +518,7 @@ fn evaluate(text: &str, service: bool) -> Result<Answer, RdfDiagnostic> {
                 base_iri: None,
                 substitutions: &[],
             },
-            options,
+            &options,
         )
         .map(answer_of)
 }

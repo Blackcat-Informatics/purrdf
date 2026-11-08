@@ -68,6 +68,8 @@ pub(crate) struct ImportPair<'a> {
 /// imported document may be read from standard input.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ImportRole {
+    /// The argument naming these pairs.
+    flag: &'static str,
     /// What imports: `the premise`, `the shapes graph`, ...
     importer: &'static str,
     /// What the IRI half is matched against, e.g. ``the `owl:imports` objects``.
@@ -80,26 +82,37 @@ pub(crate) struct ImportRole {
 impl ImportRole {
     /// A premise (`reason`, `query`, `convert`, `entails`, `consistency`).
     pub(crate) const PREMISE: Self = Self {
+        flag: "--import",
         importer: "premise",
         matched: "`owl:imports` objects",
         stdin_remedy: None,
     };
     /// A SHACL shapes graph.
     pub(crate) const SHAPES_GRAPH: Self = Self {
+        flag: "--import",
         importer: "shapes graph",
         matched: "`owl:imports` objects",
         stdin_remedy: Some(
             "Write the document to a file, or name it with a recognized RDF extension",
         ),
     };
+    /// Per-import input-options files, matched to the declared import pairs.
+    pub(crate) const INPUT_OPTIONS: Self = Self {
+        flag: "--import-yamlld-input-options",
+        importer: "RDF input",
+        matched: "`--import` IRIs",
+        stdin_remedy: None,
+    };
     /// A ShEx schema.
     pub(crate) const SHEX_SCHEMA: Self = Self {
+        flag: "--import",
         importer: "schema",
         matched: "`IMPORT` IRIs",
         stdin_remedy: Some("Write the document to a `.shex`/`.shexj` path"),
     };
     /// A SPARQL 1.2 RL rule set.
     pub(crate) const RULE_SET: Self = Self {
+        flag: "--import",
         importer: "rule set",
         matched: "`IMPORTS` IRIs",
         stdin_remedy: None,
@@ -130,6 +143,7 @@ pub(crate) fn parse_import_pairs<'a>(
     role: ImportRole,
 ) -> Result<Vec<ImportPair<'a>>, CliError> {
     let ImportRole {
+        flag,
         importer,
         matched,
         stdin_remedy,
@@ -145,13 +159,13 @@ pub(crate) fn parse_import_pairs<'a>(
     for spec in specs {
         let Some((iri, path)) = spec.split_once('=') else {
             return Err(CliError::Usage(format!(
-                "--import {spec}: an import pair is `IRI=FILE` — the IRI the {importer} \
+                "{flag} {spec}: an import pair is `IRI=FILE` — the IRI the {importer} \
                  imports, then the local document that resolves it — and this one has no `=`"
             )));
         };
         if iri.is_empty() || path.is_empty() {
             return Err(CliError::Usage(format!(
-                "--import {spec}: both halves of `IRI=FILE` are required — the IRI names what \
+                "{flag} {spec}: both halves of `IRI=FILE` are required — the IRI names what \
                  the {importer} imports, and the path names the document that is it"
             )));
         }
@@ -159,13 +173,13 @@ pub(crate) fn parse_import_pairs<'a>(
             && is_stdin(path)
         {
             return Err(CliError::Usage(format!(
-                "--import {spec}: an imported document's syntax is inferred from its own path \
+                "{flag} {spec}: an imported document's syntax is inferred from its own path \
                  extension, and `-` has none. {remedy}"
             )));
         }
         scope.resolve(iri).map_err(|error| {
             argv_iri_refusal(
-                &format!("--import {spec}"),
+                &format!("{flag} {spec}"),
                 &error,
                 relative_code,
                 &format!(
@@ -181,7 +195,7 @@ pub(crate) fn parse_import_pairs<'a>(
         })?;
         if pairs.iter().any(|seen| seen.iri == iri) {
             return Err(CliError::Usage(format!(
-                "--import {iri}=…: the IRI is named twice, and one IRI resolves to one \
+                "{flag} {iri}=…: the IRI is named twice, and one IRI resolves to one \
                  document; keeping either would be a choice the command line did not make"
             )));
         }
@@ -235,9 +249,11 @@ pub(crate) fn supplied_readers<'a>(flags: &[(&str, Option<&'a str>)]) -> Vec<(St
 }
 
 /// The `--import` readers among `pairs`, for [`refuse_shared_stdin`].
-pub(crate) fn import_readers<'a>(pairs: &[ImportPair<'a>]) -> Vec<(String, &'a str)> {
+pub(crate) fn import_readers<'a>(
+    pairs: impl IntoIterator<Item = ImportPair<'a>>,
+) -> Vec<(String, &'a str)> {
     pairs
-        .iter()
+        .into_iter()
         .map(|pair| (format!("--import {}=-", pair.iri), pair.path))
         .collect()
 }

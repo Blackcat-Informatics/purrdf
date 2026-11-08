@@ -102,6 +102,7 @@
 #![deny(clippy::float_arithmetic)]
 
 mod analysis;
+mod arithmetic;
 pub mod character;
 pub use character::{HanCharacterIndex, HanMatchEvidence};
 pub mod dictionary;
@@ -111,6 +112,7 @@ pub use dictionary_relation::PhraseOccurrenceRelation;
 mod error;
 mod query_workspace;
 pub use query_workspace::CapacityFailure;
+mod configuration;
 mod corpus;
 mod fixed;
 mod index;
@@ -119,6 +121,9 @@ mod profile;
 mod ranking;
 mod relation;
 mod score;
+mod source;
+pub use index::IndexRankedPostings;
+pub use source::{IndexPositions, RankedWindow, TextSource};
 pub mod segment;
 pub mod stem;
 mod surface;
@@ -135,14 +140,15 @@ pub use error::{TextDeltaError, TextError};
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
-    TextIndexConfig, TokenOccurrence,
+    TextIndexConfig, TokenOccurrence, snapshot_fingerprint, source_digest, source_fingerprint,
 };
 pub use profile::{
     AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
     Stemming,
 };
 pub use relation::{
-    SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,
+    SearchObservations, TermOccurrenceRelation, TextSearchRelation, TextSourceBounds,
+    verify_binding,
 };
 pub use score::{
     B, Constraint, K1, PartitionFilter, ScopedTerm, Scored, TermContribution, explain,
@@ -160,6 +166,7 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 pub const ANALYZER_PROFILE_ID: &str = "purrdf-profiled-text-v4";
 
 pub use ranking::{
-    BoundedScore, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus, PreparedQuery,
-    RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile, ScoreBound,
+    BoundedScore, FieldEnvelope, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus,
+    PreparedQuery, RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile,
+    ScoreBound,
 };

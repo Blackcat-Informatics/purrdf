@@ -100,6 +100,8 @@ pub enum ValidationRefusal {
     },
     /// A reference-chain bound stopped evaluation.
     ReferenceChain {
+        /// Number of references the refused chain would have followed.
+        attempted: usize,
         /// Configured maximum chain.
         maximum: usize,
     },
@@ -238,7 +240,7 @@ impl purrdf_hash::error::StructuredError for ValidationRefusal {
         UnevaluatedItems { failed } => "schema-unevaluated-items-failed" { "failed" => List(failed.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))) },
         UnevaluatedProperties { failed } => "schema-unevaluated-properties-failed" { "failed" => List(failed.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))) },
         ReferenceCycle { target } => "schema-reference-cycle" { "target" => Iri(target) },
-        ReferenceChain { maximum } => "schema-reference-chain" { "maximum" => Unsigned(*maximum as u128) },
+        ReferenceChain { attempted, maximum } => "schema-reference-chain" { "attempted" => Unsigned(*attempted as u128), "maximum" => Unsigned(*maximum as u128) },
         Type { expected, actual } => "schema-type-mismatch" { "expected" => List(expected.iter().map(|value| purrdf_hash::error::ErrorValue::Code(value))), "actual" => Code(actual) },
         Enum => "schema-enum-mismatch" {},
         Const { value } => "schema-const-mismatch" { "value" => Record(value) },
@@ -305,9 +307,9 @@ impl std::fmt::Display for ValidationRefusal {
                 f,
                 "reference cycle: {target} is re-entered at the same instance location without consuming any of it"
             ),
-            Self::ReferenceChain { maximum } => write!(
+            Self::ReferenceChain { attempted, maximum } => write!(
                 f,
-                "more than {maximum} references are followed in a row at one instance location"
+                "reference chain attempted {attempted} references at one instance location, exceeding the maximum {maximum}"
             ),
             Self::Type { expected, actual } => {
                 write!(f, "expected {}, found {actual}", expected.join(" or "))

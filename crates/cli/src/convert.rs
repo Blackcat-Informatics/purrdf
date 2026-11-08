@@ -90,6 +90,7 @@ impl ViewOp for ConvertOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<LossLedger, CliError> {
         sink::write_rdf(
             view,
@@ -98,6 +99,7 @@ impl ViewOp for ConvertOp<'_> {
             self.base,
             self.src_codec,
             self.jsonld_options,
+            canonical,
         )
     }
 }
@@ -106,6 +108,8 @@ impl ViewOp for ConvertOp<'_> {
 /// two optional transforms. Grouping them keeps [`run`]'s signature small and lets
 /// the transform lane borrow them by reference.
 pub(crate) struct ConvertOptions<'a> {
+    /// Command-local input configuration file.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// The `--from` input-format override. Applies to EVERY source in the list.
     pub(crate) from: Option<CliRdfFormat>,
     /// The `--to` output-format override.
@@ -124,6 +128,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) limits: purrdf_validate::regime::MaterializeLimits,
     /// `--import IRI=FILE`: the premise's `owl:imports` closure `--entailment` closes over.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -137,8 +143,10 @@ pub(crate) fn run(
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
-    let sources = Sources::new(
+    refuse_inapplicable_combinations(options, report_target)?;
+    let mut sources = Sources::new(
         input,
         options.inputs,
         options.from,
@@ -149,8 +157,21 @@ pub(crate) fn run(
     // fails before the first two are read. `--base` is decided later, once the target is
     // resolved too: whether it can be spent depends on both legs.
     let formats = sources.resolve_formats()?;
-
-    refuse_inapplicable_combinations(options, report_target)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        if options.entailment.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::PREMISE,
+        options.from,
+    )?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &formats))
+        .transpose()?;
+    sources.input_options = input_options.as_deref();
 
     // The transform lane: either `--entailment` or `--canonical` needs a concrete
     // owned dataset, so reconstruct one and apply the transforms in order.
@@ -158,10 +179,12 @@ pub(crate) fn run(
         return run_with_transforms(
             &sources,
             &formats,
+            &import_plan,
             options,
             output,
             ledger_target,
             report_target,
+            canonical,
         );
     }
 
@@ -180,6 +203,7 @@ pub(crate) fn run(
     // union takes concrete datasets.
     if let (Some(only), [source_format]) = (sources.single(), formats.as_slice())
         && !source_format.is_gts()
+        && sources.input_options.is_none()
     {
         return convert_one_view(
             only,
@@ -188,12 +212,13 @@ pub(crate) fn run(
             output,
             target_format,
             ledger_target,
+            canonical,
         );
     }
 
     // Otherwise: materialize (folding GTS through the authoritative importer, merging a
     // list through the deterministic union) and serialize the result.
-    let (dataset, mut merged) = ingest::ingest(&sources, &formats)?;
+    let (dataset, mut merged) = ingest::ingest(&sources, &formats, canonical)?;
     let write = sink::write_rdf(
         &*dataset,
         output,
@@ -201,6 +226,7 @@ pub(crate) fn run(
         options.base,
         source_codec(&formats),
         options.jsonld_options,
+        canonical,
     )?;
     for entry in write.entries() {
         merged.record(entry.clone());
@@ -216,6 +242,7 @@ fn convert_one_view(
     output: &str,
     target_format: SourceFormat,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Pack → pack: a verified byte passthrough (no decode/re-encode churn). The pack
     // is acquired through the one immutable-input seam — a DISK pack is borrowed from
@@ -223,8 +250,8 @@ fn convert_one_view(
     // guarantee immutability), stdin is owned — and verified once before its bytes
     // are written straight through.
     if source_format.is_pack() && target_format.is_pack() {
-        let owner = source::verified_pack_input(input)?;
-        sink::write_out(output, owner.as_bytes())?;
+        let owner = source::verified_pack_input(input, canonical)?;
+        sink::write_out_with_request(output, owner.as_bytes(), canonical)?;
         return ledger::surface(ledger_target, &LossLedger::new());
     }
 
@@ -234,6 +261,7 @@ fn convert_one_view(
         source_format,
         options.base,
         options.transport,
+        None,
         ConvertOp {
             out: output,
             target: target_format,
@@ -241,6 +269,7 @@ fn convert_one_view(
             src_codec,
             jsonld_options: options.jsonld_options,
         },
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }
@@ -298,6 +327,11 @@ fn refuse_inapplicable_combinations(
     options: &ConvertOptions<'_>,
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
+    if !options.import_yamlld_input_options.is_empty() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --entailment".to_owned(),
+        ));
+    }
     if options.canonical && options.jsonld_options.is_some() {
         return Err(CliError::Usage(
             "--jsonld-options cannot be combined with --canonical".to_owned(),
@@ -340,13 +374,19 @@ fn refuse_inapplicable_combinations(
 /// The `--entailment` / `--canonical` lane: reconstruct an owned dataset, optionally
 /// materialize its entailment closure, then either emit canonical N-Quads or
 /// serialize to the `--to` target.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the prepared imports and source/output controls are independent inputs"
+)]
 fn run_with_transforms(
     sources: &Sources<'_>,
     formats: &[SourceFormat],
+    import_plan: &crate::rdf_imports::RdfImportPlan<'_>,
     options: &ConvertOptions<'_>,
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
         // `--canonical` writes RDFC-1.0 canonical N-Quads unconditionally, so the egress
@@ -383,43 +423,48 @@ fn run_with_transforms(
                 .zip(formats.iter().copied())
                 .collect();
             let premise_imports = crate::premise_imports::PremiseImports::read(
-                options.imports,
-                options.from,
+                import_plan,
                 options.base,
                 &premises,
+                canonical,
             )?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
             match (sources.single(), formats) {
-                (Some(only), [source_format]) if !source_format.is_gts() => {
+                (Some(only), [source_format])
+                    if !source_format.is_gts() && sources.input_options.is_none() =>
+                {
                     report::materialize_reported_over_input(
                         only,
                         *source_format,
                         options.base,
                         options.transport,
+                        None,
                         plan.materialization(),
                         &premise_imports,
                         &options.limits,
                         report_target,
+                        canonical,
                     )?
                 }
                 _ => {
                     // A merged list (or a GTS source, whose envelope ledger must be
                     // carried) has no single view to reason over: materialize first,
                     // then reason over the merged dataset.
-                    let (merged, ledger) = ingest::ingest(sources, formats)?;
+                    let (merged, ledger) = ingest::ingest(sources, formats, canonical)?;
                     read_ledger = ledger;
                     premise_imports.materialize(
                         &*merged,
                         plan.materialization(),
                         &options.limits,
                         report_target,
+                        canonical,
                     )?
                 }
             }
         }
         None => {
-            let (merged, ledger) = ingest::ingest(sources, formats)?;
+            let (merged, ledger) = ingest::ingest(sources, formats, canonical)?;
             read_ledger = ledger;
             merged
         }
@@ -431,16 +476,17 @@ fn run_with_transforms(
     // n-degree search budget exhaustion) must come back as a value this CLI reports,
     // never as a process abort.
     if options.canonical {
-        let nquads = match try_canonicalize_flat_view(&dataset, CanonHash::Sha256) {
-            Ok(canonicalized) => canonicalized.nquads,
-            Err(ViewCanonError::Refused(err)) => return Err(CliError::Runtime(err.to_string())),
-            Err(ViewCanonError::NotReady { error, .. }) => match error {
+        let nquads =
+            match try_canonicalize_flat_view(&dataset, CanonHash::Sha256, canonical.control()?) {
+                Ok(canonicalized) => canonicalized,
+                Err(ViewCanonError::Refused(err)) => return Err(CliError::native(err)),
+                Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: an owned `Arc<RdfDataset>`'s `FallibleDatasetView::Error` is
                 // `Infallible` — the frozen dataset never faults, so this arm is
                 // unreachable by construction.
             },
-        };
-        sink::write_out(output, nquads.as_bytes())?;
+            };
+        sink::write_out_with_request(output, nquads.nquads().as_bytes(), canonical)?;
         // The RDFC-1.0 canonical N-Quads document flattens the RDF 1.2 statement
         // overlay into plain triples; it is a lossless re-rendering, so the only
         // entries are whatever reading the sources already dropped.
@@ -456,6 +502,7 @@ fn run_with_transforms(
         options.base,
         source_codec(formats),
         options.jsonld_options,
+        canonical,
     )?;
     for entry in write.entries() {
         read_ledger.record(entry.clone());

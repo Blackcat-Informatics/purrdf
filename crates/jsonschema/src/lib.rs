@@ -114,8 +114,9 @@
 //! * **Depth costs memory, not stack.** Subschemas in progress live on a heap
 //!   work stack, and `const`, `enum` and `uniqueItems` compare and hash values
 //!   on one too, so an instance of any nesting depth is evaluated without
-//!   growing the thread's stack. More than [`MAX_REF_CHAIN`] references
-//!   followed in a row at one instance location stops with an
+//!   growing the thread's stack. [`EvaluationPolicy`] selects the longest
+//!   consecutive reference chain at one instance location; the default is
+//!   [`MAX_REF_CHAIN`]. Exceeding it stops with an
 //!   [`EvaluationError`] naming the [`EvaluationCause`], never a guessed
 //!   verdict.
 //! * **`format` is an annotation** by default, as every supported draft
@@ -164,7 +165,7 @@ pub use meta_set::Metaschemas;
 pub use output::{Output, OutputFormat, OutputUnit, ValidationRefusal};
 pub use registry::{DRAFT_2020_12, Registry};
 pub use schema::Schema;
-pub use validate::MAX_REF_CHAIN;
+pub use validate::{EvaluationPolicy, MAX_REF_CHAIN};
 
 impl Registry {
     /// Compile the schema at the absolute URI `uri`. A fragment selects a

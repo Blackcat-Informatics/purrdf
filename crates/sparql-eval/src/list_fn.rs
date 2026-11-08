@@ -900,7 +900,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions {
+                    &QueryOptions {
                         env: &env,
                         ..QueryOptions::EMPTY
                     },
@@ -1023,7 +1023,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &env,
                     ..QueryOptions::EMPTY
                 },
@@ -1048,7 +1048,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &env,
                     ..QueryOptions::EMPTY
                 },
@@ -1255,7 +1255,7 @@ mod tests {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions {
+                &QueryOptions {
                     env: &env,
                     ..QueryOptions::EMPTY
                 },

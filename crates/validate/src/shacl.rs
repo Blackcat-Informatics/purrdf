@@ -28,6 +28,47 @@ use purrdf_shapes::{ShapesError, ShapesImports};
 use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 use crate::{SarifOptions, ShapesImportList, report_to_sarif_string};
 
+/// Decode an explicit recursive SHACL request before shapes are admitted.
+/// Omission retains the engine's default; both limits retain their full width,
+/// including zero, whose operational meaning belongs to the native evaluator.
+///
+/// # Errors
+/// Refuses an unknown mode or any incomplete selection.
+pub fn requested_shacl_recursion(
+    mode: Option<&str>,
+    max_pairs: Option<u64>,
+    max_iterations: Option<u64>,
+) -> Result<
+    Option<purrdf_shapes::recursion::RecursionOptions>,
+    purrdf_shapes::recursion::RecursionRequestError,
+> {
+    use purrdf_shapes::recursion::{RecursionOptions, RecursionRequestError, RecursionSemantics};
+    let refused = || RecursionRequestError::new(mode, max_pairs, max_iterations);
+
+    let Some(mode) = mode else {
+        return if max_pairs.is_none() && max_iterations.is_none() {
+            Ok(None)
+        } else {
+            Err(refused())
+        };
+    };
+    let semantics = match mode {
+        "lfp" => RecursionSemantics::Lfp,
+        "gfp" => RecursionSemantics::Gfp,
+        _ => {
+            return Err(refused());
+        }
+    };
+    let (Some(max_pairs), Some(max_iterations)) = (max_pairs, max_iterations) else {
+        return Err(refused());
+    };
+    Ok(Some(RecursionOptions {
+        semantics,
+        max_pairs,
+        max_iterations,
+    }))
+}
+
 /// Validate `data_nt` (N-Triples) against `shapes_ttl` (Turtle) and render the
 /// resulting SHACL report to a SARIF 2.1.0 JSON string.
 ///
@@ -208,7 +249,7 @@ pub fn validate_changes_to_sarif_string(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(String, ChangeScope), ShapesError> {
+) -> Result<(String, ChangeScope), purrdf_shapes::report::CompleteValidationError> {
     validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
@@ -243,7 +284,7 @@ pub fn validate_changes_to_sarif_string_with_shapes_graph(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(String, ChangeScope), ShapesError> {
+) -> Result<(String, ChangeScope), purrdf_shapes::report::CompleteValidationError> {
     let (snapshot, shapes) = change_inputs(
         shapes_ttl,
         shapes_base,
@@ -391,15 +432,15 @@ fn change_inputs(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(Arc<DeltaDatasetView>, Shapes), ShapesError> {
-    let mut table = ShapesImports::from_turtle(imports)?;
+) -> Result<(Arc<DeltaDatasetView>, Shapes), purrdf_shapes::report::CompleteValidationError> {
+    let mut table = ShapesImports::from_turtle(imports).map_err(ShapesError::from)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
     if let Some(added) = added_nt {
         for row in parse_ntriples(added)?.flat_default_graph_quads() {
             mutation
                 .insert(row)
-                .map_err(|error| error.diagnostic_code().to_owned())?;
+                .map_err(|error| ShapesError::from(purrdf_core::RdfDiagnostic::from(error)))?;
         }
     }
     if let Some(removed) = removed_nt {
@@ -407,15 +448,13 @@ fn change_inputs(
             mutation.remove(&row);
         }
     }
-    let snapshot = Arc::new(
-        mutation
-            .snapshot_view()
-            .map_err(|error| error.to_string())?,
-    );
+    let snapshot = Arc::new(mutation.snapshot_view().map_err(ShapesError::from)?);
 
     // The data graph this validation reads is the MUTATED one, so its links are read off
     // the snapshot: a change may add or retract a `sh:shapesGraph` link like any other row.
-    table.link_data_graph(snapshot.as_ref(), &[])?;
+    table
+        .link_data_graph(snapshot.as_ref(), &[])
+        .map_err(ShapesError::from)?;
     let shapes = engine::parse_shapes_with_options(
         shapes_ttl,
         shapes_base,
@@ -423,11 +462,7 @@ fn change_inputs(
         shapes_graph,
         &table,
         &options.validation,
-    )
-    .map_err(|error| match error {
-        purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
-        error => ShapesError::Invalid(error.to_string()),
-    })?;
+    )?;
     Ok((snapshot, shapes))
 }
 
@@ -439,9 +474,8 @@ fn change_inputs(
 /// carrying a reifier declaration or an annotation contributes those rows too. A
 /// change set short by a row cannot be told from a graph that did not change.
 /// Nothing is dropped by flattening: N-Triples has no named graph to drop.
-fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, String> {
-    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(document)
-        .map_err(|errors| errors.join("\n"))
+fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, ShapesError> {
+    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(document).map_err(ShapesError::Text)
 }
 
 #[cfg(test)]
@@ -451,6 +485,57 @@ mod tests {
     use purrdf_lex::json::{self, Object, Value};
 
     use super::*;
+
+    #[test]
+    fn recursion_request_preserves_selection_and_full_width_limits() {
+        use purrdf_shapes::recursion::RecursionSemantics;
+        assert!(
+            requested_shacl_recursion(None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        for (mode, semantics) in [
+            ("lfp", RecursionSemantics::Lfp),
+            ("gfp", RecursionSemantics::Gfp),
+        ] {
+            let request = requested_shacl_recursion(Some(mode), Some(0), Some(u64::MAX))
+                .expect("explicit request")
+                .unwrap();
+            assert_eq!(request.semantics, semantics);
+            assert_eq!(request.max_pairs, 0);
+            assert_eq!(request.max_iterations, u64::MAX);
+        }
+        for (mode, pairs, iterations) in [
+            (None, Some(1), None),
+            (None, None, Some(1)),
+            (Some("lfp"), None, None),
+            (Some("gfp"), Some(1), None),
+            (Some("lfp"), None, Some(1)),
+            (Some("other"), Some(1), Some(1)),
+        ] {
+            use purrdf_hash::error::ErrorValue;
+            use purrdf_testkit::error_capture::Capture;
+            let error = {
+                let mode = mode.map(str::to_owned);
+                requested_shacl_recursion(mode.as_deref(), pairs, iterations).unwrap_err()
+            };
+            let captured = Capture::read(&error);
+            match mode {
+                Some(expected) => assert!(
+                    matches!(captured.field("mode"), ErrorValue::Text(value) if value == expected)
+                ),
+                None => assert!(matches!(captured.field("mode"), ErrorValue::Absent)),
+            }
+            for (name, expected) in [("max_pairs", pairs), ("max_iterations", iterations)] {
+                match expected {
+                    Some(expected) => assert!(
+                        matches!(captured.field(name), ErrorValue::Unsigned(value) if value == u128::from(expected))
+                    ),
+                    None => assert!(matches!(captured.field(name), ErrorValue::Absent)),
+                }
+            }
+        }
+    }
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\

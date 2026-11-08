@@ -134,7 +134,6 @@
 //! [`stage_id`]: ShapesProductView::stage_id
 //! [`rebuild`]: ShapesProductView::rebuild
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactError, ArtifactSpec, ArtifactView, Identity};
@@ -221,8 +220,8 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x31, 0x02, 0x47, 0x33, 0xbe, 0x4b, 0x99, 0xd1, 0xbf, 0xf1, 0x6a, 0x7e, 0x16, 0x7c, 0xcd, 0xf1,
-    0x57, 0x42, 0xf8, 0x15, 0x83, 0x3a, 0x71, 0x72, 0xd9, 0x41, 0xb0, 0x12, 0x07, 0xcb, 0x95, 0x75,
+    0x2c, 0xf5, 0x19, 0x68, 0xb3, 0xdf, 0x11, 0xfc, 0xe0, 0x83, 0x4d, 0x82, 0xe3, 0x84, 0x03, 0x4d,
+    0xd8, 0xa4, 0xca, 0xe2, 0x8a, 0xcb, 0xe1, 0x39, 0xa3, 0x17, 0x82, 0xe0, 0xa9, 0x79, 0x69, 0x97,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -857,8 +856,12 @@ impl PreparedShapes {
     /// identity cannot be established; [`ProductDimension::DepthLimit`] when the
     /// model nests past the codec's ceiling; [`ProductDimension::Malformed`] when
     /// the model is internally inconsistent.
-    pub fn to_product(&self, profile: &ShapesProfile) -> Result<Vec<u8>, ShapesProductError> {
-        self.to_product_bound(profile, &HostBindings::empty())
+    pub fn to_product(
+        &self,
+        profile: &ShapesProfile,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Vec<u8>, ShapesProductError> {
+        self.to_product_bound(profile, &HostBindings::empty(), control)
     }
 
     /// Write this preparation out as a prepared product bound to the FULL host
@@ -885,8 +888,9 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
-        self.to_product_bound(profile, host)
+        self.to_product_bound(profile, host, control)
     }
 
     /// Write this preparation out as a prepared product, binding it to the build of
@@ -913,6 +917,7 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         implementation_identity: &[u8],
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
         if implementation_identity.is_empty() {
             return Err(ShapesProductError::new(
@@ -932,6 +937,7 @@ impl PreparedShapes {
                 &EMPTY_PROPERTY_FUNCTIONS,
                 implementation_identity,
             ),
+            control,
         )
     }
 
@@ -948,6 +954,7 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
         let implementation_identity = host.implementation_identity();
         if profile.id() != identity::PROFILE_ID {
@@ -999,13 +1006,13 @@ impl PreparedShapes {
         // digested into row 10 of the identity so what was written can be checked
         // against what the product claims. Two derivations for those two uses would
         // be two chances to disagree about one analysis.
-        let classes = self.class_catalog();
+        let classes = self.class_catalog()?;
         let ast_bytes = ast::encode_ast(shapes, &classes)?;
-        let dataset_bytes = dataset::encode_dataset(shapes.dataset())?;
+        let dataset_bytes = dataset::encode_dataset(shapes.dataset(), control)?;
         // The PRODUCER certifies; the consumer trusts the digest chain. This is the
         // one canonicalization in the whole codec that is not on a cold path, and it
         // is here because a product cannot state an identity it has not established.
-        let digest = dataset::certify_dataset(&dataset_bytes)?;
+        let digest = dataset::certify_dataset(&dataset_bytes, control)?;
         // The product binds the environment it was PREPARED against, which is
         // whatever the writer's host states. `to_product` passes the empty host, so a
         // product written that way still binds the empty relation registry and the
@@ -1020,6 +1027,7 @@ impl PreparedShapes {
             host.parser_options(),
             implementation_identity,
             &classes,
+            &ast_bytes,
         )?;
 
         let mut builder = ArtifactBuilder::new(SPEC);
@@ -1319,6 +1327,7 @@ impl<'a> ShapesProductView<'a> {
                 &dataset,
                 &self.provenance,
                 options.shacl_profile,
+                options.recursion.as_ref().map(|request| request.semantics),
             )?)
         };
         let parts = ast::decode_ast(self.section(SECTION_AST)?)?;
@@ -1347,8 +1356,7 @@ impl<'a> ShapesProductView<'a> {
         let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
-            &parts.custom_functions,
-            &parts.node_shapes,
+            &parts.owner.functions,
             &mut functions,
             options.shacl_profile,
         )
@@ -1363,15 +1371,8 @@ impl<'a> ShapesProductView<'a> {
             ))
             .into()
         })?;
-        link::link_shapes(
-            &parts.node_shapes,
-            &parts.shape_index,
-            &parts.custom_functions,
-            &native_list,
-            BTreeMap::new(),
-            &mut functions,
-        )?;
-        link::link_global_rules(&parts.rules.global_rules, &parts.shape_index)?;
+        let owner = parts.owner;
+        link::register_model_functions(&owner, &native_list, &mut functions);
 
         // The two carriers of the parse configuration must agree. Both are
         // authenticated, so a disagreement is not tampering — it is a product whose
@@ -1394,13 +1395,22 @@ impl<'a> ShapesProductView<'a> {
             .into());
         }
 
+        let node_shapes = parts.node_shapes;
+        let rules = parts.rules;
         let shapes = Shapes {
-            node_shapes: parts.node_shapes,
-            rules: parts.rules,
+            owner: Arc::clone(&owner),
+            recursion_source: crate::shapes::restored_recursion_source(
+                &dataset,
+                &self.provenance,
+                &owner,
+                options,
+            )?,
+            node_shapes,
+            rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::default()),
-            validation_options: options.clone(),
+            validation_options: options.clone().into(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,
             mandatory_diagnostics: crate::lint::mandatory_diagnostics(&dataset),
@@ -1412,8 +1422,14 @@ impl<'a> ShapesProductView<'a> {
             parse_provenance: self.provenance.clone(),
         };
 
-        CertifiedParts::from_admitted(self.declared_identity(), shapes, host, parts.classes)
-            .map(CertifiedParts::into_prepared)
+        CertifiedParts::from_admitted(
+            self.declared_identity(),
+            shapes,
+            host,
+            parts.classes,
+            self.section(SECTION_AST)?,
+        )
+        .map(CertifiedParts::into_prepared)
     }
 
     /// **The forward-compatibility path.** Ignore the memo and re-derive the
@@ -1552,7 +1568,15 @@ impl<'a> ShapesProductView<'a> {
             options,
         )
         .map_err(|error| {
-            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+            if options.recursion.is_some()
+                || options.shacl_profile != crate::profile::ShaclProfile::LEGACY
+                || matches!(
+                    &error,
+                    crate::report::CompleteValidationError::Shapes(
+                        crate::error::ShapesError::Recursion(_)
+                    )
+                )
+            {
                 return error;
             }
             malformed(format!(
@@ -1588,8 +1612,11 @@ impl<'a> ShapesProductView<'a> {
     /// [`ProductDimension::DatasetIdentity`] when the dataset does not canonicalize
     /// to the digest the identity records, or when canonicalization refuses;
     /// otherwise the structural dimensions the dataset section reports.
-    pub fn certify(&self) -> Result<(), ShapesProductError> {
-        let certified = dataset::certify_dataset(self.section(SECTION_DATASET)?)?;
+    pub fn certify(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<(), ShapesProductError> {
+        let certified = dataset::certify_dataset(self.section(SECTION_DATASET)?, control)?;
         identity::certify_dataset_component(self.declared_identity(), &certified)
     }
 

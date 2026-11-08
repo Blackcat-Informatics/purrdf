@@ -50,7 +50,7 @@ fn high_cost_query() -> String {
 
 fn high_cost_calibration(
     request: SparqlRequest<'_>,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
 ) -> (u64, u64, purrdf_alloc_probe::Measurement) {
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
@@ -127,7 +127,7 @@ fn high_cost_input_peak(ds: &std::sync::Arc<purrdf_core::RdfDataset>, rows: usiz
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED,
             )
         })
@@ -187,14 +187,19 @@ fn forked_high_cost_rows_stop_with_bounded_workspace_and_work() {
     let functions = engine
         .bind_functions(functions, ExtensionEnv::empty())
         .expect("stable function");
-    let options = QueryOptions::new().with_functions(&functions);
+    // Whole receipts are compared across pools, so their coordinates must match.
+    let now = purrdf_xsd::temporal::parse_datetime("2024-02-29T12:34:56Z").unwrap();
+    let options = QueryOptions::new()
+        .with_functions(&functions)
+        .with_now(&now)
+        .with_entropy_seed(7);
     let query = high_cost_query();
     let request = SparqlRequest {
         query: &query,
         base_iri: None,
         substitutions: &[],
     };
-    let (row_scratch, per_row, row_allocation) = high_cost_calibration(request, options);
+    let (row_scratch, per_row, row_allocation) = high_cost_calibration(request, &options);
     // The five squared integers and their STR have payload lengths 6,249 + 12,497 +
     // 24,993 + 49,985 + 99,969 + 99,969, plus five integer (40 + 32) and one string
     // (39 + 32) term charges. Every distinct fixture ordinal has these same lengths.
@@ -216,14 +221,14 @@ fn forked_high_cost_rows_stop_with_bounded_workspace_and_work() {
             let window = WholeProcessWindow::open();
             let outcome = pool
                 .install(|| {
-                    NativeSparqlEngine::new().query_governed(&ds, request, options, &governors)
+                    NativeSparqlEngine::new().query_governed(&ds, request, &options, &governors)
                 })
                 .expect("bounded heavy rows");
             let allocation = window.close();
             let visited = visits.load(Ordering::Relaxed);
             let observation = (
                 outcome.tripped(),
-                ResourceDimension::ALL.map(|dimension| outcome.evidence().consumed_in(dimension)),
+                outcome.evidence().consumed(),
                 format!("{outcome:?}"),
             );
             assert!(

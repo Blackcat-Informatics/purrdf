@@ -55,6 +55,10 @@ fn convert_turtle_to_ntriples_produces_expected_triples() {
 
 #[test]
 fn query_json_row_matches_between_turtle_and_pack() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("temp dir");
     let input = write_fixture(
         dir.path(),
@@ -76,14 +80,36 @@ fn query_json_row_matches_between_turtle_and_pack() {
     // Build a pack from the same source, then query it.
     let pack = dir.path().join("data.purrpck");
     let pack = pack.to_str().expect("utf-8 path");
-    let (code, _, stderr) = run(&["convert", &input, pack]);
+    let (code, _, stderr) = run(&[
+        "convert",
+        &input,
+        pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         code, 0,
         "convert to pack exits 0 (formats inferred from extensions); stderr:\n{stderr}"
     );
 
-    let (code, pack_stdout, stderr) =
-        run(&["query", "--data", pack, "--results-format", "json", query]);
+    let (code, pack_stdout, stderr) = run(&[
+        "query",
+        "--data",
+        pack,
+        "--results-format",
+        "json",
+        query,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code, 0, "query over pack exits 0; stderr:\n{stderr}");
     let pack_stdout = String::from_utf8(pack_stdout).expect("utf-8 stdout");
 

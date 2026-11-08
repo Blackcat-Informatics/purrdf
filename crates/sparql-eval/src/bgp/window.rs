@@ -152,6 +152,11 @@ impl<I: ViewTermId> PreparedWindow<I> {
                 }
                 if matches!(scope, GraphScope::One(_)) {
                     let mut failure = None;
+                    let range_admission = crate::expr::AnnotationRangeMemory::new(ctx);
+                    let range = ctx.annotation_range.as_ref().and_then(|ranges| {
+                        ranges.iter().find(|range| matches!(&cp.o, Pos::Slot(slot)
+                            if working.vars().get(*slot).is_some_and(|variable| range.matches(variable))))
+                    });
                     emit_virtual_candidates(
                         ctx.dataset,
                         cp,
@@ -161,6 +166,7 @@ impl<I: ViewTermId> PreparedWindow<I> {
                         components,
                         reifies,
                         graph,
+                        range.map(|range| range.range(&ctx.now, &range_admission)),
                         |quad| {
                             if failure.is_some() || ctx.stop_check().is_some() {
                                 return ControlFlow::Break(());
@@ -189,7 +195,7 @@ impl<I: ViewTermId> PreparedWindow<I> {
                             }
                         },
                     );
-                    if let Some(error) = failure {
+                    if let Some(error) = range_admission.take_failure().or(failure) {
                         return Err(error);
                     }
                 }

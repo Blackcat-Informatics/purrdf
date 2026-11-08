@@ -38,7 +38,8 @@
 //! reading admits MORE models than the specification's and can therefore miss a clash but
 //! never invent one. A MALFORMED graph — a restriction with no `owl:onProperty`, a
 //! non-integer cardinality, a broken or cyclic RDF list — is still a hard
-//! [`EntailError::Parse`], because there is no sound reading of it at all.
+//! [`EntailError::OwlSyntax`] or [`EntailError::Collection`], retaining its original
+//! operands because there is no sound reading of it at all.
 //!
 //! The class-expression extraction is factored into [`CeExtractor`] — a reusable view
 //! over an interned `subject → predicate → objects` index plus the shared [`Vocab`] and
@@ -62,10 +63,11 @@
 //!
 //! So the depth is bounded where the tree is BUILT, by [`MAX_EXPRESSION_DEPTH`]: no
 //! over-deep tree is ever constructed, and every consumer of one is protected by the same
-//! single check. Exceeding it is an [`EntailError::Parse`] — a refusal every host already
+//! single check. Exceeding it is an [`EntailError::OwlSyntax`] — a refusal every host already
 //! propagates — rather than a stack overflow, which is not a refusal at all: the process
 //! aborts, nothing unwinds, and a host embedding this library dies with it.
 
+use super::property_kinds::{ANNOTATION, ANY, DATA, LOGICAL, OBJECT, PropertyKinds};
 use super::syntax::{Kind as SyntaxKind, Syntax};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +78,9 @@ use purrdf_core::{DatasetView, ListError, TermValue};
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet, TermSpace};
+
+mod error;
+pub use error::OwlSyntaxError;
 
 use crate::EntailError;
 use crate::interner::Interner;
@@ -420,6 +425,7 @@ pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
 /// concept-interning [`ConceptTable`] is *not* needed here (extraction returns a
 /// [`Concept`] tree; interning is the caller's concern).
 pub(crate) struct CeExtractor<'a> {
+    property_kinds: RefCell<PropertyKinds>,
     syntax: RefCell<Syntax>,
     index: &'a TripleIndex,
     interner: &'a Interner,
@@ -474,6 +480,7 @@ impl<'a> CeExtractor<'a> {
     ) -> Self {
         Self {
             syntax: RefCell::new(Syntax::default()),
+            property_kinds: RefCell::new(PropertyKinds::default()),
             index,
             interner,
             v,
@@ -488,6 +495,75 @@ impl<'a> CeExtractor<'a> {
         }
     }
 
+    /// Record only named source operands; an inverse expression names its operand.
+    fn property(&self, node: u32, allowed: u8) -> Option<u32> {
+        let (property, allowed) = if matches!(self.interner.value(node), TermValue::Blank { .. }) {
+            let target = self
+                .index
+                .get(&node)?
+                .get(&self.v.inverse_of)?
+                .first()
+                .copied()?;
+            (target, allowed & OBJECT)
+        } else {
+            (node, allowed)
+        };
+        let TermValue::Iri(iri) = self.interner.value(property) else {
+            return None;
+        };
+        let mut kinds = self.property_kinds.borrow_mut();
+        kinds.constrain(property, allowed);
+        for (declaration, kind) in [
+            (OWL_OBJECTPROPERTY, OBJECT),
+            (OWL_DATATYPEPROPERTY, DATA),
+            (OWL_ANNOTATIONPROPERTY, ANNOTATION),
+        ] {
+            if self
+                .interner
+                .id_of_iri(declaration)
+                .is_some_and(|ty| self.has_type(property, ty))
+            {
+                kinds.constrain(property, kind);
+            }
+        }
+        if [
+            purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY,
+            OWL_BOTTOMOBJECTPROPERTY,
+        ]
+        .contains(&iri.as_str())
+        {
+            kinds.constrain(property, OBJECT);
+        }
+        if [
+            purrdf_iri::vocab::owl::TOP_DATA_PROPERTY,
+            OWL_BOTTOMDATAPROPERTY,
+        ]
+        .contains(&iri.as_str())
+        {
+            kinds.constrain(property, DATA);
+        }
+        Some(property)
+    }
+
+    fn property_link(&self, left: u32, right: u32, allowed: u8) {
+        if let (Some(left), Some(right)) =
+            (self.property(left, allowed), self.property(right, allowed))
+        {
+            self.property_kinds.borrow_mut().link(left, right);
+        }
+    }
+
+    fn assertion_property(&self, property: u32, target: u32) {
+        let kind = if self.has_type(property, self.v.annotation_property) {
+            ANNOTATION
+        } else if matches!(self.interner.value(target), TermValue::Literal { .. }) {
+            DATA
+        } else {
+            OBJECT
+        };
+        self.property(property, kind);
+    }
+
     /// Refuse promptly when the governed caller has cancelled reverse mapping.
     fn poll(&self) -> Result<(), EntailError> {
         if let Some(original) = self.syntax.borrow().refusal {
@@ -500,9 +576,7 @@ impl<'a> CeExtractor<'a> {
         self.poll()?;
         let syntax = self.syntax.into_inner();
         if !syntax.complete() {
-            return Err(EntailError::Parse(
-                "native syntax capture did not complete".to_owned(),
-            ));
+            return Err(OwlSyntaxError::IncompleteCapture.into());
         }
         Ok(syntax)
     }
@@ -574,8 +648,9 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed class-expression graph or one nesting
-    /// past [`MAX_EXPRESSION_DEPTH`]. Finite cycles are exact defining equations.
+    /// [`EntailError::OwlSyntax`] on a malformed class expression or one nesting past
+    /// [`MAX_EXPRESSION_DEPTH`]; [`EntailError::Collection`] retains a malformed list.
+    /// Finite cycles are exact defining equations.
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
         self.poll()?;
         let recursive = self.in_progress.contains(&node);
@@ -601,9 +676,12 @@ impl<'a> CeExtractor<'a> {
         // this one — inserted on entry, removed on the way out — so its size IS the current
         // nesting depth. See this module's *How deep an expression may nest*.
         if self.in_progress.len() >= MAX_EXPRESSION_DEPTH {
-            return Err(EntailError::Parse(format!(
-                "OWL class expression nests deeper than {MAX_EXPRESSION_DEPTH}"
-            )));
+            return Err(OwlSyntaxError::ExpressionDepth {
+                node: self.interner.value(node).clone(),
+                active_depth: self.in_progress.len(),
+                limit: MAX_EXPRESSION_DEPTH,
+            }
+            .into());
         }
         self.in_progress.insert(node);
         let c = self.build_expr(node)?;
@@ -688,7 +766,7 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed `owl:oneOf` collection.
+    /// [`EntailError::Collection`] on a malformed `owl:oneOf` collection.
     fn is_data_range(&self, node: u32) -> Result<bool, EntailError> {
         if let TermValue::Iri(iri) = self.interner.value(node)
             && (iri.starts_with(XSD_NS)
@@ -743,8 +821,8 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed collection in a data-range position, on a cyclic
-    /// data range, and on one nesting past [`MAX_EXPRESSION_DEPTH`].
+    /// [`EntailError::Collection`] on a malformed collection in a data-range position;
+    /// [`EntailError::OwlSyntax`] on a cyclic or over-deep data range.
     fn data_range(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         let token = self.syntax.borrow_mut().enter(SyntaxKind::Range(node));
         let result = self.data_range_scoped(node, path);
@@ -756,12 +834,18 @@ impl<'a> CeExtractor<'a> {
     fn data_range_scoped(&self, node: u32, path: &mut Vec<u32>) -> Result<DataRange, EntailError> {
         self.poll()?;
         if path.contains(&node) {
-            return Err(EntailError::Parse("cyclic OWL data range".to_owned()));
+            return Err(OwlSyntaxError::DataRangeCycle {
+                node: self.interner.value(node).clone(),
+            }
+            .into());
         }
         if path.len() >= MAX_EXPRESSION_DEPTH {
-            return Err(EntailError::Parse(format!(
-                "OWL data range nests deeper than {MAX_EXPRESSION_DEPTH}"
-            )));
+            return Err(OwlSyntaxError::DataRangeDepth {
+                node: self.interner.value(node).clone(),
+                active_depth: path.len(),
+                limit: MAX_EXPRESSION_DEPTH,
+            }
+            .into());
         }
         path.push(node);
         let decoded = self.data_range_inner(node, path);
@@ -969,30 +1053,62 @@ impl<'a> CeExtractor<'a> {
 
     /// Decode an `owl:Restriction` node.
     fn restriction(&mut self, node: u32) -> Result<Concept, EntailError> {
-        let r = self.get(node, self.v.on_property).ok_or_else(|| {
-            EntailError::Parse("owl:Restriction without owl:onProperty".to_owned())
-        })?;
-        // A restriction over a BUILT-IN role (`owl:topObjectProperty`,
-        // `owl:bottomObjectProperty`, …) reads it as an ordinary named role, which is
-        // exactly what the built-in-role boundary is about. It is raised HERE as well as at
-        // the role-assertion site, because a built-in role reaches the knowledge base
-        // through either position.
-        if let TermValue::Iri(iri) = self.interner.value(r)
-            && let Some(Support::Bounded(construct)) = support_of(iri)
-        {
-            self.boundaries.insert(construct);
-        }
+        let r =
+            self.get(node, self.v.on_property)
+                .ok_or_else(|| OwlSyntaxError::MissingProperty {
+                    node: self.interner.value(node).clone(),
+                })?;
+        // Restrictions and assertions share the vocabulary support contract.
+        // Unsupported roles raise their boundary before an ordinary role encoding
+        // could make the resulting certificate appear exact.
         let role = self.role_of(r)?;
+        let (Role::Named(property) | Role::Inv(property)) = role;
+        record_role_support(self.interner, &mut self.boundaries, [property]);
+        self.property(r, LOGICAL);
+        if self
+            .index
+            .get(&node)
+            .is_some_and(|predicates| predicates.contains_key(&self.v.on_class))
+        {
+            self.property(r, OBJECT);
+        }
+        if self
+            .index
+            .get(&node)
+            .is_some_and(|predicates| predicates.contains_key(&self.v.on_data_range))
+        {
+            self.property(r, DATA);
+        }
         if let Some(c) = self.get(node, self.v.some_values) {
-            return Ok(Concept::Some(role, Box::new(self.expr(c)?)));
+            let filler = self.expr(c)?;
+            self.property(
+                r,
+                if matches!(filler, Concept::Data(_)) {
+                    DATA
+                } else {
+                    OBJECT
+                },
+            );
+            return Ok(Concept::Some(role, Box::new(filler)));
         }
         if let Some(c) = self.get(node, self.v.all_values) {
-            return Ok(Concept::All(role, Box::new(self.expr(c)?)));
+            let filler = self.expr(c)?;
+            self.property(
+                r,
+                if matches!(filler, Concept::Data(_)) {
+                    DATA
+                } else {
+                    OBJECT
+                },
+            );
+            return Ok(Concept::All(role, Box::new(filler)));
         }
         if let Some(a) = self.get(node, self.v.has_value) {
+            self.assertion_property(r, a);
             return Ok(Concept::Some(role, Box::new(Concept::Nominal(vec![a]))));
         }
         if let Some(lit) = self.get(node, self.v.has_self) {
+            self.property(r, OBJECT);
             self.counted_roles.insert(role);
             return Ok(self.self_restriction(role, lit));
         }
@@ -1080,10 +1196,8 @@ impl<'a> CeExtractor<'a> {
         let filler = self
             .get(node, self.v.on_class)
             .or_else(|| self.get(node, self.v.on_data_range))
-            .ok_or_else(|| {
-                EntailError::Parse(
-                    "qualified cardinality without owl:onClass or owl:onDataRange".to_owned(),
-                )
+            .ok_or_else(|| OwlSyntaxError::MissingQualifiedFiller {
+                node: self.interner.value(node).clone(),
             })?;
         self.expr(filler)
     }
@@ -1138,24 +1252,24 @@ impl<'a> CeExtractor<'a> {
                 // graph and a hard error, never a bound guessed from it.
                 let n = purrdf_iri::terminals::trim_ws(lexical_form)
                     .parse::<u32>()
-                    .map_err(|_| {
-                        EntailError::Parse(format!(
-                            "non-integer cardinality literal: {lexical_form:?}"
-                        ))
+                    .map_err(|cause| OwlSyntaxError::CardinalityLexical {
+                        literal: self.interner.value(lit).clone(),
+                        cause,
                     })?;
                 if n == u32::MAX {
-                    return Err(EntailError::Parse(format!(
-                        "cardinality {n} exceeds this reasoner's representable bound \
-                         ({} is the largest supported cardinality): refusing rather \
-                         than deciding wrongly",
-                        u32::MAX - 1
-                    )));
+                    return Err(OwlSyntaxError::CardinalityRange {
+                        literal: self.interner.value(lit).clone(),
+                        value: n,
+                        maximum: u32::MAX - 1,
+                    }
+                    .into());
                 }
                 Ok(n)
             }
-            other => Err(EntailError::Parse(format!(
-                "cardinality value is not a literal: {other:?}"
-            ))),
+            other => Err(OwlSyntaxError::CardinalityNotLiteral {
+                value: other.clone(),
+            }
+            .into()),
         }
     }
 
@@ -1170,7 +1284,13 @@ impl<'a> CeExtractor<'a> {
         });
         self.syntax.borrow_mut().leave(token, result.is_ok());
         self.poll()?;
-        result.map_err(|error| EntailError::Parse(format!("malformed RDF list: {}", error.kind)))
+        result.map_err(|error| {
+            EntailError::Collection(Box::new(crate::CollectionError {
+                phase: crate::CollectionPhase::OwlDirect,
+                head: self.interner.value(head).clone(),
+                original: error.map(|id| self.interner.value(id).clone()),
+            }))
+        })
     }
 
     /// Walk an RDF list of class expressions.
@@ -1186,13 +1306,17 @@ impl<'a> CeExtractor<'a> {
         Some(object)
     }
 
-    /// Whether `s rdf:type o` is asserted.
-    fn is_typed(&self, s: u32, o: u32) -> bool {
-        let holds = self
-            .index
+    /// Read declaration metadata without adding a semantic proof premise.
+    fn has_type(&self, s: u32, o: u32) -> bool {
+        self.index
             .get(&s)
             .and_then(|m| m.get(&self.v.ty))
-            .is_some_and(|os| os.contains(&o));
+            .is_some_and(|os| os.contains(&o))
+    }
+
+    /// Whether `s rdf:type o` is asserted.
+    fn is_typed(&self, s: u32, o: u32) -> bool {
+        let holds = self.has_type(s, o);
         if holds {
             self.syntax.borrow_mut().triple(s, self.v.ty, o);
         }
@@ -1214,8 +1338,8 @@ fn poll<E>(stop: Option<&dyn StopSignal>) -> Result<(), EntailError<E>> {
 ///
 /// # Errors
 ///
-/// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
-/// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
+/// [`EntailError::OwlSyntax`] retains malformed class-expression operands;
+/// [`EntailError::Collection`] retains malformed RDF lists.
 #[cfg(test)]
 pub(crate) fn build_until<D: DatasetView>(
     ds: &D,
@@ -1298,6 +1422,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         let mut acc = Accums::default();
         let mut ranges = DataRangeTable::default();
         let syntax;
+        let property_kinds;
         {
             let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
             // The n-ary axioms are stated as a node carrying a list or a reification, so they
@@ -1379,6 +1504,16 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                     break;
                 }
             }
+            if let Some(program) = &role_program {
+                for chain in &program.source.chains {
+                    for role in std::iter::once(&chain.head).chain(&chain.body) {
+                        ce.poll().map_err(EntailError::with_read_error)?;
+                        let (Role::Named(property) | Role::Inv(property)) = *role;
+                        ce.property(property, OBJECT);
+                    }
+                }
+            }
+            property_kinds = ce.property_kinds.take();
             syntax = ce.into_syntax().map_err(EntailError::with_read_error)?;
         }
 
@@ -1456,6 +1591,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
 
         poll(stop)?;
         let mut kb = Kb {
+            property_kinds,
             syntax,
             query_syntax: Syntax::query(),
             inputs: acc.inputs,
@@ -1520,6 +1656,22 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         Ok(kb)
     })
     .map_err(EntailError::source_read)?
+}
+
+/// Record unsupported role operands through the same vocabulary contract whether
+/// they occur in the source, a native axiom question or a query pattern.
+pub(crate) fn record_role_support(
+    interner: &Interner,
+    boundaries: &mut BTreeSet<Construct>,
+    roles: impl IntoIterator<Item = u32>,
+) {
+    for role in roles {
+        if let TermValue::Iri(iri) = interner.value(role)
+            && let Some(Support::Bounded(construct)) = support_of(iri)
+        {
+            boundaries.insert(construct);
+        }
+    }
 }
 
 /// Install the fixed empty extension of each mentioned bottom role through
@@ -1785,6 +1937,12 @@ fn axiom_node(
     } else if axiom_class == v.all_disjoint_properties {
         if let Some(head) = ce.get(node, v.members) {
             let members = ce.node_list(head)?;
+            for &member in &members {
+                ce.property(member, LOGICAL);
+            }
+            for pair in members.windows(2) {
+                ce.property_link(pair[0], pair[1], LOGICAL);
+            }
             for (index, &left) in members.iter().enumerate() {
                 for &right in &members[index + 1..] {
                     ce.poll()?;
@@ -1828,12 +1986,14 @@ fn negative_assertion(
     ) else {
         return Ok(());
     };
-    let Some(target) = ce
-        .get(node, v.target_individual)
-        .or_else(|| ce.get(node, v.target_value))
-    else {
+    let (target, kind) = if let Some(target) = ce.get(node, v.target_individual) {
+        (target, OBJECT)
+    } else if let Some(target) = ce.get(node, v.target_value) {
+        (target, DATA)
+    } else {
         return Ok(());
     };
+    ce.property(property, kind);
     let concept = Concept::All(
         Role::Named(property),
         Box::new(Concept::Not(Box::new(Concept::Nominal(vec![target])))),
@@ -1877,6 +2037,7 @@ fn axiom(
     } else if p == v.disjoint_union {
         disjoint_union(ce, table, acc, s, o)?;
     } else if p == v.domain {
+        ce.property(s, ANY);
         let d = ce.expr(o)?;
         gci(
             table,
@@ -1886,6 +2047,16 @@ fn axiom(
         );
     } else if p == v.range {
         let d = ce.expr(o)?;
+        ce.property(
+            s,
+            if ce.has_type(s, v.annotation_property) {
+                ANNOTATION
+            } else if matches!(d, Concept::Data(_)) {
+                DATA
+            } else {
+                OBJECT
+            },
+        );
         gci(
             table,
             acc,
@@ -1893,6 +2064,7 @@ fn axiom(
             Concept::All(Role::Named(s), Box::new(d)),
         );
     } else if p == v.inverse_of {
+        ce.property_link(s, o, OBJECT);
         for (left, right) in [(s, o), (o, s)] {
             if acc.inverses.entry(left).or_default().insert(right) {
                 acc.inputs
@@ -1900,6 +2072,7 @@ fn axiom(
             }
         }
     } else if p == v.equiv_prop {
+        ce.property_link(s, o, LOGICAL);
         for (sup, sub) in [(s, o), (o, s)] {
             if acc.role_sub.entry(sup).or_default().insert(sub) {
                 acc.inputs
@@ -1907,6 +2080,7 @@ fn axiom(
             }
         }
     } else if p == v.sub_prop {
+        ce.property_link(s, o, ANY);
         // s ⊑ o : `o` has sub-role `s`.
         if acc.role_sub.entry(o).or_default().insert(s) {
             acc.inputs.record(
@@ -1915,6 +2089,7 @@ fn axiom(
             )?;
         }
     } else if p == v.property_disjoint_with {
+        ce.property_link(s, o, LOGICAL);
         for (left, right) in [(s, o), (o, s)] {
             if acc.disjoint_roles.insert((left, right)) {
                 acc.inputs
@@ -1925,6 +2100,9 @@ fn axiom(
         let class = ce.expr(s)?;
         let cid = table.intern(class);
         let properties = ce.node_list(o)?;
+        for &property in &properties {
+            ce.property(property, LOGICAL);
+        }
         acc.inputs
             .record(Input::Key(acc.keys.len()), Source::Anchor(acc.source))?;
         acc.keys.push((cid, properties));
@@ -1947,7 +2125,7 @@ fn axiom(
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
-        role_or_boundary(acc, interner, v, s, p, o)?;
+        role_or_boundary(ce, acc, interner, v, s, p, o)?;
     }
     Ok(())
 }
@@ -1999,6 +2177,7 @@ fn disjoint_union(
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
 fn role_or_boundary(
+    ce: &CeExtractor<'_>,
     acc: &mut Accums,
     interner: &Interner,
     v: &Vocab,
@@ -2013,6 +2192,7 @@ fn role_or_boundary(
             Input::Role(acc.abox_roles.len()),
             Source::Anchor(acc.source),
         )?;
+        ce.assertion_property(p, o);
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);
@@ -2040,6 +2220,7 @@ fn role_or_boundary(
                 Input::Role(acc.abox_roles.len()),
                 Source::Anchor(acc.source),
             )?;
+            ce.assertion_property(p, o);
             acc.abox_roles.push((s, p, o));
             acc.name(interner, s);
             acc.name(interner, o);
@@ -2058,6 +2239,26 @@ fn type_assertion(
     s: u32,
     o: u32,
 ) -> Result<(), EntailError> {
+    // Source declarations are inventory evidence even when they state no axiom.
+    if matches!(interner.value(o), TermValue::Iri(iri) if [OWL_OBJECTPROPERTY, OWL_DATATYPEPROPERTY, OWL_ANNOTATIONPROPERTY].contains(&iri.as_str()))
+    {
+        ce.property(s, ANY);
+    }
+    if o == v.functional {
+        ce.property(s, LOGICAL);
+    }
+    if [
+        v.inverse_functional,
+        v.symmetric,
+        v.transitive,
+        v.asymmetric,
+        v.reflexive,
+        v.irreflexive,
+    ]
+    .contains(&o)
+    {
+        ce.property(s, OBJECT);
+    }
     // --- The role characteristics, each a global axiom or a graph-level constraint. ---
     if o == v.functional {
         // ⊤ ⊑ ≤1 s.⊤.
@@ -2333,8 +2534,9 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("{unicode_ws:?} must not be read as a bound"));
             assert!(
-                matches!(err, EntailError::Parse(_)),
-                "{unicode_ws:?} must refuse as a parse error, got {err:?}"
+                matches!(err, EntailError::OwlSyntax(ref original)
+                    if matches!(original.as_ref(), crate::OwlSyntaxError::CardinalityLexical { .. })),
+                "{unicode_ws:?} must retain its native integer refusal, got {err:?}"
             );
         }
         // And a genuinely non-numeric bound is still refused, so the change narrowed the

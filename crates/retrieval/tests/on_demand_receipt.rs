@@ -21,16 +21,17 @@
 //! Fixtures use `example.org` throughout; every block tag and stratum IRI below is
 //! fixture configuration, never a minted vocabulary.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, Fixed,
-    FusionError, FusionProfile, Iri, PfAttestation, ProtocolError, RECIP_K, RankFidelity,
-    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, SearchError, SearchResult,
-    Statistics, Term, TopK, compile, execute, execute_within, fuse, plan, search,
+    AdmissionEnvironment, CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, FusionError,
+    FusionProfile, Iri, PfAttestation, ProtocolError, RECIP_K, RankFidelity, RankedStreamAdapter,
+    ReadSchedule, RequestTerm, RetrievalRequest, SearchError, SearchResult, Statistics, Term, TopK,
+    compile, execute, execute_within, fuse, plan, search,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity, PfCursor, PfRow,
@@ -231,6 +232,7 @@ fn counted_registry(left: Index) -> (PropertyFunctionRegistry<'static>, [Arc<Ato
                     }],
                 }],
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 0,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -293,10 +295,14 @@ fn statistics() -> Cardinalities {
 /// to its end without being fused.
 fn right_only_profile() -> FusionProfile {
     FusionProfile::with_decay(
-        BTreeMap::from([(strata()[1].clone(), Fixed::ONE)]),
+        BTreeMap::from([(
+            strata()[1].clone(),
+            PRECISION_12.score(PRECISION_12.scale()),
+        )]),
         DecayRule::ReciprocalRank {
             k: u32::try_from(RECIP_K).expect("the smoothing constant fits"),
         },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }

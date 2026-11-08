@@ -7,6 +7,8 @@
 //! knob in the calling host's own spelling; the neighbour one fact or step inside the
 //! limit completes.
 
+use purrdf_validate::canonical::CanonicalServiceError;
+use purrdf_validate::regime::ReasoningError;
 use purrdf_validate::{
     MaterializeLimits, RegimeHost, RulesHost, RulesRequest, apply_rules_to_ntriples,
     materialize_to_nquads_string, materialize_to_nquads_string_with,
@@ -129,11 +131,45 @@ const REGIME_HOSTS: [(RegimeHost, &str, &str); 6] = [
 ];
 
 #[test]
+fn canonical_materialization_refusal_retains_the_original_native_cause() {
+    let input = "_:x <http://example.org/link> _:y .\n\
+                 _:y <http://example.org/link> _:x .\n";
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::SearchPolicy::Finite(0), None);
+    let refused = materialize_to_nquads_string("rdfs", input, "", &mut control)
+        .expect_err("a symmetric blank pair requires a search frame");
+    let native = purrdf_validate::canonical::native_canonical_cause(&refused)
+        .expect("the shared host boundary retains its native canonicalizer cause");
+    let ReasoningError::Canonical(CanonicalServiceError::Canonical { cause, .. }) = &refused else {
+        panic!("the finite refusal must retain a canonical cause");
+    };
+    assert!(std::ptr::eq(native, cause.as_ref()));
+    let purrdf_core::CanonError::BudgetExceeded(budget) = native else {
+        panic!("the original native cause must remain a finite search refusal");
+    };
+    assert_eq!(budget.limit, 0);
+    assert_eq!(budget.work.total(), 0);
+    assert!(matches!(
+        budget.context,
+        purrdf_core::RdfcSearchContext::InitialFrame { .. }
+    ));
+}
+
+#[test]
 fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() {
     // `rdfs` runs through the restricted chase and `owl-rl` through the semi-naive
     // evaluator, so both refusal paths are observed.
     for regime in ["rdfs", "owl-rl"] {
-        let unlimited = materialize_to_nquads_string(regime, DATA, "").expect("the default");
+        let unlimited = materialize_to_nquads_string(
+            regime,
+            DATA,
+            "",
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the default");
         let stored: usize = unlimited
             .report()
             .lines()
@@ -145,11 +181,28 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             let limits = |facts: Option<u64>, steps: Option<u64>| MaterializeLimits {
                 max_stored_facts: facts,
                 max_join_steps: steps,
+                max_term_arena_bytes: None,
                 host,
             };
             let short = limits(Some(stored as u64 - 1), None);
-            let refused = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &short)
-                .expect_err("one fact short");
+            let refused = materialize_to_nquads_string_with(
+                regime,
+                DATA,
+                "",
+                &[],
+                &[],
+                &short,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect_err("one fact short");
+            assert!(
+                matches!(&refused, ReasoningError::Entailment { .. }),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.starts_with(&format!(
                     "entailment regime \"{regime}\": evaluation exceeded the stored-fact \
@@ -159,8 +212,19 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 "{regime} {host:?}: {refused}"
             );
             let exact = limits(Some(stored as u64), None);
-            let closed = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &exact)
-                .expect("exactly the store it needs");
+            let closed = materialize_to_nquads_string_with(
+                regime,
+                DATA,
+                "",
+                &[],
+                &[],
+                &exact,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("exactly the store it needs");
             assert_eq!(closed.nquads(), unlimited.nquads(), "{regime} {host:?}");
 
             let refused = materialize_to_nquads_string_with(
@@ -170,8 +234,17 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 &[],
                 &[],
                 &limits(None, Some(1)),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .expect_err("one join step");
+            assert!(
+                matches!(&refused, ReasoningError::Entailment { .. }),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {join_steps}")),
@@ -187,29 +260,116 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
 #[test]
 fn the_limits_in_force_reach_the_reports_contract_hash() {
     let hash = |limits: &MaterializeLimits| {
-        materialize_to_nquads_string_with("owl-rl", DATA, "", &[], &[], limits)
-            .expect("closes")
-            .report()
-            .lines()
-            .find(|line| line.starts_with("contract-hash "))
-            .expect("a contract hash")
-            .to_owned()
+        materialize_to_nquads_string_with(
+            "owl-rl",
+            DATA,
+            "",
+            &[],
+            &[],
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("closes")
+        .report()
+        .lines()
+        .find(|line| line.starts_with("contract-hash "))
+        .expect("a contract hash")
+        .to_owned()
     };
     let default = hash(&MaterializeLimits::default());
     let restated = hash(&MaterializeLimits {
-        max_stored_facts: Some(purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
-        max_join_steps: Some(purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS),
+        max_stored_facts: Some(u64::MAX),
+        max_join_steps: Some(u64::MAX),
+        max_term_arena_bytes: None,
         host: RegimeHost::Rust,
     });
     assert_eq!(default, restated);
     let raised = hash(&MaterializeLimits {
-        max_stored_facts: Some(purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS * 2),
+        max_stored_facts: Some(1_000),
         ..MaterializeLimits::default()
     });
     assert_ne!(default, raised);
 }
 
-/// Every conclusion-directed service takes the same two limits, and a refusal names the knob
+#[test]
+fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
+    for regime in ["rdfs", "owl-rl"] {
+        let reference = materialize_to_nquads_string(
+            regime,
+            DATA,
+            "",
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let bytes: u64 = reference
+            .report()
+            .lines()
+            .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+            .expect("the original arena count")
+            .parse()
+            .unwrap();
+        assert!(bytes > 0);
+        let short = MaterializeLimits {
+            max_term_arena_bytes: Some(bytes - 1),
+            ..MaterializeLimits::default()
+        };
+        let refused = materialize_to_nquads_string_with(
+            regime,
+            DATA,
+            "",
+            &[],
+            &[],
+            &short,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("one original byte short");
+        assert!(
+            matches!(&refused, ReasoningError::Entailment { .. }),
+            "{refused:?}"
+        );
+        let refused = refused.to_string();
+        assert!(
+            refused.contains(&format!(
+                "term arena bytes limit: {bytes} observed, {} permitted",
+                bytes - 1
+            )),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with("raise it with MaterializeLimits::max_term_arena_bytes"),
+            "{refused}"
+        );
+        let exact = MaterializeLimits {
+            max_term_arena_bytes: Some(bytes),
+            ..MaterializeLimits::default()
+        };
+        let actual = materialize_to_nquads_string_with(
+            regime,
+            DATA,
+            "",
+            &[],
+            &[],
+            &exact,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        assert_eq!(actual.nquads(), reference.nquads());
+    }
+}
+
+/// Every conclusion-directed service takes the same three limits, and a refusal names the knob
 /// of the entry point the CALLER called — on every host, never another function's argument
 /// and never a Rust type to a non-Rust caller. The neighbour, the same question with the
 /// limit raised to what the run needs, answers.
@@ -226,7 +386,8 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
         &purrdf_validate::ImportList<'_>,
         &[&str],
         &MaterializeLimits,
-    ) -> Result<purrdf_validate::regime::ReasoningAnswer, String>;
+    )
+        -> Result<purrdf_validate::regime::ReasoningAnswer<String>, ReasoningError>;
     let conclusion = "<http://example.org/s0> <http://example.org/p> <http://example.org/o0> .\n";
     let pattern = "?s <http://example.org/p> ?o .\n";
     let services: [(Service, RegimeService, &str); 3] = [
@@ -271,10 +432,11 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             .parse()
             .expect("a count");
         for host in hosts {
-            let (stored_facts, join_steps) = host.service_knobs(which);
+            let (stored_facts, join_steps, _) = host.service_knobs(which);
             let limits = |facts: Option<u64>, steps: Option<u64>| MaterializeLimits {
                 max_stored_facts: facts,
                 max_join_steps: steps,
+                max_term_arena_bytes: None,
                 host,
             };
             let refused = service(
@@ -287,9 +449,15 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             )
             .expect_err("one fact short");
             assert!(
-                refused.contains("evaluation exceeded the stored-fact limit: ")
-                    && refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
-                    && refused.ends_with(&format!("raise it with {stored_facts}")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the stored-fact limit: ")
+                    && refused
+                        .to_string()
+                        .contains(&format!("{} permitted (the caller's limit)", stored - 1))
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {stored_facts}")),
                 "{which:?} {host:?}: {refused}"
             );
             let answered = service(
@@ -305,8 +473,12 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             let refused = service("owl-rl", DATA, question, &[], &[], &limits(None, Some(1)))
                 .expect_err("one join step");
             assert!(
-                refused.contains("evaluation exceeded the join-step limit: ")
-                    && refused.ends_with(&format!("raise it with {join_steps}")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the join-step limit: ")
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {join_steps}")),
                 "{which:?} {host:?}: {refused}"
             );
         }
@@ -321,7 +493,7 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
         ),
         (RegimeHost::Cli, "--max-stored-facts"),
     ] {
-        let (stored_facts, _) = host.service_knobs(RegimeService::GraphEntails);
+        let (stored_facts, _, _) = host.service_knobs(RegimeService::GraphEntails);
         assert_eq!(stored_facts, expected);
         assert!(
             !stored_facts.contains("MaterializeLimits") && !stored_facts.contains("EvalOptions")

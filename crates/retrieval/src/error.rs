@@ -9,6 +9,9 @@
 //! different build must be refused loudly, never silently reinterpreted under
 //! the current layout.
 
+mod profile;
+pub use profile::ProfileRefusal;
+
 /// A failure to plan a request, validate an IRI, or encode/decode a canonical
 /// [`Plan`].
 ///
@@ -22,6 +25,11 @@
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum PlanError {
+    /// A non-prefix read retained a score-prefix depth license.
+    OrderBoundPrefix {
+        /// Stratum whose recorded prefix contradicts the request's read bound.
+        stratum: String,
+    },
     /// A plan's canonical encoding carries a version this build does not write.
     ///
     /// This is a refusal, not a warning: a plan whose layout a newer or older
@@ -110,6 +118,8 @@ pub enum PlanError {
     InvalidUtf8 {
         /// The field being decoded.
         what: &'static str,
+        /// The original decoder refusal, including its byte position and sequence length.
+        source: core::str::Utf8Error,
     },
 
     /// A canonical field did not parse as an IRI.
@@ -468,7 +478,7 @@ impl purrdf_hash::error::StructuredError for PlanError {
         RegistryDeclaration { message } => "retrieval-plan-registry-declaration" { "message" => Message(message) },
         Truncated { offset } => "retrieval-plan-truncated" { "offset" => ByteCount(*offset as u128) },
         InvalidTag { what, tag } => "retrieval-plan-invalid-tag" { "what" => Code(what), "tag" => Unsigned(u128::from(*tag)) },
-        InvalidUtf8 { what } => "retrieval-plan-invalid-utf8" { "what" => Code(what) },
+        InvalidUtf8 { what, source } => "retrieval-plan-invalid-utf8" { "what" => Code(what), "source" => Cause(source) },
         InvalidIri { text, source } => "retrieval-plan-invalid-iri" { "text" => Iri(text), "source" => Cause(source) },
         InvalidJson { pointer, reason } => "retrieval-plan-invalid-json" { "pointer" => Text(pointer), "reason" => Text(reason) },
         TrailingBytes { extra } => "retrieval-plan-trailing-bytes" { "extra" => ByteCount(*extra as u128) },
@@ -481,6 +491,7 @@ impl purrdf_hash::error::StructuredError for PlanError {
         DuplicateSelectivityTerm { section, subject, request_term } => "retrieval-plan-duplicate-selectivity-term" { "section" => Record(section), "subject" => Text(subject), "request_term" => Unsigned(u128::from(*request_term)) },
         DepthNotDerivable { stratum, recorded, derived } => "retrieval-plan-depth-not-derivable" { "stratum" => Iri(stratum), "recorded" => Unsigned(u128::from(*recorded)), "derived" => Unsigned(u128::from(*derived)) },
         DepthWithoutDerivation { stratum } => "retrieval-plan-depth-without-derivation" { "stratum" => Iri(stratum) },
+        OrderBoundPrefix { stratum } => "retrieval-plan-order-bound-prefix" { "stratum" => Iri(stratum) },
         DerivationWithoutDepth { stratum } => "retrieval-plan-derivation-without-depth" { "stratum" => Iri(stratum) },
         DerivationWithoutStatisticsEntry { stratum } => "retrieval-plan-derivation-without-statistics" { "stratum" => Iri(stratum) },
         StatisticsEntryContradictsDerivation { stratum, dimension, snapshot, derivation } => "retrieval-plan-statistics-contradiction" { "stratum" => Iri(stratum), "dimension" => Record(dimension), "snapshot" => Text(snapshot), "derivation" => Text(derivation) },
@@ -518,7 +529,7 @@ impl std::fmt::Display for PlanError {
                 f,
                 "plan canonical encoding carries invalid tag {tag} for {what}"
             ),
-            Self::InvalidUtf8 { what } => {
+            Self::InvalidUtf8 { what, .. } => {
                 write!(f, "plan canonical encoding carries invalid UTF-8 in {what}")
             }
             Self::InvalidIri { text, source } => write!(f, "invalid IRI {text:?}: {source}"),
@@ -580,6 +591,10 @@ impl std::fmt::Display for PlanError {
                 f,
                 "stratum {stratum} records depth {recorded}, but its recorded inputs derive depth {derived}"
             ),
+            Self::OrderBoundPrefix { stratum } => write!(
+                f,
+                "stratum {stratum} retains a score-prefix depth license under a non-prefix read bound; replan before caller-key fusion"
+            ),
             Self::DepthWithoutDerivation { stratum } => write!(
                 f,
                 "stratum {stratum} records a depth with no recorded derivation"
@@ -623,6 +638,7 @@ impl std::error::Error for PlanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIri { source, .. } => Some(source),
+            Self::InvalidUtf8 { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -674,6 +690,7 @@ impl PlanError {
             Self::UnconsultedStatisticsSubject { .. } => "unconsulted-statistics-subject",
             Self::DepthNotDerivable { .. } => "depth-not-derivable",
             Self::DepthWithoutDerivation { .. } => "depth-without-derivation",
+            Self::OrderBoundPrefix { .. } => "order-bound-prefix",
             Self::DerivationWithoutDepth { .. } => "derivation-without-depth",
             Self::DerivationWithoutStatisticsEntry { .. } => "derivation-without-statistics-entry",
             Self::StatisticsEntryContradictsDerivation { .. } => {
@@ -778,11 +795,27 @@ pub enum FusionError {
     /// The original native layout, allocation or workspace admission refusal.
     NativeFailure(purrdf_sparql_eval::EvalError),
     /// A checked arithmetic step left the range it is computed in: a
-    /// fixed-point addition, the profile's derived ceiling
-    /// (`max_weight × stratum count`), or a stratum count too large for the
+    /// score addition, the exact sum of rank-one contributions, or a stratum
+    /// count too large for the
     /// `u32` the canonical profile encoding writes. A wrapped value would be a
     /// wrong order presented as a right one, so it is refused.
     Overflow,
+    /// A decimal precision exceeded the unsigned representation's 38 digits.
+    InvalidPrecision {
+        /// Rejected fractional digit count.
+        digits: u32,
+    },
+    /// Values from different decimal laws were combined.
+    PrecisionMismatch {
+        /// Required precision.
+        expected: crate::Precision,
+        /// Supplied precision.
+        got: crate::Precision,
+    },
+    /// The exact resolution search violated its proven candidate bounds.
+    ResolutionInvariant,
+    /// Original typed caller-key or bound protocol refusal.
+    Ordering(crate::OrderingError),
 
     /// A ranked stream violated the input protocol.
     Protocol(Box<crate::ranked_stream::ProtocolError>),
@@ -836,7 +869,7 @@ pub enum FusionError {
         /// The stratum whose weight was rejected, as its canonical IRI text.
         stratum: String,
         /// The rejected weight.
-        weight: purrdf_text::Fixed,
+        weight: crate::Score,
     },
 
     /// A weight handed to the threshold-crossing derivation was not strictly
@@ -854,7 +887,7 @@ pub enum FusionError {
     /// wrong one.
     NonPositiveCrossingWeight {
         /// The rejected weight.
-        weight: purrdf_text::Fixed,
+        weight: crate::Score,
     },
 
     /// A stream emitted under a stratum the profile declares no weight for.
@@ -919,8 +952,8 @@ pub enum FusionError {
         requested: crate::fuse::TopK,
     },
 
-    /// A fusion profile's canonical bytes could not be decoded.
-    MalformedProfile(String),
+    /// An original profile decoder or fusion-invariant refusal.
+    MalformedProfile(Box<ProfileRefusal>),
 
     /// A candidate received more contributions than there are strata.
     ///
@@ -1023,6 +1056,10 @@ impl purrdf_hash::error::StructuredError for FusionError {
     purrdf_hash::error_visit! {
         NativeFailure(cause) => "fusion-native-failure" { "cause" => Cause(cause) },
         Overflow => "fusion-overflow" {},
+        InvalidPrecision { digits } => "fusion-invalid-precision" { "digits" => Unsigned(u128::from(*digits)) },
+        PrecisionMismatch { expected, got } => "fusion-precision-mismatch" { "expected" => Unsigned(u128::from(expected.digits())), "got" => Unsigned(u128::from(got.digits())) },
+        ResolutionInvariant => "fusion-resolution-invariant" {},
+        Ordering(cause) => "fusion-ordering" { "cause" => Cause(cause) },
         Protocol(cause) => "fusion-protocol" { "cause" => Cause(cause.as_ref()) },
         InvalidK { k } => "fusion-invalid-k" { "k" => Unsigned(u128::from(*k)) },
         InvalidRank { rank } => "fusion-invalid-rank" { "rank" => Unsigned(u128::from(*rank)) },
@@ -1034,7 +1071,7 @@ impl purrdf_hash::error::StructuredError for FusionError {
         DuplicateStratum { stratum } => "fusion-duplicate-stratum" { "stratum" => Iri(stratum) },
         PlanIdMismatch { expected, got } => "fusion-plan-id-mismatch" { "expected" => Record(expected), "got" => Value(got.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::Record(value))) },
         ReadBoundMismatch { planned, requested } => "fusion-read-bound-mismatch" { "planned" => Record(planned), "requested" => Record(requested) },
-        MalformedProfile(reason) => "fusion-malformed-profile" { "reason" => Text(reason) },
+        MalformedProfile(reason) => "fusion-malformed-profile" { "reason" => Cause(reason.as_ref()) },
         MaxContributionsExceeded { item, count, max } => "fusion-max-contributions-exceeded" { "item" => Text(item), "count" => Unsigned(u128::from(*count)), "max" => Unsigned(u128::from(*max)) },
         DepthUnreachable { depth, saturates_at } => "fusion-depth-unreachable" { "depth" => Unsigned(u128::from(*depth)), "saturates_at" => Unsigned(u128::from(*saturates_at)) },
         DepthBeyondPlanRange { depth, limit } => "fusion-depth-beyond-plan-range" { "depth" => Unsigned(u128::from(*depth)), "limit" => Unsigned(u128::from(*limit)) },
@@ -1044,7 +1081,11 @@ impl purrdf_hash::error::StructuredError for FusionError {
 impl std::fmt::Display for FusionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Overflow => write!(f, "fusion overflowed the fixed-point range"),
+            Self::Overflow => write!(f, "fusion overflowed the unsigned score range"),
+            Self::InvalidPrecision { digits } => write!(f, "fusion precision {digits} exceeds 38 decimal digits"),
+            Self::PrecisionMismatch { expected, got } => write!(f, "fusion precision differs: expected {}, got {} decimal digits", expected.digits(), got.digits()),
+            Self::ResolutionInvariant => f.write_str("resolution search exceeded its proven sufficient weight; candidate advancement invariant failed"),
+            Self::Ordering(error) => error.fmt(f),
             Self::NativeFailure(err) => err.fmt(f),
             Self::Protocol(err) => write!(f, "ranked-stream protocol violation: {err}"),
             Self::InvalidK { k } => write!(f, "fusion profile K must be at least 1, got {k}"),
@@ -1101,11 +1142,19 @@ impl std::error::Error for FusionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NativeFailure(error) => Some(error),
+            Self::Ordering(error) => Some(error),
             Self::Protocol(error) => Some(error.as_ref()),
+            Self::MalformedProfile(error) => Some(error.as_ref()),
             _ => None,
         }
     }
 }
+
+purrdf_lex::variant_from!(FusionError {
+    MalformedProfile(PlanError, ProfileRefusal) via ProfileRefusal::boxed
+});
+
+purrdf_lex::variant_from!(FusionError { Ordering(crate::OrderingError) });
 
 impl From<purrdf_sparql_eval::EvalError> for FusionError {
     fn from(error: purrdf_sparql_eval::EvalError) -> Self {
@@ -1119,6 +1168,7 @@ impl From<crate::ranked_stream::ProtocolError> for FusionError {
     fn from(error: crate::ranked_stream::ProtocolError) -> Self {
         match error {
             crate::ranked_stream::ProtocolError::NativeFailure(error) => Self::NativeFailure(error),
+            crate::ranked_stream::ProtocolError::Ordering(error) => Self::Ordering(error),
             error => Self::Protocol(Box::new(error)),
         }
     }

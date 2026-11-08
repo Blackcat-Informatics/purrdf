@@ -17,7 +17,9 @@ use std::fmt::Write as _;
 use purrdf_lex::json::{self as lex_json, Value};
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, derive_jsonld_context,
-    parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
+    parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_context,
+    serialize_dataset_to_jsonld_with_options, serialize_dataset_to_yamlld_with_context,
+    serialize_dataset_to_yamlld_with_options, yamlld_to_jsonld,
 };
 use purrdf_rdf::{
     RdfDatasetBuilder, RdfLiteral, canonical_flat_nquads, datasets_isomorphic, parse_dataset,
@@ -88,12 +90,249 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
     assert_eq!(node["age"], "42");
     assert!(node.get("https://schema.org/name").is_none());
 
+    let options = JsonLdSerializeOptions::context(&context, None).unwrap();
+    assert!(options.compact_arrays());
+    let explicit = options.clone().with_compact_arrays(true).unwrap();
+    assert_eq!(
+        serialize_dataset_to_jsonld_with_options(&dataset, &explicit).unwrap(),
+        compacted
+    );
+    let compiled = CompiledJsonLdContext::compile(&context, None).unwrap();
+    assert_eq!(
+        serialize_dataset_to_jsonld_with_context(&dataset, &compiled).unwrap(),
+        compacted
+    );
+    let yaml = serialize_dataset_to_yamlld_with_options(&dataset, &options).unwrap();
+    assert_eq!(
+        serialize_dataset_to_yamlld_with_options(&dataset, &explicit).unwrap(),
+        yaml
+    );
+    assert_eq!(
+        serialize_dataset_to_yamlld_with_context(&dataset, &compiled, None).unwrap(),
+        yaml
+    );
+    let retained = options.with_compact_arrays(false).unwrap();
+    assert!(!retained.compact_arrays());
+    let false_json = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    let false_value = read_output(&false_json);
+    assert_eq!(
+        false_value["graph"][0],
+        json!({
+            "id":"ex:alice", "type":["ex:Person"], "name":["Alice"],
+            "knows":["ex:bob"], "age":["42"]
+        })
+    );
+    let false_yaml = serialize_dataset_to_yamlld_with_options(&dataset, &retained).unwrap();
+    assert_eq!(
+        read_output(&yamlld_to_jsonld(false_yaml.as_bytes()).unwrap()),
+        false_value
+    );
+    for output in [
+        &false_json,
+        &yamlld_to_jsonld(false_yaml.as_bytes()).unwrap(),
+    ] {
+        let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reopened,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let schema = purrdf_jsonschema::Schema::from_document(
+        &purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::all()
+                .map(|(uri, text)| (uri, lex_json::read(text).unwrap())),
+        )
+        .unwrap(),
+        "https://example.org/options-schema",
+        JsonLdSerializeOptions::json_schema(),
+    )
+    .unwrap();
+    for mode in ["context", "derived", "expanded"] {
+        for policy in [
+            json!(true),
+            json!(false),
+            json!("false"),
+            json!(null),
+            json!(0),
+        ] {
+            let mut request = json!({"version":1,"mode":"derived"});
+            let object = request.as_object_mut().unwrap();
+            object.insert("mode", Value::String(mode.to_owned()));
+            object.insert("compact_arrays", policy.clone());
+            if mode == "context" {
+                object.insert("context", context.clone());
+            }
+            let valid = mode != "expanded" && policy.as_bool().is_some();
+            assert_eq!(schema.is_valid(&request).unwrap(), valid, "{request:?}");
+            let decoded =
+                JsonLdSerializeOptions::from_json(lex_json::write_compact(&request).as_bytes());
+            assert_eq!(decoded.is_ok(), valid, "{request:?}");
+            if let Ok(decoded) = decoded {
+                assert_eq!(decoded.compact_arrays(), policy.as_bool().unwrap());
+            } else {
+                assert!(decoded.unwrap_err().message.contains("compact_arrays"));
+            }
+        }
+    }
+    for policy in [true, false] {
+        assert!(
+            JsonLdSerializeOptions::expanded()
+                .with_compact_arrays(policy)
+                .is_err()
+        );
+    }
+    let derived = JsonLdSerializeOptions::derived()
+        .with_compact_arrays(false)
+        .unwrap();
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &derived).unwrap();
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    assert!(
+        read_output(&output)["@graph"][0]["@type"]
+            .as_array()
+            .is_some()
+    );
+
+    // One carrier walk covers maps, scoped/nested values and multi-node graph identity.
+    let rich_context = json!({
+        "ex":{"@id":"https://example.org/","@prefix":true},
+        "details":"@nest", "name":{"@id":"ex:name","@nest":"details"},
+        "label":{"@id":"ex:label","@container":"@language"},
+        "member":{"@id":"ex:member","@container":"@id"},
+        "knownBy":{"@reverse":"ex:knows","@type":"@id"},
+        "friend":{"@id":"ex:friend","@context":{"local":"ex:local"}},
+        "items":{"@id":"ex:items","@container":"@list"},
+        "graphs":{"@id":"ex:graph","@container":["@graph","@id"],"@context":{"gp":"ex:p"}},
+        "indexed":{"@id":"ex:indexed","@container":["@graph","@index"],"@index":"ex:key"},
+        "plain":{"@id":"ex:plain","@container":"@graph"},
+        "typed":{"@id":"ex:typed","@container":"@type"},
+        "entries":{"@id":"ex:entry","@container":"@index"}
+    });
+    let mut authored = json!({"@id":"ex:alice",
+        "details":{"name":"Alice"}, "label":{"en":"hello"},
+        "member":{"ex:bob":{}}, "knownBy":"ex:bob",
+        "friend":{"@id":"_:friend","local":"scoped"}, "items":["one"],
+        "graphs":{"ex:g":[{"@id":"ex:a","ex:p":"a"},{"@id":"ex:b","ex:p":"b"}]},
+        "indexed":{"row":[{"@graph":[{"@id":"ex:c","ex:p":"c"},{"@id":"ex:d","ex:p":"d"}]}]},
+        "plain":[{"@included":[{"@id":"ex:e","ex:p":"e"},{"@id":"ex:f","ex:p":"f"}]}],
+        "typed":{"ex:Person":{"@id":"ex:person"}},
+        "entries":{"@none":{"@id":"ex:entry"}}
+    });
+    authored
+        .as_object_mut()
+        .unwrap()
+        .insert("@context", rich_context.clone());
+    let rich = parse_jsonld(lex_json::write_compact(&authored).as_bytes(), None).unwrap();
+    let rich_options = JsonLdSerializeOptions::context(&rich_context, None)
+        .unwrap()
+        .with_compact_arrays(false)
+        .unwrap();
+    let rich_json = serialize_dataset_to_jsonld_with_options(&rich, &rich_options).unwrap();
+    let rich_value = read_output(&rich_json);
+    let alice = rich_value["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["@id"] == "ex:alice")
+        .unwrap();
+    assert_eq!(alice["details"]["name"], json!(["Alice"]));
+    assert_eq!(alice["label"]["en"], json!(["hello"]));
+    assert_eq!(alice["member"]["ex:bob"], json!([{}]));
+    assert_eq!(alice["knownBy"], json!(["ex:bob"]));
+    assert!(
+        alice["friend"][0]["@id"]
+            .as_str()
+            .unwrap()
+            .starts_with("_:")
+    );
+    assert_eq!(alice["items"], json!(["one"]));
+    assert_eq!(
+        alice["graphs"]["ex:g"],
+        json!([
+            {"@id":"ex:a","gp":["a"]},{"@id":"ex:b","gp":["b"]}
+        ])
+    );
+    assert_eq!(
+        alice["indexed"]["row"],
+        json!([{"@graph":[
+            {"@id":"ex:c","ex:p":["c"]},{"@id":"ex:d","ex:p":["d"]}
+        ]}])
+    );
+    assert_eq!(
+        alice["plain"],
+        json!([{"@included":[
+            {"@id":"ex:e","ex:p":["e"]},{"@id":"ex:f","ex:p":["f"]}
+        ]}])
+    );
+    // The shared document body also produces ordinary type and index maps.
+    assert_eq!(alice["typed"]["@none"], json!(["ex:person"]));
+    assert_eq!(alice["entries"]["@none"], json!([{"@id":"ex:entry"}]));
+    let rich_yaml = serialize_dataset_to_yamlld_with_options(&rich, &rich_options).unwrap();
+    let rich_yaml_json = yamlld_to_jsonld(rich_yaml.as_bytes()).unwrap();
+    assert_eq!(read_output(&rich_yaml_json), rich_value);
+    for output in [&rich_json, &rich_yaml_json] {
+        let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &rich,
+                &reopened,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            "{output}"
+        );
+    }
+
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand compact JSON-LD");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "source:\n{}\nreparsed:\n{}",
-        canonical_flat_nquads(&dataset).expect("canonical source"),
-        canonical_flat_nquads(&reparsed).expect("canonical reparsed")
+        canonical_flat_nquads(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical source")
+        .nquads(),
+        canonical_flat_nquads(
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -130,7 +369,17 @@ fn derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips() {
     assert!(compacted.contains("ns1:p0"));
     assert!(!compacted.contains("@vocab"));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("parse derived output");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -152,10 +401,34 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
 
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand partitioned aliases");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
-        canonical_flat_nquads(&dataset).expect("canonical source"),
-        canonical_flat_nquads(&reparsed).expect("canonical reparsed")
+        canonical_flat_nquads(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical source")
+        .nquads(),
+        canonical_flat_nquads(
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -179,7 +452,17 @@ fn safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically() {
     assert!(!compacted.contains("rdf-syntax-ns#first"));
 
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("reconstruct RDF list");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -200,7 +483,17 @@ fn explicit_list_items_inherit_active_property_id_coercion() {
         "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
     ));
     let actual = parse_jsonld(source, None).expect("expand explicit coerced list");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -231,13 +524,41 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
     ));
     let actual = parse_jsonld(direct_set, None).expect("expand direct @set object");
     assert!(
-        datasets_isomorphic(&expected, &actual),
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "expected:\n{}\nactual:\n{}",
-        canonical_flat_nquads(&expected).expect("canonical expected"),
-        canonical_flat_nquads(&actual).expect("canonical actual")
+        canonical_flat_nquads(
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical expected")
+        .nquads(),
+        canonical_flat_nquads(
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical actual")
+        .nquads()
     );
 
     for (description, input) in [
+        (
+            "set annotations have no statement to annotate",
+            br#"{"@id":"https://example.org/s","https://example.org/p":{"@set":[{"@id":"https://example.org/o"}],"@annotation":[{"https://example.org/q":"v"}]}}"#.as_slice(),
+        ),
         (
             "value object property",
             br#"{"@id":"https://example.org/s","https://example.org/p":{"@value":"v","https://example.org/lost":"x"}}"#.as_slice(),
@@ -271,6 +592,186 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         "json": {"@id": "ex:json", "@type": "@json"},
         "rdf": {"@id": "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "@prefix": true}
     });
+    for lexicals in [["1", "1.0"], [r#"{"a":1}"#, r#"{"a":1.0}"#], ["1", "2"]] {
+        let source = lexicals.map(|lexical| {
+            let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+            format!("<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n")
+        }).concat();
+        let (dataset, compacted) = serialize_with_context(&source, &context);
+        let value = read_output(&compacted);
+        assert_eq!(
+            value["@graph"][0]["ex:json"]
+                .as_array()
+                .expect("explicit typed lexical values")
+                .len(),
+            2
+        );
+        let reparsed =
+            parse_jsonld(compacted.as_bytes(), None).expect("retain distinct RDF JSON lexicals");
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let set_context = json!({
+        "ex": {"@id":"https://example.org/","@prefix":true},
+        "rdf": {"@id":"http://www.w3.org/1999/02/22-rdf-syntax-ns#","@prefix":true},
+        "json": {"@id":"ex:json","@type":"@json","@container":"@set"},
+        "typed": {"@id":"ex:json","@type":"rdf:JSON","@container":"@set"}
+    });
+    for lexical in ["1", "[1,2]"] {
+        let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+        let source = format!(
+            "<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n"
+        );
+        let (dataset, compacted) = serialize_with_context(&source, &set_context);
+        assert!(read_output(&compacted)["@graph"][0].get("typed").is_some());
+        let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let list_context = json!({
+        "ex": {"@id":"https://example.org/","@prefix":true},
+        "rdf": {"@id":"http://www.w3.org/1999/02/22-rdf-syntax-ns#","@prefix":true},
+        "json": {"@id":"ex:json","@type":"@json","@container":"@list"}
+    });
+    let list_source = concat!(
+        "<https://example.org/s> <https://example.org/json> _:head .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:tail .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"2\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+    );
+    let annotated = concat!(
+        "<https://example.org/s> <https://example.org/json> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "<https://example.org/reifier> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/json> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> )>> .\n",
+        "<https://example.org/reifier> <https://example.org/note> \"annotation\" .\n",
+    );
+    for (source, input_context) in [(list_source, &list_context), (annotated, &context)] {
+        let (dataset, compacted) = serialize_with_context(source, input_context);
+        let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let retained = JsonLdSerializeOptions::context(&context, None)
+        .unwrap()
+        .with_compact_arrays(false)
+        .unwrap();
+    for lexical in ["1", "1.0", "[1,2]", r#"{"a":1}"#, r#"{"a":1.0}"#] {
+        let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+        let source = format!(
+            "<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n"
+        );
+        let dataset = parse_nquads(&source);
+        let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+        let value = read_output(&output);
+        assert!(value["@graph"][0].get("json").is_none());
+        assert_eq!(
+            value["@graph"][0]["ex:json"],
+            Value::Array(vec![Value::Object(
+                lex_json::Object::new()
+                    .with("@type", "rdf:JSON")
+                    .with("@value", lexical)
+            )])
+        );
+        let yaml = serialize_dataset_to_yamlld_with_options(&dataset, &retained).unwrap();
+        let yaml_json = yamlld_to_jsonld(yaml.as_bytes()).unwrap();
+        assert_eq!(read_output(&yaml_json), value);
+        for document in [&output, &yaml_json] {
+            let reopened = parse_jsonld(document.as_bytes(), None).unwrap();
+            assert!(
+                datasets_isomorphic(
+                    &dataset,
+                    &reopened,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
+        }
+    }
+    let dataset = parse_nquads(annotated);
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    let value = read_output(&output);
+    let literal = &value["@graph"][0]["ex:json"][0];
+    assert_eq!(literal["@value"], "1");
+    assert_eq!(literal["@type"], "rdf:JSON");
+    assert_eq!(literal["@annotation"][0]["ex:note"], json!(["annotation"]));
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    let triple_source = "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .\n";
+    let dataset = parse_nquads(triple_source);
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    assert_eq!(
+        read_output(&output)["@graph"][0]["rdf:reifies"][0]["@triple"],
+        json!({
+            "@subject":{"@id":"ex:s"}, "@predicate":"ex:p", "@object":{"@id":"ex:o"}
+        })
+    );
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    let opaque_array = "<https://example.org/s> <https://example.org/json> \"[1,2]\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n";
+    let (dataset, compacted) = serialize_with_context(opaque_array, &context);
+    assert_eq!(read_output(&compacted)["@graph"][0]["json"], json!([1, 2]));
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let canonical = concat!(
         "<https://example.org/s> <https://example.org/json> ",
         "\"{\\\"a\\\":1}\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
@@ -280,10 +781,34 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
     assert_eq!(value["@graph"][0]["json"], json!({"a": 1}));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand canonical rdf:JSON");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
-        canonical_flat_nquads(&dataset).expect("canonical source"),
-        canonical_flat_nquads(&reparsed).expect("canonical reparsed")
+        canonical_flat_nquads(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical source")
+        .nquads(),
+        canonical_flat_nquads(
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical reparsed")
+        .nquads()
     );
 
     let noncanonical = concat!(
@@ -296,10 +821,34 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
     assert_eq!(value["@graph"][0]["ex:json"]["@type"], "rdf:JSON");
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand lexical rdf:JSON");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
-        canonical_flat_nquads(&dataset).expect("canonical source"),
-        canonical_flat_nquads(&reparsed).expect("canonical reparsed")
+        canonical_flat_nquads(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical source")
+        .nquads(),
+        canonical_flat_nquads(
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -323,7 +872,17 @@ fn language_and_id_maps_compact_and_expand_losslessly() {
     assert_eq!(value["@graph"][0]["member"]["ex:alice"], json!({}));
     assert_eq!(value["@graph"][0]["member"]["ex:bob"], json!({}));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand map containers");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -351,7 +910,17 @@ fn authored_reverse_nest_and_scoped_contexts_expand_through_one_lens() {
         "<https://example.org/carol> <https://example.org/label> \"Carol\" .\n",
     ));
     let actual = parse_jsonld(source, None).expect("expand reverse/nest/scoped context");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -377,7 +946,17 @@ fn mapped_index_type_and_set_containers_preserve_rdf() {
         "<https://example.org/s> <https://example.org/tag> \"two\" .\n",
     ));
     let actual = parse_jsonld(source, None).expect("expand index/type/set containers");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -408,10 +987,34 @@ fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
     ));
     let actual = parse_jsonld(source, None).expect("expand containers with null entries");
     assert!(
-        datasets_isomorphic(&expected, &actual),
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "expected:\n{}\nactual:\n{}",
-        canonical_flat_nquads(&expected).expect("canonical expected"),
-        canonical_flat_nquads(&actual).expect("canonical actual")
+        canonical_flat_nquads(
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical expected")
+        .nquads(),
+        canonical_flat_nquads(
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical actual")
+        .nquads()
     );
 }
 
@@ -445,10 +1048,34 @@ fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
     ));
     let actual = parse_jsonld(source, None).expect("expand @graph map containers");
     assert!(
-        datasets_isomorphic(&expected, &actual),
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "expected:\n{}\nactual:\n{}",
-        canonical_flat_nquads(&expected).expect("canonical expected"),
-        canonical_flat_nquads(&actual).expect("canonical actual")
+        canonical_flat_nquads(
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical expected")
+        .nquads(),
+        canonical_flat_nquads(
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical actual")
+        .nquads()
     );
 }
 
@@ -476,7 +1103,17 @@ fn named_graph_references_compact_into_graph_id_maps() {
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
 
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand graph id map");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -502,7 +1139,17 @@ fn a_standalone_named_graph_is_not_embedded_again_by_a_later_graph() {
         1
     );
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand named graphs");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -526,10 +1173,34 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
     assert!(compacted.contains("@annotation"));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand rich RDF 1.2 fixture");
     assert!(
-        datasets_isomorphic(&dataset, &reparsed),
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
-        canonical_flat_nquads(&dataset).expect("canonical source"),
-        canonical_flat_nquads(&reparsed).expect("canonical reparsed")
+        canonical_flat_nquads(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical source")
+        .nquads(),
+        canonical_flat_nquads(
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical reparsed")
+        .nquads()
     );
 }
 
@@ -575,7 +1246,17 @@ fn configured_context_preserves_many_to_many_reifier_bindings() {
     )
     .expect("serialize many-to-many reifiers");
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand many-to-many reifiers");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -598,7 +1279,17 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         "<https://example.org/s> <https://example.org/measure#cups> \"5.3E0\"^^<http://www.w3.org/2001/XMLSchema#double> <https://example.org/g> .\n",
     ));
     let actual = parse_jsonld(mixed, None).expect("expand mixed graph node");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     let annotated = br#"{
       "@id": "https://example.org/s",
@@ -616,7 +1307,17 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         "_:r <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/Annotation> .\n",
     ));
     let actual = parse_jsonld(annotated, None).expect("expand typed annotation node");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -637,7 +1338,17 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         .expect("reverse target node");
     assert_eq!(alice["knownBy"], "ex:bob");
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand reverse alias");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     let indexed_source = concat!(
         "<https://example.org/catalog> <https://example.org/indexedGraph> _:graph .\n",
@@ -658,7 +1369,17 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
     assert_eq!(value["@graph"][0]["indexedGraphs"]["row-1"]["name"], "Item");
     assert_eq!(value["@graph"].as_array().expect("graph").len(), 1);
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand graph index map");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -694,7 +1415,17 @@ fn graph_index_containers_apply_inside_named_graphs() {
     assert_eq!(catalog["indexedGraphs"]["row-1"]["name"], "Item");
 
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand nested graph index map");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -714,7 +1445,17 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
     let value = read_output(&compacted);
     assert_eq!(value["@graph"][0]["items"], json!(["one", "two"]));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand coerced list");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 
     let shared = concat!(
         "<https://example.org/s> <https://example.org/items> _:head .\n",
@@ -725,7 +1466,17 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
     let (dataset, compacted) = serialize_with_context(shared, &context);
     assert!(compacted.contains("rdf-syntax-ns#first"));
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand shared list identity");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 /// JSON-LD 1.1 §8.4.2 step 6.4 walks back from `rdf:nil` and stops at the
@@ -759,11 +1510,21 @@ fn a_well_formed_list_suffix_folds_behind_a_shared_head() {
         .unwrap_or_else(|| panic!("the shared head stays a node: {compacted}"));
     assert_eq!(
         head["http://www.w3.org/1999/02/22-rdf-syntax-ns#rest"]["@list"],
-        json!([{"@value": "two"}]),
+        json!(["two"]),
         "{compacted}"
     );
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand folded suffix");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -781,7 +1542,17 @@ fn graph_names_are_not_folded_as_list_heads() {
     assert!(compacted.contains("rdf-syntax-ns#first"));
     let reparsed =
         parse_jsonld(compacted.as_bytes(), None).expect("expand graph-name list identity");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -804,7 +1575,17 @@ fn generated_list_cells_do_not_collide_with_nested_annotation_ids() {
         "_:jsonld_list_0 <https://example.org/confidence> \"high\" .\n",
     ));
     let actual = parse_jsonld(source, None).expect("parse annotated list");
-    assert!(datasets_isomorphic(&expected, &actual));
+    assert!(
+        datasets_isomorphic(
+            &expected,
+            &actual,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -829,7 +1610,17 @@ fn registry_backed_compaction_has_a_matching_parse_lens() {
     .expect("registry-backed compaction");
     let reparsed = parse_jsonld_with_context(compacted.as_bytes(), &compiled)
         .expect("registry-backed expansion");
-    assert!(datasets_isomorphic(&dataset, &reparsed));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 #[test]
@@ -882,7 +1673,7 @@ prop_test! {
         });
         let (dataset, compacted) = serialize_with_context(&source, &context);
         let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand generated compact document");
-        prop_assert!(datasets_isomorphic(&dataset, &reparsed));
+        prop_assert!(datasets_isomorphic(&dataset, &reparsed, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap());
 
         let compiled = CompiledJsonLdContext::compile(&context, None).expect("compile context");
         let reserialized = serialize_dataset_to_jsonld_with_options(

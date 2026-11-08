@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use purrdf_core::collections::{SoleObject, walk_rdf_list};
-use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
+use purrdf_gts::model::{Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
 use purrdf_iri::PrefixMap;
 use purrdf_iri::langtag::identity_fold;
 #[cfg(test)]
@@ -716,8 +716,8 @@ impl GtsFoldView {
     ///
     /// # Errors
     ///
-    /// Returns an error message when a blob payload cannot be decoded.
-    pub fn relational_rows(&self) -> Result<RelationalRows, String> {
+    /// Returns the original blob digest and codec error when decoding fails.
+    pub fn relational_rows(&self) -> Result<RelationalRows, RelationalProjectionError> {
         relational_rows(&self.graph)
     }
 
@@ -879,12 +879,20 @@ type LitRow = (String, Option<String>, String);
 ///
 /// # Errors
 ///
-/// Returns an error message when a blob payload cannot be decoded.
-pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
+/// Returns the original blob digest and codec error when decoding fails.
+pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, RelationalProjectionError> {
     let blobs = graph
         .blobs
         .iter()
-        .map(|(digest, entry)| decoded_blob(entry).map(|bytes| (digest.clone(), bytes)))
+        .map(|(digest, entry)| {
+            entry
+                .decoded_vec()
+                .map(|bytes| (digest.clone(), bytes))
+                .map_err(|cause| RelationalProjectionError::BlobDecode {
+                    digest: digest.clone(),
+                    cause,
+                })
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(RelationalRows {
@@ -920,10 +928,36 @@ pub fn relational_rows(graph: &Graph) -> Result<RelationalRows, String> {
     })
 }
 
-fn decoded_blob(entry: &BlobEntry) -> Result<Vec<u8>, String> {
-    entry
-        .decoded_vec()
-        .map_err(|err| format!("cannot decode blob: {err:?}"))
+/// Why a relational projection could not finish. No partial row set is returned.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RelationalProjectionError {
+    /// The original lazy blob could not be decoded.
+    BlobDecode {
+        /// The original content-addressed blob key.
+        digest: String,
+        /// The original native codec refusal.
+        cause: purrdf_gts::codec::CodecError,
+    },
+}
+impl purrdf_hash::error::StructuredError for RelationalProjectionError {
+    purrdf_hash::error_visit! {
+        BlobDecode { digest, cause } => "gts-relational-blob-decode" { "digest" => Text(digest), "cause" => Cause(cause) },
+    }
+}
+impl std::fmt::Display for RelationalProjectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BlobDecode { cause, .. } => write!(f, "cannot decode blob: {cause:?}"),
+        }
+    }
+}
+impl std::error::Error for RelationalProjectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BlobDecode { cause, .. } => Some(cause),
+        }
+    }
 }
 
 fn graph_term_for_scope(scope: ScopeKey) -> Option<usize> {
@@ -1390,6 +1424,54 @@ mod tests {
         assert_eq!(rows.reifiers, vec![(16, 0, 1, 2, None)]);
         assert_eq!(rows.annotations, vec![(16, 17, 18, None)]);
         assert_eq!(rows.blobs, [] as [_; 0]);
+    }
+
+    #[test]
+    fn relational_projection_preserves_lazy_blob_digest_and_native_codec_failure() {
+        use purrdf_gts::codec::{Codec, CodecError, CodecFailure, CodecUnavailable};
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let digest = purrdf_gts::writer::digest_string(b"expected decoded payload");
+        for codec in ["gzip", "not-a-codec"] {
+            let mut graph = Graph::default();
+            graph.set_lazy_blob(
+                digest.clone(),
+                b"bad encoded bytes".to_vec(),
+                vec![Codec::new(codec, "compress")],
+            );
+            let view = GtsFoldView::new(graph).expect("blob decoding remains lazy");
+            for error in [
+                relational_rows(view.graph()).unwrap_err(),
+                view.relational_rows().unwrap_err(),
+            ] {
+                let RelationalProjectionError::BlobDecode {
+                    digest: original,
+                    cause,
+                } = &error;
+                assert_eq!(original, &digest);
+                match (codec, cause) {
+                    ("gzip", CodecError::Failed(CodecFailure::Gzip(_))) => {}
+                    (
+                        "not-a-codec",
+                        CodecError::Unavailable {
+                            detail: CodecUnavailable::UnknownCodec(name),
+                            ..
+                        },
+                    ) => assert_eq!(name, codec),
+                    _ => panic!("lost original codec failure: {error:?}"),
+                }
+                let fields = Capture::read(&error);
+                assert!(
+                    matches!(fields.field("digest"), ErrorValue::Text(value) if value == digest)
+                );
+                assert!(
+                    std::error::Error::source(&error)
+                        .unwrap()
+                        .is::<CodecError>()
+                );
+                assert!(error.to_string().starts_with("cannot decode blob: "));
+            }
+        }
     }
 
     /// The relational projection keeps the statement layer's graph column. One

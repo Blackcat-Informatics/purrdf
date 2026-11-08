@@ -95,8 +95,8 @@ pub use read::{
 };
 pub use value::{Object, Value};
 pub use write::{
-    Format, write, write_compact, write_into, write_into_with_memory, write_pretty,
-    write_with_memory,
+    Format, WriteError, write, write_bounded_with_memory, write_compact, write_into,
+    write_into_bounded_with_memory, write_into_with_memory, write_pretty, write_with_memory,
 };
 
 #[cfg(test)]

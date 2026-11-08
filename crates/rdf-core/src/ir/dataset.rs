@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 
 use crate::backend::DatasetHandle;
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
@@ -72,7 +72,7 @@ pub enum QueryIndexAllocationError {
     /// Ordinal array allocation failed.
     Permutation(purrdf_lex::allocation::StorageError),
     /// The statement graph histogram table allocation failed.
-    StatementHistogram(hashbrown::TryReserveError),
+    StatementHistogram(crate::hash::table::TryReserveError),
 }
 
 impl std::fmt::Display for QueryIndexAllocationError {
@@ -322,6 +322,7 @@ pub struct RdfDataset {
     /// Graph-independent lexical ownership shared by resident carriers.
     dictionary: super::frozen_terms::FrozenTerms,
     statistics: super::statistics::LocalStatistics,
+    snapshot_identity: purrdf_hash::hex::Digest32,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
@@ -413,6 +414,7 @@ impl std::fmt::Debug for RdfDataset {
             .field("predecessor_index", &self.predecessor_index)
             .field("statement_graph_rows", &self.statement_graph_rows)
             .field("statistics", &self.statistics)
+            .field("snapshot_identity", &self.snapshot_identity)
             .finish()
     }
 }
@@ -450,6 +452,7 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
         Ok(Self {
             dictionary: dataset.dictionary,
             statistics: dataset.statistics,
+            snapshot_identity: dataset.snapshot_identity,
             triples: TripleTable::new(memory.boxed_slice(triples)?),
             reifiers: memory.boxed_slice(reifiers)?,
             reifier_targets: OnceLock::new(),
@@ -984,6 +987,67 @@ impl Iterator for QuadPatternCursor {
 impl std::iter::FusedIterator for QuadPatternCursor {}
 
 impl RdfDataset {
+    /// Visit physical source records that changed between two independently
+    /// frozen carriers. IDs belong to the indicated original carrier; dictionary
+    /// ordinals and interning order never substitute for value identity.
+    ///
+    /// This includes nonliteral statements, reifiers and annotations, preserving
+    /// their physical stream. Chronological visibility and reclassification must
+    /// still be evaluated by the chronological source owner.
+    ///
+    /// # Errors
+    /// Returns original work-list storage refusal or the consumer's typed error.
+    pub fn visit_source_changes_with_memory<
+        S: purrdf_lex::allocation::Admission + ?Sized,
+        E: From<purrdf_lex::allocation::StorageError>,
+    >(
+        &self,
+        next: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        mut visit: impl FnMut(
+            crate::source::SourceSide,
+            crate::StatisticsStream,
+            QuadIds,
+            &mut purrdf_lex::allocation::Memory<'_, S>,
+        ) -> Result<(), E>,
+    ) -> Result<crate::source::SourceDifferenceWork, E> {
+        use crate::source::SourceSide;
+        self.statistics.source_directory().visit_changes(
+            next.statistics.source_directory(),
+            memory,
+            |added, record, memory| {
+                let (side, dataset) = if added {
+                    (SourceSide::Next, next)
+                } else {
+                    (SourceSide::Previous, self)
+                };
+                let row = dataset.source_record_row(record);
+                visit(side, record.stream, row, memory)
+            },
+        )
+    }
+
+    pub(crate) fn source_record_row(
+        &self,
+        record: super::source_directory::SourceRecord,
+    ) -> QuadIds {
+        let index = record.ordinal as usize;
+        match record.stream {
+            crate::StatisticsStream::Asserted => QuadIds::from(self.quads[index]),
+            crate::StatisticsStream::Reifiers => {
+                let (s, o, g) = self.reifiers[index];
+                let p = self
+                    .rdf_reifies_id()
+                    .expect("validated nonempty reifier table has its predicate");
+                QuadIds { s, p, o, g }
+            }
+            crate::StatisticsStream::Annotations => {
+                let (s, p, o, g) = self.annotations[index];
+                QuadIds { s, p, o, g }
+            }
+        }
+    }
+
     pub(crate) fn predicate_statistics(&self) -> &super::statistics::LocalStatistics {
         &self.statistics
     }
@@ -1014,9 +1078,35 @@ impl RdfDataset {
             }),
             memory,
         )?;
+        // Seal content and graph declarations once, before publishing the owner.
+        // Query admission reads this fixed-size identity without walking payloads.
+        let graphs = memory.try_scope(|memory| {
+            let mut graphs = purrdf_hash::multiset::Multiset256::default();
+            let mut pending = Vec::new();
+            for &graph in &named_graphs {
+                memory.admission_mut().checkpoint(1)?;
+                let mut hash = purrdf_hash::blake3::RecordHasher::new();
+                dictionary
+                    .try_visit_canonical_bytes(graph, &mut pending, memory, |bytes, memory| {
+                        crate::source::source_hash_update(&mut hash, bytes, memory)
+                    })
+                    .map_err(|error| crate::source::source_visit_error(&error))?;
+                graphs
+                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            memory.release_vec(pending)?;
+            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
+        })?;
+        let snapshot_identity = crate::source::resident_snapshot(
+            statistics.source_directory().content_records(),
+            graphs,
+            dictionary.snapshot_fingerprint(memory)?,
+        );
         Ok(Self {
             dictionary,
             statistics,
+            snapshot_identity,
             quads,
             reifiers,
             reifier_targets: OnceLock::new(),
@@ -1030,6 +1120,26 @@ impl RdfDataset {
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
         })
+    }
+
+    pub(crate) fn term_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        id: TermId,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<[u8; 32], purrdf_lex::allocation::StorageError> {
+        memory.try_scope(|memory| {
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            self.dictionary
+                .visit_canonical_bytes(id, &mut Vec::new(), memory, |bytes| {
+                    hash.update(bytes);
+                })?;
+            Ok(*hash.finalize().as_bytes())
+        })
+    }
+
+    /// Frozen content identity, including empty graph declarations.
+    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        self.snapshot_identity
     }
 
     /// Every named graph known to this dataset (quad-bearing or explicitly
@@ -1071,7 +1181,7 @@ impl RdfDataset {
     /// cardinality once prevents any allocating insertion in the fill pass.
     fn try_statement_graph_rows(
         &self,
-    ) -> Result<&HashTable<(TermId, usize)>, hashbrown::TryReserveError> {
+    ) -> Result<&HashTable<(TermId, usize)>, crate::hash::table::TryReserveError> {
         if let Some(rows) = self.statement_graph_rows.get() {
             return Ok(rows);
         }
@@ -1707,6 +1817,19 @@ impl RdfDataset {
         self.dictionary.resolve(id)
     }
 
+    /// Inspect an original native term as an inline borrowed error record.
+    /// No owned term tree, diagnostic string or shared owner is constructed.
+    /// Literal datatypes and triple children are original local IDs; callers
+    /// retain this dataset to inspect them explicitly without recursive expansion.
+    pub fn inspect_term<'a>(
+        &'a self,
+        id: TermId,
+        name: Option<&'static str>,
+        visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'a>,
+    ) {
+        self.resolve(id).visit_error_record(name, visitor);
+    }
+
     /// Iterate `(reifier, triple-term)` bindings, graph slot dropped. Zero allocation,
     /// infallible. Consumers that need the graph dimension use
     /// [`reifiers_with_graph`](Self::reifiers_with_graph).
@@ -2199,7 +2322,7 @@ impl RdfDataset {
     /// of the order the inputs are supplied. Two merges that differ only in input
     /// order (or in the dataset-local term/scope numbering of equivalent inputs)
     /// therefore canonicalize byte-identically (verify with
-    /// [`canonicalize`](super::canon::canonicalize)).
+    /// [`try_canonicalize`](super::canon::try_canonicalize)).
     ///
     /// # Blank-node scope discipline (standardize-apart, C0.2)
     ///
@@ -2248,6 +2371,7 @@ impl RdfDataset {
         Self {
             dictionary: self.dictionary.clone(),
             statistics: self.statistics.clone(),
+            snapshot_identity: self.snapshot_identity,
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
             reifier_targets: OnceLock::new(),
@@ -3675,7 +3799,7 @@ mod tests {
     // ── union ──────────────────────────────────────────────────────────────
 
     use crate::RdfTextDirection;
-    use crate::ir::canon::canonicalize;
+    use crate::ir::canon::try_canonicalize;
 
     /// Two independent datasets with the same predicate but different objects merge
     /// to a dataset holding BOTH quads, and the merge is commutative up to RDF
@@ -3699,8 +3823,18 @@ mod tests {
         let ba = RdfDataset::union(&[&c, &a]).unwrap();
         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
         assert_eq!(
-            canonicalize(&ab).nquads,
-            canonicalize(&ba).nquads,
+            try_canonicalize(
+                &ab,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &ba,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "union is order-independent up to isomorphism"
         );
     }
@@ -3821,8 +3955,18 @@ mod tests {
         };
         let u = RdfDataset::union(&[&ds]).unwrap();
         assert_eq!(
-            canonicalize(&ds).nquads,
-            canonicalize(&u).nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
+            try_canonicalize(
+                &u,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads(),
             "single-input union is isomorphic to the input"
         );
     }

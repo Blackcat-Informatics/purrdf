@@ -65,10 +65,10 @@ simply not narrated here:
   recognition cost for ordinary vs. genuine content-id IRIs.
 - `crates/rdf-core/benches/pack_index_compare.rs` — the shipped pack codec's
   FoQ posting indexes vs. an internal bitmap wavelet-matrix candidate.
-- `crates/rdf-core/benches/purremb.rs` — `.purremb` validation, resident
+- `crates/purrdf/benches/purremb.rs` — `.purremb` validation, resident
   reopen, target and prefix access, exact/two-stage retrieval, streaming write,
   binary64 access, and a one-million-chunk catalog.
-- `crates/rdf-core/benches/purremb_alloc.rs` — one-shot allocation traffic and
+- `crates/purrdf/benches/purremb_alloc.rs` — one-shot allocation traffic and
   live-byte high-water probes over the same deterministic `.purremb` fixtures.
 - `crates/rdf-core/benches/csv.rs` — `purrdf_core::csv` read and write
   throughput over 1 MiB SSSOM-shaped TSV and CSVW-shaped CSV inputs, through
@@ -170,13 +170,216 @@ simply not narrated here:
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
 - `crates/xsd/benches/exact.rs` — the arbitrary-precision numeric tower: its
-  inline small-value path beside the bounded `i128` arithmetic it will replace,
+  inline small-value path beside the public `XsdValue` operators, which now
+  use the same exact tower. These rows do not compare with historical bounded
+  arithmetic; that comparison requires a separate baseline checkout. It covers
   its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
-  crossover, and a decimal product past eighteen fractional digits beside one
-  that stays at eighteen (about 55 ns against 16 ns a product). Each routine
+  crossover, and decimal products at eighteen and twenty fractional digits,
+  both with inline coefficients. Each routine
   runs its body once under `--test`, so `perf stat -e instructions:u` of
-  `--test --exact <id>`, less the same run selecting nothing, is a
-  load-independent instruction count.
+  `--test --exact <id>`, less the same run selecting nothing, gives a
+  setup-subtracted estimate that still includes differences in harness work.
+  Use acknowledged in-workload counter windows for acceptance comparisons.
+
+The exact benchmark's `xsd_exact_float_factory/{fractional,integral,extreme}`
+rows exercise the public `Rational::from_f64` factory. Each row constructs
+8,192 results from sixteen fixed inputs. Across the fixtures, these include
+positive binary exponents, both zero signs and the subnormal/normal boundaries.
+Expected canonical values
+come through the exact decimal constructor outside measurement. The elapsed-time
+rows include destruction of the previous iteration's outputs. Native instruction
+windows exclude destruction: an empty output vector is reserved beforehand and
+every result remains alive until counter close, full comparison and output to
+the raw sample log. Three guarded warm-up calls precede each window.
+
+On Linux, the following command collects ten fresh-process instruction samples
+for each row and an empty control using the shared acknowledged counter protocol.
+The report directory must be new and absolute. Raw counters, coverage metadata
+and complete result logs remain in its sample directories; counts are not reduced
+by subtracting the empty control. The separate allocation command uses the same
+fixtures and retention boundary under the counting allocator, which is absent
+from the instruction executable.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --float-factory-instructions "$PWD/target/float-factory-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_float_factory_preserves_values_and_reports_allocations -- --exact --nocapture
+```
+
+Keep the benchmark source, fixtures and compilation profile identical between
+the before and after measurements. These factory counts establish no query or
+geographic performance result; geographic callers already use the canonical
+binary constructor.
+
+On native x86-64 Linux with `rustc 1.101.0-nightly`, the release-derived bench
+profile and ten fresh-process instruction samples per row gave the following
+medians. The before factory reduced dyadic fractions with GCD; the after factory
+uses the canonical binary constructor, which keeps denominator one directly for
+integral values. Allocation counts come from the separate release allocation
+case, with all 8,192 outputs retained in both measurements.
+The allocation window covers factory payloads; fixture data and the output
+vector's storage are prepared beforehand.
+
+| Fixture | Instructions/value before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Fractional | 768.5547 | 632.0552 | 0 | 0 |
+| Integral | 601.6075 | 584.6097 | 2,048 | 2,048 |
+| Extreme | 4,138.3177 | 763.5034 | 15,360 | 8,192 |
+
+The largest empty control was 552 instructions, below 0.012% of the smallest
+workload sample, with no subtraction. Extreme inputs' requested bytes fell from
+2,048,000 to 1,081,344 per batch; their retained bytes and peak working bytes
+both stayed at 1,081,344. Integral inputs retained and requested 98,304 bytes per
+batch; fractional inputs required no heap allocation.
+
+The `xsd_exact_reciprocal/{positive_compact,negative_minimum,wide}` rows use
+the same acknowledged sample, collection and retained-output protocol for
+`Rational::recip`. Each row repeats sixteen canonical nonzero inputs for 8,192
+calls. Positive compact inputs include the inverse-flattening value
+`298257223563/1000000000`; negative inputs include the minimum signed 128-bit
+coefficient. Wide inputs use signed operands around powers of two at exponents
+256 and 1,024, including integer and unit-numerator neighbours. Expected canonical
+results come from the unchanged checked rational constructor before the window opens.
+Reciprocal collection selects these rows separately from the float factory.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --reciprocal-instructions "$PWD/target/reciprocal-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_reciprocal_preserves_values_and_reports_allocations -- --exact --nocapture
+```
+
+These counts measure the reciprocal operation. They establish no whole-query
+or end-to-end geographic speedup.
+
+On native x86-64 Linux with `rustc 1.101.0-nightly` and the release-derived bench
+profile, ten fresh-process samples per row gave these median instructions per
+call. The before operation recomputed GCD after swapping canonical operands;
+the after operation preserves their existing coprimality and normalizes the sign
+through the existing integer operation. Allocation counts come from the separate
+release case with all 8,192 results retained.
+
+| Reciprocal inputs | Instructions/call before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Positive compact | 402.9313 | 91.0549 | 0 | 0 |
+| Negative/minimum | 612.9933 | 236.4924 | 0 | 0 |
+| Wide | 123,303.4618 | 681.5124 | 38,912 | 12,288 |
+
+The largest empty control was 520 instructions, below 0.070% of the smallest
+workload sample, without subtraction. Wide inputs' requested bytes fell from
+3,309,568 to 1,048,576 per batch; retained bytes stayed at 1,048,576 and peak
+working bytes fell from 1,048,712 to 1,048,576.
+
+The `xsd_exact_rational_rounding/{compact,wide_normal,boundary}` rows measure
+public `Rational::to_f64` calls through the same shared counter runner. Each row
+repeats sixteen canonical inputs for 8,192 calls. Compact inputs include zero,
+signs and the minimum signed 128-bit coefficient. Wide normal ratios use operands
+around powers of two at exponents 256 and 1,024. Signed boundary inputs cover
+nearest-even halfway values, the subnormal grid, the normal boundary, the largest
+finite value and overflow. The independent rational oracle supplies every expected
+output bit pattern before measurement.
+
+The complete scalar outputs remain in a preallocated bit buffer until counter
+close and validation, then are written to the raw sample log. That buffer's
+allocation is outside the window. Retained window payload is therefore zero;
+the shared rounding kernel still allocates its required working destinations.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --rounding-instructions "$PWD/target/rounding-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_float_rounding_preserves_bits_and_reports_allocations -- --exact --nocapture
+```
+
+On native x86-64 Linux with `rustc 1.101.0-nightly` and the release-derived bench
+profile, ten fresh-process samples per row gave these median instructions per
+call. The before conversion materialized outer absolute and binary-integer
+copies; the after conversion borrows the original operands into the same rounding
+body. Allocation counts come from the separate release case.
+
+| Conversion inputs | Instructions/call before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Compact | 666.6810 | 590.1801 | 0 | 0 |
+| Wide normal | 7,800.3068 | 7,163.8167 | 86,016 | 61,440 |
+| Boundary | 5,005.0573 | 4,778.6845 | 52,224 | 43,008 |
+
+The largest empty control was 407 instructions, below 0.009% of the smallest
+workload sample, without subtraction. Wide normal inputs' requested bytes fell
+from 7,340,032 to 5,308,416 per batch, and peak working bytes from 1,200 to 800.
+Boundary inputs' requested bytes fell from 6,930,432 to 5,718,016 and peak working
+bytes from 896 to 680. These counts establish no whole-query or geographic
+performance result; `to_f32` shares the production body but is not measured here.
+
+The small decimal parse/render rows include canonical text's reservation of its
+complete prepared length. The public allocation control
+`canonical_decimal_reserves_one_exact_output_destination` in
+`crates/xsd/tests/exact_governance.rs` checks one exact-sized output allocation,
+including zero, normalized fractions, the minimum signed coefficient and long
+fractional padding, in native execution.
+The conversion to `f64` narrows proven small coefficients to signed 64-bit
+integers before the existing exact-operand division. Zero, whole coefficients
+and wider values retain their original routes; ratio conversion has a separate
+cold frame. The correctly rounded kernels, `f32` path and bit-pattern oracles
+are unchanged.
+
+Inline decimal normalization tests divisibility by ten with an inverse multiply,
+rotation and bound instead of remainders. Wide zero stripping retains the exact
+quotient from that test rather than dividing again. Decimal multiplication widens
+signed 64-bit coefficients before multiplying; other inline coefficients retain
+the checked 128-bit product, and larger products use the existing limb kernels.
+Rounded division keeps its machine-word quotient ahead of a cold general-integer
+storage and admission frame. Caller-selected rounding remains visible through
+the small entry; toward-zero division does not form an unused remainder or
+half-distance. The exact-first half-even default and all general division
+algorithms retain their original laws.
+
+Decimal parsing and its lexical predicate share one validated borrowed
+decomposition. Full grammar and the original fractional scale are checked
+before trimming or coefficient conversion; small coefficients accumulate in a
+native unsigned word and then widen into the same exact value. Wider conversion
+retains its existing cold native path. Canonical rendering consumes the existing
+Integer digit preparation and emits the prepared group widths at their one
+shared home, without another output allocation.
+
+A native arithmetic-source comparison holds current hash/lex foundations
+constant and retains all 1,024 results outside
+each acknowledged instruction window. Fixed seeds and unchanged release/bench
+profiles give these median instructions/value. Historical rows use ten
+fresh-process samples. The parsing/rendering after figures pool two complete
+ten-sample batches to resolve observed counter noise; both batches are retained.
+
+The division rows compare against the source after the earlier normalization
+and conversion improvements. Parsing/rendering pairs use the qualified division
+source as their before baseline; other rows retain their historical before
+figures.
+
+| Production route | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Exact decimal addition | 172.1465 | 171.9121 | -0.14% |
+| Exact decimal multiplication | 187.4795 | 159.2354 | -15.07% |
+| Public decimal multiplication | 274.9604 | 248.7158 | -9.54% |
+| Exact decimal division, scale eighteen/toward-zero | 363.1680 | 243.0713 | -33.07% |
+| Public decimal division, exact-first half-even default | 598.2305 | 507.0273 | -15.25% |
+| Exact decimal conversion to `f64` | 144.3599 | 102.8242 | -28.77% |
+| Public decimal conversion to `f64` | 146.3594 | 104.8242 | -28.38% |
+| Exact decimal parsing and canonical rendering | 2228.2852 | 1767.5596 | -20.68% |
+| Public decimal parsing and canonical rendering | 2242.2852 | 1792.9961 | -20.04% |
+
+Every returned answer is checked after measurement. The accompanying pooled
+check gives exact division a median of 248905.5 total instructions per 1,024
+values against 248905 before; the original total recurs in ten of twenty samples.
+Every other non-parsing median equals its matched source baseline. All measured
+allocation quantities are unchanged. Exact multiplication is 6.56% below the frozen historical bounded
+source's 170.40625 instructions/value. Exact conversion to `f64` is 21.35% below
+its original 130.734375 instructions/value reference. From the already optimized
+normalization and conversion source, exact division falls from 363.16796875 to
+243.0712890625 instructions/value, 3.13% below its frozen bounded reference of
+250.9365234375. The public division row retains its distinct exact-first,
+eighteen-digit half-even policy. The existing bench default-law rows are
+unchanged; `decimal_div_scale18_toward_zero/exact` names the explicit policy.
+The parsing/rendering baseline is 2228.28515625 instructions/value through the
+tower and 2242.28515625 through the public route. Exact parsing/rendering reaches
+1767.5595703125, 0.16% below its frozen bounded reference of 1770.3603515625.
+That reference applies to the direct exact comparison; the public row preserves
+its original wrapper and output law. These retained-output figures
+include a common indirect call and exclude setup, validation and destruction;
+they establish neither complete-query speed nor full bounded parity. General
+semantics execute natively; portable release builds are a separate obligation.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -312,12 +515,23 @@ puts requested bytes and peak memory below main in all tested numeric fuel and
 scratch lanes at 1, 4 and 32 workers. It trades block setup against shorter-lived
 worker allocations; both quantities are reported.
 
-Plain grouped numeric queries request an additional 199,960 bytes per query
-in the numeric fixture, with unchanged allocation-call and retained-byte counts.
-Their typed fallible output allocation cannot reuse the differently typed
-minted-row vector. Retaining the larger input vector would increase returned
-result capacity instead. This round preserves fallible admission and releases
-oversized input buffers; cross-stage buffer reduction is a separate optimization.
+Grouped output now retains the original ordered worker buffers until fallible
+typed admission consumes them. It avoids a full concatenated minted-row buffer;
+checked sizing, first-error selection and ordered governor replay still use
+their existing homes. Oversized input buffers are released rather than retained
+in the result.
+
+Against the flat-minted-buffer baseline, the 5,000-group numeric fixture requests
+399,904, 399,592 and 396,904 fewer bytes per ungoverned query at 1, 4 and 32 workers.
+Every numeric governor lane reduces requested bytes with identical retained
+bytes and unchanged or lower median allocation-call counts. Original worker
+capacity overlaps parent admission, so peak memory is an explicit tradeoff:
+numeric median peak changes range from -329,780 to +259,096 bytes, with a largest
+relative increase of 1.69%. Numeric instruction changes range from approximately
+-0.016% to +0.082%. The public BIND controls preserve all four allocation
+quantities; their instruction changes range from approximately -0.084% to
++0.365%. All quantities come from instruction and allocation measurements with
+ten samples per lane, complete typed answers and governor receipts.
 
 The hash-workload frontend projects the current testkit into each selected
 production source graph. Its manifest generator binds the testkit hash dependency
@@ -350,8 +564,8 @@ here.
 | `crates/rdf-core/benches/mutable.rs` | Copy-on-write mutation paths on the immutable IR, and snapshot publication with named-graph enumeration (`mut_snapshot_graphs`): removals spread over many graphs, a `DROP` of a one-quad graph beside a large annotated base, and repeated snapshots after a `DROP` of a large graph; a mutable-layer declared graph drained row by row at 1k and 10k rows (`mut_declared_graph_removal`); empty graph creation, last-row removal, clearing and explicit withdrawal in implicit and remembered modes (`mut_graph_slots`); and snapshot publication of a delta of 1k, 20k and 200k added rows, retention check and freeze included (`snapshot_with_delta`). |
 | `crates/rdf-core/benches/intern_content_id.rs` | Extra intern-time cost when content-addressing is enabled: prefix-miss baseline, prefix-hit decode, and side-table insert. |
 | `crates/rdf-core/benches/pack_index_compare.rs` | Exact bytes, build latency, and unbound-subject query latency for the shipped FoQ posting indexes vs. a non-shipped bitmap wavelet matrix over the same pack adjacency. |
-| `crates/rdf-core/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 binary32 Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 binary64 matrix, and a one-million-chunk hierarchy. |
-| `crates/rdf-core/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
+| `crates/purrdf/benches/purremb.rs` | Full validation and resident reopen over a 16,384 x 384 single-precision Matryoshka matrix; target/row/prefix access, exact and coarse-prefix/full-prefix top-10 retrieval, canonical streaming output, a 4,096 x 128 double-precision matrix, and a one-million-chunk hierarchy. |
+| `crates/purrdf/benches/purremb_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for PURREMB fixture construction, verification, and streaming. |
 | `crates/rdf-core/benches/csv.rs` | `purrdf_core::csv` throughput over 1 MiB inputs: an SSSOM-shaped TSV body read and written under `Dialect::SSSOM_TSV`, and a CSVW-shaped CSV table (quoted cells with commas, doubled quotes and line breaks) read by `Reader` and by `read_table`, and written. |
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
@@ -379,11 +593,11 @@ here.
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
 | `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
-| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and current `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); original schoolbook/Karatsuba rows whose width parameters count nine-digit groups, plus appended 160,000/320,000/640,000-digit transform-range products and standalone cached-power renders (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
+| `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and current `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); original schoolbook/Karatsuba rows whose width parameters count nine-digit groups, plus appended 160,000/320,000/640,000-digit transform-range products and standalone cached-power renders (`xsd_exact_karatsuba`); 1,024 exact products with inline coefficients whose scales sum to eighteen and to twenty (`scale18` and `scale20`) (`xsd_exact_fine_products`). |
 
 ### PURREMB companion format
 
-The shared `crates/rdf-core/benches/support/purremb.rs` module constructs three
+The shared `crates/purrdf/benches/support/purremb.rs` module constructs three
 deterministic fixtures without RNG, wall-clock values, local paths, or
 process-specific canonical input. The timed and allocation processes consume
 the exact same builders:
@@ -433,13 +647,13 @@ Run the exact fixtures, a timed short sample, or a reduced-catalog smoke pass
 with:
 
 ```sh
-cargo bench -p purrdf-core --bench purremb --locked -- --test
-cargo bench -p purrdf-core --bench purremb --locked -- --quick
-cargo bench -p purrdf-core --bench purremb_alloc --locked
+cargo bench -p purrdf --bench purremb --locked -- --test
+cargo bench -p purrdf --bench purremb --locked -- --quick
+cargo bench -p purrdf --bench purremb_alloc --locked
 PURREMB_CATALOG_SUBJECTS=10000 \
-  cargo bench -p purrdf-core --bench purremb --locked -- --test
+  cargo bench -p purrdf --bench purremb --locked -- --test
 PURREMB_CATALOG_SUBJECTS=10000 \
-  cargo bench -p purrdf-core --bench purremb_alloc --locked
+  cargo bench -p purrdf --bench purremb_alloc --locked
 ```
 
 The environment override is for local smoke testing only. Reported results use

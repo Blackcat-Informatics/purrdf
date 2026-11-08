@@ -62,14 +62,14 @@ pub mod profile;
 pub mod provenance;
 pub mod pydantic;
 mod query_law;
+pub mod recursion;
 pub mod report;
 pub(crate) mod result_annotations;
 pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
 mod schema_surface;
-#[doc(hidden)]
-pub mod shacl_corpora;
+pub mod scope_binding;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -83,10 +83,12 @@ pub(crate) mod unique_values;
 pub mod validator_alternatives;
 pub mod xpath;
 
+pub use engine::BindingRefusal;
 pub use error::{
-    FailureClass, IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation,
-    ProcessorFailure, ShaclJsRefusal, ShapesError, SparqlTargetDisagreement,
-    UnsupportedTargetRefusal,
+    FailureClass, IllFormedDeclaration, IllFormedShapesGraph, IncompleteRelation,
+    PrebindingViolation, PreparationRefusal, ProcessorFailure, RecursionDependency,
+    RecursionPolarity, RecursionRefusal, RecursionRefusalReason, ScopedRecursionDependency,
+    ShaclJsRefusal, ShapesError, SparqlTargetDisagreement, UnsupportedTargetRefusal,
 };
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
@@ -94,16 +96,17 @@ pub use graphql::{
     GraphqlUnionMemberMap, emit_graphql, import_graphql_package,
 };
 pub use imports::{
-    ResolvedShapesGraph, ShapesImportError, ShapesImports, UnanchoredNote, resolve_shapes_imports,
+    ImportEntryError, ResolvedShapesGraph, ShapesImportError, ShapesImports, UnanchoredNote,
+    resolve_shapes_imports,
 };
 pub use json_schema::{
-    Namespaces, SchemaClassExpressionAxiom, SchemaClassExpressionCoverage,
-    SchemaClassExpressionReport, SchemaClassPropertyCoverage, SchemaCompilation,
-    SchemaCompilationInput, SchemaCompilationKey, SchemaCompileError, SchemaCompileRequest,
-    SchemaCoveragePrecision, SchemaCoverageProvenance, SchemaCoverageReport, SchemaCoverageStatus,
-    SchemaExpressionComponent, SchemaExpressionOutcome, SchemaPropertyCoverage, SchemaSurfaceMode,
-    ValueVocab, ValueVocabProjection, compile_schema, compile_schema_with_class_expressions,
-    compile_with_value_vocab,
+    NamespaceContext, NamespaceError, Namespaces, SchemaClassExpressionAxiom,
+    SchemaClassExpressionCoverage, SchemaClassExpressionReport, SchemaClassPropertyCoverage,
+    SchemaCompilation, SchemaCompilationInput, SchemaCompilationKey, SchemaCompileError,
+    SchemaCompileRequest, SchemaCoveragePrecision, SchemaCoverageProvenance, SchemaCoverageReport,
+    SchemaCoverageStatus, SchemaExpressionComponent, SchemaExpressionOutcome,
+    SchemaPropertyCoverage, SchemaSurfaceMode, ValueVocab, ValueVocabProjection, compile_schema,
+    compile_schema_with_class_expressions, compile_with_value_vocab,
 };
 pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic,
@@ -119,9 +122,11 @@ pub use pydantic::{
     PydanticPackage, PydanticPackageTopology, PydanticVersionStamp, emit_pydantic,
     import_pydantic_package,
 };
+pub use report::ConformanceError;
 pub use rules::{
-    LimitKnobs, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions, RuleProcessor, RuleSource,
-    apply_rules, entail_dataset, infer, run_rules,
+    LimitKnobs, RuleCoordinates, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions,
+    RuleProcessor, RuleSource, apply_rules, entail_dataset, infer, run_rules,
+    run_rules_with_options,
 };
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,

@@ -33,8 +33,8 @@
 //!
 //! Evaluation carries a [`Scope`]: the `scope` argument of the specification's
 //! `evalExpr(expr, focusGraph, focusNode, scope)`. It is a borrowed linked list of
-//! [`Binding`] frames, so the empty case (the overwhelming majority of the tree)
-//! costs one word and no allocation. `sh:expression` binds `value` to the value
+//! [`Binding`] frames with borrowed arguments, so the empty case allocates nothing.
+//! `sh:expression` binds `value` to the value
 //! node under test (§7.1); `sh:nodeByExpression` evaluates in the empty scope
 //! (§7.2); `shnex:flatMap` and `shnex:orderBy` rebind the FOCUS NODE per element
 //! and thread the caller's scope through unchanged.
@@ -95,8 +95,13 @@
 //!   a SPARQL-based expression returns its query's solution sequence unchanged.
 //!
 //! [`Term`] is intentionally not `Ord`, which is why the Set arms name their
-//! comparator. The evaluator is wasm32-clean: no clocks, threads, RNG, or
+//! comparator. The evaluator supports `wasm32`: no clocks, threads, RNG, or
 //! filesystem.
+
+pub(crate) mod named_outputs;
+
+mod sparql_error;
+pub use sparql_error::{SparqlCallError, SparqlUnsupported};
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -233,13 +238,22 @@ pub enum NodeExpr {
     /// itself is legal (and bounded at evaluation by [`MAX_RECURSION_DEPTH`]),
     /// whereas inlining it at parse time would not terminate.
     CustomCall {
-        /// The declared function.
-        func: Arc<CustomFunction>,
+        /// The function IRI, resolved in the retained model at preparation.
+        func: NamedNode,
         /// The arguments as authored, keyed the way the function's kind keys them:
         /// by zero-based index for a list-parameter function, by parameter `sh:path`
         /// IRI for a named-parameter one. They are node EXPRESSIONS, not values —
         /// §6.3 evaluates them where `shnex:arg` reads them.
         args: Vec<(ArgKey, Self)>,
+    },
+
+    /// An exported expression retaining its declaration and resolution domain.
+    /// This carries ownership only; the wrapped expression keeps its semantics.
+    Owned {
+        /// The semantic expression.
+        expr: Box<Self>,
+        /// The original model owner, absent from its own definitions.
+        owner: Arc<crate::shapes::ModelOwner>,
     },
 
     // ── SHACL 1.2 Node Expressions (W3C WD, `shnex:` namespace) ─────────────────
@@ -397,11 +411,23 @@ pub enum SequenceContract {
 }
 
 impl NodeExpr {
+    /// The semantic root and its innermost explicit model domain.
+    pub(crate) fn in_model(&self) -> (&Self, Option<&Arc<crate::shapes::ModelOwner>>) {
+        let mut expression = self;
+        let mut model = None;
+        while let Self::Owned { expr, owner } = expression {
+            expression = expr;
+            model = Some(owner);
+        }
+        (expression, model)
+    }
+
     /// This arm's [`SequenceContract`], as its specification clause defines it
     /// (see [`Self::spec_clause`]).
     #[must_use]
     pub const fn sequence_contract(&self) -> SequenceContract {
         match self {
+            Self::Owned { expr, .. } => expr.sequence_contract(),
             // SHACL-AF §6.5 / Node Expressions §4.1.4: the VALUE NODES of a path,
             // which SHACL Core defines as a set.
             Self::Path(_) | Self::PathValues { .. }
@@ -459,6 +485,7 @@ impl NodeExpr {
     #[must_use]
     pub const fn spec_clause(&self) -> &'static str {
         match self {
+            Self::Owned { expr, .. } => expr.spec_clause(),
             Self::Constant(_) => {
                 "SHACL 1.2 Node Expressions §3.1.1-§3.1.3: \"The output nodes of an IRI \
                  expression are the list consisting of exactly the node expression itself\" \
@@ -642,7 +669,7 @@ pub enum ShapeArg {
         /// The same handle `Constraint::NodeByExpression` carries, for the same
         /// reason: a shape that names another shape cannot resolve it while it is
         /// itself still being parsed.
-        shapes: Arc<OnceLock<FastMap<Term, Shape>>>,
+        shapes: std::sync::Weak<OnceLock<FastMap<Term, Shape>>>,
     },
 }
 
@@ -793,65 +820,38 @@ impl SparqlCallForm {
     /// Returns `Err(String)` when `arity` cannot satisfy the form (an operator
     /// applied to the wrong number of operands, or a keyword function called with a
     /// count its grammar production does not admit).
-    pub fn render(self, iri: &str, arity: usize) -> Result<String, String> {
-        let arg = |i: usize| format!("?a{i}");
-        match self {
+    pub fn render(self, iri: &str, arity: usize) -> Result<String, SparqlCallError> {
+        let (minimum, maximum) = match self {
             Self::Call(keyword) => {
-                if let Some((min, max)) = purrdf_sparql_algebra::builtin_keyword_arity(keyword)
-                    && (arity < min || max.is_some_and(|max| arity > max))
-                {
-                    let expected = match max {
-                        Some(max) if max == min => format!("exactly {min}"),
-                        Some(max) => format!("{min} to {max}"),
-                        None => format!("at least {min}"),
-                    };
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{keyword}` function and takes {expected} \
-                         argument(s), got {arity}"
-                    ));
-                }
-                let args: Vec<String> = (0..arity).map(arg).collect();
-                Ok(format!("{keyword}({})", args.join(", ")))
+                purrdf_sparql_algebra::builtin_keyword_arity(keyword).unwrap_or((0, None))
             }
-            Self::Infix(op) => {
-                if arity != 2 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{op}` operator and takes exactly 2 arguments, got {arity}"
-                    ));
-                }
-                Ok(format!("({} {op} {})", arg(0), arg(1)))
-            }
-            Self::Prefix(op) => {
-                if arity != 1 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL unary `{op}` operator and takes exactly 1 argument, got {arity}"
-                    ));
-                }
-                Ok(format!("({op} {})", arg(0)))
-            }
-            Self::Membership(keyword) => {
-                let Some(rest) = arity.checked_sub(1) else {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{keyword}` form and takes at least 1 argument, got 0"
-                    ));
-                };
-                let candidates: Vec<String> = (1..=rest).map(arg).collect();
-                Ok(format!(
-                    "({} {keyword} ({}))",
-                    arg(0),
-                    candidates.join(", ")
-                ))
-            }
-            Self::Ebv => {
-                if arity != 1 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL effective-boolean-value coercion and takes exactly \
-                         1 argument, got {arity}"
-                    ));
-                }
-                Ok(format!("(!(! {}))", arg(0)))
-            }
+            Self::Infix(_) => (2, Some(2)),
+            Self::Prefix(_) | Self::Ebv => (1, Some(1)),
+            Self::Membership(_) => (1, None),
+        };
+        if arity < minimum || maximum.is_some_and(|maximum| arity > maximum) {
+            return Err(SparqlCallError::Arity {
+                iri: iri.to_owned(),
+                form: self,
+                actual: arity,
+                minimum,
+                maximum,
+            });
         }
+        let arg = |i: usize| format!("?a{i}");
+        Ok(match self {
+            Self::Call(keyword) => {
+                let args: Vec<String> = (0..arity).map(arg).collect();
+                format!("{keyword}({})", args.join(", "))
+            }
+            Self::Infix(op) => format!("({} {op} {})", arg(0), arg(1)),
+            Self::Prefix(op) => format!("({op} {})", arg(0)),
+            Self::Membership(keyword) => {
+                let candidates: Vec<String> = (1..arity).map(arg).collect();
+                format!("({} {keyword} ({}))", arg(0), candidates.join(", "))
+            }
+            Self::Ebv => format!("(!(! {}))", arg(0)),
+        })
     }
 }
 
@@ -877,7 +877,7 @@ impl SparqlCallForm {
 /// functions; the two `EXISTS` functional forms, which take a graph pattern
 /// rather than argument values; and anything the vocabulary does not define. A
 /// refusal, never a silent empty result.
-pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
+pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, SparqlCallError> {
     /// The SPARQL 1.2 names that are not spelled as a function call, each with
     /// the surface form it is spelled as instead.
     static NON_CALL_FORMS: &[(&str, SparqlCallForm)] = &[
@@ -934,23 +934,18 @@ pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
         return Ok(SparqlCallForm::Call(keyword));
     }
     let iri = format!("{}{local}", crate::model::sparql_ns::NS);
-    if local.starts_with("agg-") {
-        return Err(format!(
-            "<{iri}> names a SPARQL AGGREGATE, not a scalar function, and cannot be called from a \
-             node expression; the SHACL aggregate node expressions are shnex:count, shnex:min, \
-             shnex:max and shnex:sum"
-        ));
-    }
-    if local == "filter-exists" || local == "filter-not-exists" {
-        return Err(format!(
-            "<{iri}> is a SPARQL functional form over a GRAPH PATTERN, not over argument values, \
-             and cannot be called from a node expression; the SHACL existence node expression is \
-             shnex:exists"
-        ));
-    }
-    Err(format!(
-        "<{iri}> is not a callable SPARQL 1.2 function name"
-    ))
+    let reason = if local.starts_with("agg-") {
+        SparqlUnsupported::Aggregate
+    } else if local == "filter-exists" || local == "filter-not-exists" {
+        SparqlUnsupported::GraphPattern
+    } else {
+        SparqlUnsupported::Unknown
+    };
+    Err(SparqlCallError::Unsupported {
+        iri,
+        local: Some(local.to_owned()),
+        reason,
+    })
 }
 
 /// A function-call node expression (`sh:SPARQLFunction` / builtin).
@@ -1055,14 +1050,35 @@ pub struct Scope<'a> {
     /// call REPLACES the argument environment outright — `evalExpr(expr, focusGraph,
     /// focusNode, scope) -> evalExpr(body, focusGraph, focusNode, argScope)` — so
     /// there is never an outer frame to chain to.
-    args: &'a [(ArgKey, NodeExpr)],
+    args: Arguments<'a>,
+}
+
+/// An argument supplied as an expression, or already evaluated by SPARQL.
+#[derive(Debug, Clone, Copy)]
+pub enum ArgValue<'a> {
+    /// Evaluate this authored expression where its argument is read.
+    Expression(&'a NodeExpr),
+    /// The caller already evaluated this argument.
+    Value(&'a Term),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Arguments<'a> {
+    Expressions(&'a [(ArgKey, NodeExpr)]),
+    Values(&'a [Option<Term>]),
+}
+
+impl Default for Arguments<'_> {
+    fn default() -> Self {
+        Self::Expressions(&[])
+    }
 }
 
 impl<'a> Scope<'a> {
     /// The empty scope — no variable and no argument is bound.
     pub const EMPTY: Self = Self {
         frame: None,
-        args: &[],
+        args: Arguments::Expressions(&[]),
     };
 
     /// The scope whose innermost frame is `binding`, inheriting `binding`'s
@@ -1083,14 +1099,39 @@ impl<'a> Scope<'a> {
     /// extended by it, so a `shnex:var` inside a body sees nothing the caller had.
     #[must_use]
     pub const fn with_args(args: &'a [(ArgKey, NodeExpr)]) -> Self {
-        Self { frame: None, args }
+        Self {
+            frame: None,
+            args: Arguments::Expressions(args),
+        }
     }
 
-    /// The node expression bound to argument key `key`, or `None` when the key is
+    /// Borrow evaluated LIST parameter values by their original argument index.
+    /// A missing value remains unbound; later indices keep their positions.
+    #[must_use]
+    pub const fn with_values(args: &'a [Option<Term>]) -> Self {
+        Self {
+            frame: None,
+            args: Arguments::Values(args),
+        }
+    }
+
+    /// The expression or evaluated value bound to `key`, or `None` when the key is
     /// not in the argument scope (§6.3's second case).
     #[must_use]
-    pub fn lookup_arg(&self, key: &ArgKey) -> Option<&'a NodeExpr> {
-        purrdf_lex::assoc::get(self.args, key)
+    pub fn lookup_arg(&self, key: &ArgKey) -> Option<ArgValue<'a>> {
+        match self.args {
+            Arguments::Expressions(args) => {
+                purrdf_lex::assoc::get(args, key).map(ArgValue::Expression)
+            }
+            Arguments::Values(args) => match key {
+                ArgKey::Index(index) => usize::try_from(*index)
+                    .ok()
+                    .and_then(|index| args.get(index))
+                    .and_then(Option::as_ref)
+                    .map(ArgValue::Value),
+                ArgKey::Named(_) => None,
+            },
+        }
     }
 
     /// Every argument binding in force, in call order.
@@ -1099,9 +1140,19 @@ impl<'a> Scope<'a> {
     /// SHACL 1.2 SPARQL Extensions §7.2 writes a `sh:select` body that references
     /// `$arg0` directly. Ordinary evaluation never calls this: `shnex:arg` resolves
     /// one key through [`lookup_arg`](Self::lookup_arg).
-    #[must_use]
-    pub const fn args(&self) -> &'a [(ArgKey, NodeExpr)] {
-        self.args
+    pub fn args(&self) -> impl Iterator<Item = (Cow<'a, ArgKey>, ArgValue<'a>)> + use<'a> {
+        let (expressions, values) = match self.args {
+            Arguments::Expressions(args) => (args, &[][..]),
+            Arguments::Values(args) => (&[][..], args),
+        };
+        expressions
+            .iter()
+            .map(|(key, value)| (Cow::Borrowed(key), ArgValue::Expression(value)))
+            .chain((0_u64..).zip(values).filter_map(|(index, value)| {
+                value
+                    .as_ref()
+                    .map(|value| (Cow::Owned(ArgKey::Index(index)), ArgValue::Value(value)))
+            }))
     }
 
     /// The node bound to `name`, innermost binding first, or `None` when the name
@@ -1170,9 +1221,10 @@ impl<'a> Scope<'a> {
 /// process rather than returning an error a caller could handle.
 #[derive(Debug, Default)]
 pub struct RecursionGuard {
-    stack: FastSet<(String, String)>,
+    stack: FastSet<(Term, Term)>,
     depth: u32,
     structural: u32,
+    request: crate::engine::ValidationRequest,
 }
 
 /// Maximum nested `sh:filterShape` / `sh:exists` re-entry depth. Legitimate
@@ -1200,6 +1252,11 @@ pub const MAX_RECURSION_DEPTH: u32 = 64;
 pub const MAX_NODE_EXPR_DEPTH: u32 = 256;
 
 impl RecursionGuard {
+    pub(crate) fn with_request(mut self, request: &crate::engine::ValidationRequest) -> Self {
+        self.request.clone_from(request);
+        self
+    }
+
     /// A fresh guard seeded at `depth` — used when the constraint engine
     /// re-enters expression evaluation across the `conforms` boundary so the
     /// filter/exists recursion depth is preserved across the fresh guard.
@@ -1209,6 +1266,7 @@ impl RecursionGuard {
             stack: FastSet::default(),
             depth,
             structural: 0,
+            request: crate::engine::ValidationRequest::default(),
         }
     }
 
@@ -1232,6 +1290,9 @@ impl RecursionGuard {
                 limit: MAX_NODE_EXPR_DEPTH,
             }
             .into());
+        }
+        if purrdf_stack::is_low() {
+            return Err(crate::error::ProcessorFailure::ExpressionStackMargin.into());
         }
         self.structural += 1;
         Ok(())
@@ -1268,6 +1329,12 @@ impl RecursionGuard {
             }
             .into());
         }
+        if purrdf_stack::is_low() {
+            return Err(crate::error::ProcessorFailure::CallStackMargin {
+                iri: iri.to_owned(),
+            }
+            .into());
+        }
         self.depth += 1;
         Ok(())
     }
@@ -1283,12 +1350,22 @@ impl RecursionGuard {
     ///
     /// Returns [`crate::error::ProcessorFailure::ReentryCycle`] if the pair is already in flight — a recursion
     /// cycle through `sh:filterShape` / `sh:exists`.
-    pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), crate::error::ShapesError> {
-        let key = (shape_id.to_owned(), focus.to_owned());
+    pub fn enter(
+        &mut self,
+        shape_id: &Term,
+        focus: &Term,
+    ) -> Result<(), crate::error::ShapesError> {
+        if purrdf_stack::is_low() {
+            return Err(crate::error::ProcessorFailure::ReentryStackMargin {
+                shape: Box::new(shape_id.clone()),
+            }
+            .into());
+        }
+        let key = (shape_id.clone(), focus.clone());
         if self.stack.contains(&key) {
             return Err(crate::error::ProcessorFailure::ReentryCycle {
-                shape: shape_id.to_owned(),
-                focus: focus.to_owned(),
+                shape: shape_id.clone(),
+                focus: Box::new(focus.clone()),
             }
             .into());
         }
@@ -1297,8 +1374,8 @@ impl RecursionGuard {
     }
 
     /// Clear `(shape_id, focus)` from the in-flight set.
-    pub fn exit(&mut self, shape_id: &str, focus: &str) {
-        self.stack.remove(&(shape_id.to_owned(), focus.to_owned()));
+    pub fn exit(&mut self, shape_id: &Term, focus: &Term) {
+        self.stack.remove(&(shape_id.clone(), focus.clone()));
     }
 }
 
@@ -1406,6 +1483,73 @@ pub(crate) fn scalar_call_query(call: &FnCall) -> String {
         None => format!("<{}>({placeholders})", iri.as_str()),
     };
     crate::sparql::scalar_expr_query(&expr)
+}
+
+/// Supply values to the shared scalar engine. A catchable failure has SPARQL's
+/// error operand representation here, but its original cause remains in `args`;
+/// the caller must propagate it when the outer form does not mask it. An empty
+/// argument is separately `Ok(None)`, and never becomes an invented failure.
+fn eval_sparql_arguments(
+    store: &ShaclData,
+    query: &str,
+    args: &[Result<Option<Term>, crate::error::ShapesError>],
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    let bound: Vec<_> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(position, arg)| arg.as_ref().ok()?.as_ref().map(|value| (position, value)))
+        .collect();
+    let names: Vec<String> = bound
+        .iter()
+        .map(|(position, _)| format!("a{position}"))
+        .collect();
+    let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
+    crate::sparql::eval_cached_scalar_query_view(
+        store.sparql_view(),
+        query,
+        &parameters,
+        |execution| {
+            for (slot, (_, value)) in bound.iter().enumerate() {
+                execution.bind(slot, value.to_term_value())?;
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Let SPARQL decide masking and EBV; retain the node-expression failure cause.
+/// IF selects the argument outcome itself, because a selected empty argument
+/// remains empty even when its unselected branch failed. Processor failures have
+/// already escaped before this boundary and are never stored as operands.
+fn finish_sparql_arguments(
+    store: &ShaclData,
+    form: SparqlCallForm,
+    query: &str,
+    args: Vec<Result<Option<Term>, crate::error::ShapesError>>,
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    if form == SparqlCallForm::Call("IF") {
+        if args.len() != 3 {
+            return Err(crate::error::ShapesError::internal(
+                "an admitted SPARQL IF has three arguments",
+            ));
+        }
+        if let Err(error) = &args[0] {
+            return Err(error.clone());
+        }
+        let condition =
+            eval_sparql_arguments(store, "SELECT ((!(! ?a0)) AS ?result) WHERE {}", &args[..1])?;
+        let Some(condition) = condition else {
+            return Ok(None);
+        };
+        let selected = if is_true_term(&condition) { 1 } else { 2 };
+        return args.into_iter().nth(selected).ok_or_else(|| {
+            crate::error::ShapesError::internal("an admitted SPARQL IF lost its selected argument")
+        })?;
+    }
+    if let Some(value) = eval_sparql_arguments(store, query, &args)? {
+        return Ok(Some(value));
+    }
+    args.into_iter().find_map(Result::err).map_or(Ok(None), Err)
 }
 
 // ── Evaluator ───────────────────────────────────────────────────────────────────
@@ -1555,6 +1699,9 @@ pub(crate) fn eval_planned_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
+    guard
+        .request
+        .clone_from(plan.binding().validation_request());
     guard.enter_node_expr()?;
     // Capture, unwind one level, THEN propagate: an early `?` here would leave
     // the structural counter permanently raised for the rest of the evaluation.
@@ -1563,36 +1710,94 @@ pub(crate) fn eval_planned_node_expr_in_scope(
     result
 }
 
+/// Evaluate only the focus operand of a proved conformance expression. Preserve
+/// its enclosing structural frame while evaluating that operand.
+pub(crate) fn eval_planned_conformance_focus(
+    store: &ShaclData,
+    focus: &Term,
+    node: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Option<Term>, crate::error::ShapesError> {
+    eval_planned_conformance_operand(store, focus, node, lowered, plan, guard, scope)
+        .and_then(conformance_focus)
+}
+
+/// Evaluate a proved operand under the enclosing conformance structural frame.
+pub(crate) fn eval_planned_conformance_operand(
+    store: &ShaclData,
+    focus: &Term,
+    node: &NodeExpr,
+    lowered: &LoweredExpr,
+    plan: ShapePlan<'_>,
+    guard: &mut RecursionGuard,
+    scope: Scope<'_>,
+) -> Result<Vec<Term>, crate::error::ShapesError> {
+    guard.enter_node_expr()?;
+    let result = eval_planned_node_expr_in_scope(store, focus, node, lowered, plan, guard, scope);
+    guard.exit_node_expr();
+    result
+}
+
+fn conformance_focus(mut candidates: Vec<Term>) -> Result<Option<Term>, crate::error::ShapesError> {
+    if candidates.len() > 1 {
+        return Err(format!(
+            "shnex:conformsToShape node argument must yield at most one node, got {}",
+            candidates.len()
+        )
+        .into());
+    }
+    Ok(candidates.pop())
+}
+
+/// Resolve the selected computed operand through its original lowered index.
+pub(crate) fn conformance_target<'a>(
+    produced: &[Term],
+    plan: ShapePlan<'a>,
+    index: u32,
+) -> Result<ShapePlan<'a>, crate::error::ShapesError> {
+    let [shape_iri] = produced else {
+        return Err(format!(
+            "shnex:conformsToShape shape argument must produce exactly \
+             one shape IRI, got {}",
+            produced.len()
+        )
+        .into());
+    };
+    plan.indexed(index, shape_iri)?.ok_or_else(|| {
+        format!(
+            "shnex:conformsToShape shape argument produced \
+             {shape_iri}, which is not a shape of this shapes graph"
+        )
+        .into()
+    })
+}
+
 /// Evaluate a node expression that has NO stage-0 lowering, lowering it here.
 ///
-/// Two expressions are genuinely of that kind, and both are dynamic BY
-/// CONSTRUCTION rather than by omission:
+/// Public expression callers and authored argument expressions prepare their
+/// retained model here. Callers with a shared preparation use the planned entry.
+/// The direct SPARQL value boundary prepares only the declared function body and
+/// borrows its evaluated values through [`Scope::with_values`].
 ///
-/// * a `shnex:arg` argument, which travels in the evaluation [`Scope`] — a frozen
-///   public type carrying an argument's DECLARATION, with nowhere to put a
-///   lowering; and
-/// * the synthetic call [`call_custom_function`] builds at SPARQL query-evaluation
-///   time, out of argument values the engine has just computed.
-///
-/// Neither exists before evaluation begins, so neither can have been lowered
-/// before it. This is also what the PUBLIC entry points use, because a caller
-/// holding only a parsed `NodeExpr` has no preparation to have lowered it against.
-///
-/// `disallows` is the conformance-disallow set of the run this evaluation belongs
+/// `request` is the shared law of the run this evaluation belongs
 /// to, so a shape-bearing expression reached through an argument or a dynamic body
 /// judges conformance exactly as the rest of the run does; a public entry point
-/// that is not part of a validation run passes the default set.
+/// that is not part of a validation run passes the default request.
 fn eval_unlowered(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
-    disallows: &crate::report::ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let lowering = crate::plan::lower_standalone_expression(expr);
+    let lowering = crate::plan::lower_standalone_expression(expr, model)?;
     let mut binding = lowering.bind(store.core_view());
-    binding.set_conformance_disallows(disallows);
+    binding.set_validation_request(request);
     eval_planned_node_expr_in_scope(
         store,
         focus,
@@ -1621,14 +1826,8 @@ pub fn eval_node_expr_in_scope(
     guard: &mut RecursionGuard,
     scope: Scope<'_>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    eval_unlowered(
-        store,
-        focus,
-        expr,
-        guard,
-        scope,
-        &crate::report::ConformanceDisallows::default(),
-    )
+    let request = guard.request.clone();
+    eval_unlowered(store, focus, expr, guard, scope, &request, None)
 }
 
 /// `evalExpr(expr, data graph, focus, {})` as one step of a validation RUN: the
@@ -1644,7 +1843,8 @@ pub(crate) fn eval_node_expr_in_run(
     store: &ShaclData,
     focus: &Term,
     expr: &NodeExpr,
-    disallows: &crate::report::ConformanceDisallows,
+    request: &crate::engine::ValidationRequest,
+    model: Option<&Arc<crate::shapes::ModelOwner>>,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_unlowered(
         store,
@@ -1652,7 +1852,8 @@ pub(crate) fn eval_node_expr_in_run(
         expr,
         &mut RecursionGuard::default(),
         Scope::EMPTY,
-        disallows,
+        request,
+        model,
     )
 }
 
@@ -1942,15 +2143,42 @@ fn eval_node_expr_at_depth(
         // the empty list. The working group's own approved test reads it that way —
         // `inference-rules/expectedPredicate-example` computes a rectangle's area as
         // `sparql:multiply` over a width the incomplete rectangle does not have, and
-        // expects no area rather than a failure. A failure of the evaluation itself
-        // (an argument that fails, a query the engine cannot run) propagates.
+        // expects no area rather than a failure. Catchable nested failures retain
+        // their causes while the SPARQL error-handling forms decide whether to
+        // mask them. Processor/storage failures and declaration refusals always
+        // escape; a successful sibling cannot make a stopped evaluation complete.
         NodeExpr::Call(FnCall::Sparql { iri, args, .. }) => {
-            let mut bound: Vec<(usize, Term)> = Vec::with_capacity(args.len());
+            let local = iri
+                .as_str()
+                .strip_prefix(crate::model::sparql_ns::NS)
+                .ok_or_else(|| {
+                    crate::error::ShapesError::internal(
+                        "a SPARQL call lost its vocabulary namespace",
+                    )
+                })?;
+            let form = sparql_ns_lowering(local)?;
+            let catches = matches!(
+                form,
+                SparqlCallForm::Call("COALESCE" | "IF")
+                    | SparqlCallForm::Infix("&&" | "||")
+                    | SparqlCallForm::Membership(_)
+            );
+            let mut arguments = Vec::with_capacity(args.len());
             for (position, arg) in args.iter().enumerate() {
-                let mut values = descend!(arg, position)?;
-                match values.len() {
-                    0 => {}
-                    1 => bound.extend(values.pop().map(|value| (position, value))),
+                let mut values = match descend!(arg, position) {
+                    Ok(values) => values,
+                    Err(error)
+                        if catches
+                            && error.failure_class() == crate::error::FailureClass::Evaluation =>
+                    {
+                        arguments.push(Err(error));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                let argument = match values.len() {
+                    0 => None,
+                    1 => values.pop(),
                     more => {
                         return Err(format!(
                             "<{}> argument {position} produced {more} nodes; a SPARQL function \
@@ -1960,7 +2188,8 @@ fn eval_node_expr_at_depth(
                         )
                         .into());
                     }
-                }
+                };
+                arguments.push(Ok(argument));
             }
             let query = lowered.scalar_query()?;
             // Only the arguments that produced a node are PARAMETERS of the run; the
@@ -1968,22 +2197,7 @@ fn eval_node_expr_at_depth(
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.
-            let names: Vec<String> = bound
-                .iter()
-                .map(|(position, _)| format!("a{position}"))
-                .collect();
-            let parameters: Vec<&str> = names.iter().map(String::as_str).collect();
-            let result = crate::sparql::eval_cached_scalar_query_view(
-                store.sparql_view(),
-                query,
-                &parameters,
-                |execution| {
-                    for (slot, (_, value)) in bound.iter().enumerate() {
-                        execution.bind(slot, value.to_term_value())?;
-                    }
-                    Ok(())
-                },
-            )?;
+            let result = finish_sparql_arguments(store, form, query, arguments)?;
             Ok(result.into_iter().collect())
         }
         // §4.2.1 Distinct expression: first occurrences, in input order, by term
@@ -2034,16 +2248,26 @@ fn eval_node_expr_at_depth(
                 let first = descend!(&element, key, 1)?.first().map(Term::to_term_value);
                 keyed.push((first, element));
             }
-            keyed.sort_by(|(left, _), (right, _)| match (left, right) {
-                (None, None) => core::cmp::Ordering::Equal,
-                (None, Some(_)) => core::cmp::Ordering::Less,
-                (Some(_), None) => core::cmp::Ordering::Greater,
-                (Some(left), Some(right)) => purrdf_sparql_eval::compare_values(left, right),
-            });
-            let mut out: Vec<Term> = keyed.into_iter().map(|(_, element)| element).collect();
+            let mut order = purrdf_sparql_eval::order_value_permutation(
+                keyed.iter().map(|(key, _)| key.as_ref()),
+                false,
+            );
             if *descending {
-                out.reverse();
+                // SHACL reverses equal-key groups as well as key order.
+                order.reverse();
             }
+            let mut slots: Vec<_> = keyed
+                .into_iter()
+                .map(|(_, element)| Some(element))
+                .collect();
+            let out = order
+                .into_iter()
+                .map(|index| {
+                    slots[index]
+                        .take()
+                        .expect("one element per permutation index")
+                })
+                .collect();
             Ok(out)
         }
         NodeExpr::Offset { of, n } => {
@@ -2217,55 +2441,28 @@ fn eval_node_expr_at_depth(
         // argument must produce at most one node. No node ⇒ the empty list (the
         // spec's stated "no value" case); otherwise the boolean conformance answer.
         NodeExpr::ConformsToShape { node, shape } => {
-            let candidates = descend!(node, 0)?;
-            match candidates.as_slice() {
-                [] => Ok(Vec::new()),
-                [only] => {
+            match conformance_focus(descend!(node, 0)?)? {
+                None => Ok(Vec::new()),
+                Some(only) => {
                     // The shape argument is resolved the way it was written: a
                     // NAMED one was parsed at load, a COMPUTED one is evaluated
                     // here against the shapes graph's own shape index.
                     match shape {
                         ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
                             store,
-                            only,
+                            &only,
                             lowered.shape(plan, 0, shape)?,
                             guard,
                         )?)]),
-                        ShapeArg::Computed { expr, shapes } => {
+                        ShapeArg::Computed { expr, .. } => {
                             let produced = descend!(expr, 1)?;
-                            let [shape_iri] = produced.as_slice() else {
-                                return Err(format!(
-                                    "shnex:conformsToShape shape argument must produce exactly \
-                                     one shape IRI, got {}",
-                                    produced.len()
-                                )
-                                .into());
-                            };
-                            let resolved = shapes.get().ok_or_else(|| {
-                                crate::error::ShapesError::internal(
-                                    "shnex:conformsToShape: the shapes graph's shape index was \
-                                     never filled",
-                                )
-                            })?;
-                            let shape_plan = plan
-                                .indexed(lowered.index()?, shape_iri, resolved)?
-                                .ok_or_else(|| {
-                                format!(
-                                    "shnex:conformsToShape shape argument produced \
-                                         {shape_iri}, which is not a shape of this shapes graph"
-                                )
-                            })?;
+                            let shape_plan = conformance_target(&produced, plan, lowered.index()?)?;
                             Ok(vec![bool_literal(conforms_guarded(
-                                store, only, shape_plan, guard,
+                                store, &only, shape_plan, guard,
                             )?)])
                         }
                     }
                 }
-                more => Err(format!(
-                    "shnex:conformsToShape node argument must yield at most one node, got {}",
-                    more.len()
-                )
-                .into()),
             }
         }
         // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
@@ -2314,18 +2511,26 @@ fn eval_node_expr_at_depth(
             // that produces several is a hard refusal naming the variable — binding
             // an arbitrary member, or dropping the binding silently, would both hand
             // the query a different answer than the author wrote.
-            for (arg_key, arg_expr) in scope.args() {
+            for (arg_key, argument) in scope.args() {
                 let name = arg_key.variable_name();
                 if let Some(potential) = &mut potential {
                     potential.push(name.clone());
                 }
+                let arg_expr = match argument {
+                    ArgValue::Expression(expression) => expression,
+                    ArgValue::Value(value) => {
+                        bindings.push((name, value.clone()));
+                        continue;
+                    }
+                };
                 let values = eval_unlowered(
                     store,
                     focus,
                     arg_expr,
                     guard,
                     Scope::EMPTY,
-                    plan.binding().conformance_disallows(),
+                    plan.binding().validation_request(),
+                    plan.model(),
                 )?;
                 match values.as_slice() {
                     [] => {}
@@ -2355,7 +2560,7 @@ fn eval_node_expr_at_depth(
             // bindings and the call's argument names.
             let declared: Vec<String> = std::iter::once("this".to_owned())
                 .chain(scope.bindings().iter().map(|(name, _)| (*name).to_owned()))
-                .chain(scope.args().iter().map(|(key, _)| key.variable_name()))
+                .chain(scope.args().map(|(key, _)| key.variable_name()))
                 .collect();
             let declared: Vec<&str> = declared.iter().map(String::as_str).collect();
             crate::sparql::eval_select_nodes_view(
@@ -2374,14 +2579,16 @@ fn eval_node_expr_at_depth(
         // own second case and yields the empty list.
         NodeExpr::Arg(key) => match scope.lookup_arg(key) {
             None => Ok(Vec::new()),
-            Some(arg) => {
+            Some(ArgValue::Value(value)) => Ok(vec![value.clone()]),
+            Some(ArgValue::Expression(arg)) => {
                 let out = eval_unlowered(
                     store,
                     focus,
                     arg,
                     guard,
                     Scope::EMPTY,
-                    plan.binding().conformance_disallows(),
+                    plan.binding().validation_request(),
+                    plan.model(),
                 )?;
                 // §6.2 says of a custom LIST parameter function that "each argument
                 // produces at most one output node", and that "an evaluation failure
@@ -2408,8 +2615,18 @@ fn eval_node_expr_at_depth(
         // The focus node and the focus graph both carry through unchanged; only the
         // scope is replaced. The re-entry counter is charged and released on EVERY
         // path, so an erroring body never leaves the guard permanently raised.
-        NodeExpr::CustomCall { func, args } => {
-            let out = eval_custom_call(store, focus, func, args, lowered, plan, guard)?;
+        NodeExpr::CustomCall { args, .. } => {
+            let function = plan.function(lowered.body_key()?)?;
+            let func = &function.declaration;
+            let out = eval_custom_call(
+                store,
+                focus,
+                func,
+                Scope::with_args(args),
+                &function.body,
+                plan,
+                guard,
+            )?;
             // §6.2: a custom LIST parameter expression evaluates its body "where an
             // evaluation failure is reported when there is more than 1 output node"
             // — a list parameter function produces at most one node. A NAMED
@@ -2421,6 +2638,15 @@ fn eval_node_expr_at_depth(
             }
             Ok(out)
         }
+        NodeExpr::Owned { expr, owner } => eval_node_expr_at_depth(
+            store,
+            focus,
+            expr,
+            lowered,
+            plan.with_model(owner),
+            guard,
+            scope,
+        ),
         NodeExpr::Min(of) => aggregate(
             store,
             focus,
@@ -2517,9 +2743,9 @@ fn more_than_one_output_node(func: &CustomFunction, count: usize) -> crate::erro
 fn eval_custom_call(
     store: &ShaclData,
     focus: &Term,
-    func: &Arc<CustomFunction>,
-    args: &[(ArgKey, NodeExpr)],
-    lowered: &LoweredExpr,
+    func: &CustomFunction,
+    scope: Scope<'_>,
+    body_lowered: &LoweredExpr,
     plan: ShapePlan<'_>,
     guard: &mut RecursionGuard,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
@@ -2535,25 +2761,7 @@ fn eval_custom_call(
         // may call the function it belongs to, so it cannot be a subtree
         // of any one call site. A body this walk never reached has none,
         // which is the dynamic case `eval_unlowered` exists for.
-        match plan.body(lowered.body_iri()?) {
-            Some(body_lowered) => eval_planned_node_expr_in_scope(
-                store,
-                focus,
-                body,
-                body_lowered,
-                plan,
-                guard,
-                Scope::with_args(args),
-            ),
-            None => eval_unlowered(
-                store,
-                focus,
-                body,
-                guard,
-                Scope::with_args(args),
-                plan.binding().conformance_disallows(),
-            ),
-        }
+        eval_planned_node_expr_in_scope(store, focus, body, body_lowered, plan, guard, scope)
     };
     guard.exit_call();
     result
@@ -2589,42 +2797,37 @@ fn eval_custom_call(
 /// evaluation failure is the call's SPARQL error.
 pub fn eval_custom_function_call(
     store: &ShaclData,
+    owner: &Arc<crate::shapes::ModelOwner>,
     func: &Arc<CustomFunction>,
     args: &[Option<Term>],
     guard: &mut RecursionGuard,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
-    let mut bound: Vec<(ArgKey, NodeExpr)> = Vec::with_capacity(args.len());
-    for (index, value) in args.iter().enumerate() {
-        let key = u64::try_from(index)
-            .map_err(|e| format!("argument index {index} is not representable: {e}"))?;
-        if let Some(value) = value {
-            bound.push((ArgKey::Index(key), NodeExpr::Constant(value.clone())));
-        }
+    if !owner
+        .function(&func.iri)
+        .is_some_and(|declared| Arc::ptr_eq(declared, func))
+    {
+        return Err(crate::PreparationRefusal::UnknownFunction(func.iri.clone()).into());
     }
-    let call = NodeExpr::CustomCall {
-        func: Arc::clone(func),
-        args: bound.clone(),
-    };
+    // Preserve the direct-call boundary's original typed missing-body failure.
+    let body = func.body()?;
+    let lowering = crate::plan::lower_standalone_expression(body, Some(owner))?;
+    let mut binding = lowering.bind(store.core_view());
+    binding.set_validation_request(&guard.request);
     let focus = Term::NamedNode(func.iri.clone());
-    // The synthetic call has no preparation to have been lowered against: it is
-    // made of values the SPARQL engine has just computed (see `eval_unlowered`).
-    let lowering = crate::plan::lower_standalone_expression(&call);
-    let binding = lowering.bind(store.core_view());
+    let plan = lowering.plan(&binding);
     guard.enter_node_expr()?;
     let out = eval_custom_call(
         store,
         &focus,
         func,
-        &bound,
+        Scope::with_values(args),
         lowering.expr(),
-        lowering.plan(&binding),
+        plan,
         guard,
     );
     guard.exit_node_expr();
-    match out?.as_slice() {
-        [only] => Ok(Some(only.clone())),
-        _ => Ok(None),
-    }
+    let mut out = out?;
+    Ok(if out.len() == 1 { out.pop() } else { None })
 }
 
 /// Conformance-check `node` against `shape`, under the shared recursion guard.
@@ -2648,10 +2851,9 @@ fn conforms_guarded(
     shape: ShapePlan<'_>,
     guard: &mut RecursionGuard,
 ) -> Result<bool, crate::error::ShapesError> {
-    let shape_id = shape.shape().id.to_string();
-    let node_key = node.to_string();
+    let shape_id = &shape.shape().id;
     let next_depth = guard.depth().saturating_add(1);
-    guard.enter(&shape_id, &node_key)?;
+    guard.enter(shape_id, node)?;
     // The shape's own lowering travels with it: re-entering the constraint engine
     // through an expression costs a plan lookup, not a fresh walk of the shape.
     let verdict = crate::constraints::conforms_with_id_depth(
@@ -2660,7 +2862,7 @@ fn conforms_guarded(
         shape,
         next_depth,
     );
-    guard.exit(&shape_id, &node_key);
+    guard.exit(shape_id, node);
     verdict
 }
 
@@ -2799,6 +3001,7 @@ mod tests {
         // output is exactly its candidate LIST — §4.2.5 "preserving the order in
         // the list", duplicates included.
         let shape = Shape {
+            owner: None,
             id: ex("leaf"),
             targets: vec![],
             constraints: vec![],
@@ -3222,9 +3425,14 @@ mod tests {
         );
         // Bound through the production path: a body becomes algebra against the
         // environment in force, never at declaration time.
-        let _scope = crate::sparql::enter_function_scope(
-            crate::sparql::bind_in_current_env(&registry).expect("the body parses and admits"),
-        );
+        let _scope = crate::sparql::enter_function_scope(Arc::new(
+            purrdf_sparql_eval::NativeSparqlEngine::new()
+                .bind_functions(
+                    registry,
+                    &crate::sparql::current_env().expect("environment"),
+                )
+                .expect("the body parses and admits"),
+        ));
 
         let data = load_data("");
         let mut guard = RecursionGuard::default();
@@ -3660,20 +3868,20 @@ mod tests {
     #[test]
     fn recursion_guard_detects_reentry() {
         let mut guard = RecursionGuard::default();
-        guard.enter("shapeA", "focusX").expect("first enter ok");
-        let err = guard.enter("shapeA", "focusX").unwrap_err();
+        let shape = ex("shapeA");
+        let focus = ex("focusX");
+        guard.enter(&shape, &focus).expect("first enter ok");
+        let err = guard.enter(&shape, &focus).unwrap_err();
         assert_eq!(
             err,
             crate::error::ProcessorFailure::ReentryCycle {
-                shape: "shapeA".to_owned(),
-                focus: "focusX".to_owned(),
+                shape: shape.clone(),
+                focus: Box::new(focus.clone()),
             }
             .into()
         );
-        guard.exit("shapeA", "focusX");
-        guard
-            .enter("shapeA", "focusX")
-            .expect("re-enter after exit ok");
+        guard.exit(&shape, &focus);
+        guard.enter(&shape, &focus).expect("re-enter after exit ok");
     }
 
     /// A node-expression tree nested past [`MAX_NODE_EXPR_DEPTH`] must fail
@@ -3782,6 +3990,7 @@ mod tests {
             let data = load_data(DATA);
 
             let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                owner: None,
                 id,
                 targets: vec![],
                 constraints,

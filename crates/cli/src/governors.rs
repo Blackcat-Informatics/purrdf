@@ -90,6 +90,10 @@ pub(crate) struct GovernorFlags {
     pub(crate) max_scratch_bytes: Option<u64>,
     /// `--max-remote-requests`: requests issued to a remote or federated endpoint.
     pub(crate) max_remote_requests: Option<u64>,
+    /// Inclusive logical depth; omitted keeps the native default.
+    pub(crate) max_udf_depth: Option<u64>,
+    /// Remove the logical user-function depth ceiling.
+    pub(crate) unlimited_udf_depth: bool,
     /// `--no-ceiling`: decline every ceiling and all accounting
     /// ([`QueryGovernors::UNBOUNDED`] instead of [`QueryGovernors::METERED`]).
     pub(crate) no_ceiling: bool,
@@ -121,6 +125,12 @@ impl GovernorFlags {
         if self.max_remote_requests.is_some() {
             named.push("--max-remote-requests");
         }
+        if self.max_udf_depth.is_some() {
+            named.push("--max-udf-depth");
+        }
+        if self.unlimited_udf_depth {
+            named.push("--unlimited-udf-depth");
+        }
         named
     }
 
@@ -138,6 +148,9 @@ impl GovernorFlags {
             || self.max_intermediate_cells.is_some()
             || self.max_scratch_bytes.is_some()
             || self.max_remote_requests.is_some()
+            || self.max_udf_depth.is_some()
+            || self.unlimited_udf_depth
+            || self.no_ceiling
     }
 
     /// Build the engine configuration these flags describe, through
@@ -152,14 +165,15 @@ impl GovernorFlags {
     /// A usage error naming both flags when `--no-ceiling` is given beside a numeric
     /// ceiling.
     pub(crate) fn to_governors(self) -> Result<QueryGovernors, CliError> {
-        let parts = GovernorParts {
-            fuel: self.fuel,
-            max_answers: self.max_answers,
-            max_intermediate_cells: self.max_intermediate_cells,
-            max_scratch_bytes: self.max_scratch_bytes,
-            max_remote_requests: self.max_remote_requests,
-            no_ceiling: self.no_ceiling,
-        };
+        let mut parts = GovernorParts::new();
+        parts.fuel = self.fuel;
+        parts.max_answers = self.max_answers;
+        parts.max_intermediate_cells = self.max_intermediate_cells;
+        parts.max_scratch_bytes = self.max_scratch_bytes;
+        parts.max_remote_requests = self.max_remote_requests;
+        parts.max_udf_depth = self.max_udf_depth;
+        parts.unlimited_udf_depth = self.unlimited_udf_depth;
+        parts.no_ceiling = self.no_ceiling;
         let stop = self
             .deadline
             .map(|budget| Arc::new(WallDeadline::after(budget)) as Arc<dyn StopSignal>);
@@ -175,6 +189,9 @@ fn refusal(error: GovernorPartsError) -> String {
              under the ceiling, or drop the ceiling to run with none",
             ceiling_flag(dimension)
         ),
+        GovernorPartsError::UdfDepthConflict { limit } => format!(
+            "--max-udf-depth {limit} and --unlimited-udf-depth cannot be combined; choose one"
+        ),
         other => other.to_string(),
     }
 }
@@ -187,6 +204,7 @@ fn ceiling_flag(dimension: ResourceDimension) -> String {
         ResourceDimension::IntermediateCells => "--max-intermediate-cells".to_owned(),
         ResourceDimension::ScratchBytes => "--max-scratch-bytes".to_owned(),
         ResourceDimension::RemoteRequests => "--max-remote-requests".to_owned(),
+        ResourceDimension::UdfDepth => "--max-udf-depth".to_owned(),
         other => format!("a {} ceiling", other.label()),
     }
 }
@@ -195,6 +213,11 @@ fn ceiling_flag(dimension: ResourceDimension) -> String {
 /// dimension that carries none — unbounded, or bounded only by the ceiling
 /// [`QueryGovernors::METERED`] installs so its counter runs, which no flag asked for.
 fn named_limit(limits: ResourceVector, dimension: ResourceDimension) -> Option<u64> {
+    if dimension == ResourceDimension::UdfDepth {
+        return limits
+            .is_bounded(dimension)
+            .then_some(limits.get(dimension));
+    }
     let metering = QueryGovernors::METERED.limits();
     let limit = limits.get(dimension);
     (limits.is_bounded(dimension)
@@ -300,7 +323,7 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
             let _ = writeln!(out, "barrier {}", barrier.operator());
         }
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = writeln!(
             out,
             "consumed {} {}",
@@ -308,7 +331,7 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
             exhausted.evidence.consumed_in(dimension)
         );
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = match named_limit(exhausted.evidence.limits(), dimension) {
             Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
             None => writeln!(out, "limit {} unbounded", dimension.label()),
@@ -388,7 +411,7 @@ fn render_all_or_nothing_trip(
     let _ = writeln!(out, "tripped {}", tripped.label());
     let _ = writeln!(out, "detail {tripped}");
     let _ = writeln!(out, "{effect}");
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = writeln!(
             out,
             "consumed {} {}",
@@ -396,7 +419,7 @@ fn render_all_or_nothing_trip(
             evidence.consumed_in(dimension)
         );
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = match named_limit(evidence.limits(), dimension) {
             Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
             None => writeln!(out, "limit {} unbounded", dimension.label()),
@@ -483,6 +506,8 @@ mod tests {
         max_intermediate_cells: None,
         max_scratch_bytes: None,
         max_remote_requests: None,
+        max_udf_depth: None,
+        unlimited_udf_depth: false,
         no_ceiling: false,
     };
 
@@ -502,6 +527,8 @@ mod tests {
             max_intermediate_cells: Some(14),
             max_scratch_bytes: Some(15),
             max_remote_requests: Some(16),
+            max_udf_depth: None,
+            unlimited_udf_depth: false,
             no_ceiling: false,
         };
         assert!(all.is_engaged());

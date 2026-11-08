@@ -4102,7 +4102,9 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/property-functio
 /// producer promises about the completeness and order of its own rows now
 /// changes the registry's identity, because a plan drawn from producers that
 /// approximate is not the plan drawn from producers that do not.
-const CONTENT_VERSION: u16 = 2;
+/// Bumped to 3 when ranked declarations gained their rank source and progression
+/// law, distinguishing shared ranks from distinct ordinal ranks.
+const CONTENT_VERSION: u16 = 3;
 
 /// A **content-only** fingerprint of `relations`: every registered IRI's subject
 /// and object arity, its declared volatility, its declared modes with their row
@@ -4176,7 +4178,7 @@ pub fn content_fingerprint(
     content_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
 }
 
-fn content_fingerprint_with_memory(
+pub(crate) fn content_fingerprint_with_memory(
     relations: &PropertyFunctionRegistry<'_>,
     memory: &mut Memory<'_, LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {
@@ -4476,6 +4478,7 @@ mod content_fingerprint_tests {
             stratum: purrdf_core::parse_iri(stratum).expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: crate::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             // The fixture producer is an in-memory table read end to end.
@@ -4744,7 +4747,7 @@ mod content_fingerprint_tests {
         );
         assert_eq!(
             empty.to_hex(),
-            "d73476de4655573c5093e8c6a85b5653d03b7562d9bbcd8846b9d5c7b930c62a",
+            "ed82a61a8573792bd977af440a33618abf79df53d0e04abf6b6a3448a1d5a1b1",
             "the empty property-function registry digest is a persisted constant"
         );
         assert_ne!(

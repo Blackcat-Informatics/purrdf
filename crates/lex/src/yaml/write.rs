@@ -158,12 +158,13 @@ fn analyze(text: &str) -> Analysis {
     let (mut trailing_space, mut trailing_break) = (false, false);
     let (mut break_space, mut space_break) = (false, false);
     let (mut previous_space, mut previous_break) = (false, false);
-    let chars: Vec<char> = text.chars().collect();
+    let mut chars = text.chars().peekable();
     let mut preceded_by_whitespace = true;
-    for (index, &c) in chars.iter().enumerate() {
+    let mut index = 0;
+    while let Some(c) = chars.next() {
         let first = index == 0;
-        let last = index + 1 == chars.len();
-        let followed_by_whitespace = is_blankz(chars.get(index + 1).copied());
+        let last = chars.peek().is_none();
+        let followed_by_whitespace = is_blankz(chars.peek().copied());
         if first {
             if matches!(
                 c,
@@ -234,6 +235,7 @@ fn analyze(text: &str) -> Analysis {
             previous_break = false;
         }
         preceded_by_whitespace = is_blankz(Some(c));
+        index += 1;
     }
     analysis.multiline = line_breaks;
     analysis.flow_plain_allowed = true;
@@ -279,6 +281,9 @@ struct Emitter<'v> {
     events: Vec<Event<'v>>,
     at: usize,
     out: String,
+    measure: Option<usize>,
+    overflow: bool,
+    literal_hint: u32,
     state: State,
     states: Vec<State>,
     indent: i32,
@@ -293,13 +298,24 @@ struct Emitter<'v> {
 }
 
 impl Emitter<'_> {
+    fn output(&mut self, c: char) {
+        if let Some(bytes) = &mut self.measure {
+            if let Some(next) = bytes.checked_add(c.len_utf8()) {
+                *bytes = next;
+            } else {
+                self.overflow = true;
+            }
+        } else {
+            self.out.push(c);
+        }
+    }
     fn put(&mut self, c: char) {
-        self.out.push(c);
-        self.column += 1;
+        self.output(c);
+        self.column = self.column.saturating_add(1);
     }
 
     fn put_break(&mut self) {
-        self.out.push('\n');
+        self.output('\n');
         self.column = 0;
     }
 
@@ -308,8 +324,21 @@ impl Emitter<'_> {
         if !self.indention || self.column > indent || (self.column == indent && !self.whitespace) {
             self.put_break();
         }
-        while self.column < indent {
-            self.put(' ');
+        if self.column < indent
+            && let Some(bytes) = &mut self.measure
+        {
+            let padding =
+                usize::try_from(indent - self.column).expect("positive native indentation");
+            if let Some(next) = bytes.checked_add(padding) {
+                *bytes = next;
+            } else {
+                self.overflow = true;
+            }
+            self.column = indent;
+        } else {
+            while self.column < indent {
+                self.put(' ');
+            }
         }
         self.whitespace = true;
         self.indention = true;
@@ -543,42 +572,36 @@ impl Emitter<'_> {
     }
 
     fn write_double_quoted(&mut self, text: &str) {
+        // INVARIANT: ALL includes the eight-digit escape that represents every
+        // Rust Unicode scalar. The default writer therefore cannot refuse one.
+        self.write_double_quoted_with(text, EscapeSet::ALL)
+            .expect("the complete YAML escape set represents every Unicode scalar");
+    }
+
+    fn write_double_quoted_with(
+        &mut self,
+        text: &str,
+        escapes: EscapeSet,
+    ) -> Result<(), EmitError> {
         self.write_indicator("\"", true, false, false);
-        for c in text.chars() {
-            if !is_printable(c) || c == '\u{feff}' || is_break(c) || c == '"' || c == '\\' {
-                self.put('\\');
-                let short = match c {
-                    '\0' => Some('0'),
-                    '\u{7}' => Some('a'),
-                    '\u{8}' => Some('b'),
-                    '\t' => Some('t'),
-                    '\n' => Some('n'),
-                    '\u{b}' => Some('v'),
-                    '\u{c}' => Some('f'),
-                    '\r' => Some('r'),
-                    '\u{1b}' => Some('e'),
-                    '"' => Some('"'),
-                    '\\' => Some('\\'),
-                    '\u{85}' => Some('N'),
-                    '\u{a0}' => Some('_'),
-                    '\u{2028}' => Some('L'),
-                    '\u{2029}' => Some('P'),
-                    _ => None,
-                };
-                if let Some(short) = short {
-                    self.put(short);
-                } else {
+        for (offset, c) in text.char_indices() {
+            let spelling = double_spelling(c, escapes).ok_or(EmitError::Escape {
+                offset,
+                character: c,
+            })?;
+            match spelling {
+                Spelling::Raw => self.put(c),
+                Spelling::Short(name) => {
+                    self.put('\\');
+                    self.put(char::from(name));
+                }
+                Spelling::Hex(name, width) => {
+                    self.put('\\');
+                    self.put(char::from(name));
                     let code = u32::from(c);
-                    let (letter, width) = if code <= 0xff {
-                        ('x', 2)
-                    } else if code <= 0xffff {
-                        ('u', 4)
-                    } else {
-                        ('U', 8)
-                    };
-                    self.put(letter);
                     for shift in (0..width).rev() {
                         let digit = (code >> (shift * 4)) & 0xf;
+                        // INVARIANT: masking leaves exactly one hexadecimal nibble.
                         self.put(
                             char::from_digit(digit, 16)
                                 .expect("a nibble")
@@ -586,31 +609,33 @@ impl Emitter<'_> {
                         );
                     }
                 }
-            } else {
-                self.put(c);
             }
         }
         self.write_indicator("\"", false, false, false);
         self.whitespace = false;
         self.indention = false;
+        Ok(())
     }
 
     fn write_literal(&mut self, text: &str) {
         self.write_indicator("|", true, false, false);
         // Block scalar hints: an indentation indicator when the text starts
         // with a space or a break, and a chomping indicator.
-        let chars: Vec<char> = text.chars().collect();
-        if chars.first().is_some_and(|&c| c == ' ' || is_break(c)) {
-            let hint = char::from_digit(INDENT as u32, 10)
-                .expect("a digit")
-                .to_string();
-            self.write_indicator(&hint, false, false, false);
+        if text
+            .chars()
+            .next()
+            .is_some_and(|c| matches!(c, ' ' | '\t') || is_break(c))
+        {
+            self.put(char::from_digit(self.literal_hint, 10).expect("a digit"));
         }
-        let chomp = match chars.as_slice() {
-            [] => Some("-"),
-            [.., last] if !is_break(*last) => Some("-"),
-            [_] => Some("+"),
-            [.., before, _] if is_break(*before) => Some("+"),
+        let mut tail = text.chars().rev();
+        let last = tail.next();
+        let before = tail.next();
+        let chomp = match (last, before) {
+            (None, _) => Some("-"),
+            (Some(last), _) if !is_break(last) => Some("-"),
+            (Some(_), None) => Some("+"),
+            (_, Some(before)) if is_break(before) => Some("+"),
             _ => None,
         };
         if let Some(chomp) = chomp {
@@ -620,12 +645,12 @@ impl Emitter<'_> {
         self.indention = true;
         self.whitespace = true;
         let mut breaks = true;
-        for c in chars {
+        for c in text.chars() {
             if is_break(c) {
                 if c == '\n' {
                     self.put_break();
                 } else {
-                    self.out.push(c);
+                    self.output(c);
                     self.column = 0;
                 }
                 self.indention = true;
@@ -666,6 +691,9 @@ pub fn write(value: &Value) -> String {
         events: events(value),
         at: 0,
         out: String::new(),
+        measure: None,
+        overflow: false,
+        literal_hint: INDENT as u32,
         state: State::DocumentContent,
         states: Vec::new(),
         indent: -1,
@@ -680,4 +708,471 @@ pub fn write(value: &Value) -> String {
     };
     emitter.run();
     emitter.out
+}
+
+/// A scalar spelling requested by a layout-policy caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmitStyle {
+    /// Choose a spelling that retains the scalar's string value.
+    Auto,
+    /// Prefer an unquoted spelling; unsafe spellings become quoted.
+    Plain,
+    /// Prefer single quotes; multiline or special text becomes double quoted.
+    SingleQuoted,
+    /// Use the native YAML double-quoted escape table.
+    DoubleQuoted,
+    /// Prefer a literal block; flow and key contexts become double quoted.
+    Literal,
+}
+impl EmitStyle {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Plain => "plain",
+            Self::SingleQuoted => "single-quoted",
+            Self::DoubleQuoted => "double-quoted",
+            Self::Literal => "literal",
+        }
+    }
+}
+/// How an exact plain spelling relates to Core-schema resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlainMode {
+    /// The scalar must resolve to the same Core-schema string.
+    CoreString,
+    /// Preserve syntactically valid lexical text, independently of Core type.
+    Lexical,
+}
+/// A closed set of native YAML double-quoted escape names, not custom encodings.
+/// Names are the characters after a backslash, including `x`, `u` and `U`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscapeSet(u128);
+impl EscapeSet {
+    /// Every escape supported by the native YAML reader.
+    pub const ALL: Self = Self(super::scalar::all_escape_bits());
+    /// Permit raw content only; mandatory unrepresentable characters refuse.
+    pub const NONE: Self = Self(0);
+    /// Select native escape names without allocating. Duplicates have no effect.
+    pub fn from_names(names: &str) -> Result<Self, EmitError> {
+        let mut bits = 0;
+        for name in names.chars() {
+            let byte = u8::try_from(u32::from(name))
+                .ok()
+                .filter(|&name| name < 128);
+            let Some(byte) = byte.filter(|&name| {
+                super::scalar::short_escape(name).is_some()
+                    || super::scalar::hex_width(name).is_some()
+            }) else {
+                return Err(EmitError::EscapeName { name });
+            };
+            bits |= 1_u128 << byte;
+        }
+        Ok(Self(bits))
+    }
+    fn permits(self, name: u8) -> bool {
+        self.0 & (1_u128 << name) != 0
+    }
+}
+/// Explicit lexical and escape policy for exact scalar emission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmitPolicy {
+    /// Whether an exact plain spelling must preserve a Core string value.
+    pub plain: PlainMode,
+    /// Permitted double-quoted escape spellings; raw legal content remains available.
+    pub escapes: EscapeSet,
+}
+
+enum Spelling {
+    Raw,
+    Short(u8),
+    Hex(u8, usize),
+}
+fn double_spelling(c: char, escapes: EscapeSet) -> Option<Spelling> {
+    if is_printable(c) && !is_break(c) && !matches!(c, '\u{feff}' | '"' | '\\') {
+        return Some(Spelling::Raw);
+    }
+    let (name, width) = if let Some(name) = super::scalar::preferred_escape(c) {
+        (name, None)
+    } else {
+        let code = u32::from(c);
+        if code <= 0xff {
+            (b'x', Some(2))
+        } else if code <= 0xffff {
+            (b'u', Some(4))
+        } else {
+            (b'U', Some(8))
+        }
+    };
+    if escapes.permits(name) {
+        return Some(match width {
+            Some(width) => Spelling::Hex(name, width),
+            None => Spelling::Short(name),
+        });
+    }
+    if super::scalar::printable(c) && !matches!(c, '\r' | '\n' | '"' | '\\') {
+        return Some(Spelling::Raw);
+    }
+    for (name, maximum, width) in [(b'x', 0xff, 2), (b'u', 0xffff, 4), (b'U', 0x0010_ffff, 8)] {
+        if u32::from(c) <= maximum && escapes.permits(name) {
+            return Some(Spelling::Hex(name, width));
+        }
+    }
+    None
+}
+
+/// The surrounding native layout constraints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalarContext {
+    /// Standalone node at column zero; literal content uses the native two spaces.
+    Root,
+    /// Block value with absolute parent and content indentation.
+    Block {
+        /// Indentation of the owning block. Exact emission uses Root for a standalone node.
+        parent_indentation: usize,
+        /// Absolute content indentation, greater than its parent's.
+        indentation: usize,
+    },
+    /// A value inside brackets or braces.
+    Flow,
+    /// A simple mapping key safe in both mapping layouts, on one source line
+    /// and at most 1,024 source characters.
+    Key,
+}
+/// Explicit scalar output and allocation bounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmitLimits {
+    /// Maximum generated UTF-8 bytes.
+    pub max_output_bytes: usize,
+    /// Maximum admitted output buffer capacity.
+    pub max_allocation_bytes: usize,
+}
+/// An emitted scalar and the style actually selected.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EmittedScalar {
+    /// Native spelling; literal blocks include header and content indentation.
+    pub text: String,
+    /// The chosen presentation, including a safe fallback when needed.
+    pub style: EmitStyle,
+}
+/// A position-independent emission refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmitError {
+    /// The requested concrete style cannot preserve the text in this context/policy.
+    Style {
+        /// Requested style; Auto is not a concrete exact request.
+        requested: EmitStyle,
+    },
+    /// A selected name is outside the native YAML escape vocabulary.
+    EscapeName {
+        /// Invalid character after a backslash.
+        name: char,
+    },
+    /// No permitted escape or lossless raw spelling represents this character.
+    Escape {
+        /// Byte offset in the original scalar text.
+        offset: usize,
+        /// Original character.
+        character: char,
+    },
+    /// The requested indentation cannot describe a block scalar.
+    Indentation,
+    /// The complete emitted simple key exceeds YAML's source-character bound.
+    KeyLength {
+        /// Maximum source characters, including quotes and escape spellings.
+        limit: usize,
+    },
+    /// Native storage arithmetic or allocation failed.
+    Storage(crate::allocation::StorageError),
+    /// Generated bytes exceed the caller's bound.
+    Output {
+        /// Caller bound.
+        limit: usize,
+    },
+    /// Output buffer capacity exceeds the caller's allocation bound.
+    Allocation {
+        /// Caller bound.
+        limit: usize,
+    },
+}
+impl core::fmt::Display for EmitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Style { requested } => write!(
+                f,
+                "YAML scalar style {requested:?} cannot preserve this text under its policy"
+            ),
+            Self::EscapeName { name } => write!(f, "unknown YAML escape name {name:?}"),
+            Self::Escape { offset, character } => write!(
+                f,
+                "YAML scalar byte {offset}: no permitted spelling for {character:?}"
+            ),
+            Self::Indentation => f.write_str(
+                "block content indentation must exceed its parent and fit a native column",
+            ),
+            Self::KeyLength { limit } => {
+                write!(f, "YAML simple key exceeds {limit} source characters")
+            }
+            Self::Storage(cause) => cause.fmt(f),
+            Self::Output { limit } => write!(f, "YAML scalar output exceeds {limit} bytes"),
+            Self::Allocation { limit } => write!(f, "YAML scalar allocation exceeds {limit} bytes"),
+        }
+    }
+}
+impl purrdf_hash::error::StructuredError for EmitError {
+    purrdf_hash::error_visit! {
+        Style { requested } => "yaml-emission-style" { "requested" => Code(requested.code()) },
+        EscapeName { name } => "yaml-emission-escape-name" { "name" => Character(*name) },
+        Escape { offset, character } => "yaml-emission-escape" { "byte" => ByteCount(*offset as u128), "character" => Character(*character) },
+        Indentation => "yaml-emission-indentation" {},
+        KeyLength { limit } => "yaml-emission-key-length" { "limit" => Unsigned(*limit as u128) },
+        Storage(cause) => "yaml-emission-storage" { "cause" => Cause(cause) },
+        Output { limit } => "yaml-emission-output-limit" { "limit" => ByteCount(*limit as u128) },
+        Allocation { limit } => "yaml-emission-allocation-limit" { "limit" => ByteCount(*limit as u128) },
+    }
+}
+purrdf_hash::error_sources!(EmitError, Storage);
+
+/// Emit one string scalar through the same quoting/escaping bodies as
+/// [`write`](fn@write), reporting the actual safe style. Output is measured without
+/// allocation, then its complete buffer is admitted before writing.
+///
+/// # Errors
+/// Refuses invalid block indentation, an overlong simple key, output/allocation
+/// exhaustion and native storage failure. No partial spelling is returned.
+pub fn emit_scalar(
+    text: &str,
+    requested: EmitStyle,
+    context: ScalarContext,
+    limits: EmitLimits,
+) -> Result<EmittedScalar, EmitError> {
+    emit_scalar_impl(text, requested, context, limits, None)
+}
+
+/// Emit exactly the requested concrete style, preserving lexical text under policy.
+/// Auto, unavailable styles and unrepresentable restricted escapes return typed
+/// refusals. Raw quoted Unicode remains available when its preferred escape is
+/// forbidden; ASCII CR/LF must be escaped because raw line folding is lossy.
+/// Complete output is measured and admitted before any spelling is returned.
+pub fn emit_scalar_exact(
+    text: &str,
+    requested: EmitStyle,
+    context: ScalarContext,
+    policy: EmitPolicy,
+    limits: EmitLimits,
+) -> Result<EmittedScalar, EmitError> {
+    emit_scalar_impl(text, requested, context, limits, Some(policy))
+}
+
+/// Whether a single plain lexical scalar preserves text in the requested context.
+/// This inspects syntax only, allocates nothing and never invokes Core resolution.
+/// Root excludes document markers; Block is an embedded value, even with parent
+/// indentation zero. Key is safe in both mapping layouts and obeys the simple-key
+/// length bound. Raw CR/LF would fold; BOM is excluded by YAML non-break plain
+/// content syntax in every context. Quoted content can retain it instead.
+pub fn plain_lexical_allowed(text: &str, context: ScalarContext) -> bool {
+    plain_lexical_length(text, context)
+        .is_some_and(|characters| !matches!(context, ScalarContext::Key) || characters <= 1024)
+}
+fn plain_lexical_length(text: &str, context: ScalarContext) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let &first = bytes.first()?;
+    let key = matches!(context, ScalarContext::Key);
+    let flow = matches!(context, ScalarContext::Flow | ScalarContext::Key);
+    let after = |at: usize| {
+        if key && at + 1 == bytes.len() {
+            Some(b':')
+        } else {
+            bytes.get(at + 1).copied()
+        }
+    };
+    if matches!(
+        first,
+        b' ' | b'\t'
+            | b'#'
+            | b','
+            | b'['
+            | b']'
+            | b'{'
+            | b'}'
+            | b'&'
+            | b'*'
+            | b'!'
+            | b'|'
+            | b'>'
+            | b'\''
+            | b'"'
+            | b'%'
+            | b'@'
+            | b'`'
+    ) || matches!(bytes.last(), Some(b' ' | b'\t'))
+        || matches!(first, b'-' | b'?' | b':')
+            && (super::scalar::blank(after(0)) || flow && super::scalar::flow_indicator(after(0)))
+        || matches!(context, ScalarContext::Root | ScalarContext::Key)
+            && super::scalar::document_marker_before(
+                bytes,
+                if key && bytes.len() == 3 {
+                    Some(b':')
+                } else {
+                    bytes.get(3).copied()
+                },
+            )
+    {
+        return None;
+    }
+    let mut characters = 0;
+    for (at, c) in text.char_indices() {
+        if !super::scalar::printable(c)
+            || matches!(c, '\r' | '\n' | '\u{feff}')
+            || super::scalar::plain_end_before(bytes, at, flow, after(at))
+        {
+            return None;
+        }
+        characters += 1;
+    }
+    Some(characters)
+}
+
+fn emit_scalar_impl(
+    text: &str,
+    requested: EmitStyle,
+    context: ScalarContext,
+    limits: EmitLimits,
+    policy: Option<EmitPolicy>,
+) -> Result<EmittedScalar, EmitError> {
+    let (indent, hint) = match context {
+        ScalarContext::Root => (INDENT, INDENT as usize),
+        ScalarContext::Block {
+            parent_indentation,
+            indentation,
+        } => {
+            let increment = indentation
+                .checked_sub(parent_indentation)
+                .filter(|&increment| increment > 0)
+                .ok_or(EmitError::Indentation)?;
+            let indent = i32::try_from(indentation).map_err(|_| EmitError::Indentation)?;
+            (indent, increment)
+        }
+        ScalarContext::Flow | ScalarContext::Key => (0, 0),
+    };
+    let analysis = analyze(text);
+    let plain = !text.is_empty()
+        && !needs_quotes(text)
+        && match context {
+            ScalarContext::Root | ScalarContext::Block { .. } => analysis.block_plain_allowed,
+            ScalarContext::Flow | ScalarContext::Key => analysis.flow_plain_allowed,
+        };
+    let single = analysis.single_quoted_allowed && !text.chars().any(is_break);
+    let needs_hint = text.starts_with([' ', '\t']) || text.chars().next().is_some_and(is_break);
+    let literal = matches!(context, ScalarContext::Root | ScalarContext::Block { .. })
+        && (!needs_hint || hint < 10)
+        && analysis.block_allowed
+        && !text.contains(['\r', '\u{85}', '\u{2028}', '\u{2029}']);
+    let style = if let Some(policy) = policy {
+        let allowed = match requested {
+            EmitStyle::Auto => false,
+            EmitStyle::Plain => {
+                plain_lexical_length(text, context).is_some()
+                    && (policy.plain == PlainMode::Lexical || !needs_quotes(text))
+            }
+            EmitStyle::SingleQuoted => text
+                .chars()
+                .all(|c| super::scalar::printable(c) && !matches!(c, '\r' | '\n')),
+            EmitStyle::DoubleQuoted => true,
+            EmitStyle::Literal => {
+                matches!(context, ScalarContext::Root | ScalarContext::Block { .. })
+                    && (!needs_hint || hint < 10)
+                    && text.chars().all(|c| {
+                        super::scalar::printable(c)
+                            && !matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}' | '\u{feff}')
+                    })
+            }
+        };
+        if !allowed {
+            return Err(EmitError::Style { requested });
+        }
+        requested
+    } else {
+        match requested {
+            EmitStyle::DoubleQuoted => EmitStyle::DoubleQuoted,
+            EmitStyle::Literal if literal => EmitStyle::Literal,
+            EmitStyle::SingleQuoted if single => EmitStyle::SingleQuoted,
+            EmitStyle::Plain | EmitStyle::Auto if plain => EmitStyle::Plain,
+            EmitStyle::Auto if literal && text.contains('\n') => EmitStyle::Literal,
+            EmitStyle::Auto | EmitStyle::Plain if single => EmitStyle::SingleQuoted,
+            _ => EmitStyle::DoubleQuoted,
+        }
+    };
+    let mut emitter = Emitter {
+        events: Vec::new(),
+        at: 0,
+        out: String::new(),
+        measure: Some(0),
+        overflow: false,
+        literal_hint: u32::try_from(hint).unwrap_or(2),
+        state: State::DocumentContent,
+        states: Vec::new(),
+        indent,
+        indents: Vec::new(),
+        flow_level: 0,
+        mapping_context: false,
+        simple_key_context: false,
+        column: 0,
+        whitespace: true,
+        indention: true,
+        analysis,
+    };
+    let emit = |emitter: &mut Emitter<'_>| match style {
+        EmitStyle::Plain => {
+            for c in text.chars() {
+                emitter.put(c);
+            }
+            Ok(())
+        }
+        EmitStyle::SingleQuoted => {
+            emitter.write_single_quoted(text);
+            Ok(())
+        }
+        EmitStyle::Literal => {
+            emitter.write_literal(text);
+            Ok(())
+        }
+        EmitStyle::Auto | EmitStyle::DoubleQuoted => emitter
+            .write_double_quoted_with(text, policy.map_or(EscapeSet::ALL, |policy| policy.escapes)),
+    };
+    emit(&mut emitter)?;
+    if emitter.overflow {
+        return Err(EmitError::Storage(
+            crate::allocation::StorageError::SizeOverflow,
+        ));
+    }
+    if matches!(context, ScalarContext::Key) && emitter.column > 1024 {
+        return Err(EmitError::KeyLength { limit: 1024 });
+    }
+    let bytes = emitter.measure.expect("measurement mode");
+    if bytes > limits.max_output_bytes {
+        return Err(EmitError::Output {
+            limit: limits.max_output_bytes,
+        });
+    }
+    let mut account = super::admission::Allocations::bounded(limits.max_allocation_bytes);
+    account
+        .memory(|memory| memory.reserve_string(&mut emitter.out, bytes))
+        .map_err(|cause| {
+            if cause == crate::allocation::StorageError::AdmissionFailed {
+                EmitError::Allocation {
+                    limit: limits.max_allocation_bytes,
+                }
+            } else {
+                EmitError::Storage(cause)
+            }
+        })?;
+    emitter.measure = None;
+    emitter.column = 0;
+    emitter.whitespace = true;
+    emitter.indention = true;
+    emit(&mut emitter)?;
+    Ok(EmittedScalar {
+        text: emitter.out,
+        style,
+    })
 }

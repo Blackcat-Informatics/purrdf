@@ -180,7 +180,7 @@ fn execute(
     engine: &NativeSparqlEngine,
     dataset: &mut Arc<RdfDataset>,
     text: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     governed: bool,
 ) -> Result<(), RdfDiagnostic> {
     if governed {
@@ -243,7 +243,7 @@ fn check(
     before: &Image,
     expected: &Image,
     operation: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     failure: Option<&str>,
 ) {
     let engine = NativeSparqlEngine::new();
@@ -361,7 +361,7 @@ fn transfer(
         &before,
         &expected,
         &operation,
-        QueryOptions::EMPTY.with_graph_existence(mode),
+        &QueryOptions::EMPTY.with_graph_existence(mode),
         (missing && !silent).then_some("native-sparql-update-graph-missing"),
     );
 }
@@ -378,7 +378,7 @@ fn create(state: State, mode: GraphExistenceMode, silent: bool) {
         &before,
         &expected,
         &format!("CREATE {}GRAPH ex:source", silent_word(silent)),
-        QueryOptions::EMPTY.with_graph_existence(mode),
+        &QueryOptions::EMPTY.with_graph_existence(mode),
         (duplicate && !silent).then_some("rdf-ir-graph-already-exists"),
     );
 }
@@ -402,7 +402,7 @@ fn clear_one(operation: &str, state: State, mode: GraphExistenceMode, silent: bo
             silent_word(silent),
             target(graph.as_deref())
         ),
-        QueryOptions::EMPTY.with_graph_existence(mode),
+        &QueryOptions::EMPTY.with_graph_existence(mode),
         (missing && !silent).then_some("native-sparql-update-graph-missing"),
     );
 }
@@ -435,7 +435,7 @@ fn clear_bulk(
             silent_word(silent),
             if all { "ALL" } else { "NAMED" }
         ),
-        QueryOptions::EMPTY.with_graph_existence(mode),
+        &QueryOptions::EMPTY.with_graph_existence(mode),
         None,
     );
 }
@@ -468,7 +468,7 @@ fn row_update(operation: usize, mode: GraphExistenceMode) {
         &before,
         &expected,
         text,
-        QueryOptions::EMPTY.with_graph_existence(mode),
+        &QueryOptions::EMPTY.with_graph_existence(mode),
         None,
     );
 }
@@ -515,7 +515,7 @@ fn load(state: State, document: Document, mode: GraphExistenceMode, silent: bool
         &before,
         &expected,
         &format!("LOAD {}ex:document{destination}", silent_word(silent)),
-        QueryOptions::EMPTY
+        &QueryOptions::EMPTY
             .with_graph_existence(mode)
             .with_load(Some(&document)),
         (matches!(document, Document::Failed) && !silent).then_some("native-sparql-load-failed"),
@@ -615,7 +615,7 @@ fn role_membership(role: usize, mode: GraphExistenceMode) {
         ] {
             let mut dataset = Arc::clone(&base);
             let text = format!("PREFIX ex: <{EX}> {operation}");
-            let result = execute(&engine, &mut dataset, &text, options, governed);
+            let result = execute(&engine, &mut dataset, &text, &options, governed);
             if operation.starts_with("CREATE") && mode == GraphExistenceMode::RememberEmpty {
                 assert_eq!(
                     result
@@ -684,7 +684,7 @@ fn role_membership(role: usize, mode: GraphExistenceMode) {
             let mut within = Arc::clone(&base);
             let text =
                 format!("{text}; INSERT {{ ex:observer ex:saw ?g }} WHERE {{ GRAPH ?g {{}} }}");
-            execute(&engine, &mut within, &text, options, governed)
+            execute(&engine, &mut within, &text, &options, governed)
                 .expect("role snapshot observation");
             assert_eq!(
                 query_names(

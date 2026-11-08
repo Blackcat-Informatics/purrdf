@@ -35,10 +35,11 @@
 //! reports a false all-clear, which is how a regression test written that way
 //! passes while the defect is still present.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DuplicatePolicy, ExclusionBasis, Fixed, FusionProfile, Iri,
-    RankFidelity, RankedStreamAdapter, RankedStreamImpl, RowBlock, StreamContract, StreamEnding,
-    Term, TopK, block_on, fuse,
+    CandidateDomains, DecayRule, DuplicatePolicy, ExclusionBasis, FusionProfile, Iri, RankFidelity,
+    RankedStreamAdapter, RankedStreamImpl, RowBlock, Score, StreamContract, StreamEnding, Term,
+    TopK, block_on, fuse,
 };
 use std::collections::BTreeMap;
 
@@ -48,11 +49,12 @@ use std::collections::BTreeMap;
 /// with no gaps, distinct items, and a contract that truthfully declares no
 /// repeats. Every contribution is minted by the adapter from the profile itself,
 /// so the producer never even supplies the value that used to be refused.
-fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
+fn run(weight: Score, ranks: u64, top_k: usize) -> Result<usize, String> {
     let stratum = Iri::parse("https://example.org/stratum/a").expect("a valid fixture IRI");
     let profile = FusionProfile::with_decay(
         BTreeMap::from([(stratum.clone(), weight)]),
         DecayRule::ReciprocalRank { k: 60 },
+        PRECISION_12,
     )
     .expect("a strictly positive weight is a valid profile");
     let rows: Vec<(u64, Term, RowBlock)> = (1..=ranks)
@@ -67,6 +69,7 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
         })
         .collect();
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,
@@ -86,10 +89,10 @@ fn run(weight: Fixed, ranks: u64, top_k: usize) -> Result<usize, String> {
 
 #[test]
 fn two_ranks_at_a_weight_whose_decay_collides_immediately() {
-    // Was: Err(Protocol(RepeatedContribution { rank: 2, value: Fixed(16) })).
+    // Was: Err(Protocol(RepeatedContribution { rank: 2, value: Score(16) })).
     // A thousand raw units is `10^-9`; 1000/61 and 1000/62 both truncate to 16,
     // so the shortest stream that can collide already does.
-    assert_eq!(run(Fixed::from_raw(1_000), 2, 10), Ok(2));
+    assert_eq!(run(Score::from_raw(1_000, PRECISION_12), 2, 10), Ok(2));
 }
 
 #[test]
@@ -97,16 +100,19 @@ fn two_ranks_at_a_whole_unit_weight_are_unaffected() {
     // The neighbouring valid case, and the control: this one always answered,
     // and a fix that broke it would have moved the boundary rather than removed
     // it. Only the weight differs from the case above.
-    let one = Fixed::from_integer(1).expect("one is representable");
+    let one = Score::from_integer(1, PRECISION_12).expect("one is representable");
     assert_eq!(run(one, 2, 10), Ok(2));
 }
 
 #[test]
 fn fourteen_hundred_ranks_at_the_weight_that_collided_at_rank_973() {
-    // Was: Err(Protocol(RepeatedContribution { rank: 973, value: Fixed(968) })).
+    // Was: Err(Protocol(RepeatedContribution { rank: 973, value: Score(968) })).
     // The collision is real and is simply no longer a refusal: past it the fused
     // score stops separating ranks and the declared total tie-break orders them.
-    assert_eq!(run(Fixed::from_raw(1_000_000), 1_400, 1_400), Ok(1_400));
+    assert_eq!(
+        run(Score::from_raw(1_000_000, PRECISION_12), 1_400, 1_400),
+        Ok(1_400)
+    );
 }
 
 #[test]
@@ -114,7 +120,10 @@ fn fourteen_hundred_ranks_at_a_weight_that_never_collides_in_range() {
     // The other neighbouring valid case: a hundred million raw units does not
     // collide until about rank ten thousand, well past this stream, so this one
     // always answered and must continue to.
-    assert_eq!(run(Fixed::from_raw(100_000_000), 1_400, 1_400), Ok(1_400));
+    assert_eq!(
+        run(Score::from_raw(100_000_000, PRECISION_12), 1_400, 1_400),
+        Ok(1_400)
+    );
 }
 
 #[test]
@@ -123,5 +132,8 @@ fn a_small_row_bound_is_a_false_all_clear() {
     // case, bounded at five: fusion certifies the top five and never pulls as
     // far as rank 973, so this answered even while the defect was present. A
     // regression test for this defect written with a small bound proves nothing.
-    assert_eq!(run(Fixed::from_raw(1_000_000), 1_400, 5), Ok(5));
+    assert_eq!(
+        run(Score::from_raw(1_000_000, PRECISION_12), 1_400, 5),
+        Ok(5)
+    );
 }

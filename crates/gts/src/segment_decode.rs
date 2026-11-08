@@ -57,11 +57,16 @@
 
 use purrdf_lex::cbor::Value;
 
+use std::sync::Arc;
+
 use crate::FastMap;
 use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
 use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
+
+mod rows;
+use rows::Rows;
 
 /// The three resolved components `(subject, predicate, object)` a reifier binds,
 /// in the target's id space.
@@ -80,6 +85,12 @@ type ResolvedComponents<S> = (
 /// context). Non-RDF events pass through with no-op defaults so a target that
 /// only cares about triples need not implement them.
 pub trait ResolvedSink {
+    /// Caller-owned replay storage for transformed RDF frames, when supported.
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        None
+    }
     /// The target's resolved-term identifier. `Copy` so the resolver can cache
     /// it in its per-segment remap without cloning.
     type Id: Copy;
@@ -265,7 +276,7 @@ pub struct SegmentResolver<S: ResolvedSink> {
     sink: S,
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
-    raw_terms: FastMap<(u64, usize), Term>,
+    raw_terms: FastMap<(u64, usize), Arc<Term>>,
     /// Per-segment memo from `(segment_index, gts_id)` to the target id,
     /// populated as the currently buffered segment's terms resolve (so a term
     /// referenced twice — e.g. as both a quad subject and a reifier subject —
@@ -277,12 +288,12 @@ pub struct SegmentResolver<S: ResolvedSink> {
     /// ids, recorded from `reifier` events so a Triple term (any order) can
     /// recover its components.
     reifier_bindings: FastMap<(u64, usize), Triple3>,
-    /// RAW quad rows `(segment_index, (s, p, o, g) gts ids)`.
-    raw_quads: Vec<(u64, Quad)>,
-    /// RAW reifier rows `(segment_index, reifier, (s, p, o), graph?)`.
-    raw_reifiers: Vec<(u64, usize, Triple3, Option<usize>)>,
-    /// RAW annotation rows `(segment_index, (r, p, v), graph?)`.
-    raw_annotations: Vec<(u64, Triple3, Option<usize>)>,
+    /// Accepted quad identifiers, compactly encoded until their phase runs.
+    raw_quads: Rows<3>,
+    /// Accepted reifier identifiers, preserving every binding in arrival order.
+    raw_reifiers: Rows<4>,
+    /// Accepted annotation identifiers, preserving their optional graph.
+    raw_annotations: Rows<3>,
     /// The segment currently being buffered; a higher incoming index flushes it.
     current_segment: Option<u64>,
     /// First latched error. Streaming callbacks are infallible, so a failure is
@@ -313,9 +324,9 @@ impl<S: ResolvedSink> SegmentResolver<S> {
             raw_terms: FastMap::default(),
             remaps: FastMap::default(),
             reifier_bindings: FastMap::default(),
-            raw_quads: Vec::new(),
-            raw_reifiers: Vec::new(),
-            raw_annotations: Vec::new(),
+            raw_quads: Rows::default(),
+            raw_reifiers: Rows::default(),
+            raw_annotations: Rows::default(),
             current_segment: None,
             error: None,
         }
@@ -408,7 +419,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 
         // Quads.
         let raw_quads = std::mem::take(&mut self.raw_quads);
-        for (segment_index, (s, p, o, g)) in raw_quads {
+        for (segment_index, [s, p, o], g) in raw_quads {
             let s = self.resolve_term(segment_index, s, "quad subject", 0)?;
             let p = self.resolve_term(segment_index, p, "quad predicate", 0)?;
             let o = self.resolve_term(segment_index, o, "quad object", 0)?;
@@ -421,7 +432,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 
         // Reifier bindings: bind the reifier resource to the triple.
         let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
-        for (segment_index, reifier, (s, p, o), graph) in raw_reifiers {
+        for (segment_index, [reifier, s, p, o], graph) in raw_reifiers {
             let reifier_id = self.resolve_term(segment_index, reifier, "reifier", 0)?;
             let s = self.resolve_term(segment_index, s, "reified subject", 0)?;
             let p = self.resolve_term(segment_index, p, "reified predicate", 0)?;
@@ -436,7 +447,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 
         // Annotations `(reifier, predicate, object, graph?)`.
         let raw_annotations = std::mem::take(&mut self.raw_annotations);
-        for (segment_index, (r, p, v), graph) in raw_annotations {
+        for (segment_index, [r, p, v], graph) in raw_annotations {
             let r = self.resolve_term(segment_index, r, "annotation reifier", 0)?;
             let p = self.resolve_term(segment_index, p, "annotation predicate", 0)?;
             let v = self.resolve_term(segment_index, v, "annotation object", 0)?;
@@ -479,13 +490,18 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         // MOVE the raw term out: it resolves at most once (every later reference
         // hits the `remaps` cache above), so taking ownership lets interning
         // borrow the target mutably without a conflict AND without cloning the
-        // term's owned strings. A (pathological) cyclic reference now surfaces as
+        // term's owned strings when its validation owner has been released.
+        // A (pathological) cyclic reference now surfaces as
         // a dangling-term ref — the term is already removed — rather than the
         // nesting-limit; both are hard failures and a GTS Writer never emits
         // cycles.
         let Some(term) = self.raw_terms.remove(&(segment_index, gts_id)) else {
             return Err(self.sink.err_dangling_term(segment_index, gts_id, role));
         };
+        // Normal reader drives have released their validation table before
+        // resolution. Custom callers may retain handles, in which case only
+        // that shared term needs an owned copy for interning.
+        let term = Arc::unwrap_or_clone(term);
         let our_id = self.intern_raw_term(segment_index, gts_id, term, depth)?;
         self.remaps.insert((segment_index, gts_id), our_id);
         Ok(our_id)
@@ -589,6 +605,14 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 }
 
 impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        if self.error.is_some() {
+            return Some(Err(std::io::Error::other("segment sink already failed")));
+        }
+        self.sink.frame_scratch()
+    }
     fn frame(&mut self, ctx: FrameContext<'_>) {
         if self.error.is_some() {
             return;
@@ -598,7 +622,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         }
     }
 
-    fn term(&mut self, segment_index: u64, term_id: usize, term: &Term) {
+    fn term(&mut self, segment_index: u64, term_id: usize, term: Arc<Term>) {
         if self.error.is_some() {
             return;
         }
@@ -609,8 +633,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // Streaming phase: stash the raw term verbatim. A quoted-triple term
         // cannot be resolved yet — its reifier binding may arrive in a later
         // frame — so we defer ALL resolution to segment close.
-        self.raw_terms
-            .insert((segment_index, term_id), term.clone());
+        self.raw_terms.insert((segment_index, term_id), term);
     }
 
     fn quad(&mut self, segment_index: u64, quad: Quad) {
@@ -621,7 +644,8 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         if self.error.is_some() {
             return;
         }
-        self.raw_quads.push((segment_index, quad));
+        let (s, p, o, graph) = quad;
+        self.raw_quads.push(segment_index, [s, p, o], graph);
     }
 
     fn reifier(&mut self, segment_index: u64, reifier: crate::model::ReifierRow) {
@@ -646,8 +670,9 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         self.reifier_bindings
             .entry((segment_index, reifier_id))
             .or_insert(triple);
+        let (s, p, o) = triple;
         self.raw_reifiers
-            .push((segment_index, reifier_id, triple, graph));
+            .push(segment_index, [reifier_id, s, p, o], graph);
     }
 
     fn annotation(&mut self, segment_index: u64, annotation: crate::model::AnnotationRow) {
@@ -661,7 +686,7 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // Row-array `(reifier, predicate, value, graph?)`.
         let (reifier, predicate, value, graph) = annotation;
         self.raw_annotations
-            .push((segment_index, (reifier, predicate, value), graph));
+            .push(segment_index, [reifier, predicate, value], graph);
     }
 
     fn suppression(&mut self, segment_index: u64, suppression: &Suppression) {

@@ -403,7 +403,7 @@ impl<'ast> Visit<'ast> for Structure<'_> {
         let home = node
             .trait_
             .as_ref()
-            .is_some_and(|(_, path, _)| names_home(path))
+            .is_some_and(|(path, _)| names_home(path))
             || matches!(node.self_ty.as_ref(), syn::Type::Path(path) if names_home(&path.path));
         self.in_home += usize::from(home);
         let test = crate::source::is_test_only(&node.attrs);

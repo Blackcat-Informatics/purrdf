@@ -203,6 +203,10 @@ use crate::{format, ledger, sink, source};
 /// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s signature
 /// small enough to read, and every field is borrowed from the parsed command line.
 pub(crate) struct ValidateOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// The data-graph path `IN`, or `-` for stdin (which requires `--from`).
     pub(crate) input: &'a str,
     /// The report path `OUT`, or `-` for stdout.
@@ -237,6 +241,8 @@ pub(crate) struct ValidateOptions<'a> {
     /// `owl:imports`. Empty means the operator named none, and an import nothing else
     /// resolves is then refused — see [`crate::shapes_source::shapes_imports`].
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
     /// `None` to leave the box-role annotation feature inactive. Threaded to
     /// `purrdf_shapes::shapes::from_dataset_with_config` through
@@ -261,6 +267,10 @@ pub(crate) struct ValidateOptions<'a> {
     /// `--changes-removed`: the document whose rows are REMOVED from [`Self::input`],
     /// or `-`.
     pub(crate) changes_removed: Option<&'a str>,
+    /// Independent input controls for the added change document.
+    pub(crate) changes_yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent input controls for the removed change document.
+    pub(crate) changes_removed_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--changes-from`: the format override both change documents are read under.
     pub(crate) changes_from: Option<CliRdfFormat>,
     /// `--format`: which artifact the report is serialized as.
@@ -414,8 +424,12 @@ fn validation_options(
         // `complete_profile`, and the dated law's XPath bundle checked against
         // `--xpath-regex`.
         if let Some(profile) =
-            purrdf_validate::requested_shacl_profile(Some(id), options.xpath_regex)
-                .map_err(|message| CliError::Usage(format!("--shacl-profile {id}: {message}")))?
+            purrdf_validate::requested_shacl_profile(Some(id), options.xpath_regex).map_err(
+                |cause| CliError::ShaclProfileRequest {
+                    id: id.to_owned(),
+                    cause,
+                },
+            )?
         {
             validation = validation.with_profile(profile);
         }
@@ -433,6 +447,7 @@ fn validation_options(
 pub(crate) fn run(
     options: &ValidateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     // IN, the shapes input in either spelling and the two halves of a change set may each
     // be `-`, and at most one of them may be.
@@ -450,10 +465,41 @@ pub(crate) fn run(
     refuse_an_expectation_with_no_product(options)?;
     refuse_a_rebuild_with_no_product(options)?;
 
-    let data_format = format::resolve(options.from, options.input)?;
-    // Decided before a byte of anything is read, for the reason `ShapesPlan::decide` is:
-    // an unresolvable `--changes-from` is a malformed request about the command line.
+    if options.shapes_yamlld_input_options.is_some()
+        && (options.shapes.is_none() || options.shapes_product.is_some())
+    {
+        return Err(CliError::Usage(
+            "--shapes-yamlld-input-options requires --shapes and conflicts with --shapes-product"
+                .to_owned(),
+        ));
+    }
+    if !options.import_yamlld_input_options.is_empty()
+        && (options.shapes.is_none() || options.shapes_product.is_some())
+    {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --shapes and conflicts with --shapes-product"
+                .to_owned(),
+        ));
+    }
+
+    let imports = crate::rdf_imports::RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
+    // Both change roles and formats are admitted before either configuration is read.
     let change_plan = ChangePlan::decide(options)?;
+    let data_format = format::resolve(options.from, options.input)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+    // Every DECISION about the shapes side is made here, before a byte of either document
+    // is read: a `--shapes-graph` that names no graph is a malformed request and should
+    // fail against the command line rather than after the data has been parsed and
+    // validated.
+    let plan = ShapesPlan::decide(options, imports)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
     // its own retrieval IRI, and the validation report is a fresh graph `emit` serializes
     // with no base at all (it passes `None`). So a data syntax that admits no relative IRI
@@ -467,32 +513,45 @@ pub(crate) fn run(
         &change_plan.base_legs(format::BaseUse::parse(data_format, "the --from data graph")),
     )?;
 
-    // Every DECISION about the shapes side is made here, before a byte of either document
-    // is read: a `--shapes-graph` that names no graph is a malformed request and should
-    // fail against the command line rather than after the data has been parsed and
-    // validated.
-    let plan = ShapesPlan::decide(options)?;
     // Decided off the command line too: an IRI that is not one is a malformed request.
     let validation = validation_options(options)?;
 
-    let data = source::load_dataset(options.input, data_format, options.base)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
     // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
     // section 6.4) decide what the shapes graph is — and a change may add or retract a
     // link like any other row.
-    let snapshot = match change_plan {
+    let snapshot = match &change_plan {
         ChangePlan::WholeGraph => None,
         ChangePlan::Incremental { added, removed } => Some(Arc::new(
-            apply_changes(&data, options.base, added, removed)?
-                .snapshot_view()
-                .map_err(|error| CliError::Runtime(error.to_string()))?,
+            apply_changes(
+                &data,
+                options.base,
+                added.as_ref(),
+                removed.as_ref(),
+                canonical,
+            )?
+            .snapshot_view()
+            .map_err(|error| CliError::Runtime(error.to_string()))?,
         )),
     };
     let data_iris = data_graph_iris(options, data_format)?;
     let data_iris: Vec<&str> = data_iris.iter().map(String::as_str).collect();
     let source = match &snapshot {
-        None => plan.load(options, &validation, data.as_ref(), &data_iris)?,
-        Some(snapshot) => plan.load(options, &validation, snapshot.as_ref(), &data_iris)?,
+        None => plan.load(options, &validation, data.as_ref(), &data_iris, canonical)?,
+        Some(snapshot) => plan.load(
+            options,
+            &validation,
+            snapshot.as_ref(),
+            &data_iris,
+            canonical,
+        )?,
     }
     .with_validation_options(validation);
     // Before the verdict, because it describes the INPUT rather than the outcome and an
@@ -523,7 +582,7 @@ pub(crate) fn run(
         return Ok(CliOutcome::BudgetExhausted);
     };
 
-    emit(&report, options, ledger_target)?;
+    emit(&report, options, ledger_target, canonical)?;
     // The verdict AFTER the artifact, so a `> file` redirect has the report on disk by the
     // time the operator reads the line that describes it.
     eprintln!("shacl conforms {}", report.conforms);
@@ -630,17 +689,17 @@ fn data_graph_iris(
                 .collect())
         }
         SourceFormat::Pack | SourceFormat::Gts => Ok(Vec::new()),
+        _ => Err(format::unsupported_format(format, "the data input")),
     }
 }
 
-/// Everything DECIDED about the change side of this run, before a document is read.
+/// Everything admitted about the change side of this run, before RDF acquisition.
 ///
 /// Two arms because `--changes`/`--changes-removed` select between two genuinely
 /// different runs, not between two spellings of one: the whole-graph route validates
 /// `IN` as it stands, and the incremental route validates a MUTATION of it and reports
 /// about the focus nodes that mutation can move. Deciding which here, off the command
-/// line alone, is what keeps [`run`] from carrying the question any further.
-#[derive(Clone, Copy)]
+/// line, and admitting its configuration here, keeps [`run`] from carrying the question further.
 enum ChangePlan<'a> {
     /// Neither half of a change set was named: validate `IN` exactly as this command
     /// did before the flags existed.
@@ -648,25 +707,64 @@ enum ChangePlan<'a> {
     /// At least one half was named. Each is a path and the syntax it is read as.
     Incremental {
         /// `--changes`: rows to ADD, or `None`.
-        added: Option<(&'a str, SourceFormat)>,
+        added: Option<ChangeDocument<'a>>,
         /// `--changes-removed`: rows to REMOVE, or `None`.
-        removed: Option<(&'a str, SourceFormat)>,
+        removed: Option<ChangeDocument<'a>>,
     },
 }
 
+/// One change document and its admitted, role-specific input controls.
+struct ChangeDocument<'a> {
+    path: &'a str,
+    format: SourceFormat,
+    input_options: Option<Vec<u8>>,
+}
+
 impl<'a> ChangePlan<'a> {
-    /// Decide the change side from the command line, reading no document.
+    /// Admit both change roles and formats, then decode their requested input controls.
     ///
     /// # Errors
     ///
     /// Any usage error in `--changes-from` or in either change path.
     fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
-        let resolve = |path: Option<&'a str>| -> Result<Option<(&'a str, SourceFormat)>, CliError> {
-            path.map(|path| format::resolve(options.changes_from, path).map(|f| (path, f)))
-                .transpose()
+        let resolve = |path: Option<&'a str>, controls: Option<&std::path::Path>, flag: &str| {
+            path.map(|path| {
+                let format = format::resolve(options.changes_from, path)?;
+                if controls.is_some() && format != SourceFormat::Native(NativeRdfFormat::YamlLd) {
+                    return Err(CliError::Usage(format!(
+                        "{flag} requires its change document to be YAML-LD"
+                    )));
+                }
+                Ok(ChangeDocument {
+                    path,
+                    format,
+                    input_options: None,
+                })
+            })
+            .transpose()
         };
-        let added = resolve(options.changes)?;
-        let removed = resolve(options.changes_removed)?;
+        let mut added = resolve(
+            options.changes,
+            options.changes_yamlld_input_options,
+            "--changes-yamlld-input-options",
+        )?;
+        let mut removed = resolve(
+            options.changes_removed,
+            options.changes_removed_yamlld_input_options,
+            "--changes-removed-yamlld-input-options",
+        )?;
+        if let Some(document) = &mut added {
+            document.input_options = options
+                .changes_yamlld_input_options
+                .map(|path| source::read_yamlld_input_options(path, &[document.format]))
+                .transpose()?;
+        }
+        if let Some(document) = &mut removed {
+            document.input_options = options
+                .changes_removed_yamlld_input_options
+                .map(|path| source::read_yamlld_input_options(path, &[document.format]))
+                .transpose()?;
+        }
         if added.is_none() && removed.is_none() {
             return Ok(Self::WholeGraph);
         }
@@ -680,15 +778,18 @@ impl<'a> ChangePlan<'a> {
     /// two legs that consume the base and one flag that reaches both; listing them all is
     /// what stops [`format::refuse_unconsumable_base`] from calling a base unconsumable
     /// because the leg it was actually written for is the one it did not know about.
-    fn base_legs(self, data: format::BaseUse<'a>) -> Vec<format::BaseUse<'a>> {
+    fn base_legs(&self, data: format::BaseUse<'a>) -> Vec<format::BaseUse<'a>> {
         let mut legs = vec![data];
         if let Self::Incremental { added, removed } = self {
-            if let Some((_, format)) = added {
-                legs.push(format::BaseUse::parse(format, "the --changes document"));
-            }
-            if let Some((_, format)) = removed {
+            if let Some(document) = added {
                 legs.push(format::BaseUse::parse(
-                    format,
+                    document.format,
+                    "the --changes document",
+                ));
+            }
+            if let Some(document) = removed {
+                legs.push(format::BaseUse::parse(
+                    document.format,
                     "the --changes-removed document",
                 ));
             }
@@ -743,8 +844,8 @@ fn validate_change(
     )?;
 
     if !options.governors.is_engaged() {
-        let validation =
-            engine::validate_change(&validator, snapshot).map_err(CliError::Runtime)?;
+        let validation = engine::validate_change(&validator, snapshot)
+            .map_err(|error| CliError::Runtime(error.to_string()))?;
         render_expansion(validation.scope);
         return Ok(Some(validation.report));
     }
@@ -754,7 +855,7 @@ fn validate_change(
         snapshot,
         &options.governors.to_governors()?,
     )
-    .map_err(CliError::Runtime)?;
+    .map_err(|error| CliError::Runtime(error.to_string()))?;
     // Before the trip or the report, so an operator reading a run that stopped still
     // learns the scope the verdict was about to describe.
     render_expansion(governed.scope);
@@ -828,20 +929,35 @@ fn render_expansion(scope: engine::ChangeScope) {
 fn apply_changes(
     base: &Arc<RdfDataset>,
     base_iri: Option<&str>,
-    added: Option<(&str, SourceFormat)>,
-    removed: Option<(&str, SourceFormat)>,
+    added: Option<&ChangeDocument<'_>>,
+    removed: Option<&ChangeDocument<'_>>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<MutableDataset, CliError> {
     let mut mutation = MutableDataset::new(Arc::clone(base));
-    if let Some((path, format)) = added {
-        let document = source::load_dataset(path, format, base_iri)?;
+    if let Some(change) = added {
+        let path = change.path;
+        let document = source::load_dataset(
+            path,
+            change.format,
+            base_iri,
+            change.input_options.as_deref(),
+            canonical,
+        )?;
         for row in QuadValues::surface_of(&document) {
             mutation.insert(row).map_err(|error| {
                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
             })?;
         }
     }
-    if let Some((path, format)) = removed {
-        let document = source::load_dataset(path, format, base_iri)?;
+    if let Some(change) = removed {
+        let path = change.path;
+        let document = source::load_dataset(
+            path,
+            change.format,
+            base_iri,
+            change.input_options.as_deref(),
+            canonical,
+        )?;
         for row in QuadValues::surface_of(&document) {
             // A row the data graph does not carry retracts nothing. That is the
             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
@@ -871,11 +987,12 @@ fn emit(
     report: &ValidationReport,
     options: &ValidateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let Some(target) = options.format.to_rdf_format() else {
         // SARIF: not RDF, so no sink, no ledger, no serializer configuration.
         let sarif = purrdf_validate::report_to_sarif_string(report, &SarifOptions::default());
-        return sink::write_out(options.output, sarif.as_bytes());
+        return sink::write_out_with_request(options.output, sarif.as_bytes(), canonical);
     };
 
     let graph = report.to_dataset()?;
@@ -890,6 +1007,7 @@ fn emit(
         // quads come from, not what they can express.
         NativeRdfFormat::NTriples.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &ledger)
 }
@@ -925,17 +1043,31 @@ fn emit(
 /// graph it links with `sh:shapesGraph` (SHACL 1.2 Core section 6.4) joins the import table
 /// as a link, so the engine resolves it through the same `--import IRI=FILE` pairs an
 /// `owl:imports` resolves through and unions it into the shapes graph — or refuses it by name.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the graph sources, validation options and caller canonical control are independent inputs"
+)]
 fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     options: &ValidateOptions<'_>,
     validation: &engine::ValidationOptions,
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
+    import_plan: &crate::rdf_imports::RdfImportPlan<'_>,
     data: &D,
     data_iris: &[&str],
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Shapes, CliError> {
-    let root = crate::shapes_source::read_shapes_document(path, format, base, "--shapes")?;
-    let mut table = crate::shapes_source::shapes_imports(&root, options.imports)?;
+    let root = crate::shapes_source::read_shapes_document(
+        path,
+        format,
+        base,
+        "--shapes",
+        input_options,
+        canonical,
+    )?;
+    let mut table = crate::shapes_source::shapes_imports(&root, import_plan, canonical)?;
     table.link_data_graph(data, data_iris).map_err(|error| {
         crate::shapes_source::shapes_error(
             ShapesError::Imports(error),
@@ -996,6 +1128,10 @@ enum ShapesPlan<'a> {
         path: &'a str,
         /// The syntax it is read as.
         format: SourceFormat,
+        /// Admitted YAML-LD Basic controls, decoded before any RDF acquisition.
+        input_options: Option<Vec<u8>>,
+        /// Imports and their options admitted before RDF acquisition.
+        imports: crate::rdf_imports::RdfImportPlan<'a>,
         /// The base it parses under, and that `--shapes-graph` resolved against.
         base: Option<String>,
         /// `--shapes-graph`, resolved to an absolute IRI.
@@ -1016,12 +1152,15 @@ enum ShapesPlan<'a> {
 }
 
 impl<'a> ShapesPlan<'a> {
-    /// Decide the shapes side from the command line, reading no document.
+    /// Decide the shapes side before RDF acquisition, admitting its input configuration.
     ///
     /// # Errors
     ///
     /// Any usage error in `--shapes-from`, `--shapes-graph` or the shapes path.
-    fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
+    fn decide(
+        options: &ValidateOptions<'a>,
+        imports: crate::rdf_imports::RdfImportPlan<'a>,
+    ) -> Result<Self, CliError> {
         if let Some(path) = options.shapes_product {
             // Decoded HERE, before a byte of the product is read: a mis-typed selector is
             // the operator's command line, not the artifact's fault, so it exits as a
@@ -1049,6 +1188,10 @@ impl<'a> ShapesPlan<'a> {
             ));
         };
         let format = format::resolve(options.shapes_from, path)?;
+        let input_options = options
+            .shapes_yamlld_input_options
+            .map(|path| source::read_yamlld_input_options(path, &[format]))
+            .transpose()?;
         // The shapes document's base is derived ONCE and spent twice: the document parses
         // under it, and `--shapes-graph` resolves against it. Deriving it separately per
         // consumer is how the flag would come to name a graph the shapes document cannot.
@@ -1058,6 +1201,8 @@ impl<'a> ShapesPlan<'a> {
         Ok(Self::Document {
             path,
             format,
+            input_options,
+            imports,
             base,
             shapes_graph,
         })
@@ -1120,12 +1265,15 @@ impl<'a> ShapesPlan<'a> {
         validation: &engine::ValidationOptions,
         data: &D,
         data_iris: &[&str],
+        canonical: &mut crate::canonical::Request,
     ) -> Result<ShapesSource, CliError> {
         match *self {
             Self::Document {
                 path,
                 format,
                 ref base,
+                ref input_options,
+                ref imports,
                 ..
             } => load_shapes(
                 options,
@@ -1133,8 +1281,11 @@ impl<'a> ShapesPlan<'a> {
                 path,
                 format,
                 base.as_deref(),
+                input_options.as_deref(),
+                imports,
                 data,
                 data_iris,
+                canonical,
             )
             .map(|shapes| ShapesSource::Parsed(Box::new(shapes))),
             Self::Product {
@@ -1227,6 +1378,7 @@ pub(crate) fn shapes_document_base(
                  --shapes an RDF text document"
             ))),
         },
+        _ => Err(format::unsupported_format(format, "the shapes input")),
     }
 }
 
@@ -1239,6 +1391,24 @@ pub(crate) fn shapes_document_base(
 fn refuse_a_changes_format_with_no_change_document(
     options: &ValidateOptions<'_>,
 ) -> Result<(), CliError> {
+    for (flag, controls, document) in [
+        (
+            "--changes-yamlld-input-options",
+            options.changes_yamlld_input_options,
+            options.changes,
+        ),
+        (
+            "--changes-removed-yamlld-input-options",
+            options.changes_removed_yamlld_input_options,
+            options.changes_removed,
+        ),
+    ] {
+        if controls.is_some() && document.is_none() {
+            return Err(CliError::Usage(format!(
+                "{flag} requires its matching change document"
+            )));
+        }
+    }
     if options.changes_from.is_none()
         || options.changes.is_some()
         || options.changes_removed.is_some()

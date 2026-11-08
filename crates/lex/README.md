@@ -33,13 +33,16 @@ the workspace share.
 
 | Module | What it holds | Specification |
 |---|---|---|
+| `visual_fingerprint` | Admitted emoji, spoken labels and randomart; typed full-digest presentation over the shared BLAKE3 XOF | Frozen visual-hashing 1.0.0 law and corpus; `docs/provenance/visual-hashing.md` |
 | `terminals` | The exact character classes `WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`, `IRIREF`'s forbidden set, XML `Char`, `NameStartChar`, `NameChar`, Unicode `White_Space`, and ECMA-262 `LineTerminator` and `\s`, each a range table proved sorted and disjoint at compile time | SPARQL 1.2 Query §19.8, RDF 1.2 Turtle §6.5, XML 1.0 (Fifth Edition) §2.2–2.3, RFC 8259 §7, ECMA-262 §12.2–12.3 and §22.2.2.9 |
 | `scan` | Chunked byte-class scanners over those tables (`find_first_trivia`, `find_first_iri_body_special`, `find_first_json_string_special`, `find_first_xml_special`) and `ByteClass`, the same kernel over a caller's own class | — |
 | `terminals` (escapes and `WS`) | `decode_uchar`, `echar_value`, `expand_uchars` and `decode_char_ref`, strict decoders of `UCHAR`, `ECHAR` and the XML `CharRef`; `skip_ws` and `trim_ws`, the four-scalar `WS` skip and trim; `is_ncname`; `in_ranges`, the one range-table search | RDF 1.2 Turtle §6.5, SPARQL 1.2 §19.8, XML 1.0 §4.1 `[66]`, Namespaces in XML 1.0 §3 |
 | `scan` (needles) | `find_byte` and `find_byte2`, the first occurrence of a byte known only at run time | — |
 | `json_escape` | The one JSON string-body escaper every PurRDF JSON writer shares, in the four spellings those writers pin (`JsonEscapes`), and the one decoder every reader shares (`unescape`, `decode_escape`, `decode_u_escape`), which refuses an unpaired surrogate | RFC 8259 §7 |
 | `json` | The one JSON reader, value and writer: the pull `Reader` (events with byte offsets, `next_key`/`next_item`, `skip_value`, `read_value`), `read`, `occurrences`, a `Value` whose `Number` keeps its lexeme and whose `Object` keeps every member in order, `Limits` with an explicit depth cap, and the deterministic `write_compact`/`write_pretty`; no walk recurses on the machine stack | RFC 8259; RFC 7493 §2.3 |
-| `yaml` | The one YAML reader (`read`, block and flow style, core-schema resolution and tags, anchors and aliases under a node bound) and deterministic block emitter (`write`), over the JSON data model | YAML 1.2.2 |
+| `yaml` | The one YAML reader (`read`, block and flow style, exact Core-schema numeric resolution under aggregate work and spelling-byte bounds, tags, anchors and aliases under a node bound) and deterministic block emitter (`write`), over the JSON data model | YAML 1.2.2 |
+| `integer_text` | Allocation-free unsigned division over borrowed little-endian words and a nonzero divisor, shared by YAML radix normalization and Xsd BigInt | Base-2^64 long division |
+| `yaml::read_syntax_stream` | Ordered document envelopes and roots in one borrowed source/occurrence/trivia arena, with aggregate admission, explicit expanded lexical tag identities and acyclic prior-alias targets | YAML 1.2.2 |
 | `cbor` | The one CBOR codec: the shortest-form `head`, `encode` and core deterministic `canonical`/`write_canonical_map`, and the well-formed, deterministic, streaming and sequence decoders | RFC 8949 §3, §4.2.1; RFC 8742 |
 | `json_pointer` | Reference-token escaping and unescaping, pointer parsing, the array-index token | RFC 6901 |
 | `percent` | `encode` over the specification-defined sets (`UNRESERVED`, `REG_NAME`, `PATH`, `FRAGMENT`, `URI_TEMPLATE_RESERVED`, `NON_ASCII`, …), strict `decode`, `decode_form`, `normalize` | RFC 3986 §2, §3, §6.2.2; RFC 3987 §3.1; RFC 6570 §3.2.3 |
@@ -97,7 +100,7 @@ branch-free clean-chunk test; in the one chunk that holds a hit, the lanes read
 as a little-endian `u128` give the first hit's offset as their trailing-zero
 count over eight. That is the shape LLVM lowers to packed byte compares and a
 mask extraction — `pcmpeqb`/`pmovmskb` on x86_64, `cmeq`/`cmhi` and `addp` on
-aarch64, `i8x16.eq`/`i8x16.lt_u` under wasm `simd128` — and to straight-line
+`aarch64`, `i8x16.eq`/`i8x16.lt_u` under wasm `simd128` — and to straight-line
 scalar code where the target has no vector unit. `scripts/check-simd-asm.py`
 holds each scanner to that shape in the emitted assembly on seven target
 configurations, and the equivalence tests compare every scanner with the
@@ -128,3 +131,8 @@ The normalization tables in `src/unicode_tables.rs` are generated from the
 Unicode Character Database and ship Unicode, Inc. data under the
 [Unicode License v3](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSES/Unicode-3.0.txt)
 in addition; see [LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).
+
+The inherited YAML emitter additionally retains its MIT terms, and the generated
+HTML reference data retains `BSD-3-Clause`; see
+[LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
+for the preserved notices and source provenance.

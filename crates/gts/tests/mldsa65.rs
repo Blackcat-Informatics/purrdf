@@ -6,18 +6,11 @@ use purrdf_gts::mldsa65::{
     Error, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH, Signature, SigningKey,
     VerifyingKey,
 };
-use purrdf_hash::hex;
 use purrdf_testkit::vectors::VectorFile;
 
-fn bytes(field: &str) -> Vec<u8> {
-    let text = purrdf_testkit::vectors::decode_str(field).unwrap();
-    hex::decode(&text).unwrap()
-}
-fn equal_bytes(actual: &[u8], expected: &[u8], identity: &str) {
-    assert_eq!(actual.len(), expected.len(), "{identity}: byte length");
-    let difference = actual.iter().zip(expected).position(|(a, b)| a != b);
-    assert_eq!(difference, None, "{identity}: first differing byte");
-}
+#[path = "support/crypto_vectors.rs"]
+mod crypto_vectors;
+use crypto_vectors::{bytes, equal_bytes};
 
 fn nist_key_generation_complete_answers() {
     let vectors = VectorFile::load(include_str!("mldsa65/keyGen.txt"));

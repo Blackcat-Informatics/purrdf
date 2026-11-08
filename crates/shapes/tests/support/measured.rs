@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The measurement discipline the shapes allocation and evaluation-count tests
-//! share: one lock serializing every measured region of a test binary, the
-//! whole-process allocation window around a region, the minimum over repeated
-//! executions, the parallel-path precondition, and the source scan that proves
-//! every `#[test]` of a binary takes the lock first.
+//! share: whole-process windows, repeated executions and the parallel-path
+//! precondition. Allocation targets use the shared serial runner to isolate
+//! their windows from runner traffic. The lock and source scan remain for
+//! tests of process-global evaluation counters.
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
@@ -15,12 +15,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use purrdf_alloc_probe::{Measurement, WholeProcessWindow};
 
-/// Serializes every measured region in the including binary.
+/// Serializes tests that share process-global evaluation counters.
 ///
-/// A [`WholeProcessWindow`] (or a process-global counter) reads one
-/// process-global ledger and `cargo test` runs test functions concurrently, so
-/// two measurements in flight at once would each report the union of both
-/// regions while appearing to report their own.
+/// These counters record only explicit production callbacks, so unrelated
+/// runner allocations cannot change them. Whole-process allocation windows
+/// need the stronger isolation provided by the serial runner.
 static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Take [`MEASURE_LOCK`], absorbing poison.
@@ -35,8 +34,9 @@ pub fn measure_lock() -> MutexGuard<'static, ()> {
 
 /// Run `operation` inside a whole-process allocation window.
 ///
-/// The caller is responsible for holding [`measure_lock`] and for having warmed
-/// the operation first; this helper only brackets it.
+/// The caller must isolate the entire process from unrelated allocation traffic
+/// through the serial runner and warm the operation first. A test-body lock
+/// alone cannot isolate concurrent runner traffic. This helper only brackets it.
 pub fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
     let window = WholeProcessWindow::open();
     let value = operation();

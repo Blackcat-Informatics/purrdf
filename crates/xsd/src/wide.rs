@@ -87,6 +87,20 @@ pub const fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
     }
 }
 
+/// `a × b / c` over the full 256-bit product, rounded upward. Returns `None`
+/// when the divisor is zero or the rounded quotient does not fit a `u128`.
+#[must_use]
+pub const fn mul_div_ceil(a: u128, b: u128, c: u128) -> Option<u128> {
+    let Some((quotient, remainder)) = mul_div_rem(a, b, c) else {
+        return None;
+    };
+    if remainder == 0 {
+        Some(quotient)
+    } else {
+        quotient.checked_add(1)
+    }
+}
+
 const fn mul_div_rem(a: u128, b: u128, c: u128) -> Option<(u128, u128)> {
     if c == 0 {
         return None;
@@ -134,7 +148,23 @@ pub const fn gcd(mut a: u128, mut b: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{div_wide, div_wide_rem, gcd, mul_div, mul_div_round_even, wide_mul};
+    use super::{div_wide, div_wide_rem, gcd, mul_div, mul_div_ceil, mul_div_round_even, wide_mul};
+
+    #[test]
+    fn upward_wide_quotients_preserve_remainders_and_refuse_real_overflow() {
+        assert_eq!(mul_div_ceil(7, 2, 3), Some(5));
+        assert_eq!(mul_div_ceil(6, 2, 3), Some(4));
+        assert_eq!(
+            mul_div_ceil(u128::MAX, u128::MAX, u128::MAX),
+            Some(u128::MAX)
+        );
+        assert_eq!(
+            mul_div_ceil(u128::MAX - 1, u128::MAX - 1, u128::MAX - 2),
+            None
+        );
+        assert_eq!(mul_div_ceil(u128::MAX, 2, 2), Some(u128::MAX));
+        assert_eq!(mul_div_ceil(1, 1, 0), None);
+    }
 
     #[test]
     fn dyadic_divisors_preserve_the_full_quotient_remainder_and_even_ties() {

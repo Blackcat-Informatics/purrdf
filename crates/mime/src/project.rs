@@ -73,21 +73,10 @@ pub(crate) fn node(document: &str, kind: &str, ordinal: usize) -> String {
 /// No text encoding is guessed: all byte-valued facts are `xsd:hexBinary`.
 ///
 /// # Errors
-/// Refuses a changed profile, invalid cover, or an RDF construction failure.
+/// Refuses a changed profile or an RDF construction failure.
 pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfDataset>, MimeError> {
     if document.profile_id != profile.identity() {
         return Err(MimeError::ProfileMismatch);
-    }
-    document.cover.reconstruct()?;
-    let original = crate::analyze(document.source, profile)?;
-    if original.id() != document.id()
-        || original.parts != document.parts
-        || original.headers != document.headers
-        || original.structures != document.structures
-        || original.problems != document.problems
-        || original.cover != document.cover
-    {
-        return Err(crate::error::metadata(document.id(), "source model"));
     }
     let mut writer = Writer {
         builder: RdfDatasetBuilder::new(),
@@ -157,11 +146,11 @@ pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfData
         }
         // A malformed transfer has a typed source problem, never a fabricated
         // decoded-content identity. Explicit decoding returns its exact refusal.
-        if let Ok(decoded) = document.decode_original_part(index) {
+        if let Ok(digest) = document.decoded_digest(index) {
             writer.field(
                 &subject,
                 "decodedDigest",
-                TermValue::simple_literal(decoded.digest.to_hex()),
+                TermValue::simple_literal(digest.to_hex()),
             )?;
         }
     }

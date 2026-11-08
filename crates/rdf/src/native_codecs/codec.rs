@@ -97,6 +97,10 @@ impl RdfCodec for LineCodec {
         // directly (a distinct monomorphization), so `NoSpans` stays zero-cost here.
         // The hot path does not report the document's prefix map; `parse_dataset_with`
         // reads it back through its own call of the same front-end.
+        let mut context = super::acquisition::RunContext::new(
+            purrdf_lex::allocation::Resident,
+            purrdf_lex::control::Unmetered,
+        );
         let graph = super::parse::text_parse_without_panicking(
             self.0,
             text,
@@ -104,8 +108,15 @@ impl RdfCodec for LineCodec {
             mode,
             &mut NoSpans,
             &mut Vec::new(),
+            &mut context,
         )?;
-        super::parse::dataset_from_text_ser_graph(&graph)
+        let dataset =
+            super::parse::dataset_from_text_ser_graph_in_context(&graph, None, &mut context);
+        let cleanup =
+            context.release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory));
+        super::parse::finish_dataset_in_context(dataset, cleanup, &mut context)
+            .map(Arc::new)
+            .map_err(super::acquisition::resident_error)
     }
 
     fn serialize_into(

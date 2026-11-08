@@ -685,6 +685,7 @@ impl<A: Arithmetic> HnswIndex<A> {
 
     /// The native row search with actual query-owned storage and retained ranking.
     /// Unlike resident pooled scratch, buffers created here die with their grants.
+    /// Bounded visitation grows with reached pages rather than the graph's row count.
     ///
     /// # Errors
     /// As for [Self::search_rows_work], plus typed workspace admission or allocator
@@ -967,7 +968,7 @@ impl<A: Arithmetic> HnswIndex<A> {
                 b,
                 search::norm_of(&self.norms, b),
             )
-            .ok_or(HnswError::NonFiniteDistance { row: b })
+            .map_err(|cause| HnswError::NonFiniteDistance { row: b, cause })
     }
 
     /// The number of indexed rows.

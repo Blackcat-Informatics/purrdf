@@ -26,7 +26,7 @@ const GRAPHS: usize = 10_000;
 
 /// The solution count of `plan` over `view`.
 fn answer(engine: &NativeSparqlEngine, view: &ShaclDatasetView, plan: &PreparedQuery) -> usize {
-    let result = engine.query_prepared_view(view, plan, &[], QueryOptions::EMPTY);
+    let result = engine.query_prepared_view(view, plan, &[], &QueryOptions::EMPTY);
     result
         .expect("the lateral query evaluates")
         .into_solutions()

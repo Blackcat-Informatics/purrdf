@@ -91,6 +91,16 @@ fn graph_fixture() -> (Arc<RdfDataset>, [TermId; 5]) {
 fn every_prepared_pattern_reads_only_the_selected_graph() {
     let (source, graphs) = graph_fixture();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
+    let snapshot = view.snapshot_identity().unwrap().expect("native identity");
+    for other in [
+        ShaclDatasetView::named_graph(Arc::clone(&source), graphs[1]),
+        ShaclDatasetView::named_graph(Arc::clone(&source), graphs[2]),
+        ShaclDatasetView::project(Arc::clone(&source)),
+        ShaclDatasetView::native(Arc::clone(&source)),
+    ] {
+        assert_ne!(other.snapshot_identity().unwrap(), Some(snapshot));
+    }
+    assert_eq!(view.stats().materializations, 0);
     let all: Vec<_> = source
         .quads()
         .chain(source.reifier_quads())
@@ -185,6 +195,8 @@ fn construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids() 
     let (source, graphs) = graph_fixture();
     let window = CurrentThreadWindow::open();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
+    let snapshot = view.snapshot_identity().unwrap().expect("native identity");
+    assert_eq!(view.snapshot_identity().unwrap(), Some(snapshot));
     let allocation = window.close();
     assert_eq!(allocation.allocations, 0);
     assert_eq!(allocation.requested_bytes, 0);

@@ -116,11 +116,68 @@ impl CliOutcome {
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
 pub enum CliError {
+    /// Original profile request with its command-line selection.
+    ShaclProfileRequest {
+        id: String,
+        cause: purrdf::shapes::profile::ProfileRequestError,
+    },
+    /// Original request/source acquisition refusal before document parsing.
+    DocumentInput {
+        /// File path or - for standard input.
+        path: String,
+        /// Original I/O, byte limit or physical storage refusal.
+        cause: crate::source::RawReadError,
+    },
+    /// Original source-carrier boundary, acquisition or RDF refusal.
+    YamlSource(Box<crate::YamlSourceFailure>),
+    /// Original RDF parse or serialization diagnostic and native cause.
+    Diagnostic(RdfDiagnostic),
+    /// Original output-target open, write or flush failure.
+    OutputIo(std::io::Error),
+    /// The failed output's cleanup, retaining the original native failure.
+    PartialOutputRemoved {
+        /// Original failure before cleanup.
+        original: Box<Self>,
+        /// Removed partial output path.
+        path: std::path::PathBuf,
+    },
+    /// Original source/output file-identity inspection failure.
+    FileIdentity(std::io::Error),
+    /// Original checked word conversion, record or I/O refusal.
+    WordId(Box<crate::word_id::Failure>),
+    /// Original native fingerprint or output refusal.
+    Fingerprint(crate::fingerprint::Failure),
     /// An argument / usage error (exit code 2).
     Usage(String),
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
     /// (exit code 1).
     Runtime(String),
+    /// Original native canonicalization refusal and its owned payload admission.
+    Canonical {
+        message: String,
+        cause: Box<purrdf_core::CanonError>,
+    },
+    /// Evidence output failed; any original refusal remains owned and visible.
+    ReceiptPublication {
+        destination: std::path::PathBuf,
+        cause: std::io::Error,
+        original: Option<Box<Self>>,
+    },
+    /// A deferred output failed while the original operation was already refused.
+    OutputPublication {
+        original: Box<Self>,
+        failure: Box<Self>,
+    },
+    /// Original compiled glob syntax or storage refusal.
+    GlobCompile(purrdf::glob::CompileError),
+    /// Original compiled glob execution refusal.
+    GlobMatch(purrdf::glob::MatchError),
+    /// Original ordered pattern-set compilation refusal.
+    GlobSetCompile(purrdf::glob::SetCompileError),
+    /// Original ordered pattern-set workspace or work refusal.
+    GlobSetMatch(purrdf::glob::SetMatchError),
+    /// Original IRI parse failure for an explicitly selected glob IRI surface.
+    GlobIri(purrdf_iri::IriReadError),
     /// A downstream reader closed the pipe before the document finished.
     ///
     /// Not a failure: the standard Unix filter contract is to exit 0 silently when
@@ -129,23 +186,84 @@ pub enum CliError {
     /// is what ends the emission early instead of formatting the rest of a document
     /// nobody is reading.
     DownstreamClosed,
+    /// Original RDF plan, input, codec or I/O refusal and its retained owners.
+    GlobRdf(Box<crate::GlobRdfFailure>),
+    /// Original refusal while admitting a native diagnostic owner.
+    GlobRdfStorage(purrdf_lex::allocation::StorageError),
 }
 
 impl CliError {
     /// The process exit code for this error's category (2 usage / 1 runtime).
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
-            Self::Usage(_) => 2,
-            Self::Runtime(_) => 1,
+            Self::WordId(error) if matches!(&**error, crate::WordIdFailure::Usage(_)) => 2,
+            Self::Usage(_) | Self::ShaclProfileRequest { .. } => 2,
+            Self::OutputPublication { .. }
+            | Self::OutputIo(_)
+            | Self::PartialOutputRemoved { .. }
+            | Self::FileIdentity(_)
+            | Self::WordId(_)
+            | Self::Canonical { .. }
+            | Self::ReceiptPublication { .. }
+            | Self::Runtime(_)
+            | Self::GlobCompile(_)
+            | Self::GlobMatch(_)
+            | Self::GlobIri(_)
+            | Self::GlobSetCompile(_)
+            | Self::GlobSetMatch(_)
+            | Self::GlobRdf(_)
+            | Self::GlobRdfStorage(_) => 1,
+            Self::YamlSource(_) | Self::Diagnostic(_) | Self::DocumentInput { .. } => 1,
+            Self::Fingerprint(_) => 1,
             Self::DownstreamClosed => 0,
         }
     }
 }
 
+purrdf_lex::variant_from!(CliError { WordId(crate::WordIdFailure) via Box::new });
+
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DocumentInput { path, cause } => write!(f, "{path}: {cause}"),
+            Self::YamlSource(error) => error.fmt(f),
+            Self::Diagnostic(error) => error.fmt(f),
+            Self::OutputIo(error) => error.fmt(f),
+            Self::PartialOutputRemoved { original, path } => write!(
+                f,
+                "{original}; the partial output file `{}` was removed (its previous contents were replaced when the write began)",
+                path.display()
+            ),
+            Self::FileIdentity(error) => error.fmt(f),
+            Self::WordId(error) => error.fmt(f),
+            Self::ShaclProfileRequest { id, cause } => write!(f, "--shacl-profile {id}: {cause}"),
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
+            Self::Canonical { message, .. } => f.write_str(message),
+            Self::OutputPublication { original, failure } => {
+                write!(f, "{original}; output publication failed: {failure}")
+            }
+            Self::ReceiptPublication {
+                destination,
+                cause,
+                original,
+            } => {
+                if let Some(original) = original {
+                    write!(f, "{original}; ")?;
+                }
+                write!(
+                    f,
+                    "cannot publish --canonicalization-receipts {}: {cause}; choose a writable distinct destination",
+                    destination.display()
+                )
+            }
+            Self::GlobCompile(error) => error.fmt(f),
+            Self::GlobMatch(error) => error.fmt(f),
+            Self::GlobSetCompile(error) => error.fmt(f),
+            Self::GlobSetMatch(error) => error.fmt(f),
+            Self::GlobIri(error) => error.fmt(f),
+            Self::GlobRdf(error) => error.fmt(f),
+            Self::GlobRdfStorage(error) => error.fmt(f),
+            Self::Fingerprint(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
             Self::DownstreamClosed => Ok(()),
@@ -153,7 +271,54 @@ impl fmt::Display for CliError {
     }
 }
 
-impl std::error::Error for CliError {}
+impl std::error::Error for CliError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DocumentInput { cause, .. } => Some(cause),
+            Self::YamlSource(error) => Some(&**error),
+            Self::Diagnostic(error) => Some(error),
+            Self::ShaclProfileRequest { cause, .. } => Some(cause),
+            Self::OutputIo(error) => Some(error),
+            Self::PartialOutputRemoved { original, .. } => Some(&**original),
+            Self::FileIdentity(error) => Some(error),
+            Self::WordId(error) => Some(&**error),
+            Self::Canonical { cause, .. } => Some(cause.as_ref()),
+            Self::OutputPublication { original, .. } => Some(&**original),
+            Self::ReceiptPublication {
+                original: Some(original),
+                ..
+            } => Some(&**original),
+            Self::ReceiptPublication { cause, .. } => Some(cause),
+            Self::GlobCompile(error) => Some(error),
+            Self::GlobMatch(error) => Some(error),
+            Self::GlobSetCompile(error) => Some(error),
+            Self::GlobSetMatch(error) => Some(error),
+            Self::GlobIri(error) => Some(error),
+            Self::GlobRdf(error) => Some(&**error),
+            Self::GlobRdfStorage(error) => Some(error),
+            Self::Fingerprint(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl CliError {
+    pub(crate) fn native(error: impl std::error::Error + 'static) -> Self {
+        match purrdf_validate::canonical::native_canonical_cause(&error) {
+            Some(cause) => Self::Canonical {
+                message: error.to_string(),
+                cause: Box::new(cause.clone()),
+            },
+            None => Self::Runtime(error.to_string()),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(CliError {
+    native(PackError),
+    native(purrdf_validate::canonical::CanonicalServiceError),
+    native(purrdf_validate::ShapesError),
+});
 
 /// The refusal for a command-line IRI value that denotes nothing.
 ///
@@ -185,14 +350,14 @@ pub(crate) fn argv_iri_refusal(
 // Every library failure the pipeline propagates with `?` is a runtime failure (exit 1)
 // carrying the library error's rendered message.
 purrdf_lex::variant_from!(CliError {
+    Diagnostic(RdfDiagnostic)
+});
+purrdf_lex::variant_from!(CliError {
     Runtime(
-        RdfDiagnostic,
-        PackError,
         purrdf_rdf::ProjectionError,
         purrdf_rdf::TransportError,
         std::io::Error,
         purrdf_sparql_results::Error,
-        purrdf_validate::ShapesError,
     ) as ToString::to_string
 });
 

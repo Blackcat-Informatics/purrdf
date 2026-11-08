@@ -325,13 +325,13 @@ fn validate_entry(
                 .map(|decl| decl.expr.clone())
         })
     };
-    let options = ValidationOptions {
-        external_resolver: Some(&resolver),
-        sem_acts: SemActRegistry::with_test(),
-        extern_start_acts: &extern_acts,
-    };
-    let exact = validate_exact(schema, data, associations, &options);
-    let plain = validate_with(schema.schema(), data, associations, &options);
+    let options = ValidationOptions::default()
+        .with_external_resolver(&resolver)
+        .with_sem_acts(SemActRegistry::with_test())
+        .with_extern_start_acts(&extern_acts);
+    let exact = validate_exact(schema, data, associations, &options).expect("validation finishes");
+    let plain =
+        validate_with(schema.schema(), data, associations, &options).expect("validation finishes");
     if exact != plain {
         return Err(format!(
             "the exact and the plain AST paths disagree: {exact:?} vs {plain:?}"

@@ -108,7 +108,18 @@ fn render(result: &SparqlResult) -> String {
     match result {
         SparqlResult::Boolean(value) => format!("boolean\n{value}\n"),
         SparqlResult::Graph(graph) => {
-            format!("graph\n{}", purrdf_core::canonicalize(graph).nquads)
+            format!(
+                "graph\n{}",
+                purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
+            )
         }
         SparqlResult::Solutions {
             variables,
@@ -119,8 +130,20 @@ fn render(result: &SparqlResult) -> String {
             for row in rows {
                 writeln!(out, "row {row:?}").expect("writing to a String cannot fail");
             }
-            write!(out, "aux\n{}", purrdf_core::canonicalize(aux).nquads)
-                .expect("writing to a String cannot fail");
+            write!(
+                out,
+                "aux\n{}",
+                purrdf_core::try_canonicalize(
+                    aux,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
+            )
+            .expect("writing to a String cannot fail");
             out
         }
     }
@@ -139,12 +162,12 @@ fn ungoverned(
     let env = purrdf_sparql_eval::ExtensionEnv::new(
         query_eval_parser_options(),
         purrdf_sparql_conformance::run::harness_relations().clone(),
-        aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+        aggregates.map_or(AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
     engine
-        .query_with_source(dataset, request(query), remote, options)
+        .query_with_source(dataset, request(query), remote, &options)
         .map_err(|error| error.to_string())
 }
 
@@ -211,7 +234,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 purrdf_sparql_conformance::run::harness_relations().clone(),
                 case_aggregates
                     .as_ref()
-                    .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+                    .map_or(AggregateRegistry::EMPTY, Clone::clone),
             )
             .expect("the harness declarations read cleanly");
 
@@ -231,7 +254,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     &remote,
-                    QueryOptions::new().with_env(&governed_env),
+                    &QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
                 )
                 .map_err(|error| error.to_string());

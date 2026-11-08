@@ -424,7 +424,15 @@ fn report_context_bench(c: &mut Bench) {
              sh:targetSubjectsOf <https://example.org/value>; {constraint} ."
         );
         let prepared = PreparedShapes::new(Arc::new(parse_shapes(&source, None).expect("shapes")));
-        let bytes = prepared.to_product(&ShapesProfile::CORE).expect("product");
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("product");
         let restore = || {
             ShapesProduct::open(&bytes)
                 .expect("open")

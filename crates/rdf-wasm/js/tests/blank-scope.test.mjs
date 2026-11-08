@@ -15,7 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, DataFactory, Dataset, QueryEngine } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 const factory = new DataFactory();
@@ -135,7 +135,7 @@ test("typed scoped blanks retain identity through insertion, serialization and p
       const captured = result.rows.toArray();
       const copied = Dataset.from(captured.map(({ x, y }) => factory.quad(x, P, y, factory.defaultGraph())));
       const parsed = Dataset.parse(copied.serialize("ntriples"), "ntriples");
-      assert.equal(copied.isomorphic(parsed), true);
+      assert.equal(canonicalValue(copied.isomorphic(parsed, "unlimited")), true);
       const recovered = engine.select(parsed, `${QUERY} ORDER BY ?x ?y`).rows.toArray();
       assert.equal(recovered.length, mode === "keep" ? 2 : 1);
       assert.deepEqual(recovered.map(({ x, y }) => [x.value, y.value]), mode === "keep" ? captured.map(({ x, y }) => [x.value, y.value]) : [["b", "b"]]);

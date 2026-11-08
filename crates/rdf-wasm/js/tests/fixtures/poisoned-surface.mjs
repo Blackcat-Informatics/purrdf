@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Shared by the poisoning children (`trap-child.mjs`, `panic-child.mjs`) and the tests
-// that read their reports: settling calls into comparable records, calling the whole
-// package surface once the instance is poisoned, and asserting every entry refused.
-
+// Shared host-result ownership and poison-boundary settling; no package initialization.
+export function canonicalValue(result) {
+  try { return result.value; } finally { result.free(); }
+}
 import assert from "node:assert/strict";
 
 const describe = (error) => ({ name: error?.name, message: error?.message, ...(error?.code === undefined ? {} : { code: error.code }) });

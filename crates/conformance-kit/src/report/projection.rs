@@ -66,9 +66,10 @@ pub fn compare_with_policy(
     expected: ReportContext<'_>,
     actual: ReportContext<'_>,
     policy: ReportPolicy,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
     if policy.format == ReportFormat::Exact {
-        return compare_contextual(expected, actual);
+        return compare_contextual(expected, actual, control);
     }
     let expected_root = root_of(expected)?;
     let actual_root = root_of(actual)?;
@@ -110,7 +111,7 @@ pub fn compare_with_policy(
     loop {
         attempts += 1;
         if attempts > 100_000 {
-            return Err(GradeError::Canonicalization(
+            return Err(GradeError::ProjectionLimit(
                 "optional report matching exceeds 100000 candidate projections".to_owned(),
             ));
         }
@@ -154,6 +155,7 @@ pub fn compare_with_policy(
                 correspondence: &actual_links,
                 ..actual
             },
+            control,
         );
         match comparison {
             Ok(()) => return Ok(()),

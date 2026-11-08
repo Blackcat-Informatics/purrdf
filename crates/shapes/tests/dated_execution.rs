@@ -674,7 +674,15 @@ fn a_reached_udf_admission_capsule_wins_its_paired_native_query_diagnostic() {
 #[test]
 fn product_admit_rebuild_and_expectation_doors_reconstruct_the_current_bundle() {
     let preparation = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, BACKREFERENCE)));
-    let bytes = preparation.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = preparation
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let expected = *ShapesProduct::open(&bytes)
         .unwrap()
         .declared_identity()
@@ -703,7 +711,18 @@ fn product_admit_rebuild_and_expectation_doors_reconstruct_the_current_bundle() 
         ];
         for prepared in restored {
             let prepared = prepared.unwrap();
-            assert_eq!(prepared.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+            assert_eq!(
+                prepared
+                    .to_product(
+                        &ShapesProfile::CORE,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap(),
+                bytes
+            );
             let report = prepared
                 .bind_complete_shared_dataset(Arc::clone(&data))
                 .unwrap()
@@ -733,8 +752,13 @@ fn public_global_rule_execution_audits_original_query_even_for_an_empty_join() {
             if profile == ShaclProfile::REC_20170720 {
                 assert!(
                     matches!(&outcome,
-                    Err(CompleteValidationError::Admission(refusal)) if refusal.reason() == AdmissionReason::Minus
-                        && refusal.purpose() == QueryPurpose::GlobalConstructRule),
+                    Err(CompleteValidationError::RuleExecution { cause, coordinates })
+                        if matches!(cause.as_ref(), CompleteValidationError::Admission(refusal)
+                            if refusal.reason() == AdmissionReason::Minus
+                                && refusal.purpose() == QueryPurpose::GlobalConstructRule)
+                            && coordinates.program_identity().is_some()
+                            && coordinates.snapshot_identity().is_some()
+                            && coordinates.executions().is_empty()),
                     "the REC source audit must run even for an empty join: {outcome:?}"
                 );
             } else {

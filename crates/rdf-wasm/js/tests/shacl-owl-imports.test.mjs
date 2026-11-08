@@ -25,7 +25,7 @@ import {
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
 } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 const LIB = "http://example.org/lib";
@@ -62,7 +62,7 @@ const ENTRY_POINTS = {
     shaclValidateToSarif(IMPORTER, PERSON, undefined, undefined, iris, documents),
   shaclValidateChangesToSarif: (iris, documents) =>
     shaclValidateChangesToSarif(IMPORTER, "", PERSON, undefined, undefined, iris, documents),
-  shaclEntail: (iris, documents) => shaclEntail(IMPORTER, PERSON, undefined, iris, documents),
+  shaclEntail: (iris, documents) => shaclEntail(IMPORTER, PERSON, undefined, iris, documents, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited"),
   shaclApplyRules: (iris, documents) =>
     shaclApplyRules(PERSON, IMPORTER, undefined, undefined, undefined, undefined, iris, documents),
   shaclEvalNodeExpr: (iris, documents) =>
@@ -77,7 +77,7 @@ const ENTRY_POINTS = {
       documents,
     ),
   shaclLintShapes: (iris, documents) => shaclLintShapes(IMPORTER, undefined, iris, documents),
-  shaclPackProduct: (iris, documents) => shaclPackProduct(IMPORTER, undefined, iris, documents),
+  shaclPackProduct: (iris, documents) => canonicalValue(shaclPackProduct(IMPORTER, undefined, iris, documents, undefined, "unlimited")),
 };
 
 for (const [name, call] of Object.entries(ENTRY_POINTS)) {

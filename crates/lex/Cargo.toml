@@ -35,6 +35,8 @@ name = "purrdf_lex"
 purrdf-hash = { workspace = true }
 
 [dev-dependencies]
+# Measure the public checked integer reader's no-allocation contract.
+purrdf-alloc-probe = { workspace = true }
 # The SplitMix64 stream the scanner and escaper equivalence tests draw their
 # fixed-seed inputs from, and the native benchmark harness. Path-only and
 # unpublished, so it is stripped from the packaged manifest.

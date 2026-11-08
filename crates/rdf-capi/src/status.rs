@@ -68,6 +68,9 @@ pub enum PurrdfStatus {
     GeoError = 14,
     /// Logical capacity or physical storage refused; the diagnostic retains its cause.
     StorageError = 15,
+    /// Canonicalization was refused by its profile or explicit search control.
+    /// The error retains exact native cause and per-run execution receipt JSON.
+    CanonicalizationError = 16,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

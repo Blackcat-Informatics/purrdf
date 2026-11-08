@@ -19,7 +19,6 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{PyRdfFormat, dataset_from_quads_verbatim, parse_quads_and_prefixes, read_input};
 use super::load::insert_loaded_document;
 use super::presentation;
@@ -68,7 +67,7 @@ impl PyStore {
     /// `PREFIX` bindings a Turtle or TriG document left in force at its end, as
     /// `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
     /// every other format.
-    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None, input_options=None))]
     fn load(
         mut slf: PyRefMut<'_, Self>,
         py: Python<'_>,
@@ -76,6 +75,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
+        input_options: Option<String>,
     ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
@@ -95,9 +95,13 @@ impl PyStore {
         // plain Rust data.
         let result = py.detach(move || {
             let base_ref = base.as_deref();
-            let (quads, prefixes, declared) =
-                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
-                    .map_err(|e| presentation::value_error(format!("load error: {e}"), &e))?;
+            let (quads, prefixes, declared) = parse_quads_and_prefixes(
+                &data,
+                format.to_native(),
+                base_ref,
+                input_options.as_deref(),
+            )
+            .map_err(|e| presentation::value_error(format!("load error: {e}"), &e))?;
             insert_loaded_document(inner, &quads, declared, next_scope_ref)
                 .map_err(super::load_value_error)?;
             Ok(prefixes)
@@ -108,7 +112,7 @@ impl PyStore {
 
     /// Alias of [`Self::load`] — bulk loading is not a different semantics, so the
     /// in-memory store path is identical.
-    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None, input_options=None))]
     fn bulk_load(
         slf: PyRefMut<'_, Self>,
         py: Python<'_>,
@@ -116,8 +120,9 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
+        input_options: Option<String>,
     ) -> PyResult<Vec<(String, String)>> {
-        Self::load(slf, py, input, format, path, base)
+        Self::load(slf, py, input, format, path, base, input_options)
     }
 
     /// Add a single quad.
@@ -240,6 +245,10 @@ impl PyStore {
     /// holds for an ordinary triple pattern, and one answer is never assembled from
     /// two points in time. The other axes are caller-supplied constants and are
     /// carried unchanged: re-deriving a constant is how a constant stops being one.
+    ///
+    /// Execution time and entropy are supplied per call to `PreparedQuery.run`,
+    /// not at preparation. Its explicit bindings dictionary keeps parameter names
+    /// separate from those execution options.
     ///
     /// `substitutions` has no seat here, deliberately: a prepared query's whole point
     /// is that the values that change between runs arrive per-run through
@@ -523,25 +532,29 @@ impl PyDataset {
         self.checked_insert(quad.inner.clone())
     }
 
-    /// Canonicalize blank-node labels in place under `algorithm` (native RDFC-1.0).
+    /// Canonicalize blank-node labels under the caller's search policy (native RDFC-1.0).
     ///
     /// Raises `ValueError` if this dataset's content is refused canonicalization (a
     /// reserved-vocabulary IRI, or an n-degree search that exhausts its budget) — this
     /// dataset's content is wholly caller-supplied, so the refusal comes back as an
     /// ordinary Python exception via the typed [`purrdf_core::try_canonicalize`] path,
     /// never a process abort. The dataset is left unchanged when it raises.
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
     fn canonicalize(
         &mut self,
         py: Python<'_>,
-        algorithm: PyCanonicalizationAlgorithm,
-    ) -> PyResult<()> {
-        // RDFC-1.0 hashing is the heavy path — run it detached (GIL released).
-        let quads = &self.quads;
-        let canonicalized = py
-            .detach(|| super::canon::canonicalize_quads(quads, algorithm))
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        canonical_search: &str,
+        cancel: Option<&super::query::PyCancellationToken>,
+    ) -> PyResult<Py<crate::py_canonical::PyCanonicalResult>> {
+        let (canonicalized, receipts) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                super::canon::canonicalize_quads(&self.quads, control)
+            })?;
+        // Prepare both the wrapped value and its Python class allocation before
+        // committing the nonfallible native replacement.
+        let result = Py::new(py, crate::py_canonical::finish(py, py.None(), receipts)?)?;
         self.quads = canonicalized;
-        Ok(())
+        Ok(result)
     }
 
     fn __len__(&self) -> usize {

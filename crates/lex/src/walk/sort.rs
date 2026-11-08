@@ -128,14 +128,126 @@ fn heap_sort<T, E>(
     values: &mut [T],
     compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
 ) -> Result<(), E> {
-    for root in (0..values.len() / 2).rev() {
-        sift(values, root, compare)?;
+    HeapSortFrame::new(values.len())
+        .resume(values, compare, || true)
+        .map(|complete| {
+            debug_assert!(
+                complete,
+                "an unlimited comparison grant completes the original sort"
+            );
+        })
+}
+
+/// Retained progress of the native in-place heap reduction.
+///
+/// It owns no elements or allocation. Its caller keeps the original slice
+/// unchanged between resumes. Every comparison first asks the caller for work;
+/// refusal retains the exact sift position without repeating a comparison.
+#[derive(Debug)]
+pub struct HeapSortFrame {
+    len: usize,
+    build: usize,
+    end: usize,
+    active: Option<SiftFrame>,
+}
+
+impl HeapSortFrame {
+    /// Start sorting an original slice of the stated length.
+    pub const fn new(len: usize) -> Self {
+        Self {
+            len,
+            build: len / 2,
+            end: len,
+            active: None,
+        }
     }
-    for end in (1..values.len()).rev() {
-        values.swap(0, end);
-        sift(&mut values[..end], 0, compare)?;
+
+    /// Resume through the shared native sift, charging before each comparison.
+    /// Returns false when work is refused and true only after the whole sort.
+    ///
+    /// # Errors
+    /// Returns the original comparator failure with every element still owned.
+    ///
+    /// # Panics
+    /// Panics if a caller replaces the retained slice with a different length.
+    pub fn resume<T, E>(
+        &mut self,
+        values: &mut [T],
+        mut compare: impl FnMut(&T, &T) -> Result<Ordering, E>,
+        mut allow: impl FnMut() -> bool,
+    ) -> Result<bool, E> {
+        assert_eq!(
+            values.len(),
+            self.len,
+            "sort progress retains its original slice"
+        );
+        loop {
+            if let Some(active) = &mut self.active {
+                if !active.resume(&mut values[..self.end], &mut compare, &mut allow)? {
+                    return Ok(false);
+                }
+                self.active = None;
+            }
+            if self.build != 0 {
+                self.build -= 1;
+                self.active = Some(SiftFrame::new(self.build));
+            } else if self.end > 1 {
+                self.end -= 1;
+                values.swap(0, self.end);
+                self.active = Some(SiftFrame::new(0));
+            } else {
+                return Ok(true);
+            }
+        }
     }
-    Ok(())
+}
+
+#[derive(Debug)]
+struct SiftFrame {
+    root: usize,
+    child: Option<usize>,
+}
+
+impl SiftFrame {
+    const fn new(root: usize) -> Self {
+        Self { root, child: None }
+    }
+
+    fn resume<T, E>(
+        &mut self,
+        values: &mut [T],
+        compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
+        allow: &mut impl FnMut() -> bool,
+    ) -> Result<bool, E> {
+        // Every internal node is below len/2, bounding 2*root+1 before arithmetic.
+        while self.root < values.len() / 2 {
+            if self.child.is_none() {
+                let mut child = 2 * self.root + 1;
+                if child + 1 < values.len() {
+                    if !allow() {
+                        return Ok(false);
+                    }
+                    if compare(&values[child], &values[child + 1])? == Ordering::Less {
+                        child += 1;
+                    }
+                }
+                self.child = Some(child);
+            }
+            let child = self
+                .child
+                .expect("the original child selection remains owned");
+            if !allow() {
+                return Ok(false);
+            }
+            if compare(&values[self.root], &values[child])? != Ordering::Less {
+                return Ok(true);
+            }
+            values.swap(self.root, child);
+            self.root = child;
+            self.child = None;
+        }
+        Ok(true)
+    }
 }
 
 /// Restore a maximum heap after its caller appends one admitted element.
@@ -252,24 +364,17 @@ pub fn try_partition_unique_by<T, E>(
 
 fn sift<T, E>(
     values: &mut [T],
-    mut root: usize,
+    root: usize,
     compare: &mut impl FnMut(&T, &T) -> Result<Ordering, E>,
 ) -> Result<(), E> {
-    // Every internal node is below len/2, bounding 2*root+1 before arithmetic.
-    while root < values.len() / 2 {
-        let mut child = 2 * root + 1;
-        if child + 1 < values.len()
-            && compare(&values[child], &values[child + 1])? == Ordering::Less
-        {
-            child += 1;
-        }
-        if compare(&values[root], &values[child])? != Ordering::Less {
-            break;
-        }
-        values.swap(root, child);
-        root = child;
-    }
-    Ok(())
+    SiftFrame::new(root)
+        .resume(values, compare, &mut || true)
+        .map(|complete| {
+            debug_assert!(
+                complete,
+                "an unlimited comparison grant completes the original sift"
+            );
+        })
 }
 
 #[cfg(test)]
@@ -278,6 +383,55 @@ mod tests {
         try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_sort_unstable_by,
     };
     use core::cmp::Ordering;
+
+    #[test]
+    fn retained_heap_sort_resumes_every_comparison_cut_without_replay() {
+        for len in [0, 1, 2, 3, 16, 63, 96] {
+            let original: Vec<_> = (0..len).map(|index| (index * 53) % 17).collect();
+            let mut expected = original.clone();
+            let mut total = 0;
+            let mut reference = super::HeapSortFrame::new(len);
+            assert!(
+                reference
+                    .resume(
+                        &mut expected,
+                        |a, b| {
+                            total += 1;
+                            Ok::<_, ()>(a.cmp(b))
+                        },
+                        || true
+                    )
+                    .unwrap()
+            );
+            for cut in 0..=total {
+                let mut values = original.clone();
+                let mut frame = super::HeapSortFrame::new(len);
+                let calls = core::cell::Cell::new(0);
+                let mut left = cut;
+                let compare = |a: &usize, b: &usize| {
+                    calls.set(calls.get() + 1);
+                    Ok::<_, ()>(a.cmp(b))
+                };
+                let completed = frame
+                    .resume(&mut values, compare, || {
+                        if left == 0 {
+                            false
+                        } else {
+                            left -= 1;
+                            true
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(completed, cut == total);
+                if !completed {
+                    assert!(frame.resume(&mut values, compare, || true).unwrap());
+                }
+                assert_eq!(values, expected);
+                assert_eq!(calls.get(), total, "length {len}, cut {cut}");
+            }
+            assert!(expected.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
 
     #[test]
     fn fallible_heap_uses_original_inventory_and_matches_independent_heap() {

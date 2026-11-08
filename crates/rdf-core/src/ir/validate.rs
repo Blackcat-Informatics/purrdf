@@ -73,25 +73,13 @@ pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(
                         direction,
                         ..
                     } => {
-                        super::absolute::check_absolute(datatype)
-                            .map_err(|error| diag(error.diagnostic_code(), error.to_string()))?;
-                        crate::RdfLiteral::diagnose_components(
+                        resident_validation(validate_literal_with_memory(
+                            lexical_form,
                             datatype,
                             language.as_deref(),
                             *direction,
-                        )
-                        .map_err(|(code, message)| diag(code, message))?;
-                        // Values at this native boundary already carry their
-                        // blank scopes. Parse through the ingress home, retaining
-                        // the authored bytes rather than binding a new document.
-                        crate::cdt_blank::bind_cdt_blank_labels(
-                            lexical_form,
-                            datatype,
-                            crate::cdt_blank::BlankBinding::Decoded(
-                                crate::blank_label::LabelAlphabet::BlankNodeLabel,
-                            ),
-                        )
-                        .map_err(RdfDiagnostic::from)?;
+                            &mut Memory::new(&mut Resident),
+                        ))?;
                         Kind::Literal
                     }
                     TermValue::Triple { .. } => unreachable!("triple components are folded"),
@@ -139,6 +127,99 @@ pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(
         }
     }
     Ok(())
+}
+
+/// The shared borrowed literal boundary, with original physical ownership for
+/// every diagnostic and composite-datatype parser/scanner allocation.
+pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<crate::RdfTextDirection>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    if let Err(cause) = super::absolute::check_absolute_with_memory(datatype, memory) {
+        let cause = match cause {
+            purrdf_iri::IriReadError::Storage(cause) => return Err(cause.into()),
+            purrdf_iri::IriReadError::Lexical(cause) => cause,
+        };
+        let bytes = cause.owned_text_bytes();
+        let result = RdfDiagnostic::try_error_with_memory(cause.diagnostic_code(), &cause, memory);
+        drop(cause);
+        let cleanup = memory.release_bytes(bytes);
+        let diagnostic = result?;
+        cleanup?;
+        return Err(diagnostic.into());
+    }
+    if let Err(cause) =
+        crate::RdfLiteral::diagnose_components_with_memory(datatype, language, direction, memory)
+    {
+        let cause = match cause {
+            purrdf_lex::control::ControlledError::Control(cause) => return Err(cause.into()),
+            purrdf_lex::control::ControlledError::Native(cause) => cause,
+        };
+        return Err(cause.into_diagnostic_with_memory(memory)?.into());
+    }
+    match crate::cdt_blank::bind_cdt_blank_labels_with_memory(
+        lexical_form,
+        datatype,
+        crate::cdt_blank::BlankBinding::Decoded(crate::blank_label::LabelAlphabet::BlankNodeLabel),
+        memory,
+    ) {
+        Ok(std::borrow::Cow::Borrowed(_)) => Ok(()),
+        Ok(std::borrow::Cow::Owned(text)) => {
+            memory.release_string(text)?;
+            Ok(())
+        }
+        Err(crate::cdt_blank::CdtBlankError::Storage(cause)) => Err(cause.into()),
+        Err(cause) => Err(cause.into_diagnostic_with_memory(memory)?.into()),
+    }
+}
+
+/// Validate a borrowed literal under its original storage and progress account.
+/// Native component and composite-datatype rules are shared with builder validation.
+/// The caller keeps the admission alive through any returned diagnostic.
+/// # Errors
+/// Returns the original native refusal or the caller's unchanged progress error.
+pub fn validate_literal_with_control<
+    S: Admission + ?Sized,
+    C: purrdf_lex::control::Progress + ?Sized,
+>(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<crate::RdfTextDirection>,
+    memory: &mut Memory<'_, S>,
+    progress: &mut C,
+) -> Result<(), purrdf_lex::control::ControlledError<NativeBuildError, C::Error>> {
+    use purrdf_lex::control::{ControlledError, with_memory_control};
+    let baseline = memory.admitted_bytes();
+    let result = with_memory_control(memory, progress, |memory| {
+        validate_literal_with_memory(lexical_form, datatype, language, direction, memory)
+    });
+    let retained = match &result {
+        Err(ControlledError::Native(NativeBuildError::Diagnostic(error))) => error.retained_bytes(),
+        _ => Some(0),
+    };
+    let Some(released) = retained
+        .and_then(|bytes| baseline.checked_add(bytes))
+        .and_then(|live| memory.admitted_bytes().checked_sub(live))
+    else {
+        // A retained native payload must fit its original live grant. Never
+        // publish a diagnostic after this ownership invariant is violated.
+        drop(result);
+        if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+            let _ = memory.release_bytes(bytes);
+        }
+        return Err(ControlledError::Native(
+            purrdf_lex::allocation::StorageError::SizeOverflow.into(),
+        ));
+    };
+    let cleanup = memory.release_bytes(released);
+    if result.is_ok() {
+        cleanup.map_err(|cause| ControlledError::Native(cause.into()))?;
+    }
+    result
 }
 
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
@@ -267,6 +348,7 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     builder: &RdfDatasetBuilder,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
+    memory.admission_mut().checkpoint(0)?;
     validate_rows_with_memory(
         builder,
         builder.quad_rows().iter().copied(),
@@ -291,8 +373,8 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
     //    every positional check below would report a downstream symptom of it.
     require_absolute_iris_with_memory(builder, memory)?;
-    if let Some((code, message)) = builder.invalid_literal() {
-        return Err(diag_with_memory(code, message, memory));
+    if let Some(cause) = builder.invalid_literal() {
+        return Err(cause.into_diagnostic_with_memory(memory)?.into());
     }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate
@@ -303,6 +385,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 2. Every declared named graph names an in-range IRI or blank node, exactly as
     //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
     for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             graph,
             term_count,
@@ -319,6 +402,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(q.s, term_count, &QuadContext(i, "subject"), memory)?;
         check_id_in_range_with_memory(q.p, term_count, &QuadContext(i, "predicate"), memory)?;
         check_id_in_range_with_memory(q.o, term_count, &QuadContext(i, "object"), memory)?;
@@ -341,6 +425,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 4. Reifier id-reference validity; the reified target MUST be a triple term.
     for (i, (reifier, triple, graph)) in reifiers.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             reifier,
             term_count,
@@ -388,6 +473,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 5. Annotation id-reference validity + predicate-is-IRI.
     for (i, (reifier, p, o, graph)) in annotations.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             reifier,
             term_count,
@@ -468,6 +554,7 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
     // statement; only the OBJECT may nest another triple term.
     for raw in 0..term_count {
+        memory.admission_mut().checkpoint(1)?;
         let id = TermId::from_index(raw as u32).expect("stored term index is representable");
         if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
             check_id_in_range_with_memory(
@@ -516,6 +603,7 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     let mut state = memory.collect(core::iter::repeat_n(VisitState::Unvisited, term_count))?;
     let result = (|| {
         for raw in 0..term_count {
+            memory.admission_mut().checkpoint(1)?;
             let id = TermId::from_index(raw as u32).expect("stored term index is representable");
             if matches!(builder.term(id), InternedTerm::Triple { .. }) {
                 check_acyclic_with_memory(builder, id, 0, &mut state, memory)?;
@@ -523,8 +611,8 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
         }
         Ok(())
     })();
-    memory.release_vec(state)?;
-    result
+    let cleanup = memory.release_vec(state).map_err(NativeBuildError::Storage);
+    result.and(cleanup)
 }
 
 fn nesting_limit_with_memory<S: Admission + ?Sized>(
@@ -546,6 +634,7 @@ fn check_acyclic_with_memory<S: Admission + ?Sized>(
     state: &mut [VisitState],
     memory: &mut Memory<'_, S>,
 ) -> Result<usize, NativeBuildError> {
+    memory.admission_mut().checkpoint(1)?;
     if depth > MAX_TERM_NESTING_DEPTH {
         return Err(nesting_limit_with_memory(memory));
     }
@@ -712,6 +801,192 @@ mod tests {
     use super::*;
     use crate::RdfLiteral;
     use crate::ir::RdfDatasetBuilder;
+
+    /// Original work failures at each native literal checkpoint retain identity
+    /// and release unpublished grammar/scanner/render buffers before returning.
+    #[test]
+    fn controlled_literal_preserves_native_diagnostics_and_refunds_every_stop_boundary() {
+        use purrdf_lex::control::{ControlledError, Unmetered};
+        let lexical = format!("[_:purrdfesc1_a, '[ _:a ]'^^<{}>]", purrdf_cdt::CDT_LIST);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut checkpoints = 0usize;
+        validate_literal_with_control(
+            &lexical,
+            purrdf_cdt::CDT_LIST,
+            None,
+            None,
+            &mut memory,
+            &mut |_| {
+                checkpoints += 1;
+                Ok::<_, usize>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        for stop_at in 0..checkpoints {
+            let mut calls = 0;
+            let failure = validate_literal_with_control(
+                &lexical,
+                purrdf_cdt::CDT_LIST,
+                None,
+                None,
+                &mut memory,
+                &mut |_| {
+                    let index = calls;
+                    calls += 1;
+                    if index == stop_at {
+                        Err(stop_at)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            assert!(
+                matches!(failure, Err(ControlledError::Control(index)) if index == stop_at),
+                "stop boundary {stop_at}"
+            );
+            assert_eq!(
+                calls,
+                stop_at + 1,
+                "a failed callback is never polled again"
+            );
+            assert_eq!(memory.admitted_bytes(), 0, "stop boundary {stop_at}");
+        }
+        for lexical in ["[_:]", "[<https://example.org/%xy>]"] {
+            let native = validate_literal_with_control(
+                lexical,
+                purrdf_cdt::CDT_LIST,
+                None,
+                None,
+                &mut memory,
+                &mut Unmetered,
+            )
+            .unwrap_err();
+            let ControlledError::Native(NativeBuildError::Diagnostic(native)) = native else {
+                panic!("native grammar diagnostic")
+            };
+            let bytes = native.retained_bytes().unwrap();
+            let controlled = validate_literal_with_control(
+                lexical,
+                purrdf_cdt::CDT_LIST,
+                None,
+                None,
+                &mut memory,
+                &mut |_| Ok::<_, usize>(()),
+            )
+            .unwrap_err();
+            let ControlledError::Native(NativeBuildError::Diagnostic(controlled)) = controlled
+            else {
+                panic!("same native grammar diagnostic")
+            };
+            assert_eq!(controlled.code, native.code);
+            assert_eq!(controlled.message, native.message);
+            assert_eq!(controlled.detail, native.detail);
+            let bytes = bytes + controlled.retained_bytes().unwrap();
+            assert_eq!(memory.admitted_bytes(), bytes);
+            drop((native, controlled));
+            memory.release_bytes(bytes).unwrap();
+        }
+        // Necessary error construction remains governed, including canonical
+        // duplicate-key text and the native diagnostic's large quoted operand.
+        let key = "k".repeat(300);
+        let duplicate = format!("{{\"{key}\":null,\"{key}\":null}}");
+        let relative = "relative".repeat(128);
+        let malformed = format!("[<{relative}>]");
+        for (lexical, datatype, language) in [
+            (duplicate.as_str(), purrdf_cdt::CDT_MAP, None),
+            (malformed.as_str(), purrdf_cdt::CDT_LIST, None),
+            ("value", relative.as_str(), None),
+            ("value", purrdf_iri::vocab::rdf::LANG_STRING, Some("en us")),
+        ] {
+            let mut checkpoints = 0;
+            let failure = validate_literal_with_control(
+                lexical,
+                datatype,
+                language,
+                None,
+                &mut memory,
+                &mut |_| {
+                    checkpoints += 1;
+                    Ok::<_, usize>(())
+                },
+            )
+            .unwrap_err();
+            let ControlledError::Native(NativeBuildError::Diagnostic(diagnostic)) = failure else {
+                panic!("native diagnostic is fully constructed");
+            };
+            let bytes = diagnostic.retained_bytes().unwrap();
+            assert_eq!(memory.admitted_bytes(), bytes);
+            if language.is_some() {
+                assert_eq!(diagnostic.code, "langtag-terminal-primary-not-alpha");
+                let original = diagnostic.native_cause().unwrap();
+                let original = (original as &dyn std::error::Error)
+                    .downcast_ref::<crate::LiteralComponentError>()
+                    .unwrap();
+                assert_eq!(
+                    *original,
+                    crate::LiteralComponentError::LanguageTag(
+                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha
+                    )
+                );
+            }
+            drop(diagnostic);
+            memory.release_bytes(bytes).unwrap();
+            for stop_at in 0..checkpoints {
+                let mut calls = 0;
+                let failure = validate_literal_with_control(
+                    lexical,
+                    datatype,
+                    language,
+                    None,
+                    &mut memory,
+                    &mut |_| {
+                        let index = calls;
+                        calls += 1;
+                        if index == stop_at {
+                            Err(stop_at)
+                        } else {
+                            Ok(())
+                        }
+                    },
+                );
+                assert!(
+                    matches!(failure, Err(ControlledError::Control(index)) if index == stop_at),
+                    "diagnostic construction stop {stop_at}"
+                );
+                assert_eq!(calls, stop_at + 1);
+                assert_eq!(
+                    memory.admitted_bytes(),
+                    0,
+                    "diagnostic construction stop {stop_at}"
+                );
+            }
+        }
+        // Long datatype paths and relaxed private-use tags reach their actual
+        // native classifiers, rather than succeeding after an outer estimate.
+        let datatype = format!("https://example.org/{}", "a".repeat(2048));
+        let language = format!("x-{}", "a".repeat(2048));
+        for (datatype, language) in [
+            (datatype.as_str(), None),
+            (purrdf_iri::vocab::rdf::LANG_STRING, Some(language.as_str())),
+        ] {
+            let mut work = 0;
+            let result = validate_literal_with_control(
+                "value",
+                datatype,
+                language,
+                None,
+                &mut memory,
+                &mut |units| {
+                    work += units;
+                    if work > 1024 { Err(99u8) } else { Ok(()) }
+                },
+            );
+            assert!(matches!(result, Err(ControlledError::Control(99))));
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+    }
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}")).unwrap()

@@ -45,7 +45,7 @@ fn a_complete_five_thousand_term_needle_reaches_the_public_relation() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::new().with_env(&environment),
+                &QueryOptions::new().with_env(&environment),
             )
             .expect("actual public query");
         let SparqlResult::Solutions { rows, .. } = result else {
@@ -146,7 +146,6 @@ fn actual_two_to_the_twenty_fifth_token_field_builds_and_scores() {
             .surface_index()
             .expect("default surface index")
             .words()
-            .iter()
             .any(|term| term.text() == "a")
     );
     assert_eq!(

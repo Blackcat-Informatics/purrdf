@@ -45,6 +45,8 @@ const GOVERNOR_KEYS = [
 ];
 
 const HANDLER_KEYS = [
+  "now",
+  "entropySeed",
   "engine",
   "dataset",
   "governors",
@@ -540,6 +542,7 @@ function handlerOptions(options) {
   return {
     engine: source.engine,
     dataset: source.dataset,
+    coordinates: { now: source.now, entropySeed: source.entropySeed },
     governors: { ...governors },
     cors,
     maxRequestBytes,
@@ -551,9 +554,11 @@ function handlerOptions(options) {
 /** The CORS response headers for a request from `origin`; none without `cors`. */
 function corsHeaders(cors, origin) {
   if (cors === undefined) return [];
-  if (cors.origins === "*") return [["Access-Control-Allow-Origin", "*"]];
-  if (origin !== null && cors.origins.includes(origin)) {
-    return [["Access-Control-Allow-Origin", origin]];
+  if (cors.origins === "*" || (origin !== null && cors.origins.includes(origin))) {
+    return [
+      ["Access-Control-Allow-Origin", cors.origins === "*" ? "*" : origin],
+      ["Access-Control-Expose-Headers", "Purrdf-Execution-Receipt"],
+    ];
   }
   return [];
 }
@@ -648,6 +653,7 @@ function protocolStep(step, headers, cors) {
  * otherwise.
  */
 function failureResponse(error, signal, headers, internal, correlationId) {
+  if (error.executionReceipt !== undefined) headers = [...headers, ["Purrdf-Execution-Receipt", JSON.stringify(error.executionReceipt)]];
   const timing = serverTiming(error?.evidence?.async);
   // A poisoned instance traps on every call, `problemFor` included; so does one whose
   // poisoning this call is the first to see. Either way the failure is this endpoint's
@@ -953,11 +959,11 @@ export async function handleSparqlRequest(request, options) {
         const { maxAnswers: _queryOnly, ...governors } = o.governors;
         let outcome;
         try {
-          outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...host });
+          outcome = await o.engine.updateGovernedAsync(o.dataset, text, { ...governors, ...o.coordinates, ...host });
         } catch (error) {
           return failureResponse(error, request.signal, headers, internal, hostFault()?.correlationId);
         }
-        const timing = serverTiming(outcome.evidence.async);
+        const timing = [...serverTiming(outcome.evidence.async), ["Purrdf-Execution-Receipt", JSON.stringify(outcome.executionReceipt)]];
         if (!outcome.isApplied) return tripResponse(outcome.tripped, [...timing, ...headers]);
         return new Response(null, { status: 204, headers: [...timing, ...headers] });
       }
@@ -976,6 +982,7 @@ export async function handleSparqlRequest(request, options) {
       let outcome;
       try {
         outcome = await o.engine.queryGovernedNegotiatedAsync(o.dataset, text, {
+          ...o.coordinates,
           ...o.governors,
           ...host,
           accept,
@@ -989,7 +996,7 @@ export async function handleSparqlRequest(request, options) {
           hostFault()?.correlationId,
         );
       }
-      const timing = serverTiming(outcome.evidence.async);
+      const timing = [...serverTiming(outcome.evidence.async), ["Purrdf-Execution-Receipt", JSON.stringify(outcome.executionReceipt)]];
       if (!outcome.isComplete) {
         return tripResponse(outcome.tripped, [...timing, ["Vary", "Accept"], ...headers]);
       }

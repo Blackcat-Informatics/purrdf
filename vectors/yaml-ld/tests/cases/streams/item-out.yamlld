@@ -1,0 +1,10 @@
+[
+  {
+    "@id": "https://example.org/item",
+    "https://example.org/value": [
+      {
+        "@value": "item"
+      }
+    ]
+  }
+]

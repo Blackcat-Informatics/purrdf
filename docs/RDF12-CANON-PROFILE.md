@@ -5,7 +5,7 @@
 
 English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
 
-**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 2 &nbsp;·&nbsp;
+**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Both values are readable from the library rather than only from this document —
@@ -135,8 +135,8 @@ named-graph annotation lossless. No quad can carry that line, so none is folded;
 the identity above holds for every dataset whose canonical form contains no
 named-graph annotation.
 
-The **graph-scoped** entry point (`purrdf_core::canonicalize_graph_view` and its
-fallible twin) erases the graph slot, so its output is always quad-shaped and
+The **graph-scoped** entry point (`purrdf_core::try_canonicalize_graph_view`)
+erases the graph slot, so its output is always quad-shaped and
 **fully idempotent** — a consumer that needs the round trip unconditionally should
 mint from a graph-scoped canonicalization.
 
@@ -170,8 +170,8 @@ second SPELLING: the **flat assertion presentation**, exported as
 `try_flat_digest_view`). The rendering of §3 is itself a named presentation too,
 exported as `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` /
 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
-WITHOUT a `flat` infix (`canonicalize`, `try_canonicalize_view`,
-`canonicalize_graph_view`, …) pins it.
+WITHOUT a `flat` infix (`try_canonicalize`, `try_canonicalize_view`,
+`try_canonicalize_graph_view`, …) pins it.
 
 The two presentations answer the same question — "what canonical bytes does this
 ADMITTED RDF 1.2 statement layer produce" — with two different spellings of the
@@ -383,35 +383,69 @@ that is both inadmissible and pathologically symmetric is refused under §5, not
 §6 — refused for the reason that makes it dangerous, and without spending the §6
 budget to discover it.
 
-## 6. Bounds (normative)
+## 6. Search policy and execution evidence (normative)
 
-The n-degree search has a combinatorial worst case: a pathologically symmetric blank
-graph can require prohibitively many permutation steps. Complexity poisoning must
-**refuse, not hang**.
+Every search-performing entry point requires a caller-owned
+`CanonicalizationControl`. Its `SearchPolicy` is either `Finite(u64)` or
+`Unlimited`; there is no implicit finite ceiling or default policy. The historical
+`RDFC_V2_CORPUS_POLICY` value is available only as an explicitly selected finite value,
+including when checking the unchanged version 2 frozen corpus.
 
-A fixed call/permutation budget of **1 000 000** bounds the search, exported as
-`purrdf_core::RDFC_CALL_LIMIT`. It is public because it is part of this contract,
-not an implementation detail: a consumer pinning the profile is pinning the bound
-at which canonicalization refuses, and a bound stated only in prose is one the
-consumer cannot check against the code it linked.
+RDFC charging law version 1 charges one event on entering an n-degree frame and
+one for every permutation attempt, including a subsequently pruned permutation.
+The stop signal is checked before admitting an event. A finite limit admits at
+most that many events; refusing the next event adds no charge. Unlimited search
+removes the logical ceiling, while exact counter representability and the
+caller's optional latching `StopSignal` still apply. Counter overflow refuses
+rather than wrapping or saturating.
 
-There is **no knob**. The bound is fixed by the build, not configurable at runtime,
-so two parties running the same profile version refuse the same datasets.
+Each canonicalization run starts a fresh ceiling. Composite operations retain
+ordered receipts for every constituent run and have no aggregate ceiling. Cache
+hits perform no canonicalization and add no run. Structural comparison shortcuts
+record a completed output with zero search work. The caller owns the control and
+may choose to discard its evidence. A composite boundary snapshots only the
+receipt range belonging to its own operation.
 
-Exhaustion yields `CanonError::BudgetExceeded`, carrying the input's blank count.
+A finalized `SearchReceipt` states the algorithm/profile version, label hash,
+presentation, exact selection, output operation/digest algorithm, effective
+policy, charging-law version, charged event counts, final phase, completion and
+any observed control refusal. Charged events may be interrupted after admission;
+they are not claimed completed. A bool stop signal does not reveal whether its
+host observed cancellation or a deadline. A source checkpoint failure retains
+precedence over an inner search or stop refusal without erasing observed work.
 
-### 6.1 Fallible and trusted entry points
+`CanonError::BudgetExceeded` carries the actual finite limit, charged work and
+input blank count. Exhaustion says that this run reached its caller's chosen
+ceiling; it does not classify the graph as adversarial or impossible to
+canonicalize. A refused or stopped run publishes no partial identity.
+
+Successful canonical bytes and their content digests do not incorporate policy
+or observed work. Execution configuration is separate evidence. Unlimited search
+makes no whole-operation physical-memory containment claim: successful-result,
+preparation, search, output and receipt storage admission remain separate work.
+
+### 6.1 Typed refusal through every entry point
 
 | Entry point | On refusal |
 |---|---|
 | `try_canonicalize` / `try_canonicalize_with` | returns `Err(CanonError)` |
-| `canonicalize` / `canonicalize_with` | panics |
+| `try_canonicalize_view` / `try_canonicalize_graph_view` | returns the original `Err(CanonError)`, including source-read failures |
+| `try_graph_digest_view` | returns the original `Err(CanonError)` |
 
-**Any consumer minting identity from canonical bytes must use the fallible entry
-points.** The panicking pair is documented for trusted callers only; its contract
-is that the caller has already vouched for the dataset's provenance.
+Every consumer minting identity from canonical bytes propagates these typed
+refusals. A refused input publishes no identity. The former trusted/panicking
+entry points are removed; callers use the fallible family directly.
 
 ## 7. Versioning
+
+Reserved-vocabulary refusals retain their original source admission with their
+immutable IRI and position. Borrow them through `iri()` and `position()`; cloning
+shares the same payload and grant. If the source cannot provide owned admission,
+refusal construction returns `CanonError::OwnedWorkspaceUnavailable`. Admission
+and physical publication failures are typed errors. This lifetime guarantee does
+not assert that canonicalization scratch or successful results are contained by
+the refusal's grant. Canonical bytes, vocabulary selection and search charges
+are unchanged.
 
 `CANON_PROFILE_VERSION` is incremented by any change that could move a consumer's
 minted identity:
@@ -419,7 +453,7 @@ minted identity:
 * a change to the canonical bytes a given dataset produces,
 * a change to the reserved vocabulary of §4,
 * a change to the refusal rule of §5,
-* a change to the bound of §6.
+* a change to the admission or charging law of §6.
 
 A change that **cannot** move output — a refactor, a faster search, a clearer
 diagnostic message — does not increment it. That restraint is what makes the
@@ -431,6 +465,7 @@ consumer nothing.
 | Version | Change |
 |---|---|
 | 1 | initial profile |
+| 3 | §6 requires explicit caller-selected finite or unlimited search policy and measured execution evidence; successful bytes are unchanged |
 | 2 | §5 narrowed: the two quad shapes §3 lowers into are **folded** back into the statement layer rather than refused, making canonicalization idempotent over its own output (§3.1) |
 
 Version 2 moved **no** bytes: every input version 1 admitted canonicalizes to
@@ -445,7 +480,7 @@ covered by a SHA-256 manifest checked on every build
 (`scripts/check-corpus-frozen.py`), so a silently edited expectation fails rather
 than passes.
 
-It carries both halves of the contract — goldens that must canonicalize to exact
+Under explicitly selected `RDFC_V2_CORPUS_POLICY`, it carries both halves of the version 2 contract — goldens that must canonicalize to exact
 bytes, and poison cases that must be refused with an exact error discriminant,
 including §5.3's named position. Two of its cases sit on the §3.1 boundary from the
 admitted side: each writes out one of the two folded shapes as an ordinary quad and
@@ -475,11 +510,20 @@ artifact it actually linked:
 
 Running the corpus of §8 against a linked build turns that pin into a receipt: it
 demonstrates that this build produces the bytes the profile specifies and refuses
-the inputs the profile forbids.
+the inputs the stated corpus configuration refuses.
 
 The presentation coordinate is also readable back off a produced result, not only
 off the entry point a caller happened to call: every `purrdf_core::Canonicalized`
-carries a `presentation` field naming exactly which of the two presentations
-produced its `nquads`. A consumer holding a `Canonicalized` value can therefore
-verify its pin's presentation coordinate against that field directly, rather than
-having to remember or re-derive it from the call site.
+exposes a `presentation()` accessor naming exactly which of the two presentations
+produced its `nquads()` document. A consumer holding a `Canonicalized` value can
+therefore verify its pin's presentation coordinate directly, rather than having
+to remember or re-derive it from the call site. Its text and ordered blank labels
+are immutable borrowed views; cloning shares the payload and its original owned
+storage reservation. This ownership does not change canonical identity or bytes.
+
+The execution pin additionally states the per-run search policy and charging-law
+version. Read the complete typed configuration and actual work from the caller's
+control receipts. Equal finite limits have equal policy identity regardless of
+which convenience value supplied the number. A receipt for a BLAKE3 output states
+that output separately from the RDFC label hash; the two hashes have different
+jobs.

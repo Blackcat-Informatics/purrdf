@@ -206,7 +206,7 @@ validate_purrdf_bin() {
   rm -f "${probe_out}"
   lane_run_probe "${provenance}" \
     "to load a one-triple N-Triples document into a pack" \
-    "${BIN}" convert --from ntriples --to pack "${probe_in}" "${probe_out}"
+    "${BIN}" convert --from ntriples --to pack --canonical-search unlimited --canonicalization-receipts - "${probe_in}" "${probe_out}"
   lane_require_magic "${probe_out}" \
     "the pack ${provenance} produced from a one-triple document" \
     "${PACK_MAGIC}" "a purrdf pack"
@@ -542,7 +542,7 @@ if ((pack_reusable == 1)); then
 else
   rm -f "${PACK}" "${PACK_STAMP}"
   convert_status=0
-  "${BIN}" convert --from ntriples --to pack "${DATASET}" "${PACK}" || convert_status=$?
+  "${BIN}" convert --from ntriples --to pack --canonical-search unlimited --canonicalization-receipts - "${DATASET}" "${PACK}" || convert_status=$?
   # What is known here is the exit status. The binary was proved to run at step 2
   # and the dataset was proved non-empty at step 3, so a failure is about this
   # invocation; the message names it rather than asserting a cause.
@@ -612,7 +612,7 @@ run_query() {
   lane_reset_capture "${errfile}"
   start="$(now_ms)"
   set +e
-  out="$("${BIN}" query --data "${PACK}" --results-format json "${query_text}" 2>"${errfile}")"
+  out="$("${BIN}" query --data "${PACK}" --results-format json --canonical-search unlimited --canonicalization-receipts - "${query_text}" 2>"${errfile}")"
   rc=$?
   set -e
   stop="$(now_ms)"

@@ -158,10 +158,10 @@ fn violation(workspace: &WorkspaceCapability, message: &'static str) -> EvalErro
     )
 }
 
-pub(crate) fn eval_shape<D: DatasetView + Sync>(
+fn select_shape<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<Evaluated<D::Id>>, EvalError> {
+) -> Result<Option<SharedWorkspace<ShapeOffer>>, EvalError> {
     if ctx.options.disable_shapes || ctx.expanded_dictionary.is_some() {
         return Ok(None);
     }
@@ -256,50 +256,188 @@ pub(crate) fn eval_shape<D: DatasetView + Sync>(
         }
         return Ok(None);
     };
-    let growth = ctx.growth.clone();
-    if let super::OperatorOwner::Builtin(kind) = &offer.operator {
-        let before = ctx.shape_state.work.snapshot();
-        let evaluated = match kind {
-            super::Builtin::Dictionary => crate::eval::eval_literal_node(pattern, ctx)?,
-            super::Builtin::ExpandedDictionary(spec) => {
-                super::dictionary::execute(pattern, spec, ctx)?
+    Ok(Some(offer))
+}
+
+// Draft integration seam; NativeShapeRun is owned by the active node boundary.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum ShapeStart<I: ViewTermId> {
+    Declined,
+    Complete(Evaluated<I>),
+    Native(NativeShapeRun<I>),
+}
+
+enum NativeOverlay<I: ViewTermId> {
+    Dictionary,
+    Expanded(super::dictionary::PreparedMaterialization<I>),
+    Bucket(usize),
+    Window(usize, super::window::WindowSpec),
+}
+
+enum NativeRestore<I: ViewTermId> {
+    Dictionary,
+    Expanded(
+        Option<SharedWorkspace<super::dictionary::Materialization<I>>>,
+        super::dictionary::PreparedMaterialization<I>,
+    ),
+    Bucket(Option<usize>),
+    Window(Option<(usize, super::window::WindowSpec)>, bool),
+}
+
+pub(crate) struct NativeShapeRun<I: ViewTermId> {
+    offer: SharedWorkspace<ShapeOffer>,
+    before: ShapeWork,
+    pending: Option<NativeOverlay<I>>,
+    restore: Option<NativeRestore<I>>,
+}
+
+impl<I: ViewTermId> NativeShapeRun<I> {
+    // Caller first publishes this owner in its armed ResidentPending boundary.
+    // This handoff itself performs no admission, dataset access or host callback.
+    pub(crate) fn install<D: DatasetView<Id = I> + Sync>(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        let overlay = self.pending.take().expect("one prepared native shape");
+        self.restore = Some(match overlay {
+            NativeOverlay::Dictionary => NativeRestore::Dictionary,
+            NativeOverlay::Expanded(next) => {
+                NativeRestore::Expanded(ctx.expanded_dictionary.replace(next.overlay.clone()), next)
             }
-            super::Builtin::Bucket => super::bucket::execute(pattern, ctx)?,
-            super::Builtin::Window(spec) => super::window::execute(pattern, spec, ctx)?,
-        };
-        let after = ctx.shape_state.work.snapshot();
-        let work = ShapeWork {
-            source_visits: after
-                .source_visits
-                .checked_sub(before.source_visits)
-                .ok_or(EvalError::WorkspaceBoundOverflow)?,
-            transitions: after
-                .transitions
-                .checked_sub(before.transitions)
-                .ok_or(EvalError::WorkspaceBoundOverflow)?,
-            output_rows: match &evaluated {
-                Evaluated::Complete(seq) => seq.rows.len() as u64,
-                Evaluated::Truncated(_) => 0,
-            },
-        };
-        let node = ctx
-            .plan
-            .as_ref()
-            .and_then(|plan| plan.node_of(pattern))
-            .map(crate::plan::NodeId::index);
-        ctx.shape_state.report(
-            ShapeReport {
-                node,
-                operator: Some(offer.name),
-                provider: offer.provider,
-                registry: Some(ctx.shapes.id()),
-                work,
-                estimate: offer.estimate,
-            },
-            &growth,
-        )?;
-        return Ok(Some(evaluated));
+            NativeOverlay::Bucket(next) => NativeRestore::Bucket(ctx.bucketed_group.replace(next)),
+            NativeOverlay::Window(node, selected) => {
+                let sequential = ctx.options.force_sequential;
+                if !selected.restrict {
+                    ctx.options.force_sequential = true;
+                }
+                NativeRestore::Window(ctx.window_bgp.replace((node, selected)), sequential)
+            }
+        });
     }
+
+    pub(crate) fn restore<D: DatasetView<Id = I> + Sync>(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        match self.restore.take() {
+            Some(NativeRestore::Dictionary) | None => {}
+            Some(NativeRestore::Expanded(previous, prepared)) => {
+                ctx.expanded_dictionary = previous;
+                drop(prepared);
+            }
+            Some(NativeRestore::Bucket(previous)) => ctx.bucketed_group = previous,
+            Some(NativeRestore::Window(previous, sequential)) => {
+                ctx.window_bgp = previous;
+                ctx.options.force_sequential = sequential;
+            }
+        }
+    }
+
+    // Run once after literal-root completion, BEFORE delivery or node output commit.
+    // Keep this owner armed until this returns: report growth can fail or unwind.
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        pattern: &GraphPattern,
+        evaluated: &Result<Evaluated<I>, EvalError>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        self.restore(ctx);
+        if let Ok(evaluated) = evaluated {
+            report_native(pattern, &self.offer, self.before, evaluated, ctx)?;
+        }
+        Ok(())
+    }
+}
+
+fn report_native<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    offer: &ShapeOffer,
+    before: ShapeWork,
+    evaluated: &Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    let after = ctx.shape_state.work.snapshot();
+    let work = ShapeWork {
+        source_visits: after
+            .source_visits
+            .checked_sub(before.source_visits)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+        transitions: after
+            .transitions
+            .checked_sub(before.transitions)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+        output_rows: match evaluated {
+            Evaluated::Complete(seq) => seq.rows.len() as u64,
+            Evaluated::Truncated(_) => 0,
+        },
+    };
+    let node = ctx
+        .plan
+        .as_ref()
+        .and_then(|plan| plan.node_of(pattern))
+        .map(crate::plan::NodeId::index);
+    let growth = ctx.growth.clone();
+    ctx.shape_state.report(
+        ShapeReport {
+            node,
+            operator: Some(offer.name),
+            provider: offer.provider,
+            registry: Some(ctx.shapes.id()),
+            work,
+            estimate: offer.estimate,
+        },
+        &growth,
+    )
+}
+
+pub(crate) fn begin_shape<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<ShapeStart<D::Id>, EvalError> {
+    let Some(offer) = select_shape(pattern, ctx)? else {
+        return Ok(ShapeStart::Declined);
+    };
+    let super::OperatorOwner::Builtin(kind) = &offer.operator else {
+        // Keep existing NativeRuntime construction, contained offer.execute,
+        // evidence and output tail in execute_external, unchanged.
+        return execute_external(pattern, &offer, ctx).map(ShapeStart::Complete);
+    };
+    let before = ctx.shape_state.work.snapshot();
+    let overlay = match kind {
+        super::Builtin::Dictionary => NativeOverlay::Dictionary,
+        super::Builtin::ExpandedDictionary(spec) => {
+            match super::dictionary::prepare(pattern, spec, ctx)? {
+                super::dictionary::Prepared::Complete(evaluated) => {
+                    report_native(pattern, &offer, before, &evaluated, ctx)?;
+                    return Ok(ShapeStart::Complete(evaluated));
+                }
+                super::dictionary::Prepared::Materialized(next) => NativeOverlay::Expanded(next),
+            }
+        }
+        super::Builtin::Bucket => NativeOverlay::Bucket(std::ptr::from_ref(pattern) as usize),
+        super::Builtin::Window(spec) => {
+            let GraphPattern::Filter { inner, .. } = pattern else {
+                return Err(EvalError::WorkspaceBoundOverflow);
+            };
+            let GraphPattern::Bgp { patterns } = &**inner else {
+                return Err(EvalError::WorkspaceBoundOverflow);
+            };
+            let mut selected = spec.clone();
+            selected.restrict &= ctx.evidence_input.is_none();
+            NativeOverlay::Window(patterns.as_ptr() as usize, selected)
+        }
+    };
+    Ok(ShapeStart::Native(NativeShapeRun {
+        offer,
+        before,
+        pending: Some(overlay),
+        restore: None,
+    }))
+}
+
+fn execute_external<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    offer: &ShapeOffer,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let growth = ctx.growth.clone();
     let schema = crate::eval::syntactic_schema_admitted(pattern, &growth)?;
     let mut runtime = NativeRuntime {
         root: pattern,
@@ -345,7 +483,7 @@ pub(crate) fn eval_shape<D: DatasetView + Sync>(
         &growth,
     )?;
     if let Some(withheld) = withheld {
-        return Ok(Some(withheld));
+        return Ok(withheld);
     }
     let mut rows = output.finish()?;
     let mut search = crate::evidence_exec::RowEvidence::default();
@@ -357,7 +495,7 @@ pub(crate) fn eval_shape<D: DatasetView + Sync>(
         )?;
     }
     rows.retain_search_evidence(search);
-    Ok(Some(Evaluated::Complete(SolutionSeq { schema, rows })))
+    Ok(Evaluated::Complete(SolutionSeq { schema, rows }))
 }
 
 struct NativeCosts<'a, 'd, D: DatasetView + Sync>(&'a EvalCtx<'d, D>);

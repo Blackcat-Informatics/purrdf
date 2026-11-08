@@ -306,16 +306,16 @@ fn exact_kernels_and_the_norm_equal_the_software_reference_on_witnesses() {
             let want = reference_distance(measure, &a, a_norm, &b, b_norm).map(f64::to_bits);
             let pair = exact.distance(measure, &a, a_norm, &b, b_norm);
             assert_eq!(
-                pair.map(f64::to_bits),
+                pair.ok().map(f64::to_bits),
                 want,
                 "{measure:?} at len {}",
                 a.len()
             );
             let norms = [b_norm];
             let rows = RowsRef::new(&b, 1, b.len(), &norms).expect("one row");
-            let mut out = [None];
+            let mut out = [Ok(0.0)];
             exact.distances(measure, &a, a_norm, rows, &mut out);
-            assert_eq!(out[0].map(f64::to_bits), want, "{measure:?} batch");
+            assert_eq!(out[0].ok().map(f64::to_bits), want, "{measure:?} batch");
             let bounded = match exact.distance_bounded(
                 measure,
                 &a,
@@ -325,7 +325,7 @@ fn exact_kernels_and_the_norm_equal_the_software_reference_on_witnesses() {
                 Bound::Above(f64::INFINITY),
             ) {
                 Bounded::Below(value) => Some(value.to_bits()),
-                Bounded::NonFinite => None,
+                Bounded::NonFinite(_) => None,
                 Bounded::Beyond => panic!("an infinite bound is never met"),
             };
             assert_eq!(bounded, want, "{measure:?} bounded");
@@ -534,6 +534,7 @@ mod x87 {
             assert_eq!(
                 exact
                     .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)
+                    .ok()
                     .map(f64::to_bits),
                 want.map(f64::to_bits)
             );
@@ -575,6 +576,7 @@ mod x87 {
             assert_eq!(
                 resolved
                     .distance(Measure::NegativeDot, &a, 0.0, &b, 0.0)
+                    .ok()
                     .map(f64::to_bits),
                 want,
                 "dot at len {}",
@@ -591,7 +593,7 @@ mod x87 {
                 Bound::Above(f64::INFINITY),
             ) {
                 Bounded::Below(value) => Some(value.to_bits()),
-                Bounded::NonFinite => None,
+                Bounded::NonFinite(_) => None,
                 Bounded::Beyond => panic!("an infinite bound is never met"),
             };
             assert_eq!(bounded, want, "squares at len {}", a.len());

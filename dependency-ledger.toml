@@ -330,14 +330,14 @@ category = "transitive:rayon"
 reason = "work-stealing deques for rayon"
 distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
 holder = "rayon"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crossbeam-epoch]
 category = "transitive:rayon"
 reason = "epoch-based reclamation for rayon"
 distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
 holder = "rayon"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crossbeam-utils]
 category = "transitive:rayon"
@@ -381,17 +381,11 @@ distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of
 holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.fastrand]
-category = "runtime"
-reason = "seeds structured-zstd FastCOVER dictionary training reproducibly in GTS"
-distinct = "the thread-local generator structured-zstd's FastCOVER sampler draws from; GTS only seeds and restores it, and no native generator can stand in for the one that crate calls"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.getrandom]
 category = "runtime"
 reason = "native OS entropy for SPARQL RAND()/UUID() seeds and GTS test keys"
 distinct = "operating-system entropy for SPARQL RAND()/UUID() seeds and GTS test keys; PurRDF has no entropy source of its own"
-metrics = { direct = true, exclusive_closure = 4, release = true, wasm = false, build_script = true, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 2, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.ghash]
 category = "transitive:aes-gcm"
@@ -399,12 +393,6 @@ reason = "GHASH universal hash for AES-GCM"
 distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
 holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.hashbrown]
-category = "runtime"
-reason = "raw HashTable for store-once interners and dedup maps"
-distinct = "the raw HashTable API behind hash-once, store-once interners, which std does not expose; PurRDF has hashers (purrdf_hash::fixed) but no hash table"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.heck]
 category = "transitive:pyo3"
@@ -455,11 +443,11 @@ holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.once_cell]
-category = "transitive:wasm-bindgen"
-reason = "lazy statics for wasm-bindgen and pyo3"
-distinct = "lazy statics inside wasm-bindgen and pyo3; no first-party code calls it"
-holder = "wasm-bindgen"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+category = "transitive:pyo3"
+reason = "lazy statics for pyo3"
+distinct = "lazy statics inside pyo3; no first-party code calls it"
+holder = "pyo3"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.once_cell_polyfill]
 category = "transitive:clap"
@@ -492,7 +480,7 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "binding"
 reason = "Python extension-module bindings (purrdf-python)"
 distinct = "the CPython extension-module boundary for purrdf-python; PurRDF has no Python FFI of its own"
-metrics = { direct = true, exclusive_closure = 7, release = false, wasm = false, build_script = true, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 8, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.pyo3-build-config]
 category = "transitive:pyo3"
@@ -520,7 +508,7 @@ category = "transitive:pyo3"
 reason = "pyo3 macro code generation"
 distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
 holder = "pyo3"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.quote]
 category = "transitive:syn"
@@ -588,12 +576,6 @@ distinct = "internal to clap's argument suggestions; no first-party code calls i
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.structured-zstd]
-category = "spec-codec"
-reason = "pure-Rust Zstandard (RFC 8878) with dictionary training for GTS and columnar"
-distinct = "Zstandard (RFC 8878) with dictionary training for GTS and columnar; PurRDF has no native Zstandard codec"
-metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.syn]
 category = "oracle"
 reason = "Rust source parser for the source-census tests in rdf and shapes and the unpublished helper-census tool"
@@ -608,11 +590,10 @@ holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.twox-hash]
-category = "transitive:structured-zstd"
-reason = "xxHash64 frame checksums for Zstandard"
-distinct = "xxHash64 frame checksums inside structured-zstd; purrdf-hash has no xxHash"
-holder = "structured-zstd"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+category = "spec-codec"
+reason = "xxHash64 frame checksums for Zstandard and standard Parquet Bloom filters"
+distinct = "The specified hash for Zstandard checksums and Parquet Bloom filters; purrdf-hash has no xxHash"
+metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.typenum]
 category = "transitive:sha2"
@@ -641,19 +622,6 @@ reason = "UTF-8 parser for anstyle-parse"
 distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.visual-hashing]
-category = "runtime"
-reason = "emojihash and randomart key fingerprints for GTS"
-distinct = "emojihash and randomart key-fingerprint rendering for GTS; its BLAKE3 is private to those renderers, PurRDF calls only the renderers, and PurRDF has no fingerprint renderer of its own"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.wasip2]
-category = "transitive:getrandom"
-reason = "WASI preview 2 bindings for getrandom"
-distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
-holder = "getrandom"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.wasm-bindgen]
 category = "binding"
@@ -700,10 +668,3 @@ category = "runtime"
 reason = "GetCurrentThreadStackLimits declarations for purrdf-stack on Windows; also terminal detection through anstream"
 distinct = "platform declarations for thread stack limits on Windows; bindings to the operating system, not a job PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
-
-[packages.wit-bindgen]
-category = "transitive:getrandom"
-reason = "WIT bindings for wasip2"
-distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
-holder = "getrandom"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }

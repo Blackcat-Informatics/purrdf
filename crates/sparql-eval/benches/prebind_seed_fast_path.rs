@@ -97,7 +97,7 @@ fn execute(c: &mut Bench) {
         ("needs_walk", NEEDS_WALK),
     ] {
         let mut execution = engine
-            .prepare_execution(text, None, &["a0", "a1"], QueryOptions::EMPTY)
+            .prepare_execution(text, None, &["a0", "a1"], &QueryOptions::EMPTY)
             .expect("prepare execution");
         group.bench_function(format!("execute/{name}"), |b| {
             let mut index = 0_usize;
@@ -121,7 +121,7 @@ fn execute(c: &mut Bench) {
                     .execute(
                         &mut execution,
                         black_box(&*data),
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         |outcome| black_box(matches!(outcome, InternedOutcome::Solutions(_))),
                     )
                     .expect("execute");

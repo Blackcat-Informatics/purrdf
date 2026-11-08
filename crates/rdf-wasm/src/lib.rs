@@ -90,6 +90,8 @@ use wasm_bindgen::prelude::*;
 //   * `xsd`     — the XSD value space: exact canonical lexical forms and value-space
 //                 comparison (`xsdCanonicalLexical`/`xsdValueCompare`)
 mod async_query;
+mod canonical;
+pub use canonical::{CanonicalCause, CanonicalResult};
 mod codec;
 mod convert;
 mod dataset;
@@ -111,6 +113,9 @@ mod stream;
 mod term;
 mod xpath_regex;
 mod xsd;
+mod yaml_source;
+pub use operation::YamlSourceCause;
+pub use yaml_source::{YamlSourceExport, yaml_source_export, yaml_source_reconstruct};
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;
@@ -125,13 +130,15 @@ pub use dataset::__purrdf_test_large_dataset_identity;
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
-pub use jsonld::CompiledJsonLdContext;
+pub use jsonld::{
+    CompiledJsonLdContext, compact_document, expand_document, flatten_document, frame_document,
+};
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use protocol::SparqlProtocolRequest;
 pub use query::{
     CancellationToken, EntailmentQueryOutcome, GovernorEvidence, NegotiatedOutcome, PartialAnswers,
-    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, SelectResult, SelectRow,
-    SilencedInvocation, TrippedGovernor, UpdateOutcome, expression_error_codes,
+    ProvenanceInfo, QueryEngine, QueryOutcome, QueryResult, RawQueryResult, SelectResult,
+    SelectRow, SilencedInvocation, TrippedGovernor, UpdateOutcome, expression_error_codes,
     governor_dimensions, provenance_from_json, provenance_from_xml,
 };
 pub use stream::Sink;

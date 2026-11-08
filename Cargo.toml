@@ -18,6 +18,7 @@ members = [
     "crates/envelope-probe",
     "crates/geo",
     "crates/geo-kernel",
+    "crates/glob",
     "crates/gts",
     "crates/hash",
     "crates/hash-conformance",
@@ -36,6 +37,7 @@ members = [
     "crates/rdf-events",
     "crates/rdf-wasm",
     "crates/retrieval",
+    "crates/shacl-conformance",
     "crates/shapes",
     "crates/shex",
     "crates/slice",
@@ -46,16 +48,19 @@ members = [
     "crates/testkit",
     "crates/stack",
     "crates/text",
+    "crates/toml",
+    "crates/yaml",
     "crates/validate",
     "crates/wasm-link",
     "crates/xsd",
+    "crates/zstd",
 ]
 exclude = [
     "crates/gts/fuzz",
 ]
 
 [workspace.package]
-version = "3.0.1"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
@@ -68,11 +73,13 @@ homepage = "https://blackcatinformatics.ca/purrdf/"
 # Where a use site needs default features OFF, they are disabled HERE and
 # re-enabled per crate with `default-features = true` where required.
 [workspace.dependencies]
+purrdf-toml = { path = "crates/toml", version = "4.0.0" }
+purrdf-yaml = { path = "crates/yaml", version = "4.0.0" }
 # --- internal crates (paths are relative to the WORKSPACE ROOT) ---
-purrdf = { path = "crates/purrdf", version = "3.0.1" }
+purrdf = { path = "crates/purrdf", version = "4.0.0" }
 # The C ABI's own library is also named `purrdf`; this distinct import key
 # reaches the same facade without colliding with that library name.
-purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
+purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "4.0.0" }
 # DEV-ONLY instrument (`publish = false`): the shared counting allocator and its
 # two measurement windows. Declared PATH-ONLY, with NO `version` key, and that
 # omission is load-bearing: cargo strips a versionless path dev-dependency from
@@ -81,34 +88,36 @@ purrdf-rs = { package = "purrdf", path = "crates/purrdf", version = "3.0.1" }
 # resolve it from the registry. Never a normal dependency of anything, so the
 # wasm32 lane (which builds `--lib`) never sees it.
 purrdf-alloc-probe = { path = "crates/alloc-probe" }
-purrdf-cdt = { path = "crates/cdt", version = "3.0.1" }
-purrdf-columnar = { path = "crates/columnar", version = "3.0.1" }
+purrdf-cdt = { path = "crates/cdt", version = "4.0.0" }
+purrdf-columnar = { path = "crates/columnar", version = "4.0.0" }
 purrdf-conformance-kit = { path = "crates/conformance-kit" }
-purrdf-core = { path = "crates/rdf-core", version = "3.0.1" }
-purrdf-datalog = { path = "crates/datalog", version = "3.0.1" }
-purrdf-deflate = { path = "crates/deflate", version = "3.0.1" }
-purrdf-ed25519 = { path = "crates/ed25519", version = "3.0.1" }
-purrdf-entail = { path = "crates/entail", version = "3.0.1" }
-purrdf-events = { path = "crates/rdf-events", version = "3.0.1" }
-purrdf-geo = { path = "crates/geo", version = "3.0.1" }
-purrdf-geo-kernel = { path = "crates/geo-kernel", version = "3.0.1" }
-purrdf-gts = { path = "crates/gts", version = "3.0.1" }
-purrdf-hash = { path = "crates/hash", version = "3.0.1" }
-purrdf-hnsw = { path = "crates/hnsw", version = "3.0.1" }
-purrdf-iri = { path = "crates/iri", version = "3.0.1" }
-purrdf-json = { path = "crates/json", version = "3.0.1" }
-purrdf-jsonschema = { path = "crates/jsonschema", version = "3.0.1" }
-purrdf-lex = { path = "crates/lex", version = "3.0.1" }
-purrdf-markdown = { path = "crates/markdown", version = "3.0.1" }
-purrdf-mime = { path = "crates/mime", version = "3.0.1" }
-purrdf-rdf = { path = "crates/rdf", version = "3.0.1" }
-purrdf-retrieval = { path = "crates/retrieval", version = "3.0.1" }
-purrdf-shapes = { path = "crates/shapes", version = "3.0.1" }
-purrdf-shex = { path = "crates/shex", version = "3.0.1" }
-purrdf-slice = { path = "crates/slice", version = "3.0.1" }
-purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "3.0.1" }
-purrdf-sparql-eval = { path = "crates/sparql-eval", version = "3.0.1" }
-purrdf-sparql-results = { path = "crates/sparql-results", version = "3.0.1" }
+purrdf-shacl-conformance = { path = "crates/shacl-conformance" }
+purrdf-core = { path = "crates/rdf-core", version = "4.0.0" }
+purrdf-datalog = { path = "crates/datalog", version = "4.0.0" }
+purrdf-deflate = { path = "crates/deflate", version = "4.0.0" }
+purrdf-ed25519 = { path = "crates/ed25519", version = "4.0.0" }
+purrdf-entail = { path = "crates/entail", version = "4.0.0" }
+purrdf-events = { path = "crates/rdf-events", version = "4.0.0" }
+purrdf-geo = { path = "crates/geo", version = "4.0.0" }
+purrdf-glob = { path = "crates/glob", version = "4.0.0" }
+purrdf-geo-kernel = { path = "crates/geo-kernel", version = "4.0.0" }
+purrdf-gts = { path = "crates/gts", version = "4.0.0" }
+purrdf-hash = { path = "crates/hash", version = "4.0.0" }
+purrdf-hnsw = { path = "crates/hnsw", version = "4.0.0" }
+purrdf-iri = { path = "crates/iri", version = "4.0.0" }
+purrdf-json = { path = "crates/json", version = "4.0.0" }
+purrdf-jsonschema = { path = "crates/jsonschema", version = "4.0.0" }
+purrdf-lex = { path = "crates/lex", version = "4.0.0" }
+purrdf-markdown = { path = "crates/markdown", version = "4.0.0" }
+purrdf-mime = { path = "crates/mime", version = "4.0.0" }
+purrdf-rdf = { path = "crates/rdf", version = "4.0.0" }
+purrdf-retrieval = { path = "crates/retrieval", version = "4.0.0" }
+purrdf-shapes = { path = "crates/shapes", version = "4.0.0" }
+purrdf-shex = { path = "crates/shex", version = "4.0.0" }
+purrdf-slice = { path = "crates/slice", version = "4.0.0" }
+purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "4.0.0" }
+purrdf-sparql-eval = { path = "crates/sparql-eval", version = "4.0.0" }
+purrdf-sparql-results = { path = "crates/sparql-results", version = "4.0.0" }
 # DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
 # target directory, frozen differential vectors and the `harness = false`
 # runner. PATH-ONLY with NO `version`, for the reason given for
@@ -117,10 +126,11 @@ purrdf-sparql-results = { path = "crates/sparql-results", version = "3.0.1" }
 # `purrdf-hash-conformance` rather than in its own tests, so any member's tests
 # may use it without closing a cycle.
 purrdf-testkit = { path = "crates/testkit" }
-purrdf-stack = { path = "crates/stack", version = "3.0.1" }
-purrdf-text = { path = "crates/text", version = "3.0.1" }
-purrdf-validate = { path = "crates/validate", version = "3.0.1" }
-purrdf-xsd = { path = "crates/xsd", version = "3.0.1" }
+purrdf-stack = { path = "crates/stack", version = "4.0.0" }
+purrdf-text = { path = "crates/text", version = "4.0.0" }
+purrdf-validate = { path = "crates/validate", version = "4.0.0" }
+purrdf-xsd = { path = "crates/xsd", version = "4.0.0" }
+purrdf-zstd = { path = "crates/zstd", version = "4.0.0" }
 
 # --- external crates ---
 # The structural source censuses (the rdf and shapes census tests and the
@@ -128,7 +138,7 @@ purrdf-xsd = { path = "crates/xsd", version = "3.0.1" }
 # `span-locations` gives the helper census line numbers and the byte ranges it
 # re-lexes function bodies from; it changes nothing inside a real proc macro.
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
@@ -138,11 +148,7 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 clap = { version = "4", features = ["derive"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
-getrandom = "0.3"
-# Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
-# (`purrdf_hash::fixed::FixedHasher`),
-# so the default hasher (foldhash) and allocator-api2 stay OFF.
-hashbrown = { version = "0.17", default-features = false }
+getrandom = "0.4"
 # The C library bindings behind the CLI's immutable-input authority on Linux:
 # `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
 # `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see
@@ -151,7 +157,7 @@ hashbrown = { version = "0.17", default-features = false }
 libc = "0.2"
 # purrdf-stack also uses these target-gated declarations to measure the current
 # native thread stack; wasm32 uses its own shadow-stack floor and no libc.
-pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
+pyo3 = { version = "0.30", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 # Built without `perf-literal`: its literal prefilter is aho-corasick and memchr,
 # a second byte-search implementation beside `purrdf_lex::scan`. Every other
@@ -161,14 +167,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 regex-syntax = "0.8.11"
 # SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
 sha2 = { version = "0.11", default-features = false }
-structured-zstd = "0.0.49"
-# pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
-# FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
-# are byte-reproducible. wasm32-unknown-unknown-clean.
-fastrand = "2"
-# 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
-# BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
-visual-hashing = "1.0.0"
+# RFC 8878 frame checksums in the shared Zstandard provider.
+twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }
 # Raw Win32 declarations for `crates/stack`'s Windows stack-bound read
 # (`GetCurrentThreadStackLimits`): `Win32_System_Threading` only. Declarations
 # only, resolved against the platform SDK at link time — no bundled C source
@@ -179,11 +179,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
 # wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
 # refuses any other CLI version) and the CI Node lane use
-# `wasm-bindgen-cli@0.2.125` to match this.
-wasm-bindgen = "=0.2.125"
+# `wasm-bindgen-cli@0.2.130` to match this.
+wasm-bindgen = "=0.2.130"
 # Encoding support for the private host linker. Native byte-preserving reads
 # and the existing Binaryen validator avoid wasmparser and its banned closure.
-wasm-encoder = { version = "0.259", default-features = false }
+wasm-encoder = { version = "0.263", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"
@@ -303,8 +303,9 @@ strip = "none"
 #     bugs.
 [profile.dev]
 opt-level = 3
-# Line tables rather than full DWARF: a backtrace keeps its function names and
-# file/line, without the multi-GB symbol trees nothing here consumes.
+# Limited debug information rather than full DWARF, retaining backtrace
+# function names and source locations. Cargo debug = 1 is distinct from
+# debug = "line-tables-only".
 debug = 1
 # Orthogonal to opt-level, and load-bearing. First-party code carries
 # `#[cfg(debug_assertions)]` bodies — the SPARQL parser and the BM25 scorer among
@@ -325,8 +326,8 @@ overflow-checks = true
 # price. The debug-info saving is taken here instead, where nearly every unit in
 # the graph is.
 [profile.test]
-# Test binaries carry no debug info. `[profile.dev]`'s line tables exist so a
-# backtrace from a REPL or an example keeps its function names; a test target is
+# Test binaries carry no debug info. `[profile.dev]`'s limited debug info lets a
+# backtrace from a REPL or an example retain function names; a test target is
 # the one place that buys nothing, because a failing assertion prints its own
 # file and line and a panicking test prints its own message. Meanwhile this is
 # where the artifacts are: every integration-test file is its own linked binary,

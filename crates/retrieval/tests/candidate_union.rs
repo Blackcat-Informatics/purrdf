@@ -8,6 +8,7 @@ mod common;
 mod registry;
 
 use purrdf_core::{TermValue, datatype::XSD_INTEGER};
+use purrdf_retrieval::fixture::PRECISION_12;
 use purrdf_retrieval::{
     AdmissionEnvironment, CandidateDepths, CandidateExecutionResult, CandidatePlan,
     CandidatePlanError, DuplicatePolicy, IndexGeneration, Iri, OrderFidelity, PfAttestation,
@@ -73,6 +74,188 @@ fn mocks() -> PropertyFunctionRegistry<'static> {
         );
     }
     registry
+}
+
+fn ranked_literals(
+    ranks: &[TermValue],
+    source: purrdf_retrieval::RankSource,
+) -> PropertyFunctionRegistry<'static> {
+    let mut registry = PropertyFunctionRegistry::new();
+    let mut declaration = ranked(
+        "http://example.org/shared",
+        vec![TermPattern::of_kind(TermKind::Literal)],
+        false,
+    );
+    declaration.rank_source = source;
+    registry.register_ranked(
+        "http://example.org/pf/shared",
+        Arc::new(registry::MockProducer {
+            arity: PfArity::new(1, 2),
+            mode: PfArity::new(1, 2).all_free_mode(),
+            rows: 20,
+            emitted: ranks
+                .iter()
+                .enumerate()
+                .map(|(index, rank)| {
+                    vec![
+                        TermValue::iri(format!("http://example.org/member{index}")),
+                        TermValue::simple_literal("echo"),
+                        rank.clone(),
+                    ]
+                })
+                .collect(),
+        }),
+        declaration,
+    );
+    registry
+}
+
+#[test]
+fn native_shared_ranks_survive_planning_execution_union_and_fusion() {
+    use purrdf_retrieval::{
+        DecayRule, FusionProfile, RankLaw, RankSource, RankedStreamAdapter, TopK,
+    };
+    let ranks: Vec<_> = [1, 1, 7, 7]
+        .into_iter()
+        .map(|rank| TermValue::typed_literal(rank.to_string(), XSD_INTEGER))
+        .collect();
+    let registry = ranked_literals(&ranks, RankSource::Shared { position: 2 });
+    let depths = CandidateDepths::new([(iri("shared"), 3)]).unwrap();
+    let plan = plan_candidates(&[lexical_term()], &depths, &registry, &NoDepthStatistics).unwrap();
+    let ordinal = ranked_literals(&ranks, RankSource::Ordinal);
+    assert_ne!(
+        registry.content_fingerprint().unwrap(),
+        ordinal.content_fingerprint().unwrap()
+    );
+    let ordinal_plan =
+        plan_candidates(&[lexical_term()], &depths, &ordinal, &NoDepthStatistics).unwrap();
+    assert_ne!(
+        plan.id(),
+        ordinal_plan.id(),
+        "the declared rank source binds the question"
+    );
+    let compiled = compile_candidates(
+        &plan,
+        &AdmissionEnvironment {
+            registry: &registry,
+            statistics: &NoDepthStatistics,
+            fusion_profile: None,
+        },
+    )
+    .unwrap();
+    assert!(compiled.units()[0].sparql().contains("AS ?rank"));
+    let profile = FusionProfile::with_decay(
+        BTreeMap::from([(iri("shared"), PRECISION_12.score(PRECISION_12.scale()))]),
+        DecayRule::WeightedReciprocalRank { k: 1 },
+        PRECISION_12,
+    )
+    .unwrap();
+    for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {
+        let executed = block_on(execute_within(
+            &compiled,
+            &registry,
+            common::empty_dataset(),
+            schedule,
+        ))
+        .unwrap();
+        let result = block_on(union(executed, &depths)).unwrap();
+        assert!(result.completed_prefix);
+        let producer = &result.producers[&iri("shared")];
+        assert_eq!((producer.rows_pulled, producer.last_rank), (3, 7));
+        assert_eq!(
+            producer.status,
+            Some(ProducerStatus::DepthReached { rank: 7 })
+        );
+        assert_eq!(
+            result.candidates[&Term::new("<http://example.org/member1>")].ranks[&iri("shared")]
+                .as_slice(),
+            &[1]
+        );
+        let executed = block_on(execute_within(
+            &compiled,
+            &registry,
+            common::empty_dataset(),
+            schedule,
+        ))
+        .unwrap();
+        let streams: Vec<_> = executed
+            .streams
+            .into_iter()
+            .map(|read| {
+                let adapter =
+                    RankedStreamAdapter::new(read.stream, read.contract, &profile, &read.stratum)
+                        .unwrap();
+                (read.stratum, adapter)
+            })
+            .collect();
+        let fused = block_on(purrdf_retrieval::fuse::<_, Term>(
+            streams,
+            &profile,
+            TopK::new(3),
+        ))
+        .unwrap();
+        assert_eq!(fused.rows.len(), 3);
+        assert_eq!(fused.rows[0].score, fused.rows[1].score);
+        assert_eq!(fused.rows[2].contributions[0].1, 7);
+        let observed = &fused.trailer.resolution[&iri("shared")];
+        assert_eq!(observed.rank_law, RankLaw::Shared);
+        assert_eq!(
+            (
+                observed.rows_pulled,
+                observed.ranks_pulled,
+                observed.shared_ranks_observed,
+                observed.collisions_observed
+            ),
+            (3, 7, 1, 0)
+        );
+    }
+}
+
+#[test]
+fn shared_rank_columns_validate_integer_values_without_renumbering() {
+    use purrdf_retrieval::RankSource;
+    let valid = [
+        TermValue::typed_literal(" \t+01\r\n", XSD_INTEGER),
+        TermValue::typed_literal("1", purrdf_core::datatype::XSD_UNSIGNED_LONG),
+        TermValue::typed_literal("7", purrdf_core::datatype::XSD_BYTE),
+    ];
+    let depths = CandidateDepths::new([(iri("shared"), 3)]).unwrap();
+    for ranks in [
+        valid.to_vec(),
+        vec![TermValue::simple_literal("1")],
+        vec![TermValue::typed_literal("0", XSD_INTEGER)],
+        vec![TermValue::typed_literal(
+            "256",
+            purrdf_core::datatype::XSD_UNSIGNED_BYTE,
+        )],
+    ] {
+        let registry = ranked_literals(&ranks, RankSource::Shared { position: 2 });
+        let plan =
+            plan_candidates(&[lexical_term()], &depths, &registry, &NoDepthStatistics).unwrap();
+        let compiled = compile_candidates(
+            &plan,
+            &AdmissionEnvironment {
+                registry: &registry,
+                statistics: &NoDepthStatistics,
+                fusion_profile: None,
+            },
+        )
+        .unwrap();
+        let result = block_on(union(
+            block_on(execute(&compiled, &registry, common::empty_dataset())).unwrap(),
+            &depths,
+        ))
+        .unwrap();
+        if ranks.len() == valid.len() {
+            assert!(result.completed_prefix);
+            assert_eq!(result.producers[&iri("shared")].last_rank, 7);
+        } else {
+            assert!(!result.completed_prefix);
+            assert!(
+                matches!(&result.producers[&iri("shared")].status, Some(ProducerStatus::ExecutionFailed { reason }) if reason.contains("positive integer-family ?rank"))
+            );
+        }
+    }
 }
 
 #[test]
@@ -305,6 +488,7 @@ fn assembled(
     let stratum = iri("scripted");
     let depths = CandidateDepths::new([(stratum.clone(), 3)]).unwrap();
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         duplicates,
         RankFidelity::EXACT,
         purrdf_retrieval::CandidateDomains::Unrestricted,
@@ -438,6 +622,7 @@ fn failed_and_lossy_short_producers_remain_distinct_from_completed_prefixes() {
         DuplicatePolicy::Unique,
     );
     let contract = StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity {
             completeness: Completeness::Lossy {

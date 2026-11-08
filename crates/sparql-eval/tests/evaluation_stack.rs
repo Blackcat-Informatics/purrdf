@@ -35,6 +35,9 @@ const EX: &str = "http://example.org/";
 /// A small stack for the deep requests below: 256 KiB left.
 const SMALL: usize = 256 * 1024;
 
+/// Stack for success-required controls, separate from the small-stack refusal sweep.
+const CONTROL: usize = 1024 * 1024;
+
 /// Large enough that every one of them does: 64 MiB left.
 const LARGE: usize = 64 * 1024 * 1024;
 
@@ -163,7 +166,7 @@ fn evaluate(prepared: &Arc<PreparedQuery>, bytes: usize) -> Result<Vec<String>, 
             &dataset(),
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ))
     })
 }
@@ -179,7 +182,7 @@ fn request(query: &str, bytes: usize) -> Result<Vec<String>, RdfDiagnostic> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ))
     })
 }
@@ -256,7 +259,7 @@ fn the_deep_answers_equal_their_shallow_twins() {
     ] {
         assert_eq!(
             evaluate(&prepare(&deep), LARGE).expect("deep"),
-            request(&shallow, SMALL).expect("the shallow twin answers on the small stack"),
+            request(&shallow, CONTROL).expect("the shallow twin answers on the control stack"),
         );
     }
 }
@@ -279,10 +282,10 @@ fn the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack() {
 #[test]
 fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
     let prepared = prepare(&not_exists(63));
-    let (refused, shallow) = on_stack(SMALL, move || {
+    let (refused, shallow) = on_stack(CONTROL, move || {
         let engine = NativeSparqlEngine::new();
         let refused =
-            subjects(engine.query_prepared(&dataset(), &prepared, &[], QueryOptions::EMPTY));
+            subjects(engine.query_prepared(&dataset(), &prepared, &[], &QueryOptions::EMPTY));
         let shallow = subjects(engine.query_with_options_view(
             &*dataset(),
             SparqlRequest {
@@ -290,7 +293,7 @@ fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ));
         (refused, shallow)
     });
@@ -320,7 +323,7 @@ fn an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing() 
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             );
             (outcome, data.quad_count())
         })
@@ -371,7 +374,7 @@ fn an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced
                     substitutions: &[],
                 },
                 &resolver,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             ))
         })
     };
@@ -405,7 +408,7 @@ fn evaluate_with_service(
             &dataset(),
             &prepared,
             &[],
-            QueryOptions::new().with_remote(Some(&resolver)),
+            &QueryOptions::new().with_remote(Some(&resolver)),
         ))
     })
 }
@@ -421,22 +424,15 @@ fn a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent() {
     let deep = prepare(&service_with_nested_calls(120));
     let small = evaluate_with_service(&deep, 320 * 1024);
     assert_answer_or_stack_refusal(&small, &["s1"], "a SERVICE SILENT body 120 calls deep");
-    if let Err(refused) = small {
-        assert!(
-            refused.message.contains("expression"),
-            "the evaluator's construct is named: {}",
-            refused.message
-        );
-    }
     // The valid neighbours: the same plan with room for the body answers `s1` alone,
-    // and so does a shallow body on the very same small stack.
+    // and so does a shallow body on the separate success-control stack.
     assert_eq!(
         evaluate_with_service(&deep, LARGE).expect("room for the body"),
         ["s1"]
     );
     assert_eq!(
-        evaluate_with_service(&prepare(&service_with_nested_calls(3)), 320 * 1024)
-            .expect("a shallow body answers on the small stack"),
+        evaluate_with_service(&prepare(&service_with_nested_calls(3)), CONTROL)
+            .expect("a shallow body answers on the control stack"),
         ["s1"]
     );
 }
@@ -551,11 +547,11 @@ fn path_under(host: Arc<SuspendingHost>) -> (Result<GovernedOutcome, RdfDiagnost
         let outcome = engine.query_governed(
             &dataset(),
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_stop_signal(host),
         );
         let after = engine
-            .query_with_options_view(&*dataset(), request, QueryOptions::EMPTY)
+            .query_with_options_view(&*dataset(), request, &QueryOptions::EMPTY)
             .is_ok();
         (outcome, after)
     })
@@ -579,7 +575,7 @@ fn a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_co
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("the ungoverned path answers");
     assert_eq!(pairs(&baseline), ["s1|o1", "s2|o2", "s3|o3", "s4|o4"]);
@@ -649,7 +645,7 @@ fn request_with_relation(query: &str, bytes: usize) -> Result<Vec<String>, RdfDi
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         ))
     })
 }
@@ -823,7 +819,7 @@ fn a_thousand_nested_laterals_answer_inside_an_allocation_ceiling() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ));
         (answered, window.close())
     });

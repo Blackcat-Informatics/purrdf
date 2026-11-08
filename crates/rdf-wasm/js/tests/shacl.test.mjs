@@ -220,7 +220,7 @@ const RULE_DATA = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-
 `;
 
 test("shaclEntail materializes the inferred triple and keeps the base fact", () => {
-  const out = shaclEntail(RULE_SHAPES, RULE_DATA);
+  const out = shaclEntail(RULE_SHAPES, RULE_DATA, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited");
   const nt = out.ntriples;
   assert.deepEqual(out.diagnostics, []);
   out.free();
@@ -276,11 +276,11 @@ test("wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, b
   const rules = shaclApplyRules(IN_002_DATA, IN_002("()"));
   assert.deepEqual(plain(rules.diagnostics), expected);
   rules.free();
-  const entailed = shaclEntail(IN_002("()"), IN_002_DATA);
+  const entailed = shaclEntail(IN_002("()"), IN_002_DATA, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited");
   assert.deepEqual(plain(entailed.diagnostics), expected);
   assert.ok(entailed.ntriples.includes("<http://example.com/ns#seen>"), entailed.ntriples);
   entailed.free();
-  const quiet = shaclEntail(IN_002("( <http://example.com/ns#Instance> )"), IN_002_DATA);
+  const quiet = shaclEntail(IN_002("( <http://example.com/ns#Instance> )"), IN_002_DATA, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited");
   assert.deepEqual(quiet.diagnostics, []);
   quiet.free();
 });

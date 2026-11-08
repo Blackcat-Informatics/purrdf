@@ -31,17 +31,18 @@
 //!
 //! Fixtures use `example.org` throughout; every IRI is fixture configuration.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use purrdf_core::{RdfDataset, TermValue};
 use purrdf_retrieval::{
-    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DecayRule, DomainTag,
-    DuplicatePolicy, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusedRow,
-    FusionError, FusionTrailer, Iri, ProducerStatus, ProtocolError, RECIP_K, RankFidelity,
-    RankedStreamAdapter, ReadSchedule, RequestTerm, RetrievalRequest, Statistics, StratumUnit,
-    StreamContract, Term, TopK, UnitError, compile, contribution_under, execute_within, fuse, plan,
+    AdmissionEnvironment, CandidateDomains, CompiledRetrieval, DomainTag, DuplicatePolicy,
+    ExclusionVerdict, ExecutionError, ExecutionResult, FusedRow, FusionError, FusionTrailer, Iri,
+    ProducerStatus, ProtocolError, RankFidelity, RankedStreamAdapter, ReadSchedule, RequestTerm,
+    RetrievalRequest, Score, Statistics, StratumUnit, StreamContract, Term, TopK, UnitError,
+    compile, execute_within, fuse, plan,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, BindingPattern, EvalError, ExclusionBasis, IndexGeneration, PfArgs, PfArity,
@@ -54,7 +55,7 @@ mod common;
 #[path = "support/lookup.rs"]
 mod lookup;
 
-use lookup::{producer_iri, profile, scored, strata};
+use lookup::{ceiling_at, producer_iri, profile, scored, strata};
 use purrdf_retrieval::block_on;
 use purrdf_retrieval::fixture::iri;
 
@@ -357,6 +358,7 @@ fn shaped_registry(
                     }],
                 }],
                 depth_placement: None,
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: CANDIDATE_POSITION,
                 duplicates: DuplicatePolicy::Unique,
                 fidelity: RankFidelity::EXACT,
@@ -389,10 +391,6 @@ impl Statistics for FixtureStatistics {
     fn selectivity_ppm(&self, _subject: &Iri, _term: &RequestTerm) -> Option<u64> {
         None
     }
-}
-
-const fn decay() -> DecayRule {
-    DecayRule::ReciprocalRank { k: RECIP_K as u32 }
 }
 
 fn request() -> RetrievalRequest {
@@ -602,12 +600,6 @@ fn measured(
     measure(exclusion, None, text, schedule).expect("the fixture fuses")
 }
 
-fn ceiling_at(rank: u64) -> ProducerStatus {
-    ProducerStatus::CeilingReached {
-        bound: contribution_under(decay(), Fixed::ONE, rank).expect("in range"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The valid case: a supplied one-call text gets its lookup.
 // ---------------------------------------------------------------------------
@@ -802,7 +794,7 @@ fn joined(predicate: &str) -> String {
 /// control answers once a `FILTER` removed the left stream's first `by` candidates.
 /// Every rank after them moves up by `by`, so every fused score stands and only the
 /// left entities change.
-fn shifted_left(answer: Vec<(String, Fixed)>, by: u64) -> Vec<(String, Fixed)> {
+fn shifted_left(answer: Vec<(String, Score)>, by: u64) -> Vec<(String, Score)> {
     let left = format!("<{}", ex("left/entity"));
     answer
         .into_iter()
@@ -2569,7 +2561,7 @@ mod text_relation {
     /// What one run over the text relations answered and cost.
     #[derive(Debug)]
     pub(super) struct TextRun {
-        pub(super) answer: Vec<(String, Fixed)>,
+        pub(super) answer: Vec<(String, Score)>,
         pub(super) exactness: purrdf_retrieval::ScoreExactness,
         pub(super) statuses: purrdf_sparql_eval::SharedWorkspace<
             purrdf_sparql_eval::AdmittedOrderedMap<Iri, ProducerStatus>,
@@ -3046,7 +3038,7 @@ fn right_only(producer: &str, right: impl Fn(&str) -> String) -> String {
 }
 
 /// One row of [`correlated_needles`].
-type CorrelatedNeedle = (&'static str, Text<'static>, i128, [u64; 2], [u64; 2]);
+type CorrelatedNeedle = (&'static str, Text<'static>, u128, [u64; 2], [u64; 2]);
 
 /// `(name, text, the fused score of <a1>, the lookups each stratum's fusion asks,
 /// the membership tests each stratum's relation performs)` for every text whose
@@ -3375,7 +3367,10 @@ fn a_needle_read_through_a_lateral_drives_its_lookup_with_the_text_s_own_pattern
         assert_eq!(looked_up.exactness, full.exactness, "{name}: as exactly");
         assert_eq!(
             looked_up.answer.first(),
-            Some(&(format!("<{}>", ex("a1")), Fixed::from_raw(first))),
+            Some(&(
+                format!("<{}>", ex("a1")),
+                Score::from_raw(first, PRECISION_12)
+            )),
             "{name}: <a1> leads, carrying what the right stratum's own needles name"
         );
         assert_eq!(
@@ -3488,7 +3483,10 @@ fn a_driving_pattern_binding_no_input_excludes_every_candidate_and_answers_the_f
     assert_eq!(looked_up.exactness, full.exactness, "as exactly");
     assert_eq!(
         looked_up.answer.first(),
-        Some(&(format!("<{}>", ex("a1")), Fixed::from_raw(16_393_442_622))),
+        Some(&(
+            format!("<{}>", ex("a1")),
+            Score::from_raw(16_393_442_622, PRECISION_12)
+        )),
         "the left stratum's alone: the right names nothing"
     );
     assert!(

@@ -932,15 +932,31 @@ impl Reference {
             // unbound.
             Expr::Bound(arg) => Ok(vec![boolean(self.argument(arg, focus)?.is_some())]),
             // §5 with SPARQL's COALESCE: "the value of the first expression that
-            // evaluates without error" — an unbound argument is the error. With
-            // none left, COALESCE raises an error, and the call produces no result.
+            // evaluates without error". Nested evaluation failures are catchable;
+            // an empty argument is unbound. The outer list-parameter cardinality
+            // check still applies to every successfully evaluated argument.
             Expr::Coalesce(args) => {
                 let mut first: Option<Term> = None;
+                let mut failure = None;
                 for arg in args {
-                    let value = self.argument(arg, focus)?;
-                    if first.is_none() {
-                        first = value;
+                    let mut values = match self.eval(arg, focus) {
+                        Ok(values) => values,
+                        Err(error) => {
+                            failure.get_or_insert(error);
+                            continue;
+                        }
+                    };
+                    if values.len() > 1 {
+                        return Err(format!("argument produced {} nodes", values.len()));
                     }
+                    if first.is_none() {
+                        first = values.pop();
+                    }
+                }
+                if first.is_none()
+                    && let Some(error) = failure
+                {
+                    return Err(error);
                 }
                 Ok(first.into_iter().collect())
             }
@@ -968,9 +984,18 @@ fn holder_expression(shapes: &Shapes) -> Result<NodeExpr, String> {
         .node_shapes
         .iter()
         .filter(|shape| shape.id == iri("Holder"))
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .find_map(|constraint| match constraint {
-            Constraint::Expression { expr, .. } => Some(expr.clone()),
+            Constraint::Expression { expr, .. } => Some(NodeExpr::Owned {
+                expr: Box::new(expr.clone()),
+                owner: Arc::clone(&shapes.owner),
+            }),
             _ => None,
         })
         .ok_or_else(|| "ex:Holder carries no sh:expression".to_owned())
@@ -984,9 +1009,9 @@ fn production(world: &World) -> Result<Output, String> {
         .map_err(|e| format!("the generated shapes graph did not load: {e}\n{shapes_ttl}"))?;
     let expr = holder_expression(&shapes)?;
     let data: Arc<_> = parse_turtle_to_dataset(&world.data_turtle(), None)
-        .map_err(|e| format!("the generated data graph did not load: {}", e.join("; ")))?;
+        .map_err(|e| format!("the generated data graph did not load: {e}"))?;
     let shapes_ds: Arc<_> = parse_turtle_to_dataset(&shapes_ttl, None)
-        .map_err(|e| format!("the generated shapes graph did not parse: {}", e.join("; ")))?;
+        .map_err(|e| format!("the generated shapes graph did not parse: {e}"))?;
     let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
     let focus = iri(&format!("n{}", world.focus));
     let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default())
@@ -1336,7 +1361,13 @@ fn every_arm_declares_the_contract_its_clause_defines() {
     let mut stack: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .filter_map(|constraint| match constraint {
             Constraint::Expression { expr, .. } => Some(expr.clone()),
             _ => None,
@@ -1367,8 +1398,20 @@ fn every_arm_declares_the_contract_its_clause_defines() {
             NodeExpr::Call(FnCall::Sparql { .. }) => "Call::Sparql",
             NodeExpr::Arg(_) => "Arg",
             NodeExpr::CustomCall { func, .. } => {
-                stack.push(func.body().expect("the body is installed").clone());
+                stack.push(
+                    shapes
+                        .owner
+                        .function(func)
+                        .expect("the declaration is retained")
+                        .body()
+                        .expect("the body is installed")
+                        .clone(),
+                );
                 "CustomCall"
+            }
+            NodeExpr::Owned { expr, .. } => {
+                stack.push(*expr.clone());
+                continue;
             }
             NodeExpr::Empty => "Empty",
             NodeExpr::Var(_) => "Var",

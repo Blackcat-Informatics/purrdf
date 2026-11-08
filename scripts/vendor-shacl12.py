@@ -246,14 +246,13 @@ a silent content edit fails `make check` via
 
 ## Why a second copy
 
-`purrdf-shapes` needs these vocabularies at runtime: the declared-vs-implemented
-ratchet (`purrdf_shapes::spec::declared()`) parses them to prove every SHACL 1.2
-function and component declaration is bound, and the `purrdf shapes lint` cold
-certify surface reads them for the `shacl-shacl.ttl` oracle. `vectors/` is a
-workspace-level tree that is not part of the published `purrdf-shapes` crate,
-so an `include_bytes!` reaching out of `crates/shapes/` into `vectors/` would
-build locally but break `cargo package`. This directory is the same bytes,
-copied so they ship inside the package.
+`purrdf-shapes` ships vocabulary bytes for the `purrdf shapes lint` cold
+certify surface and its `shacl-shacl.ttl` oracle. The test-only declaration
+ratchet (`purrdf_shacl_conformance::vocab::declared()`) also parses them to
+prove every SHACL 1.2 function and component declaration is bound.
+`vectors/` is a workspace-level tree outside the published `purrdf-shapes`
+crate, so including it directly would build locally but break `cargo package`.
+This directory contains the same bytes, copied into the shipping package.
 
 ## Source and license
 

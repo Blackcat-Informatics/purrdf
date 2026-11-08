@@ -1,35 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A JSON number becomes the binary64 nearest its decimal value in every reader that
-//! turns one into RDF, on every target, the x87 included.
+//! A JSON number selected for double conversion becomes the nearest value on every
+//! target, the x87 included. JSON-LD also preserves untyped integral values below
+//! 10^21 as exact RDF integers.
 //!
 //! The witnesses are numbers a reader that is not correctly rounded gets wrong, found by
 //! search against [`soft::significand_power_decimal`] -- the significand-times-power
 //! conversion a fast JSON reader makes, reproduced in integers -- and against the x87's
-//! double rounding of an exact fast path ([`soft::x87_fast_path_decimals`]). Each reader
-//! must give every witness the value `str::parse::<f64>` gives it (core's reader is
-//! correctly rounded and sets the x87's precision itself), and so the literal that value
-//! implies, and never the neighbour the old reading landed on.
+//! double rounding of an exact fast path ([`soft::x87_fast_path_decimals`]). Each double
+//! conversion must give every witness the value `str::parse::<f64>` gives it (core's
+//! reader is correctly rounded and sets the x87's precision itself), and so the literal
+//! that value implies, and never the neighbour the old reading landed on.
 
 use std::collections::BTreeMap;
 
-use purrdf_lex::json::{self, Number, Object, Value};
+use purrdf_lex::json::{self, Exponent, Number, Object, Value};
 use purrdf_lex::json_escape::JsonEscapes;
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, DatasetSink,
     OkfBundle, OkfConfig, ProjectionLimits, SerializeGraph, datasets_isomorphic, lift_okf_bundle,
     parse_dataset, read_csvw, serialize_dataset, write_okf_bundle,
 };
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_INTEGER};
 use purrdf_xsd::ieee::Binary64Scope;
 use purrdf_xsd::ieee::reference as soft;
 use purrdf_xsd::numeric::canonical_double;
 
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-
 /// Every decimal witness: long mantissas and shortest forms the significand-times-power
 /// reader misreads, fast-path numbers the x87 double rounds, the published misreadings,
-/// and midpoints between neighbouring binary64 values (with a digit more and a digit
+/// and midpoints between neighbouring doubles (with a digit more and a digit
 /// less), which only a reader of every digit decides.
 fn witnesses() -> Vec<String> {
     let mut witnesses = soft::misread_decimals(40);
@@ -63,7 +63,7 @@ fn witnesses() -> Vec<String> {
     witnesses
 }
 
-/// The binary64 nearest `lexical`'s decimal value.
+/// The double nearest `lexical`'s decimal value.
 fn correct(lexical: &str) -> f64 {
     lexical.parse().expect("a decimal number")
 }
@@ -76,7 +76,7 @@ fn nquads(dataset: &purrdf_rdf::RdfDataset) -> String {
     .expect("UTF-8")
 }
 
-/// The reader itself: the workspace's one JSON reader, its number converted to binary64
+/// The reader itself: the workspace's one JSON reader, its number converted to a double
 /// under the scope every result-affecting read in this workspace enters.
 /// The sweep covers the witnesses and a wide draw of midpoints, the hardest inputs a
 /// decimal reader has.
@@ -119,10 +119,10 @@ fn the_json_reader_reads_every_witness_and_midpoint_correctly_rounded() {
     );
 }
 
-/// JSON-LD: a bare number, a value object, a number coerced to `xsd:double` by the
-/// context, and an `@json` value all carry the correctly rounded value.
+/// JSON-LD preserves eligible untyped integers exactly; other bare numbers and value
+/// objects, every context-coerced double, and `@json` numbers round correctly.
 #[test]
-fn json_ld_numbers_expand_to_the_correctly_rounded_double() {
+fn json_ld_numbers_preserve_exact_integers_and_correctly_rounded_doubles() {
     let witnesses = witnesses();
     let list = witnesses.join(",");
     let objects = witnesses
@@ -150,10 +150,33 @@ fn json_ld_numbers_expand_to_the_correctly_rounded_double() {
     let mut expected = std::collections::BTreeSet::new();
     for witness in &witnesses {
         let value = correct(witness);
-        let lexical = canonical_double(value);
+        let double = canonical_double(value);
+        let decimal = Number::from_lexeme(witness.as_str())
+            .expect("a decimal witness")
+            .decimal();
+        // Normalization removes fractional trailing zeros. Exact integer arithmetic
+        // decides the JSON-LD 1.1 Object to RDF threshold, before any double rounding.
+        // Overflow here also proves the magnitude exceeds that threshold.
+        let coefficient = decimal.coefficient().parse::<u128>().ok();
+        let integer = match decimal.exponent() {
+            Exponent::Small(exponent) => u32::try_from(*exponent)
+                .ok()
+                .and_then(|power| 10_u128.checked_pow(power))
+                .and_then(|scale| coefficient?.checked_mul(scale))
+                .filter(|magnitude| *magnitude < 10_u128.pow(21))
+                .map(|magnitude| {
+                    let sign = if decimal.is_negative() { "-" } else { "" };
+                    format!("{sign}{magnitude}")
+                }),
+            Exponent::Large { .. } => None,
+        };
         for property in ["bare", "object", "coerced"] {
+            let (lexical, datatype) = match (property, integer.as_deref()) {
+                ("bare" | "object", Some(integer)) => (integer, XSD_INTEGER),
+                _ => (double.as_str(), XSD_DOUBLE),
+            };
             let line = format!(
-                "<http://example.org/s> <http://example.org/{property}> \"{lexical}\"^^<{XSD_DOUBLE}> .",
+                "<http://example.org/s> <http://example.org/{property}> \"{lexical}\"^^<{datatype}> .",
             );
             assert!(quads.contains(&line), "{witness}: missing {line}");
             expected.insert(line);
@@ -330,7 +353,17 @@ fn okf_structured_numbers_read_and_write_back_correctly_rounded() {
     let mut sink = DatasetSink::new();
     lift_okf_bundle(&written.bundle, &config, &mut sink).expect("lift the written bundle");
     let reread = sink.into_dataset().expect("finished sink");
-    assert!(datasets_isomorphic(&dataset, &reread));
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reread,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }
 
 /// CSVW: a datatype's `minimum` and `maximum` read from a referenced schema resource are
@@ -387,6 +420,94 @@ fn csvw_schema_bounds_admit_the_value_they_spell() {
         assert!(
             cell.values.len() == 1 && cell.values[0].datatype == XSD_DOUBLE,
             "{witness}: {cell:?}"
+        );
+    }
+}
+
+/// Metadata bounds retain their original XSD refusal after the input is released.
+#[test]
+fn csvw_schema_bound_refusals_retain_native_xsd_fields() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_xsd::{ErrorCode, XsdDatatype, XsdError};
+
+    let metadata_iri = "http://example.org/bounds-metadata.json";
+    let schema_iri = "http://example.org/bounds-schema.json";
+    let table_iri = "http://example.org/bounds.csv";
+    let read = |datatype: &str, lower: &str, upper: &str, cell: &str| {
+        let metadata = format!(
+            r#"{{"@context":"http://www.w3.org/ns/csvw","url":"{table_iri}","tableSchema":"{schema_iri}"}}"#
+        );
+        let schema = format!(
+            r#"{{"columns":[{{"name":"n","titles":"n","datatype":{{"base":"{datatype}","minimum":"{lower}","maximum":"{upper}"}}}}]}}"#
+        );
+        let config = csvw_config();
+        let input = CsvwInput::new(
+            CsvwAction::Metadata {
+                metadata_iri: metadata_iri.to_owned(),
+            },
+            BTreeMap::from([
+                (metadata_iri.to_owned(), metadata.into_bytes()),
+                (schema_iri.to_owned(), schema.into_bytes()),
+                (table_iri.to_owned(), format!("n\n{cell}\n").into_bytes()),
+            ]),
+            config.limits(),
+        )
+        .expect("input");
+        read_csvw(&input, &config)
+    };
+    for (datatype, base, lower, upper, lexical, identity) in [
+        (
+            XsdDatatype::Integer,
+            "integer",
+            "1.5",
+            "10",
+            "1.5",
+            "xsd-invalid-lexical",
+        ),
+        (
+            XsdDatatype::Integer,
+            "integer",
+            "1",
+            "10.5",
+            "10.5",
+            "xsd-invalid-lexical",
+        ),
+        (
+            XsdDatatype::Byte,
+            "byte",
+            "1",
+            "300",
+            "300",
+            "xsd-out-of-range",
+        ),
+    ] {
+        let error = read(base, lower, upper, "5").expect_err("invalid facet");
+        assert_eq!(error.kind(), purrdf_rdf::ProjectionErrorKind::Integrity);
+        assert_eq!(error.path(), Some(schema_iri));
+        assert!(error.message().starts_with("invalid CSVW datatype facet: "));
+        assert_eq!(error.storage_error(), None);
+        let native = std::error::Error::source(&error)
+            .expect("native cause")
+            .downcast_ref::<XsdError>()
+            .expect("the original XSD error");
+        assert_eq!(native.code(), Some(ErrorCode::Forg0001));
+        let inspected = Capture::read(&error);
+        assert_eq!(inspected.code, "rdf-projection");
+        assert!(matches!(
+            inspected.field("kind"),
+            ErrorValue::Code("integrity")
+        ));
+        assert!(matches!(inspected.field("path"), ErrorValue::Text(path) if path == schema_iri));
+        let cause = inspected.child("cause");
+        assert_eq!(cause.code, identity);
+        assert!(matches!(cause.field("datatype"), ErrorValue::Iri(iri) if iri == datatype.iri()));
+        assert!(matches!(cause.field("lexical"), ErrorValue::Text(text) if text == lexical));
+        let accepted = read(base, "1", "10", "5").expect("valid neighboring bounds");
+        assert_eq!(accepted.warnings, []);
+        assert_eq!(
+            accepted.group.tables[0].rows[0].cells[0].values[0].datatype,
+            datatype.iri()
         );
     }
 }

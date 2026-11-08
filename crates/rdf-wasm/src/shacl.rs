@@ -98,6 +98,8 @@ use crate::operation::{JobError, JobOutcome, SHACL_CODE};
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct ShaclImportError {
+    /// Shared owner of the original native error and its inspection protocol.
+    native: JobError,
     /// The engine's kebab-case kind label.
     kind: String,
     /// The IRIs the refusal names.
@@ -108,6 +110,18 @@ pub struct ShaclImportError {
 
 #[wasm_bindgen]
 impl ShaclImportError {
+    /// The retained original error's typed native field owner.
+    #[wasm_bindgen(getter, js_name = nativeCause)]
+    pub fn native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        self.native.native_cause()
+    }
+
+    /// Deterministic native fields, including original import-key or text causes.
+    #[wasm_bindgen(getter, js_name = nativeCauseJson)]
+    pub fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.native.native_cause_json()
+    }
+
     /// `unresolved-import`, `unreached-import`, `incompatible-import-versions`,
     /// `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
     /// `invalid-shapes-graph-link`.
@@ -139,13 +153,26 @@ impl ShaclImportError {
     }
 }
 
-impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
-    fn from(error: &purrdf_validate::ShapesImportError) -> Self {
-        Self {
+impl ShaclImportError {
+    /// Retain the specialized import projection only after native cause capture.
+    pub(crate) fn capture(
+        error: &purrdf_validate::ShapesImportError,
+    ) -> Result<Self, purrdf_core::RdfDiagnostic> {
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+        if diagnostic.storage_error().is_some() {
+            return Err(diagnostic);
+        }
+        Ok(Self {
+            native: JobError::diagnostic_message(diagnostic),
             kind: error.kind().to_owned(),
             iris: error.iris().into_iter().map(ToOwned::to_owned).collect(),
             message: error.to_string(),
-        }
+        })
+    }
+
+    fn rejection(error: &purrdf_validate::ShapesImportError) -> JsValue {
+        Self::capture(error).map_or_else(crate::operation::diagnostic_to_js, Into::into)
     }
 }
 
@@ -154,18 +181,69 @@ impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
 /// [`shapes_error_message`] for anything else.
 fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
-        ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
+        ShapesError::ProfileRequest(cause) => {
+            let message = format!("shaclProfile {cause}");
+            let mut diagnostic =
+                purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+            if diagnostic.storage_error().is_none() {
+                diagnostic.message = message;
+            }
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::ImportArrays(cause) => {
+            let diagnostic = purrdf_validate::native_error::diagnostic(
+                "import-array-refused",
+                cause,
+                cause.storage_error(),
+            );
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::ScopeBinding(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::Processor(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::Conformance(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::RuleExecution(error) => {
+            let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+            let rejection = match error.into_cause() {
+                purrdf_shapes::rules::RulesError::Shapes(cause) => shapes_rejection(cause),
+                cause => crate::operation::native_diagnostic_to_js_with_message(
+                    purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+                ),
+            };
+            crate::operation::attach_execution_receipt(rejection, &receipt)
+        }
+        ShapesError::Imports(error) => ShaclImportError::rejection(&error),
         ShapesError::Storage(error) => crate::operation::diagnostic_to_js(error.into()),
-        other => JsError::new(&shapes_error_message(&other)).into(),
+        other => crate::operation::native_diagnostic_to_js_with_message(
+            purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+        ),
     }
 }
 
 /// The words a shapes-graph error other than the import refusal rejects with, on the
 /// synchronous and the asynchronous lane alike.
+#[cfg(test)]
 pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
     match error {
+        ShapesError::ScopeBinding(error) => error.to_string(),
+        ShapesError::ImportArrays(error) => error.to_string(),
+        ShapesError::Canonical(error) => error.to_string(),
+        ShapesError::RuleExecution(error) => error.to_string(),
         ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
         ShapesError::Imports(error) => error.to_string(),
+        ShapesError::Recursion(refusal) => refusal.to_string(),
+        ShapesError::Preparation(refusal) => refusal.to_string(),
         ShapesError::Invalid(message) => message.clone(),
         ShapesError::Processor(failure) => failure.to_string(),
         ShapesError::ShaclJs(refusal) => refusal.message().to_owned(),
@@ -173,6 +251,7 @@ pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
         ShapesError::Prebinding(violation) => violation.to_string(),
         ShapesError::UnsupportedTarget(refusal) => refusal.message().to_owned(),
         ShapesError::SparqlTargetDisagreement(refusal) => refusal.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -185,13 +264,38 @@ pub(crate) enum ShaclRefusal {
     /// The shapes graph's `owl:imports` closure is not in hand, or the import table
     /// cannot be used.
     Import(ShaclImportError),
+    Execution(Box<Self>, String),
+    Canonical(Box<Self>, String),
 }
 
 impl ShaclRefusal {
+    pub(crate) fn canonicalization_json(&self) -> Option<&str> {
+        match self {
+            Self::Canonical(_, receipts) => Some(receipts),
+            Self::Execution(inner, _) => inner.canonicalization_json(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn execution_receipt(&self) -> Option<&str> {
+        match self {
+            Self::Execution(_, receipt) => Some(receipt),
+            Self::Canonical(inner, _) => inner.execution_receipt(),
+            _ => None,
+        }
+    }
+    pub(crate) fn into_cause(self) -> Self {
+        match self {
+            Self::Execution(inner, _) | Self::Canonical(inner, _) => inner.into_cause(),
+            other => other,
+        }
+    }
+
     /// The stable code the job's failure is reported under: a product refusal's own
     /// native XPath resource code when it carries one, `fallback` otherwise.
     pub(crate) fn code<'a>(&'a self, fallback: &'a str) -> &'a str {
         match self {
+            Self::Execution(inner, _) | Self::Canonical(inner, _) => inner.code(fallback),
             Self::Product(ShaclProductRefusal {
                 code: Some(code), ..
             }) => code,
@@ -202,6 +306,7 @@ impl ShaclRefusal {
     /// The refusal's message, as its class's `toString()` spells it.
     pub(crate) fn to_js_string(&self) -> String {
         match self {
+            Self::Execution(inner, _) | Self::Canonical(inner, _) => inner.to_js_string(),
             Self::Product(refusal) => refusal.to_js_string(),
             Self::Import(error) => error.to_js_string(),
         }
@@ -214,7 +319,7 @@ fn shapes_import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
 ) -> Result<Vec<(&'a str, &'a str)>, ShapesError> {
-    crate::entail::import_pairs(iris, documents).map_err(ShapesError::Invalid)
+    crate::entail::import_pairs(iris, documents).map_err(ShapesError::from)
 }
 
 /// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0.
@@ -289,8 +394,9 @@ pub(crate) fn validate_to_sarif_with_options_impl(
     }
     let validation = match conformance_disallows {
         None => base_options,
-        Some(iris) => base_options
-            .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
+        Some(iris) => base_options.with_conformance_disallows(
+            purrdf_validate::ConformanceDisallows::from_iris(iris).map_err(ShapesError::from)?,
+        ),
     };
     purrdf_validate::validate_to_sarif_string_with_xpath_regex(
         shapes_ttl,
@@ -439,9 +545,11 @@ pub(crate) fn entail_to_ntriples_impl(
     shapes_graph: Option<&str>,
     limits: purrdf_validate::RuleLimits,
     profile: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_validate::EntailOutcome, XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    purrdf_validate::entail_to_ntriples_with_xpath_regex(
+    purrdf_validate::entail_to_ntriples_with_coordinates(
         &purrdf_validate::EntailRequest {
             shapes_ttl,
             shapes_base,
@@ -455,6 +563,8 @@ pub(crate) fn entail_to_ntriples_impl(
             host: purrdf_validate::RulesHost::Wasm,
         },
         profile,
+        coordinates,
+        control,
     )
 }
 
@@ -466,8 +576,10 @@ pub(crate) fn entail_to_ntriples_impl(
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct ShaclEntailment {
+    coordinates: purrdf_shapes::RuleCoordinates,
     /// The materialized dataset as N-Triples.
-    ntriples: String,
+    ntriples: purrdf_core::Canonicalized,
+    canonicalization_json: String,
     /// The mandatory diagnostics.
     diagnostics: Vec<ShaclDiagnostic>,
 }
@@ -475,20 +587,36 @@ pub struct ShaclEntailment {
 impl From<purrdf_validate::EntailOutcome> for ShaclEntailment {
     fn from(outcome: purrdf_validate::EntailOutcome) -> Self {
         Self {
+            coordinates: outcome.coordinates,
             diagnostics: diagnostic_values(&outcome.diagnostics),
             ntriples: outcome.ntriples,
+            canonicalization_json: "[]".to_owned(),
         }
     }
 }
 
 #[wasm_bindgen]
 impl ShaclEntailment {
+    /// Ordered per-run canonical-search evidence with exact decimal-string counters.
+    #[wasm_bindgen(getter, js_name = canonicalizationJson)]
+    #[must_use]
+    pub fn canonicalization_json(&self) -> String {
+        self.canonicalization_json.clone()
+    }
+
+    /// The exact native rule execution transcript, including sampled defaults.
+    #[wasm_bindgen(getter, js_name = executionReceiptJson)]
+    #[must_use]
+    pub fn execution_receipt_json(&self) -> String {
+        purrdf_validate::query::rule_execution_receipt_json(&self.coordinates)
+    }
+
     /// The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
     /// N-Triples.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn ntriples(&self) -> String {
-        self.ntriples.clone()
+        self.ntriples.nquads().to_owned()
     }
 
     /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
@@ -512,6 +640,7 @@ impl ShaclEntailment {
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct ShaclRulesInference {
+    coordinates: purrdf_shapes::RuleCoordinates,
     /// The inference graph as N-Triples.
     inferred: String,
     /// The proof text, when `explain` was set.
@@ -522,6 +651,13 @@ pub struct ShaclRulesInference {
 
 #[wasm_bindgen]
 impl ShaclRulesInference {
+    /// The native rule execution transcript, independent of proof selection.
+    #[wasm_bindgen(getter, js_name = executionReceiptJson)]
+    #[must_use]
+    pub fn execution_receipt_json(&self) -> String {
+        purrdf_validate::query::rule_execution_receipt_json(&self.coordinates)
+    }
+
     /// The INFERENCE GRAPH — the inferred triples only, never the data graph — as
     /// N-Triples 1.2, one triple per line, in canonical order.
     #[wasm_bindgen(getter)]
@@ -554,6 +690,7 @@ impl ShaclRulesInference {
 impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
     fn from(outcome: purrdf_validate::RulesOutcome) -> Self {
         Self {
+            coordinates: outcome.coordinates,
             diagnostics: diagnostic_values(&outcome.diagnostics),
             inferred: outcome.inferred_ntriples,
             proof: outcome.proof,
@@ -562,15 +699,16 @@ impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
 }
 
 /// Run a rule set over a data graph. Native-testable core of [`shacl_apply_rules`]: the
-/// work is [`purrdf_validate::apply_rules_to_ntriples_with_xpath_regex`].
+/// work is [`purrdf_validate::apply_rules_to_ntriples_with_coordinates`].
 ///
 /// `profile` is the dated XPath law the request selected, or `None` for the
 /// compatibility regular expressions.
 pub(crate) fn apply_rules_impl(
     request: &purrdf_validate::RulesRequest<'_>,
     profile: Option<Profile>,
+    coordinates: purrdf_validate::query::CoordinateInputs,
 ) -> Result<purrdf_validate::RulesOutcome, XPathValidationError> {
-    purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(request, profile)
+    purrdf_validate::apply_rules_to_ntriples_with_coordinates(request, profile, coordinates)
 }
 
 /// The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check
@@ -1031,6 +1169,14 @@ impl From<ShapesProductRefusal> for ShaclProductRefusal {
     }
 }
 
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = Uint8Array)]
+    type ProductBytes;
+    #[wasm_bindgen(constructor, js_class = "Uint8Array")]
+    fn product_bytes_value(bytes: &[u8]) -> ProductBytes;
+}
+
 /// Compile a Turtle shapes graph into a prepared product. Native-testable core.
 ///
 /// Returns the plain Rust refusal so this is exercisable off wasm; the
@@ -1041,6 +1187,7 @@ pub(crate) fn pack_product_impl(
     import_iris: &[String],
     import_documents: &[String],
     shapes_graph: Option<&str>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
     let imports =
         shapes_import_pairs(import_iris, import_documents).map_err(ShapesProductRefusal::Shapes)?;
@@ -1049,6 +1196,7 @@ pub(crate) fn pack_product_impl(
         shapes_base,
         shapes_graph,
         &imports,
+        control,
     )
 }
 
@@ -1085,18 +1233,31 @@ pub fn shacl_pack_product(
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
     shapes_graph: Option<String>,
-) -> Result<Vec<u8>, JsValue> {
-    pack_product_impl(
-        shapes_ttl,
-        shapes_base.as_deref(),
-        import_iris.as_deref().unwrap_or_default(),
-        import_documents.as_deref().unwrap_or_default(),
-        shapes_graph.as_deref(),
-    )
-    .map_err(|refusal| match refusal.import_error() {
-        Some(error) => ShaclImportError::from(error).into(),
-        None => ShaclProductRefusal::from(refusal).into(),
-    })
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let (value, receipts) = crate::canonical::run_with(
+        canonical_search,
+        cancel.as_ref(),
+        |control| {
+            pack_product_impl(
+                shapes_ttl,
+                shapes_base.as_deref(),
+                import_iris.as_deref().unwrap_or_default(),
+                import_documents.as_deref().unwrap_or_default(),
+                shapes_graph.as_deref(),
+                control,
+            )
+        },
+        |refusal| match refusal.import_error() {
+            Some(error) => ShaclImportError::rejection(error),
+            None => ShaclProductRefusal::from(refusal).into(),
+        },
+    )?;
+    Ok(crate::canonical::CanonicalResult::new(
+        ProductBytes::product_bytes_value(&value).into(),
+        receipts,
+    ))
 }
 
 /// Read a prepared product's self-description. Native-testable core.
@@ -1121,8 +1282,11 @@ pub fn shacl_product_explain(product: &[u8]) -> Result<String, ShaclProductRefus
 
 /// Corroborate a prepared product's carried dataset against its claimed identity.
 /// Native-testable core.
-pub(crate) fn product_certify_impl(product: &[u8]) -> Result<(), ShapesProductRefusal> {
-    purrdf_validate::certify_shapes_product(product).map_err(ShapesProductRefusal::from)
+pub(crate) fn product_certify_impl(
+    product: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), ShapesProductRefusal> {
+    purrdf_validate::certify_shapes_product(product, control).map_err(ShapesProductRefusal::from)
 }
 
 /// `shaclProductCertify(product)` → resolves when the product's shapes dataset
@@ -1137,8 +1301,25 @@ pub(crate) fn product_certify_impl(product: &[u8]) -> Result<(), ShapesProductRe
 ///
 /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done.
 #[wasm_bindgen(js_name = shaclProductCertify)]
-pub fn shacl_product_certify(product: &[u8]) -> Result<(), ShaclProductRefusal> {
-    product_certify_impl(product).map_err(ShaclProductRefusal::from)
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
+pub fn shacl_product_certify(
+    product: &[u8],
+    canonical_search: &str,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let ((), receipts) = crate::canonical::run_with(
+        canonical_search,
+        cancel.as_ref(),
+        |control| product_certify_impl(product, control),
+        |refusal| ShaclProductRefusal::from(refusal).into(),
+    )?;
+    Ok(crate::canonical::CanonicalResult::new(
+        JsValue::UNDEFINED,
+        receipts,
+    ))
 }
 
 /// Admit a prepared product and validate a data graph with it. Native-testable core.
@@ -1240,8 +1421,7 @@ fn requested_law(
     name: Option<&str>,
     xpath_regex: Option<Profile>,
 ) -> Result<Option<ShaclProfile>, ShapesError> {
-    purrdf_validate::requested_shacl_profile(name, xpath_regex)
-        .map_err(|message| ShapesError::Invalid(format!("shaclProfile {message}")))
+    purrdf_validate::requested_shacl_profile(name, xpath_regex).map_err(ShapesError::ProfileRequest)
 }
 
 /// [`shapes_profile`] for a product entry: refused before the product is opened, so
@@ -1259,6 +1439,7 @@ fn product_profile(name: Option<&str>) -> Result<Option<Profile>, ShaclProductRe
 /// pattern refusal's, a SHACL-driven query's diagnostic's or another execution failure's
 /// as it renders itself — a resource refusal's starting with its own code. There is no
 /// partial report.
+#[cfg(test)]
 pub(crate) fn selected_error_message(error: &XPathValidationError) -> String {
     match error {
         XPathValidationError::Shapes(error) => shapes_error_message(error),
@@ -1338,16 +1519,94 @@ fn expected_identity(expect_identity: &str) -> Result<[u8; 32], ShaclProductRefu
 /// or reordering an argument is one edit here.
 ///
 /// Every entry evaluates patterns, so each is declared `selecting xpath_regex`: it also
-/// takes the dated XPath law (`xpathRegex`) as its synchronous entry's trailing argument
+/// takes the dated XPath law (`xpathRegex`) after its synchronous document and limit arguments
 /// (`None` keeping the compatibility law). Its asynchronous twin
 /// takes the law in its options object instead, so the host options keep following the
 /// positional arguments where they always have: the constructor leaves it unset and the
 /// job installs it from its options ([`ShaclRequest::select_xpath_regex`]).
+/// Rule entries append raw coordinate arguments only on the synchronous export; their
+/// constructors retain their arity and the job installs owned inputs from its options.
+macro_rules! shacl_sync_entry {
+    ($operation:expr) => {
+        $operation.map_err(ShaclFailure::into_rejection)
+    };
+    ($operation:expr, canonical($policy:ident, $cancel:ident, $control:ident)) => {{
+        let (mut value, receipts) = crate::canonical::run_with(
+            &$policy,
+            $cancel.as_ref(),
+            |$control| $operation,
+            ShaclFailure::into_rejection,
+        )?;
+        value.canonicalization_json = receipts;
+        Ok(value)
+    }};
+}
+
+macro_rules! shacl_job_entry {
+    ($stop:expr, $operation:expr) => {
+        $operation.map_or_else(ShaclFailure::into_outcome, ShaclAnswer::into_outcome)
+    };
+    ($stop:expr, $operation:expr, canonical($policy:ident, $control:ident)) => {{
+        let policy = match purrdf_validate::canonical::parse_policy(&$policy) {
+            Ok(policy) => policy,
+            Err(error) => {
+                return JobOutcome::Failed(
+                    JobError::message(SHACL_CODE, error.to_string())
+                        .with_canonicalization("[]".to_owned(), None),
+                );
+            }
+        };
+        let executed = purrdf_validate::canonical::execute(policy, $stop, |$control| $operation);
+        let receipts = purrdf_validate::canonical::receipts_json(&executed.receipts).to_string();
+        match executed.result {
+            Ok(mut value) => {
+                value.canonicalization_json = receipts;
+                value.into_outcome()
+            }
+            Err(error) => {
+                let cause = purrdf_validate::canonical::native_canonical_cause(&error).cloned();
+                if cause.is_some() {
+                    JobOutcome::Failed(
+                        JobError::message(SHACL_CODE, error.to_string())
+                            .with_canonicalization(receipts, cause),
+                    )
+                } else {
+                    match error.into_outcome() {
+                        JobOutcome::Failed(error) => {
+                            JobOutcome::Failed(error.with_canonicalization(receipts, None))
+                        }
+                        JobOutcome::Refused(refusal) => JobOutcome::Refused(
+                            ShaclRefusal::Canonical(Box::new(refusal), receipts),
+                        ),
+                        _ => unreachable!("a failed SHACL request must produce a refusal"),
+                    }
+                }
+            }
+        }
+    }};
+}
+
+macro_rules! shacl_decode_coordinates {
+    ((), ()) => {};
+    (($coordinates:ident, $now:ident, $seed:ident), ()) => {
+        let $coordinates =
+            crate::query::QueryEngine::coordinate_inputs($now.as_ref(), $seed.as_ref())?;
+    };
+    (($coordinates:ident, $now:ident, $seed:ident), ($policy:ident)) => {
+        let $coordinates =
+            crate::query::QueryEngine::coordinate_inputs($now.as_ref(), $seed.as_ref())
+                .map_err(|error| crate::canonical::attach_evidence(error, "[]", None))?;
+    };
+}
+
 macro_rules! shacl_entries {
     ($(
         $(#[$meta:meta])*
         $js:ident: fn $sync:ident($($param:ident: $ty:ty),* $(,)?)
-            selecting $selection:ident $(law $law:ident)? -> Result<$out:ty, $err:ty>
+            selecting $selection:ident $(law $law:ident)?
+            $(coordinates($now:ident, $seed:ident) as $coordinates:ident)?
+            $(canonical($policy:ident, $control:ident, $cancel:ident))?
+            -> Result<$out:ty, $err:ty>
             => $variant:ident, $ctor_js:ident / $ctor:ident
             $body:block
     )*) => {
@@ -1364,6 +1623,8 @@ macro_rules! shacl_entries {
                 #[allow(clippy::needless_pass_by_value)] // the request owns its arguments
                 pub(crate) fn $ctor(
                     $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
+                    $(, $coordinates: purrdf_validate::query::CoordinateInputs)?
+                    $(, $control: &mut purrdf_core::CanonicalizationControl<'_>)?
                 ) -> Result<$out, $err> $body
             )*
         }
@@ -1374,18 +1635,19 @@ macro_rules! shacl_entries {
         pub(crate) enum ShaclRequest {
             $(
                 #[doc = concat!("`", stringify!($js), "`'s arguments.")]
-                $variant { $($param: $ty,)* $selection: Option<String>, $($law: Option<String>,)? },
+                $variant { $($param: $ty,)* $selection: Option<String>, $($law: Option<String>,)?
+                    $($coordinates: purrdf_validate::query::CoordinateInputs,)? $($policy: String,)? },
             )*
         }
 
         impl ShaclRequest {
             /// Run the request as a job: its entry's own body, the answer or refusal
             /// carried as the value its synchronous entry returns or throws.
-            pub(crate) fn run_job(self) -> JobOutcome {
+            pub(crate) fn run_job(self, stop: Option<&dyn purrdf_core::StopSignal>) -> JobOutcome {
                 match self {
-                    $(Self::$variant { $($param,)* $selection, $($law,)? } => {
-                        requests::$ctor($($param,)* $selection $(, $law)?)
-                            .map_or_else(ShaclFailure::into_outcome, ShaclAnswer::into_outcome)
+                    $(Self::$variant { $($param,)* $selection, $($law,)? $($coordinates,)? $($policy,)? } => {
+                        shacl_job_entry!(stop, requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)?)
+                            $(, canonical($policy, $control))?)
                     })*
                 }
             }
@@ -1394,6 +1656,27 @@ macro_rules! shacl_entries {
             pub(crate) fn select_xpath_regex(&mut self, name: Option<String>) {
                 match self {
                     $(Self::$variant { $selection, .. } => *$selection = name,)*
+                }
+            }
+
+            /// Admit owned execution controls only for actual rule requests.
+            pub(crate) fn select_coordinates(
+                &mut self,
+                inputs: purrdf_validate::query::CoordinateInputs,
+            ) -> Result<(), String> {
+                match self {
+                    $($(Self::$variant { $coordinates, .. } => {
+                        *$coordinates = inputs;
+                        Ok(())
+                    },)?)*
+                    _ => {
+                        let (now, seed) = inputs.into_parts();
+                        if now.is_some() || seed.is_some() {
+                            Err("now and entropySeed apply only to entailment and rule execution".to_owned())
+                        } else {
+                            Ok(())
+                        }
+                    }
                 }
             }
 
@@ -1425,9 +1708,12 @@ macro_rules! shacl_entries {
             #[allow(clippy::too_many_arguments)] // one argument per request input
             pub fn $sync(
                 $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
+                $(, $now: Option<JsValue>, $seed: Option<JsValue>)?
+                $(, $policy: String, $cancel: Option<crate::query::CancellationToken>)?
             ) -> Result<$out, JsValue> {
-                requests::$ctor($($param,)* $selection $(, $law)?)
-                    .map_err(ShaclFailure::into_rejection)
+                shacl_decode_coordinates!(($($coordinates, $now, $seed)?), ($($policy)?));
+                shacl_sync_entry!(requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)?)
+                    $(, canonical($policy, $cancel, $control))?)
             }
         )*
 
@@ -1457,10 +1743,12 @@ macro_rules! shacl_entries {
                 #[wasm_bindgen(js_name = $ctor_js)]
                 #[allow(clippy::too_many_arguments)] // one argument per request input
                 #[must_use]
-                pub fn $ctor($($param: $ty),*) -> Self {
+                pub fn $ctor($($param: $ty,)* $($policy: String)?) -> Self {
                     Self {
                         request: ShaclRequest::$variant {
                             $($param,)* $selection: None, $($law: None,)?
+                            $($coordinates: purrdf_validate::query::CoordinateInputs::default(),)?
+                            $($policy,)?
                         },
                     }
                 }
@@ -1656,7 +1944,9 @@ shacl_entries! {
         max_generated_terms: Option<u64>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
-    ) selecting xpath_regex -> Result<ShaclEntailment, XPathValidationError> => Entail, entail / entail
+    ) selecting xpath_regex coordinates(now, entropy_seed) as coordinates
+        canonical(canonical_search, control, cancel)
+        -> Result<ShaclEntailment, XPathValidationError> => Entail, entail / entail
     {
         entail_to_ntriples_impl(
             &shapes_ttl,
@@ -1672,7 +1962,8 @@ shacl_entries! {
                 max_join_steps,
             },
             shapes_profile(xpath_regex.as_deref())?,
-        )
+            coordinates,
+         control)
         .map(ShaclEntailment::from)
     }
 
@@ -1732,7 +2023,8 @@ shacl_entries! {
         max_generated_terms: Option<u64>,
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
-    ) selecting xpath_regex -> Result<ShaclRulesInference, XPathValidationError> => ApplyRules, applyRules / apply_rules
+    ) selecting xpath_regex coordinates(now, entropy_seed) as coordinates
+        -> Result<ShaclRulesInference, XPathValidationError> => ApplyRules, applyRules / apply_rules
     {
         let profile = shapes_profile(xpath_regex.as_deref())?;
         let imports = shapes_import_pairs(
@@ -1753,7 +2045,7 @@ shacl_entries! {
             max_stored_facts,
             max_join_steps,
             host: purrdf_validate::RulesHost::Wasm,
-        }, profile)
+        }, profile, coordinates)
         .map(ShaclRulesInference::from)
     }
 
@@ -1995,6 +2287,16 @@ trait ShaclFailure {
     fn into_outcome(self) -> JobOutcome;
 }
 
+fn outcome_with_rule_receipt(outcome: JobOutcome, receipt: String) -> JobOutcome {
+    match outcome {
+        JobOutcome::Failed(error) => JobOutcome::Failed(error.with_execution_receipt(receipt)),
+        JobOutcome::Refused(refusal) => {
+            JobOutcome::Refused(ShaclRefusal::Execution(Box::new(refusal), receipt))
+        }
+        other => other,
+    }
+}
+
 impl ShaclFailure for ShapesError {
     fn into_rejection(self) -> JsValue {
         shapes_rejection(self)
@@ -2002,13 +2304,61 @@ impl ShaclFailure for ShapesError {
 
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::ImportArrays(cause) => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, cause.storage_error()),
+            )),
+            Self::ScopeBinding(cause) => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+            )),
+            Self::RuleExecution(error) => {
+                let receipt =
+                    purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+                let outcome = match error.into_cause() {
+                    purrdf_shapes::rules::RulesError::Shapes(cause) => cause.into_outcome(),
+                    cause => JobOutcome::Failed(JobError::diagnostic_message(
+                        purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+                    )),
+                };
+                outcome_with_rule_receipt(outcome, receipt)
+            }
             Self::Storage(error) => JobOutcome::Failed(JobError::diagnostic(error.into())),
-            Self::Imports(error) => {
-                JobOutcome::Refused(ShaclRefusal::Import(ShaclImportError::from(&error)))
+            Self::Imports(error) => match ShaclImportError::capture(&error) {
+                Ok(error) => JobOutcome::Refused(ShaclRefusal::Import(error)),
+                Err(cause) => JobOutcome::Failed(JobError::diagnostic(cause)),
+            },
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            )),
+        }
+    }
+}
+
+impl ShaclFailure for purrdf_shapes::report::CompleteValidationError {
+    fn into_rejection(self) -> JsValue {
+        match self {
+            Self::Shapes(error) => shapes_rejection(error),
+            Self::RuleExecution { cause, coordinates } => {
+                crate::operation::attach_execution_receipt(
+                    cause.into_rejection(),
+                    &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+                )
             }
-            other => {
-                JobOutcome::Failed(JobError::message(SHACL_CODE, shapes_error_message(&other)))
-            }
+            other => crate::operation::native_diagnostic_to_js_with_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            ),
+        }
+    }
+
+    fn into_outcome(self) -> JobOutcome {
+        match self {
+            Self::Shapes(error) => error.into_outcome(),
+            Self::RuleExecution { cause, coordinates } => outcome_with_rule_receipt(
+                cause.into_outcome(),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            )),
         }
     }
 }
@@ -2019,13 +2369,18 @@ impl ShaclFailure for XPathValidationError {
     /// the plain `Error` it always was.
     fn into_rejection(self) -> JsValue {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                crate::operation::attach_execution_receipt(
+                    cause.into_rejection(),
+                    &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+                )
+            }
             Self::Shapes(error) => shapes_rejection(error),
             other => {
-                let message = selected_error_message(&other);
-                match selected_refusal_code(&other) {
-                    Some(code) => crate::operation::coded_error(&message, code),
-                    None => JsError::new(&message).into(),
-                }
+                let code = selected_refusal_code(&other).unwrap_or(SHACL_CODE);
+                crate::operation::native_diagnostic_to_js_with_message(
+                    purrdf_validate::native_error::diagnostic(code, other, None),
+                )
             }
         }
     }
@@ -2035,10 +2390,17 @@ impl ShaclFailure for XPathValidationError {
     /// [`SHACL_CODE`] otherwise.
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::RuleExecution { cause, coordinates } => outcome_with_rule_receipt(
+                cause.into_outcome(),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
             Self::Shapes(error) => error.into_outcome(),
-            other => JobOutcome::Failed(JobError::message(
-                selected_refusal_code(&other).unwrap_or(SHACL_CODE),
-                selected_error_message(&other),
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(
+                    selected_refusal_code(&other).unwrap_or(SHACL_CODE),
+                    other,
+                    None,
+                ),
             )),
         }
     }
@@ -2089,10 +2451,13 @@ pub(crate) mod tests {
                 assert!(error.presentation_json().is_none());
             }
         }
-        assert!(
-            JobError::message(SHACL_CODE, "invalid shapes")
-                .diagnostic_json()
-                .is_none()
+        assert_eq!(
+            JobError::message(SHACL_CODE, "invalid shapes").diagnostic_json(),
+            Some(
+                purrdf_core::RdfDiagnostic::error(SHACL_CODE, "invalid shapes")
+                    .to_json()
+                    .to_string()
+            )
         );
     }
 
@@ -2488,7 +2853,7 @@ pub(crate) mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt = entail_to_ntriples_impl(
+        let nt_owner = entail_to_ntriples_impl(
             RULE_SHAPES,
             None,
             RULE_DATA,
@@ -2497,9 +2862,15 @@ pub(crate) mod tests {
             None,
             purrdf_validate::RuleLimits::default(),
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
         )
         .expect("entailment produced")
         .ntriples;
+        let nt = nt_owner.nquads();
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -2521,7 +2892,12 @@ pub(crate) mod tests {
                 &[],
                 None,
                 purrdf_validate::RuleLimits::default(),
-                None
+                None,
+                purrdf_validate::query::CoordinateInputs::default(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None
+                )
             )
             .is_err()
         );
@@ -2529,8 +2905,26 @@ pub(crate) mod tests {
 
     #[test]
     fn a_product_round_trips_and_reaches_the_same_verdict() {
-        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
-        product_certify_impl(&product).expect("certified");
+        let product = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
+        product_certify_impl(
+            &product,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("certified");
         assert!(
             product_explain_impl(&product)
                 .expect("explained")
@@ -2553,8 +2947,18 @@ pub(crate) mod tests {
 
     #[test]
     fn a_refused_product_keeps_its_dimension_across_the_boundary() {
-        let mut wrong_magic =
-            pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let mut wrong_magic = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         wrong_magic[0] = b'X';
 
         let refusal = ShaclProductRefusal::from(
@@ -2567,7 +2971,18 @@ pub(crate) mod tests {
 
         // A DATA graph that does not parse never reached the admission boundary, so
         // it truthfully names no dimension rather than borrowing one.
-        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let product = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         let data_refusal = ShaclProductRefusal::from(
             product_validate_impl(&product, "@@@ not n-triples").expect_err("refused"),
         );
@@ -2597,9 +3012,31 @@ pub(crate) mod tests {
 
     #[test]
     fn a_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let held = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         let wanted = rendered_selector(
-            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+            &pack_product_impl(
+                OTHER_SHAPES,
+                None,
+                &[],
+                &[],
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("packed"),
         );
         assert_ne!(wanted, rendered_selector(&held));
 
@@ -2619,7 +3056,18 @@ pub(crate) mod tests {
 
     #[test]
     fn a_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let product = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         let own = rendered_selector(&product);
 
         let bound = product_validate_expecting_impl(&product, DATA, &own)
@@ -2644,9 +3092,31 @@ pub(crate) mod tests {
     /// happily re-derive it.
     #[test]
     fn a_rebuilt_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let held = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         let wanted = rendered_selector(
-            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+            &pack_product_impl(
+                OTHER_SHAPES,
+                None,
+                &[],
+                &[],
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("packed"),
         );
         assert_ne!(wanted, rendered_selector(&held));
 
@@ -2671,7 +3141,18 @@ pub(crate) mod tests {
     /// unbound rebuild and the bound admission-based validation both reach.
     #[test]
     fn a_rebuilt_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let product = pack_product_impl(
+            SHAPES,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("product packed");
         let own = rendered_selector(&product);
 
         let bound_rebuild = product_validate_rebuild_expecting_impl(&product, DATA, &own)
@@ -2770,16 +3251,13 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         out
     }
 
-    /// The stored-fact and join-step limits name this host's own arguments, and the
-    /// `wasm32` default refuses a 70,000-triple copy (140,000 facts) that a larger stated
-    /// limit admits. The default is STATED here, because this native test binary runs the
-    /// native default; `the_default_limits_are_sized_per_target` in `purrdf-datalog` pins
-    /// that a `wasm32` build's default is exactly this value.
+    /// Finite capacity settings reach the shared evaluator and refusal messages
+    /// name the JavaScript host's controls. Native coverage owns large models.
     #[test]
     fn wasm_apply_rules_capacity_limits() {
         use std::fmt::Write as _;
         let mut data = String::new();
-        for i in 0..70_000 {
+        for i in 0..3 {
             writeln!(
                 data,
                 "<http://example.org/ns#s{i}> <http://example.org/ns#p> \
@@ -2792,27 +3270,32 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         let request = purrdf_validate::RulesRequest {
             data_nt: &data,
             srl: Some(copy),
-            max_stored_facts: Some(purrdf::datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS),
+            max_stored_facts: Some(4),
             host: purrdf_validate::RulesHost::Wasm,
             ..purrdf_validate::RulesRequest::default()
         };
-        let refused = apply_rules_impl(&request, None)
-            .expect_err("140,000 facts pass the wasm32 default")
-            .to_string();
+        let refused = apply_rules_impl(
+            &request,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect_err("six facts exceed the selected ceiling")
+        .to_string();
         assert!(
-            refused.contains("140000 facts observed, 131072 permitted (the caller's limit)")
+            refused.contains("5 facts observed, 4 permitted (the caller's limit)")
                 && refused.ends_with("raise it with shaclApplyRules's maxStoredFacts"),
             "{refused}"
         );
         let raised = apply_rules_impl(
             &purrdf_validate::RulesRequest {
-                max_stored_facts: Some(140_000),
+                max_stored_facts: Some(6),
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("a limit of exactly the store admits it");
-        assert_eq!(raised.inferred_ntriples.lines().count(), 70_000);
+        assert_eq!(raised.inferred_ntriples.lines().count(), 3);
         let steps = apply_rules_impl(
             &purrdf_validate::RulesRequest {
                 max_stored_facts: None,
@@ -2820,6 +3303,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect_err("one join step")
         .to_string();
@@ -2834,7 +3318,21 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn wasm_entail_limits() {
         let run = |limits: purrdf_validate::RuleLimits| {
-            entail_to_ntriples_impl(TOOLS_SHAPES, None, TOOLS_DATA, &[], &[], None, limits, None)
+            entail_to_ntriples_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                &[],
+                &[],
+                None,
+                limits,
+                None,
+                purrdf_validate::query::CoordinateInputs::default(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
         };
         let cases = [
             (
@@ -2870,7 +3368,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
             let refused = run(limits).expect_err("a limit of one").to_string();
             assert!(refused.ends_with(knob), "{refused}");
         }
-        let raised = run(purrdf_validate::RuleLimits {
+        let raised_owner = run(purrdf_validate::RuleLimits {
             max_term_generating_rounds: Some(64),
             max_generated_terms: Some(64),
             max_stored_facts: Some(64),
@@ -2878,6 +3376,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         })
         .expect("raised limits admit the counter")
         .ntriples;
+        let raised = raised_owner.nquads();
         assert!(
             raised.contains(
                 "<http://example.org/ns#a> <http://example.org/ns#n> \
@@ -2924,19 +3423,24 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("rules run")
         .inferred_ntriples;
         assert!(with.contains(named) && with.contains(marked), "{with}");
-        let without = apply_rules_impl(&request, None)
-            .expect("rules run")
-            .inferred_ntriples;
+        let without = apply_rules_impl(
+            &request,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect("rules run")
+        .inferred_ntriples;
         assert!(
             without.contains(unnamed) && !without.contains(marked),
             "{without}"
         );
 
-        let entailed = entail_to_ntriples_impl(
+        let entailed_owner = entail_to_ntriples_impl(
             SHAPES_GRAPH_RULES,
             None,
             data,
@@ -2945,14 +3449,20 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             Some("http://example.org/shapes-graph"),
             purrdf_validate::RuleLimits::default(),
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
         )
         .expect("entails")
         .ntriples;
+        let entailed = entailed_owner.nquads();
         assert!(
-            entailed.contains(named) && entailed.contains(marked),
+            entailed.contains(named) & entailed.contains(marked),
             "{entailed}"
         );
-        let plain = entail_to_ntriples_impl(
+        let plain_owner = entail_to_ntriples_impl(
             SHAPES_GRAPH_RULES,
             None,
             data,
@@ -2961,9 +3471,15 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             None,
             purrdf_validate::RuleLimits::default(),
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
         )
         .expect("entails")
         .ntriples;
+        let plain = plain_owner.nquads();
         assert!(
             plain.contains(unnamed) && !plain.contains(marked),
             "{plain}"
@@ -2982,11 +3498,19 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     shapes_graph: Some("http://example.org/shapes-graph"),
                     ..srl
                 },
-                None
+                None,
+                purrdf_validate::query::CoordinateInputs::default()
             )
             .is_err()
         );
-        assert!(apply_rules_impl(&srl, None).is_ok());
+        assert!(
+            apply_rules_impl(
+                &srl,
+                None,
+                purrdf_validate::query::CoordinateInputs::default()
+            )
+            .is_ok()
+        );
     }
 
     /// The rules entry point: the inference graph alone, the proof on request, the
@@ -2998,7 +3522,12 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             shapes_ttl: Some(TOOLS_SHAPES),
             ..purrdf_validate::RulesRequest::default()
         };
-        let plain = apply_rules_impl(&request, None).expect("rules run");
+        let plain = apply_rules_impl(
+            &request,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect("rules run");
         assert_eq!(plain.inferred_ntriples, tools_inference());
         assert_eq!(plain.proof, None);
         let explained = apply_rules_impl(
@@ -3007,6 +3536,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("rules run");
         let proof = explained.proof.expect("a proof was asked for");
@@ -3017,6 +3547,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect_err("three rounds are too few")
         .to_string();
@@ -3027,6 +3558,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("four rounds suffice");
         assert_eq!(enough.inferred_ntriples, tools_inference());
@@ -3041,6 +3573,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..purrdf_validate::RulesRequest::default()
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("SPARQL 1.2 RL runs");
         assert_eq!(
@@ -3057,7 +3590,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     data_nt: TOOLS_DATA,
                     ..purrdf_validate::RulesRequest::default()
                 },
-                None
+                None,
+                purrdf_validate::query::CoordinateInputs::default()
             )
             .is_err(),
             "no rule source"
@@ -3081,6 +3615,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect_err("three rounds are too few")
         .to_string();
@@ -3094,6 +3629,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect_err("five terms are too few")
         .to_string();
@@ -3115,6 +3651,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 ..request
             },
             None,
+            purrdf_validate::query::CoordinateInputs::default(),
         )
         .expect("six terms suffice");
         assert_eq!(enough.inferred_ntriples, tools_inference());
@@ -3143,6 +3680,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     ..purrdf_validate::RulesRequest::default()
                 },
                 None,
+                purrdf_validate::query::CoordinateInputs::default(),
             )
             .map(|outcome| outcome.inferred_ntriples)
             .map_err(|error| error.to_string())
@@ -3504,7 +4042,18 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             )
             .expect("the change validates");
             assert_eq!(results(&sarif), expected, "change path, {graph:?}");
-            let product = pack_product_impl(&shapes, Some(&base), &[], &[], graph).expect("packs");
+            let product = pack_product_impl(
+                &shapes,
+                Some(&base),
+                &[],
+                &[],
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("packs");
             let sarif = purrdf_validate::validate_with_shapes_product(
                 &product,
                 &data,

@@ -20,42 +20,58 @@ fn case(group: &str, local: &str) -> manifest::SparqlTestCase {
         .expect("exact frozen case")
 }
 
-fn passes(group: &str, local: &str) {
+fn passes(group: &str, local: &str, control: &mut purrdf_core::CanonicalizationControl<'_>) {
     let case = case(group, local);
     let outcome = run::run(&case, None).expect("native evaluation");
-    compare::compare(&case, &outcome).unwrap_or_else(|error| panic!("{group}/{local}: {error}"));
+    compare::compare(&case, &outcome, control)
+        .unwrap_or_else(|error| panic!("{group}/{local}: {error}"));
 }
 
 #[test]
 fn turtle_boolean_results_grade_true_and_false_ask_answers() {
-    passes("type-promotion", "type-promotion-01");
-    passes("type-promotion", "type-promotion-23");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    passes("type-promotion", "type-promotion-01", &mut control);
+    passes("type-promotion", "type-promotion-23", &mut control);
 }
 
 #[test]
 fn rdf_xml_solutions_and_explicit_indices_grade_the_frozen_order() {
-    passes("sort", "dawg-sort-1");
-    passes("sort", "dawg-sort-builtin");
-    passes("sort", "dawg-sort-function");
-    passes("solution-seq", "offset-1");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    passes("sort", "dawg-sort-1", &mut control);
+    passes("sort", "dawg-sort-builtin", &mut control);
+    passes("sort", "dawg-sort-function", &mut control);
+    passes("solution-seq", "offset-1", &mut control);
 }
 
 #[test]
 fn the_manifest_lax_cardinality_grades_both_reduced_cases() {
-    passes("reduced", "reduced-1");
-    passes("reduced", "reduced-2");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    passes("reduced", "reduced-1", &mut control);
+    passes("reduced", "reduced-2", &mut control);
 }
 
 #[test]
 fn query_dataset_sources_are_loaded_under_their_declared_iris() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     for local in ["01", "03", "05", "06", "07", "08", "11", "12b"] {
-        passes("dataset", &format!("dawg-dataset-{local}"));
+        passes("dataset", &format!("dawg-dataset-{local}"), &mut control);
     }
 }
 
 #[test]
 fn named_graph_blank_scopes_survive_the_global_result_comparison() {
-    passes("graph", "dawg-graph-11");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
+    passes("graph", "dawg-graph-11", &mut control);
 }
 
 /// These are literal mathematical answers for the pinned four-type value 3,

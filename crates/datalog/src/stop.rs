@@ -1,26 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The caller-owned **stop signal** a long fixpoint polls at its round boundary.
+//! The caller-owned **stop signal** a long fixpoint polls at owned work boundaries.
 //!
 //! # A stop signal is not a limit, and that distinction is the whole module
 //!
 //! This crate's [limits refuse; they never truncate](crate#limits-refuse-they-never-truncate):
-//! the stored-fact and join-step limits are the caller's, with per-target defaults, and
+//! the stored-fact and join-step ceilings are optional caller settings, and
 //! each is a NUMBER the caller states before the run — every caller passing the same
 //! options gets the same answer or the same refusal, and the effective limits are part of
 //! the result's contract hash.
 //!
 //! A [`StopSignal`] is the other thing. It carries no number and is part of no identity,
 //! because it changes no answer. A run that is not stopped returns precisely the answer
-//! it would have returned with no signal attached — the poll is a load and a branch at a
-//! round boundary, and the rounds are the ones the fixpoint was going to run anyway — and a
-//! run that IS stopped returns **no answer at all**: a typed refusal
+//! it would have returned with no signal attached. Scheduled evaluation also polls
+//! candidate, scan and callback boundaries within a round. Unscheduled and session
+//! entry points retain their documented boundary checks. A
+//! complete-only call that IS stopped returns a typed refusal
 //! ([`EvalError::Stopped`](crate::seminaive::EvalError::Stopped),
 //! [`ChaseError::Stopped`](crate::chase::ChaseError::Stopped)) carrying the consumption
-//! measured up to that point. There is no third outcome, so there is no partial closure a
-//! consumer could mistake for a complete one and no schedule of charges that would have to
-//! be versioned, frozen or pinned.
+//! measured up to that point. [`crate::seminaive::EvaluationSession`] retains a
+//! stopped execution, exposes its certified facts through a distinct
+//! [`crate::seminaive::PartialModel`], and accepts a fresh signal on resume.
+//! It cannot return a complete model before the original execution finishes.
 //!
 //! What this buys is the honesty of a host's wall deadline. A materialized closure is
 //! routinely the expensive half of an entailment-regime query, so a deadline that bounds
@@ -32,7 +34,8 @@
 //! An implementation MUST latch — once [`StopSignal::stopped`] answers `true` it answers
 //! `true` forever. A signal that could un-fire would make "did this run finish?" depend on
 //! *when* the fixpoint happened to look, which is the nondeterminism this crate exists
-//! without. It MUST also be cheap (it is polled once per round) and it MUST NOT depend on
+//! without. It MUST also be cheap (scheduled execution polls inside hot work loops)
+//! and it MUST NOT depend on
 //! the data: a signal that fires as a function of what has been derived would be a budget
 //! wearing a different hat, and would reintroduce exactly the answer-affecting optionality
 //! the module opens by refusing.

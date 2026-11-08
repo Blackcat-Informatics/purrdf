@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::BuildHasher;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 
 use purrdf_core::{RdfDatasetBuilder, TermFactory, TermId, TermValue};
 

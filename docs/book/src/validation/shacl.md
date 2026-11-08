@@ -90,6 +90,140 @@ validator and a `sh:SPARQLTarget` may carry only the terms their
 specification gives them, so an `sh:ask` beside a constraint's `sh:select`,
 or a misspelled `sh:mesage`, is refused rather than ignored.
 
+### Supplied rule coordinates
+
+Native `RuleOptions` and `srl::InferOptions` accept `with_now` and
+`with_entropy_seed`. A successful `Inference::coordinates()` returns the
+effective supplied time and the starting state of the rule's query-seed
+sequence, captured before any query consumes a draw. The `RuleCoordinates`
+receipt compares exact calendar fields, fractional seconds and timezone offsets;
+equal instants with different offsets remain distinct because `STR(NOW())` can
+observe the difference. Decimal lexical trailing zeros are already normalized.
+
+Empty options inherit an active supplied scope. Supplying either coordinate
+replaces the scope, so its omitted counterpart is absent. An absent receipt
+field does not identify a sampled host value. This receipt is independent of
+`Inference::contract_hash()`, which still identifies the program and schedule;
+it is not a complete execution or dataset identity. The receipt and its clones
+share the original caller-owned time allocation, keeping that input alive until
+the final owner drops without copying its exact coefficient.
+
+### Recursion and resource failures
+
+A cyclic shape reference requires an explicit native selection through
+`ValidationOptions::with_recursion(RecursionOptions { semantics, max_pairs,
+max_iterations })`. `RecursionSemantics::Lfp` and `Gfp` select the least and
+greatest fixed points of the same evaluator. A shared acyclic reference needs
+no selection. Recursive requests without a selection retain a typed complete
+component refusal. This explicit policy is permitted by
+[SHACL Core §6.6.3](https://www.w3.org/TR/shacl12-core/#shapes-recursion).
+
+The selected evaluator admits proved closed structural shape catalogs: node,
+property, logical, member and qualified references keep their original model
+and occurrence identities. Negative or nonmonotone references within a recursive
+component refuse either selection; lower strata remain fixed. A direct
+`sh:expression [ shnex:conformsToShape ( sh:this :Target ) ]` also participates
+when its static shape operand is a canonical IRI or blank-node reference in the
+same original catalog, including recognized anonymous node and property shapes.
+Typed empty shapes are static; untyped empty and path-only operands retain their
+computed-expression classification. It asks the current value node's target pair
+through the active fixed point; a false answer produces the ordinary
+expression-constraint violation. Original function bodies, conformance-dependent or wrapped
+expressions, query/computed targets and unbound overlays without a closed dependency proof
+return `PreparationRefusal::UnqualifiedRecursion`, retaining the original
+definition, parameter and model/index scope. Selecting a law does not authorize
+an unknown transfer or the old depth-bound approximation.
+
+The same direct conformance expression can compute its focus independently of
+conformance using `Constant`, `This`, `Path`, `Empty`, `Var`, `List`, `Union`,
+`Intersection`, `If`, `Count`, `Distinct`, `Min`, `Max`, `Sum`, `Limit`, `Offset`,
+`OrderBy`, `Exists`, `PathValues`, `Concat`, `Remove`, `FlatMap` and `InstancesOf`.
+Every expression child must belong to this family, including untaken branches
+and ordering keys. For example, `shnex:conformsToShape ( [ shnex:pathValues :next ] :Target )`
+asks the original target about the node reached by `:next`. An empty focus result
+produces the ordinary expression violation; multiple focus results are an
+evaluation failure. One result joins the active pair relation under the same
+pair and round limits. Reports keep the original judged focus, value and path.
+Variable scope and all pure expression operations retain their ordinary native
+semantics. Nested conformance, function/query calls, argument expressions and
+ownership wrappers remain outside this proof.
+
+A computed shape operand can also participate when its complete finite output
+set is known: constants, lists, empty expressions, unions, concatenations and
+conditionals compose that set. Every condition must use the pure native family
+above. Each possible original shape contributes a positive dependency, while
+evaluation selects its target through the original shape index and the active
+pair relation. An empty focus skips the shape operand. Otherwise, the shape
+operand must produce exactly one existing shape; undefined or multiple selected
+outputs retain the ordinary evaluation failure. Untaken branches retain lazy
+evaluation. Path-derived shape operands, callbacks and computations without this
+complete output proof remain outside the admitted surface.
+
+`sh:nodeByExpression` admits the same finite, conformance-independent shape
+outputs in the original index. Each value node must conform to every selected
+shape through the active fixed point; duplicate shapes are judged once and an
+empty output imposes no conformance checks. Every possible original target adds
+a positive dependency before cycle admission. Invalid selected outputs retain
+the ordinary runtime failure, while untaken branches remain lazy. Existing checks
+for explicitly named shapes still apply. Reports keep
+the original node or property focus, value, path and constraint metadata.
+
+A `sh:targetWhere :Target` can use the same explicit selection when its operand
+is a canonical IRI or blank-node reference in the same original catalog. Discovery reuses
+the original plan and dataset binding, seeds every candidate pair into one
+fixed-point execution and publishes targets only after the whole sweep settles.
+Pair and round limits cover the candidate roots and their dependencies together;
+they do not bound raw graph scans. Anonymous node and property where shapes retain
+their original definitions and focus domains. Replaced operands remain refused.
+
+`validate_with_recursion_evidence` and `validate_shape_with_recursion` retain the
+settled verdict, ordinary finite SHACL leaf results and native closed-pair cycle
+certificates separately. A false least fixed point may have a cycle certificate
+without an ordinary leaf violation. The certificate retains its original model,
+property edge, scoped data and fallibly copied focus; it invents no severity or
+RDF vocabulary. Pair and round exhaustion is a typed failure, never a partial
+report. Ahmetaj et al.'s *sheval* study compares recursive-shape
+implementations,[^sheval] and their *Common Foundations for Recursive Shape
+Languages* develops the semantics and LFP/GFP duality.[^recursive-foundations]
+
+Python selects the same closed-catalog evaluator with `recursion="lfp"` or
+`recursion="gfp"` and both `recursion_max_pairs` and
+`recursion_max_iterations`. Omit all three to retain the default cycle refusal.
+Unknown modes and partial requests raise `ValueError`; zero is an explicit limit,
+and limits accept the complete unsigned 64-bit range. Resource exhaustion raises
+an exception without returning a partial report.
+
+```python
+options = dict(recursion="gfp", recursion_max_pairs=4096,
+               recursion_max_iterations=4096)
+shapes = purrdf.shapes.Shapes(shapes_ttl, **options)
+report = shapes.prepare().validate_nt(data_nt)
+product = purrdf.shapes.ShapesProduct.open(
+    purrdf.shapes.pack_product(shapes_ttl, canonical_search="unlimited", **options).value
+)
+restored = product.admit(**options)
+```
+
+To migrate a recursive Python caller, supply the complete request on
+`shapes.validate`, `Shapes`, or `pack_product` before the shapes are loaded.
+Prepared validation, store changes and XPath overrides retain that request.
+Product bytes carry the catalog and do not serialize request options. Callers
+supply the current request again on `admit`, `admit_expecting`, `rebuild` or
+`rebuild_expecting`; restored execution retains it. Existing product refusals keep
+their dimension labels. Python exposes its existing reports and exceptions;
+native cycle certificates and scoped evidence have no Python inspection API.
+Always read `conforms`: a settled false least fixed point can have no ordinary
+leaf result, so an empty `results` list does not establish conformance.
+
+Deep acyclic parsing and recursive validation also check the available stack.
+Node-expression evaluation retains its structural and function re-entry
+limits, including the 64-call limit on custom expression functions. A stack
+or depth refusal returns an error, never a conformance verdict or a partial
+validation report. Stack admission can refuse before a logical depth limit
+is reached; the available stack differs between native threads and WebAssembly.
+
+### Refused vocabulary terms
+
 The terms the SHACL vocabularies define and the engine refuses by name are:
 
 - the SHACL JavaScript Extensions (`sh:js`, `sh:JSConstraint` and the rest),
@@ -1215,6 +1349,19 @@ proof of every inferred triple. The proof is one block per triple: `derived S P
 O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
+The CLI accepts independently optional `--now XSD_DATE_TIME` and
+`--entropy-seed U64` on `rules`, with either `--shapes` or `--srl` and
+with either XPath pattern law. The exact supplied time, including fractional
+seconds and timezone, reaches every rule query's `NOW()`. The seed selects
+the starting state of the rule execution's query-seed sequence; zero is a
+supplied seed. Omitted inputs keep native host defaults. Repeating the same
+inputs and coordinates repeats the inference, including `UUID()` and
+`STRUUID()`; SHACL SPARQL rules also support `RAND()`, which SPARQL rule
+sets do not permit. Neither flag is accepted with `--check`, which evaluates
+nothing. Invalid coordinates are usage errors before data, rule or import
+files are read. Proof text and program identity keep their existing meaning;
+they do not serialize these inputs or identify a complete execution.
+
 Every host takes the same four **rule-evaluation limits**, on both of its SHACL
 rules entry points: the rules run above and SHACL-AF entailment (Python
 `shapes.entail`, WebAssembly `shaclEntail`, C `purrdf_shacl_entail_to_ntriples`),
@@ -1235,19 +1382,14 @@ maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
   in the data graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set
   whose new terms double every iteration reaches it within a few iterations,
   long before the round limit.
-- The **stored-fact limit** bounds the facts the evaluation store holds: the
-  data graph, a rule set's data and every inferred triple. The default is
-  4,194,304 facts natively and 131,072 in WebAssembly, where the store lives in
-  one linear memory. A rule that copies each of 70,000 `ex:p` triples to
-  `ex:q`, or the transitive closure of a thousand-node chain (500,500 triples), completes
-  natively.
-- The **join-step limit** bounds the candidate solutions the rule bodies
-  enumerate. The default is 1,048,576 on every host. It bounds a rule body that
-  enumerates far more candidates than it infers triples: a body's candidates
-  for one round are held before the limit is checked, so a much larger default
-  would let a Cartesian body exhaust memory first. A rule set that needs more
-  work — the non-linear transitive closure of a thousand-node chain enumerates
-  over 67 million candidates — states a larger limit.
+- The **stored-fact limit** bounds the facts the evaluation store holds when
+  selected by the caller: the data graph, a rule set's data and every inference.
+- The **join-step limit** bounds candidate solutions when selected by the caller.
+  Credits are reserved before expansion; a refusal never returns a truncated model.
+
+Unstated fact and join limits impose no logical ceiling. Select finite limits
+independently of term-generation governors. Rule frontends expose no term-arena
+setting and leave it unlimited. Physical storage admission still applies.
 
 A run past any limit is refused. The error names the limit, the numbers, the
 knob that raises it and, for the two term limits, the rules that inferred a new
@@ -1279,10 +1421,9 @@ The graph the rules read is extended by what each iteration added rather than
 rebuilt. The inferred triples, their blank-node labels and their proofs are the
 same as running every focus node every iteration. What changes is the cost: a
 shape rule that mints a new focus node every iteration pays for one run per
-iteration, not one per focus node so far, so a rule that never stops is
-refused by a term limit — the round limit when its new
-terms stay short, the fixed 16 MiB term-arena ceiling when each is longer than
-the last — and never by the join-step limit.
+iteration, not one per focus node so far. The term-generating round limit and
+generated-term budget address divergence. A caller-selected finite join-step
+limit can refuse the run sooner.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph
@@ -1647,3 +1788,21 @@ shapes graph: over every first-party and W3C shapes graph and a set of
 generated mutants, it refuses a graph exactly when `shacl-shacl.ttl` reports a
 violation, apart from named cases. See
 [Conformance & Testing](../project/conformance.md).
+
+## References
+
+[^sheval]: Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders, Maxime Jakubowski,
+    Jose-Emilio Labra-Gayo, Wim Martens, Filip Murlak, Cem Okulmus,
+    Ognjen Savković, Mantas Šimkus, and Dominik Tomaszuk.
+    “[sheval: An RDF data shapes evaluation tool and test-suite for recursive
+    shapes](https://labra.weso.es/pdf/2026_sheval_DMKG26.pdf).”
+    2nd International Workshop on Data Management for Knowledge Graphs
+    (DMKG 2026), 2026.
+
+[^recursive-foundations]: Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders,
+    Maxime Jakubowski, Jose-Emilio Labra-Gayo, Wim Martens, Fabio Mogavero,
+    Filip Murlak, Cem Okulmus, Ognjen Savkovic, Mantas Šimkus, and
+    Dominik Tomaszuk. “[Common Foundations for Recursive Shape Languages](https://doi.org/10.24963/kr.2026/1).”
+    In *Proceedings of the 23rd
+    International Conference on Principles of Knowledge Representation and
+    Reasoning* (KR 2026), pp. 2–13. IJCAI Organization, 2026.

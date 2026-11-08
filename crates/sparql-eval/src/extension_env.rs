@@ -86,7 +86,8 @@ use purrdf_sparql_algebra::ParserOptions;
 use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::property_fn::PropertyFunctionRegistry;
-use crate::registry_id::{RegistryId, append_framed_part};
+use crate::registry_id::{RegistryId, digest_framed_part as append_framed_part};
+use sha2::Digest as _;
 
 /// The domain separator this environment's content digest opens with, so it can
 /// never collide with a digest of any other kind that happens to fold a
@@ -437,10 +438,20 @@ impl<'query> ExtensionEnv<'query> {
     /// panic. Computed once and memoized; a second call cannot fail if the first
     /// succeeded.
     pub fn content_fingerprint(&self) -> Result<ContentDigest, EvalError> {
+        let capability = crate::WorkspaceCapability::resident();
+        let mut frame = crate::workspace::LexicalFrame::new(&capability);
+        self.content_fingerprint_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut frame))
+    }
+
+    /// Compute an uncached declaration digest through the original request account.
+    pub(crate) fn content_fingerprint_with_memory(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    ) -> Result<ContentDigest, EvalError> {
         if let Some(digest) = self.content.get() {
             return Ok(*digest);
         }
-        let digest = content_digest(&self.base, &self.relations, &self.aggregates)?;
+        let digest = content_digest(&self.base, &self.relations, &self.aggregates, memory)?;
         Ok(*self.content.get_or_init(|| digest))
     }
 }
@@ -490,8 +501,9 @@ fn content_digest(
     base: &ParserOptions,
     relations: &PropertyFunctionRegistry<'_>,
     aggregates: &AggregateRegistry,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
+    let mut bytes = sha2::Sha256::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
     append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
     for (label, list) in [
@@ -504,21 +516,15 @@ fn content_digest(
             append_framed_part(&mut bytes, label, value.as_bytes());
         }
     }
-    append_framed_part(
-        &mut bytes,
-        "relations",
-        crate::property_fn_plan::content_fingerprint(relations)?
-            .to_hex()
-            .as_bytes(),
-    );
-    append_framed_part(
-        &mut bytes,
-        "aggregates",
-        crate::agg_fn::content_fingerprint(aggregates)?
-            .to_hex()
-            .as_bytes(),
-    );
-    Ok(ContentDigest::of(&bytes))
+    let relations = crate::property_fn_plan::content_fingerprint_with_memory(relations, memory)?;
+    let aggregates = crate::agg_fn::content_fingerprint_with_memory(aggregates, memory)?;
+    for (label, digest) in [("relations", relations), ("aggregates", aggregates)] {
+        let mut hex = [0; 64];
+        purrdf_hash::hex::encode_to_slice(digest.as_bytes(), &mut hex)
+            .expect("32-byte digest fits 64 hex bytes");
+        append_framed_part(&mut bytes, label, &hex);
+    }
+    Ok(ContentDigest::from_raw(bytes.finalize().into()))
 }
 
 #[cfg(test)]
@@ -677,7 +683,7 @@ mod tests {
         let env = env(ParserOptions::default(), &[A, B, C]);
         assert_eq!(
             env.content_fingerprint().expect("digest").to_hex(),
-            "fb1f135c2e76794621c48ee6084bc9999427bb9f59eb78bc99e2a9436ea29f42"
+            "b8108fd49c91447f63c763374f166b1b858f0ac15353eaac2c0472db80b40e1f"
         );
     }
 

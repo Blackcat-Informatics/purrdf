@@ -30,6 +30,18 @@ pub(crate) use storage::Mag;
 /// 10<sup>19</sup> is the largest power of ten that fits in a `u64`.
 pub(crate) const DECIMAL_CHUNK: usize = 19;
 
+// Decimal pairs are generated here rather than copied from another encoder.
+const DECIMAL_PAIRS: [[u8; 2]; 100] = {
+    let digits = *b"0123456789";
+    let mut pairs = [[b'0'; 2]; 100];
+    let mut value = 0;
+    while value < pairs.len() {
+        pairs[value] = [digits[value / 10], digits[value % 10]];
+        value += 1;
+    }
+    pairs
+};
+
 /// Powers of ten that fit in a `u64`, indexed by exponent.
 const POW10_U64: [u64; DECIMAL_CHUNK + 1] = [
     1,
@@ -289,16 +301,12 @@ fn mag_divmod_small(
 
 /// The one small-divisor quotient loop, retaining its admitted destination.
 fn mag_divmod_small_in_place(quotient: &mut Mag, divisor: u64) -> u64 {
-    debug_assert_ne!(divisor, 0, "division by zero");
-    let d = u128::from(divisor);
-    let mut rem: u128 = 0;
-    for slot in quotient.iter_mut().rev() {
-        let cur = (rem << 64) | u128::from(*slot);
-        *slot = (cur / d) as u64;
-        rem = cur % d;
-    }
-    mag_trim(quotient);
-    rem as u64
+    // Canonical divisor magnitudes have a nonzero sole word; decimal rendering
+    // supplies the fixed positive decimal group base.
+    let divisor = core::num::NonZeroU64::new(divisor).expect("nonzero small divisor");
+    let (length, remainder) = purrdf_lex::integer_text::div_rem_word(quotient, divisor);
+    quotient.resize(length, 0);
+    remainder
 }
 
 /// Writes a sub-limb left shift into initialized storage.
@@ -779,6 +787,10 @@ fn append_decimal_group_leaf(
     storage: &impl Allocate,
 ) -> Result<(), LimbScratchError> {
     let mut quotient = storage.copy(magnitude)?;
+    if quotient.len() == 1 && quotient[0] < CHUNK_BASE {
+        // The existing copy is already the sole base-10^19 remainder.
+        return storage.push(groups, quotient[0]);
+    }
     while !quotient.is_empty() {
         let remainder = mag_divmod_small_in_place(&mut quotient, CHUNK_BASE);
         storage.push(groups, remainder)?;
@@ -905,11 +917,40 @@ impl PreparedDecimalDigits {
     }
 
     pub(crate) fn write_unsigned<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
-        let mut groups = self.groups.iter().rev();
-        let leading = groups.next().expect("prepared zero includes one group");
-        write!(out, "{leading}")?;
-        for group in groups {
-            write!(out, "{group:019}")?;
+        // Preparation already established every group's width. Keep that proof
+        // instead of asking general formatting to rediscover it for each write.
+        let leading_width = self.digits - (self.groups.len() - 1) * DECIMAL_CHUNK;
+        for (index, group) in self.groups.iter().rev().enumerate() {
+            let width = if index == 0 {
+                leading_width
+            } else {
+                DECIMAL_CHUNK
+            };
+            let mut bytes = [b'0'; DECIMAL_CHUNK];
+            let start = DECIMAL_CHUNK - width;
+            let mut position = DECIMAL_CHUNK;
+            let mut value = *group;
+            // Each subtraction follows a check of the still-unwritten width.
+            while position - start >= 4 {
+                let chunk = usize::try_from(value % 10_000).expect("four decimal digits fit usize");
+                value /= 10_000;
+                position -= 4;
+                bytes[position..position + 2].copy_from_slice(&DECIMAL_PAIRS[chunk / 100]);
+                bytes[position + 2..position + 4].copy_from_slice(&DECIMAL_PAIRS[chunk % 100]);
+            }
+            if position - start >= 2 {
+                let pair = usize::try_from(value % 100).expect("a decimal pair fits usize");
+                value /= 100;
+                position -= 2;
+                bytes[position..position + 2].copy_from_slice(&DECIMAL_PAIRS[pair]);
+            }
+            if position > start {
+                bytes[start] =
+                    b'0' + u8::try_from(value).expect("the remaining decimal digit fits u8");
+            }
+            out.write_str(
+                std::str::from_utf8(&bytes[start..]).expect("decimal groups emit ASCII"),
+            )?;
         }
         Ok(())
     }
@@ -992,6 +1033,15 @@ impl BigInt {
     /// Builds an integer from an `i128`.
     #[must_use]
     pub fn from_i128(value: i128) -> Self {
+        Self::from_inline_i128(value)
+    }
+
+    #[allow(
+        clippy::inline_always,
+        reason = "native digit preparation must retain its inline coefficient facts without expanding unrelated arithmetic callers"
+    )]
+    #[inline(always)]
+    pub(crate) fn from_inline_i128(value: i128) -> Self {
         Self::from_parts(value < 0, mag_from_u128(value.unsigned_abs()))
     }
 
@@ -1705,7 +1755,12 @@ impl BigInt {
             .expect("resident integer copy allocation")
     }
 
-    fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    /// Copy the native limb buffer, keeping short magnitudes inline. Already
+    /// admitted immutable limbs share their original lease. The caller must keep
+    /// the returned buffer with the supplied admission until destruction.
+    /// # Errors
+    /// Preserves original physical layout, allocator or admission refusal.
+    pub(crate) fn detached_buffer_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         &self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
@@ -1846,6 +1901,11 @@ impl BigInt {
     /// Checked native temporary/destination layout for decimal rendering.
     /// # Errors
     /// Refuses addressable byte overflow before any conversion allocation.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured prepared rendering must retain native magnitude bounds through the checked layout"
+    )]
+    #[inline(always)]
     pub fn decimal_render_layout(
         &self,
         scale: u32,
@@ -1879,6 +1939,11 @@ impl BigInt {
         self.prepare_decimal_digits_using(scratch)
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "measured prepared render callers must keep native magnitude facts across this conversion"
+    )]
+    #[inline(always)]
     pub(crate) fn prepare_decimal_digits_using(
         &self,
         storage: &impl Allocate,

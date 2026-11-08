@@ -51,11 +51,26 @@ fn path(dir: &TempDir, name: &str) -> String {
 /// Write `ttl` to a temp `.ttl` and convert it to a `.purrpck` pack, returning both
 /// paths.
 fn make_ttl_and_pack(dir: &TempDir, ttl: &str) -> (String, String) {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let ttl_path = path(dir, "in.ttl");
     std::fs::write(&ttl_path, ttl).expect("write ttl fixture");
     let pack_path = path(dir, "in.purrpck");
     let out = run(&[
-        "convert", "--from", "turtle", "--to", "pack", &ttl_path, &pack_path,
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl_path,
+        &pack_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         out.status.success(),
@@ -67,6 +82,9 @@ fn make_ttl_and_pack(dir: &TempDir, ttl: &str) -> (String, String) {
 
 #[test]
 fn reason_rdfs_over_pack_matches_text_byte_for_byte() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = temp_dir!().expect("temp dir");
     let (ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
@@ -79,7 +97,21 @@ fn reason_rdfs_over_pack_matches_text_byte_for_byte() {
         stderr(&from_text)
     );
     let from_pack = run(&[
-        "reason", "--regime", "rdfs", "--from", "pack", "--to", "nquads", &pack, "-",
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         from_pack.status.success(),
@@ -99,14 +131,46 @@ fn reason_rdfs_over_pack_matches_text_byte_for_byte() {
 
 #[test]
 fn reason_over_pack_is_deterministic() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
     let first = run(&[
-        "reason", "--regime", "rdfs", "--from", "pack", "--to", "nquads", &pack, "-",
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     let second = run(&[
-        "reason", "--regime", "rdfs", "--from", "pack", "--to", "nquads", &pack, "-",
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(first.status.success() && second.status.success());
     assert_eq!(
@@ -117,6 +181,10 @@ fn reason_over_pack_is_deterministic() {
 
 #[test]
 fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
     let pack_bytes = std::fs::read(&pack).expect("read pack bytes");
@@ -124,7 +192,21 @@ fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
     // The pack arrives on stdin (the owned-buffer acquisition tier), `-` input.
     let from_stdin = run_with_stdin(
         &[
-            "reason", "--regime", "rdfs", "--from", "pack", "--to", "nquads", "-", "-",
+            "reason",
+            "--regime",
+            "rdfs",
+            "--from",
+            "pack",
+            "--to",
+            "nquads",
+            "-",
+            "-",
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ],
         &pack_bytes,
     );
@@ -135,7 +217,21 @@ fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
     );
 
     let from_disk = run(&[
-        "reason", "--regime", "rdfs", "--from", "pack", "--to", "nquads", &pack, "-",
+        "reason",
+        "--regime",
+        "rdfs",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(from_disk.status.success());
     assert_eq!(
@@ -146,6 +242,9 @@ fn pack_on_stdin_reasons_like_the_same_pack_on_disk() {
 
 #[test]
 fn large_pack_reasons_end_to_end() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = temp_dir!().expect("temp dir");
     let mut ttl = String::from("@prefix ex: <http://example.org/> .\n");
     for i in 0..20_000 {
@@ -158,7 +257,21 @@ fn large_pack_reasons_end_to_end() {
 
     // `simple` is the identity closure, so every input triple appears once.
     let out = run(&[
-        "reason", "--regime", "simple", "--from", "pack", "--to", "nquads", &pack, "-",
+        "reason",
+        "--regime",
+        "simple",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &pack,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         out.status.success(),
@@ -178,11 +291,26 @@ fn large_pack_reasons_end_to_end() {
 
 #[test]
 fn tampered_pack_is_rejected_by_verify_and_fails_closed_on_read() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = temp_dir!().expect("temp dir");
     let (_ttl, pack) = make_ttl_and_pack(&dir, SAMPLE_TTL);
 
     // A good pack verifies and prints its 64-hex canonical digest.
-    let good = run(&["pack", "verify", &pack]);
+    let good = run(&[
+        "pack",
+        "verify",
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(good.status.success(), "good pack verify: {}", stderr(&good));
     let digest = String::from_utf8_lossy(&good.stdout).trim().to_owned();
     assert_eq!(
@@ -200,7 +328,17 @@ fn tampered_pack_is_rejected_by_verify_and_fails_closed_on_read() {
     std::fs::write(&bad, &bytes).expect("write tampered pack");
 
     // The explicit verb rejects it...
-    let verify_bad = run(&["pack", "verify", &bad]);
+    let verify_bad = run(&[
+        "pack",
+        "verify",
+        &bad,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         !verify_bad.status.success(),
         "tampered pack must fail `pack verify`"
@@ -208,7 +346,21 @@ fn tampered_pack_is_rejected_by_verify_and_fails_closed_on_read() {
     // ...and the ordinary read/reason path fails closed too (integrity is unconditional
     // on every open, not only in the verb).
     let reason_bad = run(&[
-        "reason", "--regime", "simple", "--from", "pack", "--to", "nquads", &bad, "-",
+        "reason",
+        "--regime",
+        "simple",
+        "--from",
+        "pack",
+        "--to",
+        "nquads",
+        &bad,
+        "-",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !reason_bad.status.success(),

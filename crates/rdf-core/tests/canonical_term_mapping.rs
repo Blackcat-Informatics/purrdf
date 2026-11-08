@@ -20,7 +20,11 @@ fn mapped(result: &CanonicalRelabeling, source: TermId) -> TermId {
 /// Compare native IDs, labels and every record directly. Recanonicalizing both
 /// would hide an incorrect label, record-order or term-allocation change.
 fn assert_original_api_output(source: &RdfDataset, result: &CanonicalRelabeling) {
-    let original = canonical_relabel(source).expect("admissible original API");
+    let original = canonical_relabel(
+        source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("admissible original API");
     let output = result.dataset();
     assert_eq!(original.term_count(), output.term_count());
     for index in 0..original.term_count() {
@@ -167,7 +171,11 @@ fn mapped_records_preserve_native_identity_and_source_locations() {
         .push_annotation_in_graph(a, p, directional, Some(graph))
         .unwrap();
     let source = builder.freeze().expect("valid RDF 1.2 fixture");
-    let result = canonical_relabel_with_mapping(&source).expect("admissible");
+    let result = canonical_relabel_with_mapping(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("admissible");
 
     assert_ne!(
         mapped(&result, a),
@@ -209,7 +217,11 @@ fn composite_only_blanks_and_interned_iris_are_mapped() {
     let hidden = source
         .term_id_by_blank("hidden", BlankScope::DEFAULT)
         .expect("embedded blank");
-    let result = canonical_relabel_with_mapping(&source).expect("admissible");
+    let result = canonical_relabel_with_mapping(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("admissible");
     let output = result.dataset();
     assert_eq!(
         output.resolve(mapped(&result, embedded)),
@@ -252,7 +264,11 @@ fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
         .unwrap();
     builder.declare_named_graph(declared).unwrap();
     let source = builder.freeze().expect("valid declaration-only fixture");
-    let result = canonical_relabel_with_mapping(&source).expect("admissible");
+    let result = canonical_relabel_with_mapping(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("admissible");
     for id in [
         unused_iri,
         unused_blank,
@@ -305,7 +321,11 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
         .push_annotation(successor, derived, predecessor)
         .unwrap();
     let source = builder.freeze().expect("valid configured fixture");
-    let result = canonical_relabel_with_mapping(&source).expect("admissible");
+    let result = canonical_relabel_with_mapping(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("admissible");
     assert_eq!(result.dataset().content_id_scheme(), Some(&scheme));
     for id in [successor, predecessor] {
         assert!(source.content_id(id).is_some());
@@ -332,8 +352,16 @@ fn mapping_does_not_change_admission_refusals() {
     let source = builder
         .freeze()
         .expect("valid RDF with reserved vocabulary");
-    let original = canonical_relabel(&source).expect_err("reserved vocabulary");
-    let mapped = canonical_relabel_with_mapping(&source).expect_err("same refusal");
+    let original = canonical_relabel(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("reserved vocabulary");
+    let mapped = canonical_relabel_with_mapping(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("same refusal");
     assert!(matches!(mapped, CanonError::ReservedVocabulary(_)));
     assert_eq!(original.to_string(), mapped.to_string());
 }

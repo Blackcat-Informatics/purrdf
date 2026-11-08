@@ -75,6 +75,15 @@ pub fn digest_str(data: &[u8]) -> String {
     digest_label(&blake3_256(data))
 }
 
+/// The same blob identity over original borrowed byte-string chunks.
+pub fn digest_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> String {
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    digest_label(hasher.finalize().as_bytes())
+}
+
 /// The `blake3:<hex>` spelling of a BLAKE3 digest already computed: the
 /// scheme, then the digest's lowercase base16. The one place a GTS content
 /// identifier is spelt.
@@ -82,11 +91,21 @@ pub fn digest_label(digest: &[u8]) -> String {
     format!("blake3:{}", purrdf_hash::hex::Lower(digest))
 }
 
-fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
+fn hash_map<E>(
+    write: impl FnOnce(&mut purrdf_hash::blake3::Hasher) -> Result<(), E>,
+) -> Result<Vec<u8>, E> {
     let mut writer = purrdf_hash::blake3::Hasher::new();
-    purrdf_lex::cbor::write_canonical_map(entries, excluded, &mut writer)
-        .expect("hash writer cannot fail");
-    writer.finalize().as_bytes().to_vec()
+    write(&mut writer)?;
+    Ok(writer.finalize().as_bytes().to_vec())
+}
+fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
+    hash_map(|writer| purrdf_lex::cbor::write_canonical_map(entries, excluded, writer))
+        .expect("hash writer cannot fail")
+}
+pub(crate) fn content_id_encoded(
+    frame: purrdf_lex::cbor::BorrowedItem<'_>,
+) -> Result<Vec<u8>, purrdf_lex::cbor::WriteError> {
+    hash_map(|writer| purrdf_lex::cbor::write_canonical_borrowed_map(frame, &["id", "sig"], writer))
 }
 
 /// Compute a frame's `"id"` over its content (excluding `"id"`/`"sig"`).
@@ -161,6 +180,20 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, HeaderError> 
         Value::Map(entries) => Ok(entries),
         other => Err(HeaderError::NotMap(other.clone())),
     }
+}
+
+/// Consume a header after the shared interpretation check, retaining its map.
+/// This preserves the original native refusal while avoiding a successful copy.
+pub(crate) fn into_header(mut item: Value) -> Result<Vec<(Value, Value)>, HeaderError> {
+    unwrap_header(&item)?;
+    let inner = match &mut item {
+        Value::Tag(_, inner) => inner.as_mut(),
+        other => other,
+    };
+    let Value::Map(entries) = inner else {
+        unreachable!("the shared header interpretation validated this map");
+    };
+    Ok(std::mem::take(entries))
 }
 
 /// A native refusal to interpret an item as a header map.

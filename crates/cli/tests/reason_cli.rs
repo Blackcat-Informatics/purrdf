@@ -35,6 +35,104 @@
 mod support;
 use support::{path, purrdf, run, stderr, write_file};
 
+/// Selection reaches materialization; invalid controls cannot publish closure or report.
+#[test]
+fn configured_yamlld_input_reaches_reason_closure() {
+    use support::{code, stdout};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let report_path = path(dir.path(), "report.txt");
+    let report_arg = format!("--report={report_path}");
+    for (controls, second) in [(None, false), (Some(config.as_str()), true)] {
+        let mut args = vec![
+            "reason",
+            "--regime",
+            "simple",
+            "--to",
+            "nquads",
+            &report_arg,
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.extend([input.as_str(), "-"]);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).contains("<https://example.org/first>"));
+        assert_eq!(
+            stdout(&selected).contains("<https://example.org/second>"),
+            second
+        );
+    }
+    let closure = write_file(dir.path(), "closure.nq", "unchanged closure");
+    std::fs::write(&report_path, "unchanged report").unwrap();
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "reason",
+        "--regime",
+        "simple",
+        "--yamlld-input-options",
+        &limited,
+        &report_arg,
+        &input,
+        &closure,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&closure).unwrap(),
+        "unchanged closure"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report_path).unwrap(),
+        "unchanged report"
+    );
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let rules = path(dir.path(), "missing.xml");
+    let imports = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "reason",
+        "--regime",
+        "rif",
+        "--rules",
+        &rules,
+        "--import",
+        &imports,
+        "--yamlld-input-options",
+        &malformed,
+        &report_arg,
+        &missing,
+        &closure,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&closure).unwrap(),
+        "unchanged closure"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report_path).unwrap(),
+        "unchanged report"
+    );
+}
+
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 
@@ -365,6 +463,10 @@ fn a_rule_document_is_required_by_rif_and_refused_by_everything_else() {
 /// inferred RDFS type appears just as it does from a text source.
 #[test]
 fn pack_input_is_reconstructed_and_reasoned() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -380,7 +482,21 @@ fn pack_input_is_reconstructed_and_reasoned() {
 
     // Build a pack from the RDFS fixture, then reason over the pack.
     let pack = path(dir, "sub.purrpck");
-    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "building the pack failed: {}",
@@ -388,7 +504,19 @@ fn pack_input_is_reconstructed_and_reasoned() {
     );
 
     let out = path(dir, "out.nt");
-    let o = run(&["reason", "--regime", "rdfs", &pack, &out]);
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        &pack,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "reason over a pack failed: {}",
@@ -415,6 +543,12 @@ fn pack_input_is_reconstructed_and_reasoned() {
 /// there, and refusing it would reject a flag doing real work.
 #[test]
 fn base_with_pack_from_or_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+    let canonical_receipt_4 = canonical_receipt_dir.path().join("request-4.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -423,7 +557,21 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "@prefix ex: <http://example.org/> .\nex:s a ex:Dog .\n",
     );
     let pack = path(dir, "sub.purrpck");
-    let o = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "building the pack failed: {}",
@@ -443,6 +591,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &pack,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -474,6 +628,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &nt,
         &out_pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -498,6 +658,12 @@ fn base_with_pack_from_or_to_is_refused_by_name() {
         "http://example.org/base/",
         &ttl,
         &out_pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_4
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -647,6 +813,10 @@ fn base_resolves_relative_iris_before_reasoning() {
 /// carry the inferred triple (re-converting the pack back to text shows the inference).
 #[test]
 fn pack_output_is_a_valid_pack_carrying_the_inference() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(
@@ -662,7 +832,19 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
 
     // Reason directly INTO a pack.
     let pack = path(dir, "closure.purrpck");
-    let o = run(&["reason", "--regime", "rdfs", &seed, &pack]);
+    let o = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        &seed,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "reason to a pack failed: {}",
@@ -672,7 +854,19 @@ fn pack_output_is_a_valid_pack_carrying_the_inference() {
     // Re-convert the pack to N-Triples: a valid pack whose contents carry the inference.
     let back = path(dir, "back.nt");
     let o = run(&[
-        "convert", "--from", "pack", "--to", "ntriples", &pack, &back,
+        "convert",
+        "--from",
+        "pack",
+        "--to",
+        "ntriples",
+        &pack,
+        &back,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -978,7 +1172,7 @@ fn report_without_entailment_is_a_usage_error() {
 /// `reason --max-stored-facts` and `--max-join-steps` refuse naming the numbers and this
 /// command's own flag, and write no closure; a limit of exactly the store the run needs
 /// writes the same closure as the default, and one fact fewer refuses. `convert
-/// --entailment` takes the same two flags.
+/// --entailment` takes the same three flags.
 #[test]
 fn reason_honours_the_callers_evaluation_limits() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
@@ -990,8 +1184,21 @@ fn reason_honours_the_callers_evaluation_limits() {
          <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n",
     );
     let default_out = path(dir.path(), "default.nt");
-    let out = run(&["reason", "--regime", "rdfs", &input, &default_out]);
+    let out = run(&[
+        "reason",
+        "--regime",
+        "rdfs",
+        "--report",
+        &input,
+        &default_out,
+    ]);
     assert!(out.status.success(), "{}", stderr(&out));
+    let arena_bytes: u64 = stderr(&out)
+        .lines()
+        .find_map(|line| line.strip_prefix("budget term-arena-bytes "))
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let limited = |flag: &str, value: &str, output: &str| {
         run(&["reason", "--regime", "rdfs", flag, value, &input, output])
@@ -1081,4 +1288,58 @@ fn reason_honours_the_callers_evaluation_limits() {
         "--max-join-steps without --entailment is a usage error: {}",
         stderr(&orphan)
     );
+    let refused = limited(
+        "--max-term-arena-bytes",
+        &(arena_bytes - 1).to_string(),
+        &path(dir.path(), "arena-short.nt"),
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains(&format!(
+            "term arena bytes limit: {arena_bytes} observed, {} permitted",
+            arena_bytes - 1
+        )) && stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-term-arena-bytes"),
+        "{}",
+        stderr(&refused)
+    );
+    let exact_path = path(dir.path(), "arena-exact.nt");
+    let exact = limited(
+        "--max-term-arena-bytes",
+        &arena_bytes.to_string(),
+        &exact_path,
+    );
+    assert!(exact.status.success(), "{}", stderr(&exact));
+    assert_eq!(sorted_lines(&exact_path), sorted_lines(&default_out));
+    let refused = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-term-arena-bytes",
+        "0",
+        &input,
+        &converted,
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-term-arena-bytes"),
+        "{}",
+        stderr(&refused)
+    );
+    let exact = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-term-arena-bytes",
+        &arena_bytes.to_string(),
+        &input,
+        &converted,
+    ]);
+    assert!(exact.status.success(), "{}", stderr(&exact));
+    assert_eq!(sorted_lines(&converted), sorted_lines(&default_out));
+    let orphan = run(&["convert", "--max-term-arena-bytes", "0", &input, &converted]);
+    assert_eq!(orphan.status.code(), Some(2), "{}", stderr(&orphan));
 }

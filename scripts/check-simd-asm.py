@@ -104,8 +104,8 @@ Static checks
 * The identity-path scan: the fast float arithmetic (``algebraic_add`` and its
   siblings, and the ``Reassociated`` arithmetic) may appear only under
   ``crates/rdf-core/src/distance/``, ``crates/sparql-eval/src/knn/``,
-  ``crates/hnsw/src/`` and those crates' ``tests/`` and ``benches/``. Content identity,
-  canonical serialization, GTS and RDFC-1.0 are exact by contract.
+  ``crates/hnsw/src/``, their tests/benches, and ``crates/purrdf/tests/`` or
+  ``crates/purrdf/benches/``. Content identity, canonical serialization, GTS and RDFC-1.0 stay exact.
 * The multiplier scan: no speedup multiplier or percentage in the audit document or
   the current CHANGELOG section (``Unreleased`` during development, the exact workspace
   release after its version cut). The changelog uses ATX release headings; fences,
@@ -128,8 +128,8 @@ failing configuration does not cancel the others: every configuration runs to it
 verdict and the problems of all of them are reported together.
 ``--config`` runs a checked partial shard; only a full matrix may write the document.
 ``--fresh`` allocates new contexts (the external compiler cache remains enabled).
-``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
-matching reports and checks the full document without compiling again.
+``--report`` writes checked evidence; ``--merge-reports`` validates seven reports
+and their producer's ``compiler-receipt.txt`` without compiling assembly again.
 
 Document mode (``--doc``)
 -------------------------
@@ -1384,7 +1384,7 @@ IDENTITY_ALLOWED = (
     "crates/sparql-eval/tests/",
     "crates/sparql-eval/benches/",
     "crates/hnsw/tests/",
-    "crates/hnsw/benches/",
+    "crates/hnsw/benches/", "crates/purrdf/tests/", "crates/purrdf/benches/",
 )
 
 
@@ -2463,7 +2463,6 @@ def self_test() -> int:
     print("OK: simd-asm self-test -- every refusal fires and every valid neighbour passes")
     return 0
 
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--self-test", action="store_true", help="exercise every refusal and neighbour on fixtures; builds nothing")
@@ -2477,7 +2476,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=2, help="concurrent configurations sharing Cargo's total job budget (default: 2)")
     parser.add_argument("--fresh", action="store_true", help="use new isolated build contexts and reparse assembly")
     parser.add_argument("--report", type=Path, help="atomically write this run's checked evidence as JSON")
-    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and check complete document parity; builds nothing")
+    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and their producer receipt; check document parity without compiling assembly")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs must be positive")
@@ -2498,6 +2497,7 @@ def main() -> int:
         print("FAIL: assembly run interrupted", file=sys.stderr)
         return 130
 
-
 if __name__ == "__main__":
+    if (lease := shutil.which("cargo-cache-lease")) and subprocess.run([lease, "--check"], check=False).returncode:
+        os.execv(lease, [lease, "--", sys.executable, *sys.argv])
     sys.exit(main())

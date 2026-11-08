@@ -175,7 +175,7 @@
 //! later one is directly blocked; and only unblocked nodes are expanded, each by boundedly
 //! many successors (one per at-least atom, times its number). The round cap
 //! ([`step_cap`](crate::owl_dl::graph::step_cap)) remains a hard backstop, so a termination bug surfaces as an
-//! [`EntailError::Build`] rather than a hang.
+//! [`EntailError::Decision`] with its original certificate rather than a hang.
 //!
 //! ## The one boundary this blocking does not cross
 //!
@@ -194,7 +194,7 @@
 //!
 //! # Two ways to ask
 //!
-//! [`consistent`] answers `bool` and turns an exhausted budget into [`EntailError::Build`] — the
+//! [`consistent`] answers `bool` and turns an exhausted budget into [`EntailError::Decision`] — the
 //! shape the query-directed materialization layer wants, where a truncated search has no
 //! honest answer to return. [`decide`] answers a [`Decision`], which carries the round count
 //! and an `exhausted` flag instead of throwing one; that is what the reasoner services need,
@@ -692,13 +692,18 @@ impl Hyper<'_> {
 ///
 /// # Errors
 ///
-/// [`EntailError::Build`] if either cap is exceeded (a termination-bug backstop for the
-/// round cap, and the honest ceiling on per-round work for the other).
+/// [`EntailError::Decision`] retains the original search certificate when either
+/// cap is exceeded. Native storage refusals and cancellation remain distinct.
 pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
-    decision_result(decide(kb, assumptions, Budget::for_kb(kb)))
+    let budget = Budget::for_kb(kb);
+    decision_result(kb, budget, decide(kb, assumptions, budget))
 }
 
-pub(crate) fn decision_result(decision: Decision) -> Result<bool, EntailError> {
+pub(crate) fn decision_result(
+    kb: &Kb,
+    budget: Budget,
+    decision: Decision,
+) -> Result<bool, EntailError> {
     if let Some(original) = decision.storage_refusal {
         return Err(super::roles::RoleHierarchyError::Storage(original).into());
     }
@@ -706,11 +711,10 @@ pub(crate) fn decision_result(decision: Decision) -> Result<bool, EntailError> {
         return Err(EntailError::Stopped);
     }
     if decision.exhausted {
-        return Err(EntailError::Build(
-            "OWL-Direct hypertableau exceeded its search budget (possible non-termination, or an \
-             ontology whose per-round work is beyond the work cap)"
-                .to_owned(),
-        ));
+        return Err(
+            crate::reasoner::certificate::Session::certificate_for_decision(kb, budget, decision)
+                .into(),
+        );
     }
     Ok(decision.consistent)
 }
@@ -3651,6 +3655,43 @@ mod tests {
     const R: u32 = 20;
     /// An individual term id.
     const IND: u32 = 30;
+
+    #[test]
+    fn native_decision_refusal_keeps_the_executed_search_certificate() {
+        let mut kb = Kb::empty();
+        kb.push_gci(Concept::Named(A), Concept::Named(B));
+        let class = kb.table.intern(Concept::Named(A));
+        kb.abox_types.push((IND, class));
+        kb.individuals.insert(IND);
+        kb.finalize().unwrap();
+        for budget in [
+            Budget {
+                steps: 0,
+                work: u64::MAX,
+            },
+            Budget {
+                steps: u64::MAX,
+                work: 0,
+            },
+        ] {
+            let decision = decide(&kb, &Assumptions::of_kb(), budget);
+            assert!(decision.exhausted);
+            let Err(crate::EntailError::Decision(certificate)) =
+                super::decision_result(&kb, budget, decision)
+            else {
+                panic!("an exhausted actual search cannot publish a semantic result");
+            };
+            assert_eq!(certificate.steps(), decision.steps);
+            assert_eq!(certificate.work(), decision.work);
+            assert_eq!(certificate.budget(), budget.steps);
+            assert_eq!(certificate.work_budget(), budget.work);
+            assert_eq!(certificate.decisions(), 1);
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(certificate.as_ref()).code,
+                "owl-dl-certificate"
+            );
+        }
+    }
 
     /// A transferred fact keeps its original version and the actual merge dependency.
     #[test]

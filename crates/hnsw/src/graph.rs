@@ -33,10 +33,10 @@
 use std::collections::BTreeSet;
 
 use purrdf_core::distance::{
-    Arithmetic, BuildIdentity, BuildShape, Exact, Resolved, RowsRef, Selected,
+    Arithmetic, BuildIdentity, BuildShape, Exact, NonFinite, Resolved, RowsRef, Selected,
 };
 
-use crate::error::{HnswError, Result};
+use crate::error::{ArithmeticRefusal, ComponentValue, HnswError, Result};
 use crate::params::Params;
 use purrdf_sparql_eval::knn::{Bound, Bounded, Kernel, Ranked};
 
@@ -122,12 +122,18 @@ impl Vectors {
         }
     }
 
-    /// Whether every component is finite. A non-finite input would poison every candidate it
-    /// touched, so a matrix that cannot be ranked should not exist.
-    fn first_non_finite(&self) -> Option<usize> {
+    /// Locate the first rejected component and retain its original-width bits.
+    /// Healthy inputs perform no additional value capture.
+    fn first_non_finite(&self) -> Option<(usize, ComponentValue)> {
         match self {
-            Self::F32(data) => data.iter().position(|value| !value.is_finite()),
-            Self::F64(data) => data.iter().position(|value| !value.is_finite()),
+            Self::F32(data) => data
+                .iter()
+                .position(|value| !value.is_finite())
+                .map(|index| (index, ComponentValue::Binary32Bits(data[index].to_bits()))),
+            Self::F64(data) => data
+                .iter()
+                .position(|value| !value.is_finite())
+                .map(|index| (index, ComponentValue::Binary64Bits(data[index].to_bits()))),
         }
     }
 }
@@ -148,7 +154,7 @@ impl VectorMatrix {
     /// Assemble a matrix from a flat row-major `binary32` buffer.
     ///
     /// The width is kept rather than widened, which halves what the corpus costs resident.
-    /// Every distance is still computed in binary64, in the same order, with the same
+    /// Every distance is still computed in `binary64`, in the same order, with the same
     /// separate roundings.
     ///
     /// # Errors
@@ -169,7 +175,10 @@ impl VectorMatrix {
         }
         let expected = rows
             .checked_mul(dims)
-            .ok_or(HnswError::ArithmeticOverflow)?;
+            .ok_or(ArithmeticRefusal::MatrixElements {
+                rows,
+                dimensions: dims,
+            })?;
         if data.len() != expected {
             return Err(HnswError::ParameterValidation {
                 cause: crate::error::MatrixRefusal::ValueCount {
@@ -180,10 +189,11 @@ impl VectorMatrix {
                 },
             });
         }
-        if let Some(index) = data.first_non_finite() {
+        if let Some((index, value)) = data.first_non_finite() {
             return Err(HnswError::NonFiniteComponent {
                 row: index / dims,
                 column: index % dims,
+                value,
             });
         }
         Ok(Self { rows, dims, data })
@@ -301,7 +311,7 @@ impl VectorMatrix {
     /// fold ([`Resolved::<Exact>::norm`]).
     ///
     /// `arithmetic` is the exact handle, for the reason every distance here takes one: the
-    /// fold is binary64 arithmetic, and on a thread that flushes subnormals it would
+    /// fold is `binary64` arithmetic, and on a thread that flushes subnormals it would
     /// return different bits for a row whose squared ratios are subnormal, which a cosine
     /// kernel then divides by. Such a thread cannot obtain the handle. An index running
     /// under another arithmetic obtains it with [`Resolved::exact`]: the norm has one
@@ -322,7 +332,7 @@ impl VectorMatrix {
 
 impl VectorMatrix {
     /// The distance between two stored rows under `kernel`, along `arithmetic`'s
-    /// resolved dispatch path, or `None` if it left the finite range.
+    /// resolved dispatch path, retaining the original checked result on refusal.
     ///
     /// `arithmetic` comes from [`Arithmetic::resolve`] (or
     /// [`Arithmetic::resolve_recorded`]), called once per scan or call site on the thread
@@ -330,7 +340,6 @@ impl VectorMatrix {
     /// than to nearest is refused, by name; every distance this type computes takes the
     /// handle it returns, so none is computed on a thread that was not checked. The handle
     /// is `Copy`, and passing it costs nothing per pair.
-    #[must_use]
     pub fn distance<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
@@ -339,7 +348,7 @@ impl VectorMatrix {
         a_norm: f64,
         b: usize,
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> core::result::Result<f64, NonFinite> {
         let (a_start, b_start) = (a * self.dims, b * self.dims);
         let measure = kernel.measure();
         match &self.data {
@@ -368,7 +377,6 @@ impl VectorMatrix {
     /// an arithmetic whose bits do not depend on the path it is bit-identical to a matched one.
     /// `arithmetic` is the checked handle [`VectorMatrix::distance`] takes, for the same
     /// reason.
-    #[must_use]
     pub fn distance_from_query<A: Arithmetic>(
         &self,
         arithmetic: Resolved<A>,
@@ -377,7 +385,7 @@ impl VectorMatrix {
         query_norm: f64,
         row: usize,
         row_norm: f64,
-    ) -> Option<f64> {
+    ) -> core::result::Result<f64, NonFinite> {
         let start = row * self.dims;
         let measure = kernel.measure();
         match &self.data {
@@ -455,7 +463,7 @@ impl VectorMatrix {
         seed_norm: f64,
         norms: &[f64],
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [core::result::Result<f64, NonFinite>],
     ) {
         let start = seed * self.dims;
         let measure = kernel.measure();
@@ -494,7 +502,7 @@ impl VectorMatrix {
         query_norm: f64,
         norms: &[f64],
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [core::result::Result<f64, NonFinite>],
     ) {
         let measure = kernel.measure();
         match &self.data {

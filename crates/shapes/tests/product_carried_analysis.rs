@@ -50,6 +50,7 @@
 use purrdf_shapes::product_fixture::core_product;
 use std::sync::Arc;
 
+use purrdf_core::ContentDigest;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactSpec, ArtifactView, Identity};
 use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
@@ -172,7 +173,8 @@ fn component_of(bytes: &[u8], label: &str) -> Vec<u8> {
 /// Rebuild a product with a replacement AST section, and optionally a replacement
 /// `class-catalog` identity component.
 ///
-/// A full repack: every digest is recomputed, so nothing that refuses a product
+/// A full repack: the complete-model identity and every container digest are
+/// recomputed, so nothing that refuses a product
 /// built here is refusing an edit the envelope could have caught on its own.
 fn reframe(bytes: &[u8], ast: &[u8], class_catalog: Option<&[u8]>) -> Vec<u8> {
     let view = ArtifactView::from_bytes(SPEC, bytes).expect("the product's envelope opens");
@@ -180,6 +182,10 @@ fn reframe(bytes: &[u8], ast: &[u8], class_catalog: Option<&[u8]>) -> Vec<u8> {
     let mut identity = Identity::new();
     let mut replaced = class_catalog.is_none();
     for component in view.identity().components() {
+        if component.label() == "model" {
+            identity.push("model", ContentDigest::of(ast).as_bytes());
+            continue;
+        }
         match class_catalog {
             Some(value) if component.label() == CLASS_CATALOG_LABEL => {
                 identity.push(CLASS_CATALOG_LABEL, value);
@@ -320,7 +326,17 @@ fn admit(bytes: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
 /// every forgery below a no-op that passed.
 #[test]
 fn the_ast_section_ends_with_the_class_analysis() {
-    let ast = section_of(&core_product(SHAPES), SECTION_AST);
+    let ast = section_of(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        SECTION_AST,
+    );
     let tail = ranked_tail(&CLASSES);
 
     assert!(
@@ -362,8 +378,22 @@ fn the_ast_section_ends_with_the_class_analysis() {
 /// confounded with "it fell over".
 #[test]
 fn a_restore_uses_the_carried_analysis_verbatim() {
-    let ghost_product = core_product(SHAPES_WITH_GHOST);
-    let forged = with_catalog_tail(&core_product(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
+    let ghost_product = core_product(
+        SHAPES_WITH_GHOST,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("fixture product");
+    let forged = with_catalog_tail(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        &ranked_tail(&CLASSES_WITH_GHOST),
+    );
     let forged = reframe(
         &forged,
         &section_of(&forged, SECTION_AST),
@@ -394,7 +424,11 @@ fn a_restore_uses_the_carried_analysis_verbatim() {
 /// changed and requires a successful restore that answers like a fresh parse.
 #[test]
 fn an_untouched_repack_still_admits() {
-    let product = core_product(SHAPES);
+    let product = core_product(
+        SHAPES,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("fixture product");
     let repacked = reframe(&product, &section_of(&product, SECTION_AST), None);
 
     assert_eq!(
@@ -418,7 +452,17 @@ fn an_untouched_repack_still_admits() {
 /// for a blank cheque.
 #[test]
 fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
-    let forged = with_catalog_tail(&core_product(SHAPES), &ranked_tail(&CLASSES_WITH_GHOST));
+    let forged = with_catalog_tail(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        &ranked_tail(&CLASSES_WITH_GHOST),
+    );
 
     let refusal = admit(&forged).expect_err(
         "a carried class analysis that is not the one the product's identity pins must be refused, \
@@ -445,7 +489,17 @@ fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
 #[test]
 fn a_rearranged_analysis_is_refused() {
     let swapped = catalog_tail(&[(CLASSES[0], 1), (CLASSES[1], 0)]);
-    let forged = with_catalog_tail(&core_product(SHAPES), &swapped);
+    let forged = with_catalog_tail(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        &swapped,
+    );
 
     let refusal = admit(&forged).expect_err(
         "a class analysis that gives the fixture's own classes each other's binding-row positions \
@@ -472,7 +526,11 @@ fn a_rearranged_analysis_is_refused() {
 /// supplied.
 #[test]
 fn an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused() {
-    let product = core_product(SHAPES);
+    let product = core_product(
+        SHAPES,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("fixture product");
     for (what, tail) in [
         (
             "a repeated position",
@@ -518,8 +576,18 @@ fn an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused() {
 #[test]
 fn a_valid_but_underived_arrangement_is_not_refused_as_malformed() {
     let swapped = catalog_tail(&[(CLASSES[0], 1), (CLASSES[1], 0)]);
-    let refusal = admit(&with_catalog_tail(&core_product(SHAPES), &swapped))
-        .expect_err("a rearranged analysis is still not the pinned one");
+    let refusal = admit(&with_catalog_tail(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        &swapped,
+    ))
+    .expect_err("a rearranged analysis is still not the pinned one");
 
     assert_ne!(
         refusal.dimension(),
@@ -548,7 +616,17 @@ fn a_valid_but_underived_arrangement_is_not_refused_as_malformed() {
 #[test]
 fn rebuild_ignores_the_carried_analysis() {
     let undecodable = catalog_tail(&[(CLASSES[0], 0), (CLASSES[1], 0)]);
-    let forged = with_catalog_tail(&core_product(SHAPES), &undecodable);
+    let forged = with_catalog_tail(
+        &core_product(
+            SHAPES,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixture product"),
+        &undecodable,
+    );
 
     let refusal = admit(&forged).expect_err("an undecodable class analysis is refused by `admit`");
     assert_eq!(
@@ -586,7 +664,11 @@ fn rebuild_ignores_the_carried_analysis() {
 /// standing check that they have not.
 #[test]
 fn parsing_admitting_and_rebuilding_agree() {
-    let product = core_product(SHAPES);
+    let product = core_product(
+        SHAPES,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("fixture product");
     let parsed = expected_report_nt();
 
     let admitted = admit(&product).expect("the product admits in the process that wrote it");
@@ -679,7 +761,13 @@ fn an_admitted_product_constrains_exactly_as_a_fresh_parse_does() {
     }
 
     let product = parsed
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable as a product");
     let admitted = admit(&product).expect("the product admits in the process that wrote it");
 

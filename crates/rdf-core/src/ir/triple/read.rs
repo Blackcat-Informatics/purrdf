@@ -341,6 +341,13 @@ impl DatasetView for TripleRead<'_> {
         Self: 'a;
     type ProbePlan = TripleOrder;
 
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(Some(self.dataset.snapshot_identity))
+    }
+
     fn read_error(&self) -> Option<Self::ReadError> {
         if !self.failure.failed.load(Ordering::Acquire) {
             return None;
@@ -463,6 +470,25 @@ impl DatasetView for TripleRead<'_> {
         self.ready()
             .ok()
             .map(|()| self as &dyn crate::SnapshotStatistics<TermId>)
+    }
+
+    fn source_summary(
+        &self,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        stream: crate::StatisticsStream,
+    ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
+        self.graph(graph)?;
+        Ok(Some(
+            self.dataset
+                .statistics
+                .source_summary(predicate, graph, stream),
+        ))
+    }
+
+    fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
+        self.ready()?;
+        Ok(Some(self.dataset.statistics.statement_count()))
     }
 
     fn statement_cardinality_estimate(

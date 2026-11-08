@@ -293,7 +293,15 @@ fn dated_some_value_discards_ordinary_query_failures_but_retains_resource_refusa
 fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
     let shapes = Arc::new(purrdf_shapes::engine::parse_shapes(SHAPES, None).unwrap());
     let prepared = PreparedShapes::new(shapes);
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let identity = *purrdf_shapes::product::ShapesProduct::open(&bytes)
         .unwrap()
         .declared_identity()
@@ -392,14 +400,24 @@ fn native_allocation_refusals_keep_resource_status_across_pattern_and_query() {
         let evaluator = EvalError::XPathRegex(cause);
         let diagnostic =
             RdfDiagnostic::error(evaluator.code().unwrap(), "unrelated diagnostic words");
-        let query = Err(CompleteValidationError::XPath(Box::new(
-            XPathValidationError::Query(diagnostic),
-        )));
-        assert_eq!(
-            complete_validation_status(&query),
-            CompleteValidationStatus::ResourceRefused,
-            "{resource:?}: public SPARQL code to Query status",
-        );
+        for wrapped in [false, true] {
+            let cause = CompleteValidationError::XPath(Box::new(XPathValidationError::Query(
+                diagnostic.clone(),
+            )));
+            let query = Err(if wrapped {
+                CompleteValidationError::RuleExecution {
+                    cause: Box::new(cause),
+                    coordinates: Box::default(),
+                }
+            } else {
+                cause
+            });
+            assert_eq!(
+                complete_validation_status(&query),
+                CompleteValidationStatus::ResourceRefused,
+                "{resource:?}: public SPARQL resource status, rule receipt: {wrapped}",
+            );
+        }
     }
 
     let generic_query = Err(CompleteValidationError::XPath(Box::new(
@@ -626,11 +644,35 @@ fn a_host_request_selects_one_exact_law_beside_its_xpath_law() {
         requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath31)),
         Ok(Some(ShaclProfile::ED_20261016))
     );
-    let message = requested_shacl_profile(Some("shacl-ed-2026-10-17"), None).unwrap_err();
+    use purrdf_testkit::error_capture::Capture;
+    use std::error::Error;
+    let unsupported = {
+        let id = String::from("shacl-ed-2026-10-17");
+        requested_shacl_profile(Some(&id), None).unwrap_err()
+    };
+    let original = unsupported
+        .source()
+        .unwrap()
+        .downcast_ref::<purrdf_shapes::profile::UnsupportedProfile>()
+        .unwrap();
+    assert_eq!(original.id(), "shacl-ed-2026-10-17");
+    assert_eq!(
+        Capture::read(&unsupported).child("cause").code,
+        "shacl-unsupported-profile"
+    );
+    let message = unsupported.to_string();
     assert!(message.starts_with("unsupported-profile: "), "{message}");
     assert!(message.contains("shacl-ed-2026-10-17"), "{message}");
     let conflict =
         requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath20)).unwrap_err();
+    let original = conflict
+        .source()
+        .unwrap()
+        .downcast_ref::<purrdf_shapes::profile::XPathProfileConflict>()
+        .unwrap();
+    assert_eq!(original.requested(), Profile::Xpath20);
+    assert_eq!(original.required(), Profile::Xpath31);
+    let conflict = conflict.to_string();
     assert!(
         conflict.contains("shacl-ed-2026-10-16") && conflict.contains("requires"),
         "{conflict}"

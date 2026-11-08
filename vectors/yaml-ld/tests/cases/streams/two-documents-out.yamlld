@@ -1,0 +1,6 @@
+- "@id": https://w3.org/yaml-ld/
+  "@type":
+    - https://schema.org/WebContent
+- "@id": https://www.w3.org/TR/json-ld11/
+  "@type":
+    - https://schema.org/WebContent

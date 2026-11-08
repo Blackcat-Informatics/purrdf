@@ -3,8 +3,8 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, seventeen subcommands ([`Command`]), and three global flags
-//! (`--loss-ledger`, `--jsonld-options`, `--geo-profile`). The format / regime / results-format
+//! One pipeline of subcommands ([`Command`]), with global document, geographic and
+//! explicit canonical-search policy/receipt flags. The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
 //! validates them at parse time, and each wrapper carries a total conversion into
@@ -202,6 +202,17 @@ pub(crate) struct Cli {
     /// The subcommand to run.
     #[command(subcommand)]
     pub(crate) cmd: Command,
+    /// Exact RDFC search policy: unlimited or canonical unsigned decimal u64, with no default.
+    #[arg(long, global = true, requires = "canonicalization_receipts")]
+    pub(crate) canonical_search: Option<String>,
+    /// Required canonical-search evidence destination; '-' writes stderr.
+    #[arg(
+        long,
+        global = true,
+        requires = "canonical_search",
+        value_name = "DEST"
+    )]
+    pub(crate) canonicalization_receipts: Option<PathBuf>,
 
     /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.
@@ -226,7 +237,7 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) jsonld_options: Option<PathBuf>,
     /// Strict version-one geographic profile for geo, query, and update.
-    /// Omitting it selects the declared standard CRS84 profile.
+    /// Omitting it selects the declared standard `CRS84` profile.
     #[arg(long, global = true, value_name = "PATH")]
     pub(crate) geo_profile: Option<PathBuf>,
 }
@@ -322,9 +333,164 @@ impl Cli {
     }
 }
 
-/// The seventeen pipeline subcommands.
+/// Slash interpretation for the compiled glob command.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobMode {
+    Text,
+    Path,
+}
+
+/// Explicit lexical input selection for the compiled glob command.
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobSurface {
+    Literal,
+    Iri,
+    IriScheme,
+    IriAuthority,
+    IriPath,
+    IriQuery,
+    IriFragment,
+}
+
+/// Execute an RDF-authored ordered plan against one original RDF object.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobRdfArgs {
+    /// Source-backed RDF plan document.
+    pub plan: String,
+    /// RDF input document containing the selected object.
+    pub input: String,
+    /// Absolute IRI identifying the plan resource.
+    #[arg(long)]
+    pub root: String,
+    /// Caller-owned absolute IRI for this evaluation.
+    #[arg(long)]
+    pub evaluation: String,
+    /// Absolute IRI of the subject selecting the original input object.
+    #[arg(long)]
+    pub input_subject: String,
+    /// Absolute IRI of the predicate selecting the original input object.
+    #[arg(long)]
+    pub input_predicate: String,
+    /// Explicit role=IRI vocabulary mapping; every role is required.
+    #[arg(long = "vocabulary", required = true)]
+    pub vocabulary: Vec<String>,
+    /// Both input documents' syntax: turtle or ntriples.
+    #[arg(long, value_enum)]
+    pub from: CliNativeRdfFormat,
+    /// Output syntax: turtle or ntriples.
+    #[arg(long, value_enum)]
+    pub to: CliNativeRdfFormat,
+    /// Aggregate matching work allowance; refusal emits no RDF result.
+    #[arg(long)]
+    pub max_work: u64,
+}
+
+/// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Expand JSON-LD/YAML-LD document structure without creating an RDF dataset.
+    DocumentExpand {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Expanded JSON destination, or - for standard output.
+        output: String,
+    },
+    /// Compact JSON-LD/YAML-LD document structure under an explicit output context.
+    DocumentCompact {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Compacted JSON destination, or - for standard output.
+        output: String,
+    },
+    /// Flatten JSON-LD/YAML-LD, optionally compacting under an output context.
+    DocumentFlatten {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Flattened JSON destination, or - for standard output.
+        output: String,
+    },
+    /// Frame original source and frame documents without constructing an RDF dataset.
+    DocumentFrame {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Original frame path, or - for standard input.
+        frame: String,
+        /// Framed JSON destination, or - for standard output.
+        output: String,
+    },
+    /// Export and reconstruct exact YAML presentation through RDF metadata.
+    YamlSource {
+        #[command(subcommand)]
+        command: crate::yaml_source::Command,
+    },
+    /// Convert complete checked BLAKE3 word identities with explicit formats.
+    WordId {
+        /// Encode, decode, inspect or stream an ordered batch.
+        #[command(subcommand)]
+        command: crate::word_id::Command,
+    },
+    /// Present a full BLAKE3 identity with native emoji, spoken labels and randomart.
+    Fingerprint {
+        /// Complete 64-digit hexadecimal digest; either case is accepted.
+        #[arg(long)]
+        digest: String,
+        /// Positive number of emoji and corresponding spoken labels.
+        #[arg(long)]
+        symbols: usize,
+        /// Inclusive live UTF-8 rendering-storage allowance.
+        #[arg(long)]
+        max_bytes: usize,
+        /// Inclusive native parse, scan and output-copy work allowance.
+        #[arg(long)]
+        max_work: u64,
+    },
+    /// Execute an RDF-authored plan and emit its description and membership provenance.
+    GlobRdf(GlobRdfArgs),
+    /// Return every matching index from an ordered compiled pattern set.
+    GlobSet {
+        /// Verbatim literal value or IRI reference.
+        value: String,
+        /// Source pattern, repeatable; order and duplicate occurrences survive.
+        #[arg(long = "pattern")]
+        patterns: Vec<String>,
+        /// Treat slashes as ordinary text or path-component boundaries.
+        #[arg(long, value_enum)]
+        mode: GlobMode,
+        /// Select the literal or an exact lexical component of a parsed IRI.
+        #[arg(long, value_enum)]
+        surface: GlobSurface,
+        /// Aggregate work allowance; exhaustion publishes no result.
+        #[arg(long)]
+        max_work: u64,
+    },
+    /// Match one complete literal or explicitly selected IRI surface.
+    Glob {
+        /// Unicode pattern in the purrdf-glob-v2 language.
+        pattern: String,
+        /// Verbatim literal value or IRI reference.
+        value: String,
+        /// Treat slashes as ordinary text or path-component boundaries.
+        #[arg(long, value_enum)]
+        mode: GlobMode,
+        /// Select the literal or an exact lexical component of a parsed IRI.
+        #[arg(long, value_enum)]
+        surface: GlobSurface,
+        /// Maximum deterministic work units; exhaustion publishes no decision.
+        #[arg(long)]
+        max_work: u64,
+    },
     /// Execute a strict geographic scalar, batch, conversion, cover or index request.
     Geo {
         /// Request JSON source; `-` reads standard input.
@@ -336,6 +502,12 @@ pub(crate) enum Command {
     },
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+        import_yamlld_input_options: Vec<String>,
+        /// Closed version-one YAML-LD Basic input-options JSON file.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Input format override; inferred from each input's extension when omitted.
         /// Applies to EVERY source in the list, including each `--input`.
         #[arg(long, value_enum)]
@@ -381,15 +553,24 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
         /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
         /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
         /// a run it admits writes exactly the closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the `--entailment` closure is
@@ -420,6 +601,13 @@ pub(crate) enum Command {
     },
     /// Evaluate a SPARQL query over an RDF or pack data source.
     Query {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+        import_yamlld_input_options: Vec<String>,
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        /// Premise imports keep their default input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-source path (format inferred from its extension). A pack file is
         /// queried zero-copy (unless `--entailment` forces materialization).
         #[arg(long)]
@@ -435,9 +623,9 @@ pub(crate) enum Command {
         /// (the query then runs over the closure, not the raw view). Combines with
         /// every governor flag: the ceilings bound the QUERY over the closure, and
         /// `--deadline` additionally bounds computing the closure itself. The query
-        /// governors never become limits on the reasoning run; `--max-stored-facts` and
-        /// `--max-join-steps` are its limits, and like every evaluation limit they can
-        /// only refuse, never truncate a closure. A deadline that expires while the
+        /// governors never become limits on the reasoning run; `--max-stored-facts`,
+        /// `--max-join-steps` and `--max-term-arena-bytes` are its limits. Like every
+        /// evaluation limit they can only refuse, never truncate a closure. A deadline that expires while the
         /// closure is still being computed prints the governor report, writes no rows,
         /// and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
@@ -467,16 +655,25 @@ pub(crate) enum Command {
         imports: Vec<String>,
         /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
         /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
-        /// run (exit 1) naming the limit and the numbers. Omitted, the limit is 4194304
-        /// facts. The limit can only refuse: a run it admits answers over exactly the
+        /// run (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is
+        /// applied. The limit can only refuse: a run it admits answers over exactly the
         /// closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
-        /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
+        /// `d` regimes; one more fails the run (exit 1). Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+        /// the limit and the numbers. Omitted, no logical ceiling is applied.
+        #[arg(
+            long = "max-term-arena-bytes",
+            value_name = "BYTES",
+            requires = "entailment"
+        )]
+        max_term_arena_bytes: Option<u64>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
         /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
         /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
@@ -524,6 +721,12 @@ pub(crate) enum Command {
         /// `SILENT`, is the join identity — before it can be charged.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with_all = ["unlimited_udf_depth", "explain"])]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with_all = ["max_udf_depth", "explain"])]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting: the query runs as if no governor
         /// existed, rather than metered against ceilings nothing can reach (the base every
         /// governed run otherwise starts from). Combines with `--deadline`, which is a stop
@@ -622,11 +825,30 @@ pub(crate) enum Command {
         /// Omitted, exact when terminating or eighteen digits rounded half to even.
         #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
         division: Option<purrdf_sparql_eval::DivisionPolicy>,
+        /// Supply the exact `xsd:dateTime` returned by NOW(), including its fraction
+        /// and timezone. Omitted, execution samples the host clock.
+        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+        now: Option<String>,
+        /// Supply the unsigned 64-bit seed for RAND(), UUID() and STRUUID().
+        /// Zero is valid. Omitted, execution samples host entropy.
+        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+        entropy_seed: Option<String>,
         /// The SPARQL query text.
         query: String,
     },
     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
     Update {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
+        /// Omitted, native host-clock behavior is unchanged.
+        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+        now: Option<String>,
+        /// Initial seed for one random stream across this UPDATE request.
+        /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
+        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+        entropy_seed: Option<String>,
         /// Input dataset path; format is inferred from its extension unless `--from` is set.
         #[arg(long)]
         data: String,
@@ -661,6 +883,12 @@ pub(crate) enum Command {
         /// Bound remote/federated requests issued while computing the mutation.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with = "max_udf_depth")]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting, rather than metering the mutation
         /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
         /// any numeric ceiling.
@@ -699,6 +927,13 @@ pub(crate) enum Command {
     },
     /// Materialize an entailment regime's closure over a source graph.
     Reason {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
@@ -714,15 +949,20 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
         /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
         /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
         /// a run it admits writes exactly the closure a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
         /// imports closure to BE the ontology, so the closure is materialized over the
@@ -760,6 +1000,9 @@ pub(crate) enum Command {
     },
     /// Decide whether a premise entails a conclusion under an entailment regime.
     Entails {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
         /// The entailment regime to decide under. Five of the seven are served;
         /// `owl-direct` and `rif` are each defined by an input this question does
         /// not carry, and the boundary refuses them by name.
@@ -768,6 +1011,17 @@ pub(crate) enum Command {
         /// The premise document `FILE`, or `-` for stdin (which requires `--from`).
         #[arg(long, value_name = "FILE")]
         premise: String,
+        /// Bounded YAML-LD Basic input options for the premise only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the conclusion only.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires = "conclusion",
+            conflicts_with = "pattern"
+        )]
+        conclusion_yamlld_input_options: Option<PathBuf>,
         /// The conclusion graph `FILE`, or `-` for stdin. The answer is a verdict:
         /// `entailed`, `not-entailed` (a proof), or `undecided`.
         #[arg(
@@ -805,15 +1059,20 @@ pub(crate) enum Command {
         /// Permit exactly `N` facts in each evaluation store the question is answered with —
         /// the premise's closure and every re-chase a mechanism beyond the rule table runs —
         /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, the limit is 4194304 facts. The limit
+        /// naming the limit and the numbers. Omitted, no logical ceiling is applied. The limit
         /// can only refuse: a run it admits answers exactly as a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
-        /// in each of those evaluations; one more fails the run (exit 1). Omitted, the limit
-        /// is 1048576 steps.
+        /// in each of those evaluations; one more fails the run (exit 1).
+        /// Omitted, no logical ceiling is applied.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
+        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
+        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+        max_term_arena_bytes: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
@@ -862,6 +1121,13 @@ pub(crate) enum Command {
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Also record the run's PROOF TERM and print it after the certificate.
         ///
         /// Opt-in, and it costs what it records: the completion graph of every tableau run
@@ -938,6 +1204,10 @@ pub(crate) enum Command {
     },
     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
     Project {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Projection configuration and assets keep their existing input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Closed projection carrier profile.
         #[arg(long, value_enum)]
         profile: CliProjectionProfile,
@@ -1015,6 +1285,21 @@ pub(crate) enum Command {
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with = "shapes_product")]
+        import_yamlld_input_options: Vec<String>,
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Shapes, products, imports and change documents keep their existing policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires = "shapes",
+            conflicts_with = "shapes_product"
+        )]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
         /// Exactly one of this and `--shapes-product` is required: they are two spellings of
         /// the same input, a document to parse or a preparation to restore.
@@ -1210,6 +1495,9 @@ pub(crate) enum Command {
         /// flag existed.
         #[arg(long, value_name = "FILE")]
         changes: Option<String>,
+        /// Independent YAML-LD Basic input options for this change document only.
+        #[arg(long, value_name = "PATH", requires = "changes")]
+        changes_yamlld_input_options: Option<PathBuf>,
         /// The rows REMOVED from `IN`: the retract half of a change set, and the reason
         /// `--changes` alone would be half of one — a SHACL verdict moves when a row
         /// leaves the graph just as readily as when one joins it.
@@ -1223,6 +1511,9 @@ pub(crate) enum Command {
         /// resulting report does and does not describe.
         #[arg(long = "changes-removed", value_name = "FILE")]
         changes_removed: Option<String>,
+        /// Independent YAML-LD Basic input options for this change document only.
+        #[arg(long, value_name = "PATH", requires = "changes_removed")]
+        changes_removed_yamlld_input_options: Option<PathBuf>,
         /// Change-document format override for `--changes` and `--changes-removed`;
         /// inferred from each path's extension when omitted. Both halves are read as the
         /// same syntax, because they are two halves of one change set.
@@ -1256,6 +1547,12 @@ pub(crate) enum Command {
         /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
         #[arg(long, value_name = "REQUESTS")]
         max_remote_requests: Option<u64>,
+        /// Bound logical user-function depth. The default is thirty-two.
+        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+        max_udf_depth: Option<u64>,
+        /// Remove the logical user-function depth ceiling.
+        #[arg(long, conflicts_with = "max_udf_depth")]
+        unlimited_udf_depth: bool,
         /// Decline every ceiling AND all accounting, rather than metering the validation
         /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
         /// any numeric ceiling.
@@ -1331,6 +1628,9 @@ pub(crate) enum Command {
         /// Data-graph path, or `-` for stdin (which requires `--from`).
         #[arg(long)]
         data: String,
+        /// Bounded YAML-LD Basic input options for the data graph only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1355,6 +1655,10 @@ pub(crate) enum Command {
         /// exactly as before this flag existed.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// Maximum assignment-prefix states per ambiguous neighbourhood, including
+        /// terminal cardinality checks. Exhaustion fails the whole shape map.
+        #[arg(long, value_name = "COUNT", default_value_t = 200_000)]
+        matcher_maximum_states: u64,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
         /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
         /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
@@ -1386,6 +1690,9 @@ pub(crate) enum Command {
     /// `convert` — a description whose statement layer cannot survive the target syntax
     /// records the drop instead of losing it silently.
     Describe {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// A resource to describe: repeatable, and at least one is required. Several are
         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
         /// as several documents. A RELATIVE reference resolves against the base in force —
@@ -1444,7 +1751,7 @@ pub(crate) enum Command {
     /// The output is the inferred triples alone — SHACL 1.2 Inference Rules' "inferred
     /// triples", SPARQL 1.2 RL's "graph GI of inferred triples" — never the data graph they
     /// were inferred from, serialized in the `--to` syntax in one canonical order, so two
-    /// runs over the same inputs write identical bytes. Both frontends lower to the one
+    /// runs with the same supplied coordinates and inputs write identical bytes. Both frontends lower to the one
     /// rules engine every PurRDF host reaches (`purrdf_shapes::infer`,
     /// `purrdf_shapes::srl::infer`).
     ///
@@ -1466,6 +1773,27 @@ pub(crate) enum Command {
     /// (naming the stage), and **2** for a usage error or an `--import` pair the closure
     /// never reaches, exactly as a run would.
     Rules {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with_all = ["srl", "check"])]
+        import_yamlld_input_options: Vec<String>,
+        /// Exact caller-supplied `xsd:dateTime` for every rule query's `NOW()`.
+        /// Omitted, the native host-clock behavior is unchanged.
+        #[arg(
+            long,
+            value_name = "XSD_DATE_TIME",
+            allow_hyphen_values = true,
+            conflicts_with = "check"
+        )]
+        now: Option<String>,
+        /// Initial unsigned seed for the rule execution's query-seed sequence.
+        /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
+        #[arg(
+            long,
+            value_name = "U64",
+            allow_hyphen_values = true,
+            conflicts_with = "check"
+        )]
+        entropy_seed: Option<String>,
         /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
         /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
         /// required: a shapes graph and a SPARQL 1.2 RL rule set are two rule sets, and
@@ -1577,15 +1905,14 @@ pub(crate) enum Command {
         max_generated_terms: Option<u64>,
         /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
         /// data and every inferred triple; one more fails the run naming the limit and the
-        /// numbers. Omitted, the limit is 4194304 facts: a rule copying a predicate over
-        /// tens of thousands of triples, or the closure of a thousand-node chain,
-        /// completes. The limit can only refuse: a run it admits writes exactly the
+        /// numbers. Omitted, no logical ceiling is applied.
+        /// The limit can only refuse: a run it admits writes exactly the
         /// inference graph a larger limit would.
         #[arg(long = "max-stored-facts", value_name = "N")]
         max_stored_facts: Option<u64>,
         /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
-        /// one more fails the run naming the limit and the numbers. Omitted, the limit is
-        /// 1048576 steps. It bounds a rule body that enumerates far more candidates than
+        /// one more fails the run naming the limit and the numbers. Omitted, no logical
+        /// ceiling is applied. It bounds a rule body that enumerates far more candidates than
         /// it infers triples.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
@@ -1609,6 +1936,12 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
+        /// Bounded YAML-LD Basic input options for the primary data graph only.
+        #[arg(long, value_name = "PATH", conflicts_with = "check")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH", requires = "shapes", conflicts_with_all = ["srl", "check"])]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
@@ -1660,6 +1993,9 @@ pub(crate) enum Command {
             .args(["expr", "expr_at", "expr_turtle", "expr_turtle_file"])
     ))]
     NodeExpr {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
         /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
         /// requires `--shapes-from`).
         #[arg(long, value_name = "FILE")]
@@ -1724,6 +2060,12 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
+        /// Bounded YAML-LD Basic input options for the primary data graph only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH", requires = "shapes")]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
@@ -1786,6 +2128,12 @@ pub(crate) enum ShapesCommand {
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
     /// are always written to stderr.
     Lint {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
+        /// Bounded YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Shapes-graph format override; inferred from the path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1949,6 +2297,12 @@ pub(crate) enum ShaclCommand {
     /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
     /// writer.
     Pack {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
+        /// Bounded YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The shapes graph `FILE`, read as Turtle unless `--shapes-from` names another
         /// syntax. Its prefix map — the fallback prefix environment every SHACL-SPARQL and
         /// SHACL-AF query resolves against — is recorded in the product.
@@ -2624,6 +2978,459 @@ impl CliRegime {
             Self::Rif => Regime::Rif,
             Self::D => Regime::D,
         }
+    }
+}
+
+impl Cli {
+    /// Known input, import, artifact and report paths, before any canonical operation starts.
+    pub(crate) fn canonical_paths(&self) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        paths.extend(self.jsonld_options.iter().cloned());
+        paths.extend(self.geo_profile.iter().cloned());
+        if let Some(Some(path)) = &self.loss_ledger {
+            paths.push(path.clone());
+        }
+        match &self.cmd {
+            Command::DocumentExpand {
+                request,
+                input,
+                output,
+            }
+            | Command::DocumentCompact {
+                request,
+                input,
+                output,
+            }
+            | Command::DocumentFlatten {
+                request,
+                input,
+                output,
+            } => {
+                paths.extend([request, input, output].into_iter().map(PathBuf::from));
+            }
+            Command::DocumentFrame {
+                request,
+                input,
+                frame,
+                output,
+            } => {
+                paths.extend(
+                    [request, input, frame, output]
+                        .into_iter()
+                        .map(PathBuf::from),
+                );
+            }
+            Command::YamlSource { command } => paths.extend(command.paths()),
+            Command::Glob { pattern, .. } => {
+                paths.push(PathBuf::from(pattern));
+            }
+            Command::Geo { input, output, .. } => {
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Convert {
+                yamlld_input_options,
+                inputs,
+                rules,
+                report,
+                imports,
+                input,
+                output,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(inputs.iter().map(PathBuf::from));
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Query {
+                data,
+                yamlld_input_options,
+                rules,
+                report,
+                imports,
+                query,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(data));
+                paths.extend(yamlld_input_options.iter().cloned());
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = query.strip_prefix('@') {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            Command::Update {
+                data,
+                output,
+                update,
+                yamlld_input_options,
+                ..
+            } => {
+                paths.push(PathBuf::from(data));
+                paths.push(PathBuf::from(output));
+                paths.extend(yamlld_input_options.iter().cloned());
+                if let Some(path) = update.strip_prefix('@') {
+                    paths.push(PathBuf::from(path));
+                }
+            }
+            Command::Reason {
+                yamlld_input_options,
+                rules,
+                report,
+                imports,
+                input,
+                output,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                if let Some(path) = rules {
+                    paths.push(path.clone());
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Entails {
+                premise,
+                conclusion,
+                pattern,
+                imports,
+                report,
+                output,
+                yamlld_input_options,
+                conclusion_yamlld_input_options,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(conclusion_yamlld_input_options.iter().cloned());
+                paths.push(PathBuf::from(premise));
+                if let Some(path) = conclusion {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = pattern {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(Some(path)) = report {
+                    paths.push(path.clone());
+                }
+                paths.push(PathBuf::from(output));
+            }
+            Command::Consistency {
+                yamlld_input_options,
+                check_proof,
+                imports,
+                input,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                if let Some(path) = check_proof {
+                    paths.push(path.clone());
+                }
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(input));
+            }
+            Command::Project {
+                yamlld_input_options,
+                config,
+                assets,
+                input,
+                output,
+                ..
+            } => {
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.push(PathBuf::from(config));
+                if let Some(path) = assets {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Lift {
+                config,
+                input,
+                output,
+                ..
+            } => {
+                paths.push(PathBuf::from(config));
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Validate {
+                yamlld_input_options,
+                shapes_yamlld_input_options,
+                shapes,
+                shapes_product,
+                import,
+                changes,
+                changes_removed,
+                input,
+                output,
+                import_yamlld_input_options,
+                changes_yamlld_input_options,
+                changes_removed_yamlld_input_options,
+                ..
+            } => {
+                paths.extend(changes_yamlld_input_options.iter().cloned());
+                paths.extend(changes_removed_yamlld_input_options.iter().cloned());
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
+                if let Some(path) = shapes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = shapes_product {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = changes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = changes_removed {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Shex {
+                schema,
+                imports,
+                data,
+                output,
+                yamlld_input_options,
+                ..
+            } => {
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.push(PathBuf::from(schema));
+                for pair in imports {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.push(PathBuf::from(data));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Describe {
+                input,
+                output,
+                yamlld_input_options,
+                ..
+            } => {
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Rules {
+                shapes,
+                srl,
+                import,
+                explain,
+                input,
+                output,
+                yamlld_input_options,
+                shapes_yamlld_input_options,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
+                if let Some(path) = shapes {
+                    paths.push(PathBuf::from(path));
+                }
+                if let Some(path) = srl {
+                    paths.push(PathBuf::from(path));
+                }
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(Some(path)) = explain {
+                    paths.push(path.clone());
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::NodeExpr {
+                shapes,
+                import,
+                expr_turtle_file,
+                input,
+                output,
+                yamlld_input_options,
+                shapes_yamlld_input_options,
+                import_yamlld_input_options,
+                ..
+            } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
+                paths.push(PathBuf::from(shapes));
+                for pair in import {
+                    if let Some((_, path)) = pair.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
+                if let Some(path) = expr_turtle_file {
+                    paths.push(PathBuf::from(path));
+                }
+                paths.push(PathBuf::from(input));
+                paths.push(PathBuf::from(output));
+            }
+            Command::Pack { command } => match command {
+                PackCommand::Verify { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+            },
+            Command::Shacl { command } => match command {
+                ShaclCommand::Pack {
+                    shapes,
+                    import,
+                    out,
+                    yamlld_input_options,
+                    import_yamlld_input_options,
+                    ..
+                } => {
+                    for mapping in import_yamlld_input_options {
+                        if let Some((_, path)) = mapping.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.extend(yamlld_input_options.iter().cloned());
+                    paths.push(PathBuf::from(shapes));
+                    for pair in import {
+                        if let Some((_, path)) = pair.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.push(PathBuf::from(out));
+                }
+                ShaclCommand::Verify { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+                ShaclCommand::Explain { input, .. } => {
+                    paths.push(PathBuf::from(input));
+                }
+                ShaclCommand::Diff { a, b, .. } => {
+                    paths.push(PathBuf::from(a));
+                    paths.push(PathBuf::from(b));
+                }
+            },
+            Command::Shapes { command } => match command {
+                ShapesCommand::Lint {
+                    import,
+                    input,
+                    output,
+                    yamlld_input_options,
+                    import_yamlld_input_options,
+                    ..
+                } => {
+                    for mapping in import_yamlld_input_options {
+                        if let Some((_, path)) = mapping.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.extend(yamlld_input_options.iter().cloned());
+                    for pair in import {
+                        if let Some((_, path)) = pair.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
+                    paths.push(PathBuf::from(input));
+                    paths.push(PathBuf::from(output));
+                }
+            },
+            Command::GlobRdf(args) => {
+                paths.push(PathBuf::from(&args.plan));
+                paths.push(PathBuf::from(&args.input));
+            }
+            Command::GlobSet { .. } | Command::Fingerprint { .. } => {}
+            Command::WordId { command } => command.paths(&mut paths),
+        }
+        paths
     }
 }
 

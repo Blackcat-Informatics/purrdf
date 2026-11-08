@@ -43,7 +43,7 @@
 //! statement-layer axis wearing a function name, so it is gone: pass
 //! [`StatementLayer::Project`] instead.
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use std::io::Write;
 
 use super::jsonld::JsonLdSerializeOptions;

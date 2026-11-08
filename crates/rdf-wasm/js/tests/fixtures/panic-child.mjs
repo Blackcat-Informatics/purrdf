@@ -51,7 +51,7 @@ report.queryError = await settle(() => engine.query(data, "SELECT ?s WHERE {"));
 report.queryErrorAgain = await settle(() => engine.query(data, "SELECT ?s WHERE {"));
 // After them, every lane answers exactly on the same objects: a synchronous update
 // commits, and both lanes see it.
-report.updateBefore = await settle(() => engine.update(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`));
+report.updateBefore = await settle(() => engine.update(data, `INSERT DATA { <${EX}b> <${EX}p> <${EX}o> }`).dataset);
 report.syncBefore = await settle(() => engine.query(data, SHALLOW));
 report.asyncBefore = await settle(() => engine.queryAsync(data, SHALLOW));
 report.sizeBefore = settleSync(() => data.size);

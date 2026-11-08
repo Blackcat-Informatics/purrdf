@@ -80,6 +80,18 @@ pub struct DateTime {
     tz: Option<i32>,
 }
 
+impl purrdf_hash::error::StructuredError for DateTime {
+    purrdf_hash::error_visit! {
+        @record self { year, month, day, hour, minute, second, tz } => "xsd-date-time" {
+            "year" => Signed(i128::from(self.year)), "month" => Unsigned(u128::from(self.month)),
+            "day" => Unsigned(u128::from(self.day)), "hour" => Unsigned(u128::from(self.hour)),
+            "minute" => Unsigned(u128::from(self.minute)), "second" => Record(&self.second),
+            "timezone_minutes" => Value(self.tz.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Signed(i128::from(value)))),
+        }
+    }
+}
+
 /// `xsd:date`.
 #[derive(Debug, Clone)]
 pub struct Date {
@@ -581,7 +593,7 @@ pub fn datetime_from_unix_seconds(secs: i64) -> DateTime {
 }
 
 /// Return the Unix epoch (1970-01-01T00:00:00Z) as an xsd:dateTime value.
-/// Useful as the compile-time-safe "now" fallback for wasm32 targets.
+/// Useful as the compile-time-safe "now" fallback for `wasm32` targets.
 pub fn datetime_epoch() -> DateTime {
     datetime_from_unix_seconds(0)
 }
@@ -2729,6 +2741,8 @@ const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
         | XsdDatatype::Double
         | XsdDatatype::Boolean
         | XsdDatatype::String
+        | XsdDatatype::NormalizedString
+        | XsdDatatype::Token
         | XsdDatatype::AnyUri
         | XsdDatatype::Duration
         | XsdDatatype::DayTimeDuration
@@ -4740,6 +4754,52 @@ impl core::fmt::Display for Gregorian {
 }
 
 impl DateTime {
+    /// Whether calendar fields, exact normalized seconds and declared timezone agree.
+    /// This compares the retained representation without allocation. Equal instants
+    /// with different timezone offsets can have different representations.
+    #[must_use]
+    pub fn same_representation(&self, other: &Self) -> bool {
+        self.year == other.year
+            && self.month == other.month
+            && self.day == other.day
+            && self.hour == other.hour
+            && self.minute == other.minute
+            && self.second == other.second
+            && self.tz == other.tz
+    }
+
+    /// Content identity of the exact calendar and timezone representation.
+    ///
+    /// Equal normalized seconds share an identity. Equal instants with different
+    /// declared offsets remain distinct, as their RDF lexical values differ.
+    /// Reads the original coefficient limbs without formatting or allocation.
+    #[must_use]
+    pub fn representation_identity(&self) -> purrdf_hash::hex::Digest32 {
+        const REPRESENTATION: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-xsd/date-time-representation/v1");
+        let mut digest = purrdf_hash::blake3::Streaming::<1024>::new();
+        digest.update(REPRESENTATION.as_bytes());
+        digest.update(&self.year.to_le_bytes());
+        digest.update(&[self.month, self.day, self.hour, self.minute]);
+        digest.update(&self.second.scale().to_le_bytes());
+        let coefficient = self.second.unscaled().bigint_operand();
+        digest.update(&coefficient.signum().to_le_bytes());
+        digest.update(&(coefficient.limbs().len() as u64).to_le_bytes());
+        for limb in coefficient.limbs() {
+            digest.update(&limb.to_le_bytes());
+        }
+        match self.tz {
+            Some(zone) => {
+                digest.update(&[1]);
+                digest.update(&zone.to_le_bytes());
+            }
+            None => {
+                digest.update(&[0]);
+            }
+        }
+        purrdf_hash::hex::Digest32::new(*digest.finalize().as_bytes())
+    }
+
     /// Heap retained by the exact seconds component.
     #[must_use]
     pub fn owned_heap_bytes(&self) -> u64 {
@@ -6119,13 +6179,13 @@ mod tests {
             (XsdDatatype::GYearMonth, "2024-01", "P1D", None),              // days-rejected: Absent
             (XsdDatatype::GYearMonth, "2024-01", "PT1H", None),             // sub-day
             (XsdDatatype::GYearMonth, "2024-01", "PT0S", Some("2024-01")),  // zero
-            // ── gYear (Divisible12, Absent): 5 rows — no days-accepted ────────
+            // ── gYear (`Divisible12`, Absent): 5 rows — no days-accepted ────────
             (XsdDatatype::GYear, "2024", "P1Y", Some("2025")), // months-accepted
             (XsdDatatype::GYear, "2024", "P1M", None),         // months-rejected: not a whole year
             (XsdDatatype::GYear, "2024", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GYear, "2024", "PT1H", None),        // sub-day
             (XsdDatatype::GYear, "2024", "PT0S", Some("2024")), // zero
-            // ── gMonth (Cyclic12, Absent): 4 rows — Cyclic12 never rejects ────
+            // ── gMonth (`Cyclic12`, Absent): 4 rows — `Cyclic12` never rejects ────
             (XsdDatatype::GMonth, "--12", "P1M", Some("--01")), // months-accepted, wraps
             (XsdDatatype::GMonth, "--05", "P1D", None),         // days-rejected: Absent
             (XsdDatatype::GMonth, "--05", "PT1H", None),        // sub-day

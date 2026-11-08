@@ -246,6 +246,26 @@ pub struct DlCertificate {
     peak_depth: u64,
 }
 
+impl purrdf_hash::error::StructuredError for DlCertificate {
+    purrdf_hash::error_visit! {
+        @record self {
+            schema_obstruction, storage_refusal, exhausted, stopped, boundaries,
+            steps, budget, work, work_budget, decisions, peak_nodes, disjunctions, peak_depth
+        } => "owl-dl-certificate" {
+            "schema_obstruction" => Value(self.schema_obstruction.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |original| purrdf_hash::error::ErrorValue::Record(original))),
+            "storage_refusal" => Value(self.storage_refusal.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |original| purrdf_hash::error::ErrorValue::Cause(original))),
+            "exhausted" => Boolean(self.exhausted), "stopped" => Boolean(self.stopped),
+            "boundaries" => List(self.boundaries.iter().map(|boundary| purrdf_hash::error::ErrorValue::Record(boundary))),
+            "steps" => Unsigned(u128::from(self.steps)), "budget" => Unsigned(u128::from(self.budget)),
+            "work" => Unsigned(u128::from(self.work)), "work_budget" => Unsigned(u128::from(self.work_budget)),
+            "decisions" => Unsigned(u128::from(self.decisions)),
+            "peak_nodes" => Unsigned(u128::from(self.peak_nodes)),
+            "disjunctions" => Unsigned(u128::from(self.disjunctions)),
+            "peak_depth" => Unsigned(u128::from(self.peak_depth)),
+        }
+    }
+}
+
 impl DlCertificate {
     /// A class preparation refusal never means an exhaustive no-clash result.
     #[must_use]
@@ -515,6 +535,87 @@ pub struct Certified<T> {
     proof: Option<ServiceProof>,
 }
 
+/// Directness is unproved unless the complete supplied ontology was decided.
+///
+/// The original certificate retains omitted axioms, resource outcomes and
+/// cancellation. A decided fragment is insufficient: omitted axioms can add an
+/// intermediate class or a more specific type.
+#[derive(Debug, Clone, Copy)]
+pub struct DirectnessRefusal<'a> {
+    certificate: &'a DlCertificate,
+}
+
+impl DirectnessRefusal<'_> {
+    /// The original certificate that prevents an exact direct answer.
+    #[must_use]
+    pub const fn certificate(&self) -> &DlCertificate {
+        self.certificate
+    }
+}
+
+impl core::fmt::Display for DirectnessRefusal<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(
+            "owl-directness-unavailable: direct OWL answers require a fully decided ontology; inspect the retained certificate for boundaries, resource refusal or cancellation",
+        )
+    }
+}
+
+impl std::error::Error for DirectnessRefusal<'_> {}
+
+impl purrdf_hash::error::StructuredError for DirectnessRefusal<'_> {
+    purrdf_hash::error_visit! {
+        @record self { certificate } => "owl-directness-unavailable" {
+            "certificate" => Record(self.certificate),
+        }
+    }
+}
+
+/// An owned refusal of exact direct answers, retaining the original certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedDirectnessRefusal {
+    certificate: DlCertificate,
+}
+
+impl OwnedDirectnessRefusal {
+    /// Retain a certificate only when it actually refuses exact direct answers.
+    ///
+    /// # Errors
+    /// Returns the original certificate when its completeness is fully decided.
+    pub fn try_from_certificate(certificate: DlCertificate) -> Result<Self, Box<DlCertificate>> {
+        if certificate.completeness() == DlCompleteness::Decided {
+            Err(Box::new(certificate))
+        } else {
+            Ok(Self { certificate })
+        }
+    }
+
+    /// The original certificate that prevents an exact direct answer.
+    #[must_use]
+    pub const fn certificate(&self) -> &DlCertificate {
+        &self.certificate
+    }
+}
+
+impl core::fmt::Display for OwnedDirectnessRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        DirectnessRefusal {
+            certificate: &self.certificate,
+        }
+        .fmt(f)
+    }
+}
+
+impl std::error::Error for OwnedDirectnessRefusal {}
+
+impl purrdf_hash::error::StructuredError for OwnedDirectnessRefusal {
+    purrdf_hash::error_visit! {
+        @record self { certificate } => "owl-directness-unavailable" {
+            "certificate" => Record(&self.certificate),
+        }
+    }
+}
+
 impl<T> Certified<T> {
     /// Pair an answer with its certificate and, when one was recorded, its proof term.
     pub(crate) const fn new(
@@ -537,6 +638,17 @@ impl<T> Certified<T> {
     /// The certificate of the run that produced it.
     pub const fn certificate(&self) -> &DlCertificate {
         &self.certificate
+    }
+
+    /// Direct relations need every relevant absence, not just positive facts.
+    pub(super) fn direct_answer(&self) -> Result<&T, DirectnessRefusal<'_>> {
+        if matches!(self.certificate.completeness(), DlCompleteness::Decided) {
+            Ok(&self.answer)
+        } else {
+            Err(DirectnessRefusal {
+                certificate: &self.certificate,
+            })
+        }
     }
 
     /// The PROOF TERM of the run that produced it, when one was recorded.
@@ -791,6 +903,12 @@ impl<'a> Session<'a> {
             Some(recording) => recording.decide(self.kb, assumptions, self.budget),
             None => decide(self.kb, assumptions, self.budget),
         };
+        self.observe(decision);
+        decision
+    }
+
+    /// Tally the original decision once, regardless of its recording mode.
+    fn observe(&mut self, decision: Decision) {
         self.steps = self.steps.saturating_add(decision.steps);
         self.work = self.work.saturating_add(decision.work);
         self.decisions += 1;
@@ -802,7 +920,17 @@ impl<'a> Session<'a> {
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
         self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
         self.peak_depth = self.peak_depth.max(decision.peak_depth);
-        decision
+    }
+
+    /// Report an already executed decision through the ordinary certificate owner.
+    pub(crate) fn certificate_for_decision(
+        kb: &'a Kb,
+        budget: Budget,
+        decision: Decision,
+    ) -> DlCertificate {
+        let mut session = Self::new(kb, budget, None);
+        session.observe(decision);
+        session.certificate(kb.boundaries())
     }
 
     /// Whether `assumptions` REFUTE — i.e. whether the conclusion they negate is entailed.

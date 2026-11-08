@@ -12,8 +12,9 @@
 //! | Table set | Committed file | What it holds |
 //! |---|---|---|
 //! | `normalization` | `crates/lex/src/unicode_tables.rs` | `Canonical_Combining_Class`, the full decompositions, the primary composites (UAX 15) |
+//! | `folding` | `crates/lex/src/unicode/fold_tables.rs` | full case folding (`C` + `F`) |
 //! | `case-context` | `crates/lex/src/unicode/case_tables.rs` | `Cased` and `Case_Ignorable`, for the context-sensitive full lowercase writer |
-//! | `text` | `crates/text/src/unicode_tables.rs` | full case folding (`C` + `F`), UAX 29 segmentation, analysis properties and scripts |
+//! | `text` | `crates/text/src/unicode_tables.rs` | UAX 29 segmentation, analysis properties and scripts |
 //! | `idna` | `crates/iri/src/idna_tables.rs` | the RFC 5892 derived property, Joining_Type, Bidi_Class, the Appendix A scripts, the combining marks, NFKC_Casefold |
 //! | `ecma-properties` | `crates/jsonschema/src/ecma/property_tables.rs` | the property names and values an ECMA-262 `\p{…}` escape may spell |
 //! | `ecma-ranges` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | the code point ranges of each of those properties, and simple case folding |
@@ -867,9 +868,7 @@ fn text_properties(entries: &BTreeMap<u32, Entry>) -> TwoStage<u32> {
     two_stage(&properties)
 }
 
-fn text() -> String {
-    let entries = unicode_data();
-
+fn folding() -> String {
     // Full case folding: statuses C and F.
     let mut fold_chars: Vec<u32> = Vec::new();
     let mut fold_records: Vec<(u16, u8)> = vec![(0, 0)];
@@ -886,6 +885,45 @@ fn text() -> String {
         fold_records.push(run);
     }
     let fold_table = two_stage(&fold_of);
+
+    let mut out = String::new();
+    emit_header(
+        &mut out,
+        "folding",
+        &["Full C/F case folding, generated from the pinned CaseFolding.txt."],
+    );
+    emit_version_assertion_for(&mut out, "crate");
+    emit_two_stage(
+        &mut out,
+        "FOLD",
+        "Case fold record numbers (0: folds to itself)",
+        "u16",
+        &fold_table,
+    );
+    out.push_str("/// Case fold records: `(start, len)` into [`FOLD_CHARS`].\n");
+    let _ = write!(
+        out,
+        "pub(crate) static FOLD_RECORDS: [(u16, u8); {}] = [",
+        fold_records.len()
+    );
+    emit_list(
+        &mut out,
+        fold_records.iter().map(|(a, b)| format!("({a}, {b})")),
+    );
+    out.push_str("];\n\n/// The `C` and `F` fold mappings, concatenated.\n");
+    let _ = write!(
+        out,
+        "pub(crate) static FOLD_CHARS: [char; {}] = [",
+        fold_chars.len()
+    );
+    emit_list(&mut out, fold_chars.iter().map(|&p| char_literal(p)));
+    out.push_str("];\n\n");
+
+    out
+}
+
+fn text() -> String {
+    let entries = unicode_data();
 
     // Segmentation byte: Word_Break, Extended_Pictographic, alphanumeric.
     let mut segmentation = vec![0u8; CODE_SPACE as usize];
@@ -933,8 +971,7 @@ fn text() -> String {
          `ScriptExtensions.txt`, `PropList.txt`, `DerivedJoiningType.txt`, `GraphemeBreakProperty.txt`, `emoji-test.txt` and `emoji-variation-sequences.txt`",
     );
     let mut doc = vec![
-        "The full case folding, word- and sentence-boundary data of `purrdf_text::unicode`,"
-            .to_owned(),
+        "The word- and sentence-boundary data of `purrdf_text::unicode`,".to_owned(),
         "read through `purrdf_lex::unicode::lookup_two_stage`.".to_owned(),
         String::new(),
     ];
@@ -967,32 +1004,6 @@ fn text() -> String {
          /// Segmentation-byte bit: `Alphabetic`, or General_Category `Nd`, `Nl` or `No`.\n\
          pub(crate) const ALPHANUMERIC: u8 = {ALPHANUMERIC:#04X};\n\n"
     );
-    emit_two_stage(
-        &mut out,
-        "FOLD",
-        "Case fold record numbers (0: folds to itself)",
-        "u16",
-        &fold_table,
-    );
-    out.push_str("/// Case fold records: `(start, len)` into [`FOLD_CHARS`].\n");
-    let _ = write!(
-        out,
-        "pub(crate) static FOLD_RECORDS: [(u16, u8); {}] = [",
-        fold_records.len()
-    );
-    emit_list(
-        &mut out,
-        fold_records.iter().map(|(a, b)| format!("({a}, {b})")),
-    );
-    out.push_str("];\n\n/// The `C` and `F` fold mappings, concatenated.\n");
-    let _ = write!(
-        out,
-        "pub(crate) static FOLD_CHARS: [char; {}] = [",
-        fold_chars.len()
-    );
-    emit_list(&mut out, fold_chars.iter().map(|&p| char_literal(p)));
-    out.push_str("];\n\n");
-
     emit_two_stage(
         &mut out,
         "SEGMENTATION",
@@ -2994,6 +3005,7 @@ fn main() {
         "normalization" => normalization(),
         "case-context" => case_context(),
         "text" => text(),
+        "folding" => folding(),
         "idna" => idna(),
         "ecma-properties" => ecma_properties(),
         "ecma-ranges" => ecma_ranges(),

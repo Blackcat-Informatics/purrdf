@@ -541,7 +541,7 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
 ///
 /// The width ratio between the arms is the design, not an oversight, which is why
 /// clippy's `large_enum_variant` is scoped off here. The exhausted arm is boxed
-/// because it is cold. The complete arm carries its two receipts inline because it
+/// because it is cold. The complete arm carries its receipts inline because it
 /// is the arm the per-focus-node change path takes on every call, and the
 /// `relations` receipt now carries the relation witness — the per-relation ledger
 /// of which index generation answered and whether it was whole — so it is the
@@ -559,11 +559,24 @@ pub enum InternedGoverned<R> {
         /// The property-function registry identity the plan was admitted under,
         /// carrying the witness this execution's relations wrote.
         relations: RelationIdentity,
+        /// Supplied coordinates captured before evaluation begins.
+        coordinates: crate::QueryCoordinates,
     },
     /// A governor stopped the execution; the visitor never ran.
     ///
-    /// Boxed because the payload carries both receipts and the certified partial
+    /// Boxed because the payload carries its receipts and the certified partial
     /// answers, and every caller of the complete path would otherwise pay that
     /// width on the stack for an arm it does not take.
     BudgetExhausted(Box<BudgetExhausted>),
+}
+
+impl<R> InternedGoverned<R> {
+    /// Supplied coordinates, or a refusal before context construction.
+    #[must_use]
+    pub const fn coordinates(&self) -> &crate::QueryCoordinates {
+        match self {
+            Self::Complete { coordinates, .. } => coordinates,
+            Self::BudgetExhausted(exhausted) => &exhausted.coordinates,
+        }
+    }
 }

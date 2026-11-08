@@ -85,8 +85,8 @@ pub mod view;
 
 #[doc(hidden)]
 pub use certify::{
-    DatasetMaterializationError, PackDigest, dataset_from_view, pack_digest, restore_pack,
-    verify_pack,
+    DatasetMaterializationError, PackDigest, VerifiedPack, dataset_from_view, pack_digest,
+    restore_pack, verify_pack, verify_pack_bytes,
 };
 #[doc(hidden)]
 pub use container::{PackBuilder, PackCheckpoint, PackError, PackView};

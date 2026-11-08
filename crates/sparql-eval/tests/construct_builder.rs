@@ -55,14 +55,20 @@ fn direct_append_matches_native_construct_and_keeps_fresh_blanks() {
     let data = dataset();
     let plan = engine.prepare_query("CONSTRUCT { _:fresh <https://example.org/value> ?o . ?s <https://example.org/value> ?o } WHERE { ?s <https://example.org/value> ?o }", None).expect("plan");
     let SparqlResult::Graph(expected) = engine
-        .query_prepared(&data, &plan, &[], QueryOptions::EMPTY)
+        .query_prepared(&data, &plan, &[], &QueryOptions::EMPTY)
         .expect("ordinary")
     else {
         panic!("graph")
     };
     let mut builder = RdfDatasetBuilder::new();
     let stats = engine
-        .construct_prepared_into_view(data.as_ref(), &plan, &[], QueryOptions::EMPTY, &mut builder)
+        .construct_prepared_into_view(
+            data.as_ref(),
+            &plan,
+            &[],
+            &QueryOptions::EMPTY,
+            &mut builder,
+        )
         .expect("direct");
     assert_eq!(stats.intermediate_freezes, 0);
     assert_eq!(stats.statements, 2);
@@ -93,14 +99,14 @@ fn configured_rdf12_projection_loss_is_identical() {
     let data = b.freeze().expect("data");
     let plan = engine.prepare_query("CONSTRUCT { ?s ?p ?o } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s ?p ?o )>> }", None).expect("plan");
     let SparqlResult::Graph(expected) = engine
-        .query_prepared(&data, &plan, &[], QueryOptions::EMPTY)
+        .query_prepared(&data, &plan, &[], &QueryOptions::EMPTY)
         .expect("ordinary")
     else {
         panic!("graph")
     };
     let mut output = RdfDatasetBuilder::new();
     engine
-        .construct_prepared_into_view(data.as_ref(), &plan, &[], QueryOptions::EMPTY, &mut output)
+        .construct_prepared_into_view(data.as_ref(), &plan, &[], &QueryOptions::EMPTY, &mut output)
         .expect("direct");
     let actual = output.freeze().expect("output");
     assert_same(&expected, &actual);
@@ -135,7 +141,7 @@ fn governor_trip_and_cancellation_leave_existing_builder_untouched() {
                 data.as_ref(),
                 &plan,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
                 &mut target
             ),
@@ -150,7 +156,7 @@ fn governor_trip_and_cancellation_leave_existing_builder_untouched() {
             data.as_ref(),
             &plan,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &state,
             &mut target,
         )
@@ -241,7 +247,7 @@ fn final_operational_failure_outranks_budget_and_publishes_nothing() {
             &data,
             &plan,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &state,
             &mut target,
         )
@@ -276,7 +282,7 @@ fn successive_appends_keep_minted_blanks_fresh_against_destination_only_nodes() 
                 data.as_ref(),
                 &plan,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &mut target,
             )
             .expect("append");
@@ -349,7 +355,7 @@ fn deeply_joined_construct_on_a_large_stack() {
     // `crates/sparql-eval/src/engine.rs`). `PreparedQuery::rewritten` admits it
     // legitimately on this thread; the refusal below is entirely the publication
     // entry's own, later check, against the stack it runs on.
-    let prepared = purrdf_sparql_eval::PreparedQuery::rewritten(algebra, QueryOptions::EMPTY)
+    let prepared = purrdf_sparql_eval::PreparedQuery::rewritten(algebra, &QueryOptions::EMPTY)
         .expect("admitted where the stack holds its walks");
     let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
     let before = state.evidence();
@@ -364,7 +370,7 @@ fn deeply_joined_construct_on_a_large_stack() {
             data.as_ref(),
             &prepared,
             &[("s".to_owned(), TermValue::blank("c1"))],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &state,
             &mut target,
         )
@@ -409,7 +415,7 @@ fn typed_publication_preserves_nested_directional_terms_and_named_statement_meta
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query("CONSTRUCT { GRAPH <https://example.org/output> { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o } } WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( ?s <https://example.org/value> ?inner )>> . ?r <https://example.org/value> ?o }", None).expect("plan");
     let SparqlResult::Graph(expected) = engine
-        .query_prepared(&input, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&input, &prepared, &[], &QueryOptions::EMPTY)
         .expect("ordinary")
     else {
         panic!("graph")
@@ -420,7 +426,7 @@ fn typed_publication_preserves_nested_directional_terms_and_named_statement_meta
             input.as_ref(),
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &mut target,
         )
         .expect("direct");
@@ -465,7 +471,7 @@ fn a_construct_template_with_a_malformed_literal_is_refused_at_admission() {
         panic!("construct")
     };
     template[0].triple.object = TermPattern::Literal(Literal::new_lang("claim", "en--rtl", None));
-    let diagnostic = PreparedQuery::rewritten(malformed, QueryOptions::EMPTY)
+    let diagnostic = PreparedQuery::rewritten(malformed, &QueryOptions::EMPTY)
         .expect_err("a malformed template literal must be refused before a PreparedQuery exists");
     assert_eq!(diagnostic.code, "native-sparql-algebra");
 

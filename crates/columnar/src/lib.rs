@@ -6,7 +6,7 @@
 //! The codec projects an RDF 1.2 [`purrdf_core::DatasetView`] plus a
 //! [`purrdf_core::ContentStore`] into the fixed five-table schema exposed by
 //! [`schema`]. Its deliberately narrow Parquet subset keeps the implementation
-//! wasm-clean and auditable: INT64/BYTE_ARRAY columns, flat OPTIONAL fields,
+//! wasm-clean and auditable: `INT64`/`BYTE_ARRAY` columns, flat `OPTIONAL` fields,
 //! PLAIN values, RLE definition levels, Data Page V2, and UNCOMPRESSED or ZSTD
 //! page bodies.
 //!
@@ -24,6 +24,9 @@ mod column;
 mod compact;
 pub mod error;
 mod files;
+mod manifest;
+mod options;
+mod ordinal;
 mod parquet;
 #[doc(hidden)]
 pub mod plain_bench;
@@ -32,10 +35,22 @@ mod reader;
 pub mod schema;
 mod writer;
 
-pub use error::ColumnarError;
+pub use error::{
+    CanonicalReason, ColumnarError, ColumnarSinkError, ColumnarWriteError, CompactReason,
+    ConstructionReason, EncodingReason, MetadataReason, PageBodyReason, ProjectionReason,
+    ReaderReason, ValueBodyReason, ZstdReason,
+};
 pub use files::ParquetFiles;
+pub use manifest::source_manifest;
+pub use options::{
+    BloomOptions, ColumnOptions, EncodingPolicy, TableWriteReport, WriteOptions, WriteReport,
+};
+pub use ordinal::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue};
 pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
-pub use reader::{ColumnarRead, read};
+pub use reader::{ColumnarRead, read, read_with_ordinals};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
-pub use writer::{ColumnarWrite, project, write};
+pub use writer::{
+    BlobSource, ColumnarWrite, project, write, write_to, write_with_blob_sources_to,
+    write_with_options,
+};

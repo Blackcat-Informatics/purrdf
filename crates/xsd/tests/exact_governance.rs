@@ -18,6 +18,68 @@ use std::hint::black_box;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[path = "support/rational_float_factory.rs"]
+mod rational_float_factory;
+
+#[path = "support/rational_reciprocal.rs"]
+mod rational_reciprocal;
+
+#[path = "support/rational_float_rounding.rs"]
+mod rational_float_rounding;
+
+/// Count the public conversion while retaining only its complete scalar results.
+fn rational_float_rounding_preserves_bits_and_reports_allocations() {
+    for category in rational_float_rounding::CATEGORIES {
+        let fixture =
+            rational_float_rounding::Fixture::new(category, rational_float_factory::OPERATIONS);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        assert_eq!(allocation.retained_bytes, 0);
+        println!(
+            "rounding {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
+/// Retain reciprocal results while measuring required native operand owners.
+fn rational_reciprocal_preserves_values_and_reports_allocations() {
+    for category in rational_reciprocal::CATEGORIES {
+        let fixture =
+            rational_reciprocal::Fixture::new(category, rational_float_factory::OPERATIONS);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        if category != "wide" {
+            assert_eq!(allocation.allocations, 0);
+        }
+        println!(
+            "reciprocal {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
+/// Keep every canonical factory result alive while measuring its native owners.
+fn rational_float_factory_preserves_values_and_reports_allocations() {
+    for category in rational_float_factory::CATEGORIES {
+        let fixture = rational_float_factory::Fixture::new(category);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        if category == "fractional" {
+            // These coefficients and denominators fit the compact Integer owner.
+            assert_eq!(allocation.allocations, 0);
+            assert_eq!(allocation.retained_bytes, 0);
+        }
+        println!(
+            "float_factory {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
 /// Bytes every estimate may be off by in absolute terms: the handful of small
 /// vectors an operation allocates whatever its size.
 const SLACK: i64 = 4096;
@@ -1636,7 +1698,39 @@ fn inline_ieee_append_refuses_before_mutation_and_never_grows() {
     assert_eq!(allocation.peak_working_bytes, 0);
 }
 
+/// The public convenience renderer reserves its complete destination once,
+/// including tiny values and large fractional padding, without changing bytes.
+fn canonical_decimal_reserves_one_exact_output_destination() {
+    let cases = [
+        (Decimal::ZERO, "0".to_owned()),
+        (Decimal::from(-1), "-1".to_owned()),
+        ("12.3400".parse().unwrap(), "12.34".to_owned()),
+        ("-0.0001200".parse().unwrap(), "-0.00012".to_owned()),
+        (
+            Decimal::from_integer(Integer::from(i128::MIN)),
+            "-170141183460469231731687303715884105728".to_owned(),
+        ),
+        (
+            Decimal::new(Integer::ONE, 4096),
+            format!("0.{}1", "0".repeat(4095)),
+        ),
+    ];
+    for (value, expected) in cases {
+        let (text, allocation) = measured(|| value.canonical_lexical());
+        assert_eq!(text, expected);
+        assert_eq!(text, value.to_string());
+        let bytes = u64::try_from(expected.len()).unwrap();
+        assert_eq!(allocation.allocations, 1, "{expected}");
+        assert_eq!(allocation.requested_bytes, bytes);
+        assert_eq!(allocation.retained_bytes, i64::try_from(bytes).unwrap());
+        assert_eq!(allocation.peak_working_bytes, i64::try_from(bytes).unwrap());
+    }
+}
+
 purrdf_testkit::harness_main!(
+    rational_float_rounding_preserves_bits_and_reports_allocations,
+    rational_reciprocal_preserves_values_and_reports_allocations,
+    rational_float_factory_preserves_values_and_reports_allocations,
     admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs,
     admitted_datetime_refusal_precedes_any_copy_allocation,
     full_native_parser_preserves_all_value_families_and_original_heap_owners,
@@ -1671,4 +1765,5 @@ purrdf_testkit::harness_main!(
     temporal_native_values_and_deferred_refusals_allocate_no_heap,
     inline_ieee_text_preserves_extreme_values_without_heap_traffic,
     inline_ieee_append_refuses_before_mutation_and_never_grows,
+    canonical_decimal_reserves_one_exact_output_destination,
 );

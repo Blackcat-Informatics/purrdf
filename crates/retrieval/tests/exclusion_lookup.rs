@@ -32,15 +32,16 @@
 //! Fixtures use `example.org` throughout; every IRI below is fixture
 //! configuration, never a minted vocabulary.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::{BTreeMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
 use purrdf_retrieval::{
     CandidateDomains, Completeness, DecayRule, DuplicatePolicy, ExclusionBasis, ExclusionVerdict,
-    Fixed, FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer, IndexGeneration, Iri,
+    FusedRow, FusionError, FusionProfile, FusionStream, FusionTrailer, IndexGeneration, Iri,
     OrderFidelity, PfAttestation, ProducerReceipt, ProtocolError, RECIP_K, RankFidelity, RankedRow,
-    RankedStream, RowBlock, ScoreInterval, ServiceLevel, StreamContract, Term, TopK,
+    RankedStream, RowBlock, Score, ScoreInterval, ServiceLevel, StreamContract, Term, TopK,
     contribution_under, fuse,
 };
 use purrdf_sparql_eval::{
@@ -167,6 +168,7 @@ fn register(
             stratum: purrdf_core::parse_iri(&ex("stratum/producer")).expect("fixture IRI"),
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             duplicates: DuplicatePolicy::Unique,
             fidelity: RankFidelity {
@@ -478,7 +480,8 @@ fn term(suffix: &str) -> Term {
 fn row(rank: u64, item: &str, block: Option<&str>) -> RankedRow<Term> {
     RankedRow::new(
         rank,
-        contribution_under(decay(), Fixed::ONE, rank).expect("fixture contributions are in range"),
+        contribution_under(decay(), PRECISION_12.score(PRECISION_12.scale()), rank)
+            .expect("fixture contributions are in range"),
         term(item),
         block.map_or(RowBlock::Undeclared, |block| {
             RowBlock::Declared(domain_tag(block))
@@ -488,7 +491,13 @@ fn row(rank: u64, item: &str, block: Option<&str>) -> RankedRow<Term> {
 
 /// A contract over `domains`, declaring `basis`.
 fn contract(domains: CandidateDomains, basis: ExclusionBasis) -> StreamContract {
-    StreamContract::new(DuplicatePolicy::Unique, RankFidelity::EXACT, domains, basis)
+    StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
+        DuplicatePolicy::Unique,
+        RankFidelity::EXACT,
+        domains,
+        basis,
+    )
 }
 
 /// Fuse the two scripted streams at `top_k`.
@@ -496,7 +505,7 @@ fn fused(
     left: ScriptedStream,
     right: ScriptedStream,
     top_k: TopK,
-) -> Result<Vec<(String, Fixed)>, FusionError> {
+) -> Result<Vec<(String, Score)>, FusionError> {
     let [left_iri, right_iri] = strata();
     let profile = profile();
     block_on(fuse::<ScriptedStream, Term>(
@@ -750,7 +759,7 @@ fn a_stream_that_declares_no_basis_is_not_asked_and_refuses_if_it_is() {
 
 /// One fixture stream's rows over `SHARED`, each carrying the contribution `weight` earns at
 /// its rank under this file's decay.
-fn weighted_rows(items: &[&str], weight: Fixed) -> Vec<RankedRow<Term>> {
+fn weighted_rows(items: &[&str], weight: Score) -> Vec<RankedRow<Term>> {
     items
         .iter()
         .zip(1..)
@@ -774,17 +783,21 @@ fn weighted_rows(items: &[&str], weight: Fixed) -> Vec<RankedRow<Term>> {
 /// candidate by more. That is the configuration in which a residual the right
 /// stratum still owes is the whole difference between a certain prefix and an
 /// uncertain one.
-fn left_weight() -> Fixed {
-    Fixed::from_integer(4).expect("four is representable")
+fn left_weight() -> Score {
+    Score::from_integer(4, PRECISION_12).expect("four is representable")
 }
 
 fn weighted_profile() -> FusionProfile {
     let [left, right] = strata();
     FusionProfile::with_decay(
-        [(left, left_weight()), (right, Fixed::ONE)]
-            .into_iter()
-            .collect(),
+        [
+            (left, left_weight()),
+            (right, PRECISION_12.score(PRECISION_12.scale())),
+        ]
+        .into_iter()
+        .collect(),
         decay(),
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }
@@ -822,6 +835,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
     );
     let mut right_stream = ScriptedStream::new(
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             right.fidelity,
             CandidateDomains::within([domain_tag(SHARED)]),
@@ -829,7 +843,7 @@ fn residual_streams(right: Right) -> Vec<(Iri, ScriptedStream)> {
         ),
         weighted_rows(
             &["y1", "y2", "y3", "y4", "y5", "y6", "y7", "y8"],
-            Fixed::ONE,
+            PRECISION_12.score(PRECISION_12.scale()),
         ),
     )
     .excluding(&["i", "b"]);
@@ -858,8 +872,8 @@ fn drive(
 
 /// The right stratum's rank-one contribution: the most any row it failed to
 /// name could have been worth.
-fn right_rank_one() -> Fixed {
-    contribution_under(decay(), Fixed::ONE, 1).expect("in range")
+fn right_rank_one() -> Score {
+    contribution_under(decay(), PRECISION_12.score(PRECISION_12.scale()), 1).expect("in range")
 }
 
 fn entities(rows: &[FusedRow]) -> Vec<String> {
@@ -868,7 +882,7 @@ fn entities(rows: &[FusedRow]) -> Vec<String> {
         .collect()
 }
 
-fn deficits(rows: &[FusedRow]) -> Vec<Fixed> {
+fn deficits(rows: &[FusedRow]) -> Vec<Score> {
     rows.iter()
         .map(|row| match row.interval {
             ScoreInterval::Bounded { deficit, .. } => deficit,
@@ -936,7 +950,9 @@ fn an_attested_short_index_excluding_a_candidate_still_owes_it_the_residual() {
          exclusion is silent about the documents the index is missing"
     );
     assert_eq!(
-        trailer.certain_prefix(&rows),
+        trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals"),
         0,
         "and `i`'s first place is not certain, because `b` could out-score it"
     );
@@ -1005,12 +1021,19 @@ fn a_lossy_search_excluding_by_membership_discharges_the_residual() {
     );
     assert_eq!(
         deficits(&rows),
-        [Fixed::ZERO, Fixed::ZERO],
+        [PRECISION_12.score(0), PRECISION_12.score(0)],
         "with a membership exclusion it is owed nothing"
     );
-    assert_eq!(control_trailer.certain_prefix(&control_rows), 0);
     assert_eq!(
-        trailer.certain_prefix(&rows),
+        control_trailer
+            .certain_prefix(&control_rows)
+            .expect("valid emitted intervals"),
+        0
+    );
+    assert_eq!(
+        trailer
+            .certain_prefix(&rows)
+            .expect("valid emitted intervals"),
         2,
         "so both rows are certain where, without the answer, neither was"
     );

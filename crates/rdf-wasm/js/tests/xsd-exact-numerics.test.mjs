@@ -67,7 +67,7 @@ test("malformed and incomparable values have no order, and their neighbours do",
 
 test("a SPARQL sum past i128 returns its exact lexical form", () => {
   const ds = new Dataset();
-  const json = JSON.parse(ds.query(`SELECT ?n WHERE { BIND(${I128_MAX} + 1 AS ?n) }`));
+  const json = JSON.parse(ds.query(`SELECT ?n WHERE { BIND(${I128_MAX} + 1 AS ?n) }`).body);
   const [binding] = json.results.bindings;
   assert.equal(binding.n.type, "literal");
   assert.equal(binding.n.datatype, INTEGER);

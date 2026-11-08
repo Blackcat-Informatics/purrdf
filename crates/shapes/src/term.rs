@@ -246,6 +246,37 @@ pub enum Term {
     Triple(Box<Triple>),
 }
 
+impl purrdf_hash::error::StructuredError for Term {
+    purrdf_hash::error_visit! {
+        NamedNode(value) => "shacl-term-iri" { "iri" => Iri(value.as_str()) },
+        BlankNode(label) => "shacl-term-blank" { "label" => Text(label) },
+        Literal(value) => "shacl-term-literal" { "value" => Record(value) },
+        Triple(value) => "shacl-term-triple" { "value" => Record(value.as_ref()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Literal {
+    purrdf_hash::error_visit! {
+        @record self { lexical, datatype, language, direction } => "shacl-literal" {
+            "lexical_form" => Text(&self.lexical), "datatype" => Iri(&self.datatype),
+            "language" => Value(self.language.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "direction" => Value(self.direction.map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Code(value.as_str()))),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Triple {
+    purrdf_hash::error_visit! {
+        @record self { subject, predicate, object } => "shacl-triple" {
+            "subject" => Term(&self.subject), "predicate" => Iri(self.predicate.as_str()),
+            "object" => Term(&self.object),
+        }
+    }
+}
+
 /// Resolve an interned id to its borrowed IR payload.
 ///
 /// Object-safe on purpose. [`CanonicalBytes`] has to stream a dataset term
@@ -904,6 +935,62 @@ purrdf_lex::constructors! {
 }
 
 impl Term {
+    /// Copy the original native value through the shared admitted nested fold.
+    pub(crate) fn try_clone(&self) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{Memory, Resident, StorageError};
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let result = purrdf_core::ir::try_fold_nested_with_memory(
+            TermNode::Term(self),
+            &mut (),
+            |(), node, memory| match node {
+                TermNode::Term(Self::Triple(t)) => Ok(Nested::Triple(
+                    TermNode::Term(&t.subject),
+                    TermNode::Predicate(&t.predicate),
+                    TermNode::Term(&t.object),
+                )),
+                TermNode::Predicate(iri) | TermNode::Term(Self::NamedNode(iri)) => memory
+                    .string(iri.as_str())
+                    .map(|text| Nested::Leaf(Self::NamedNode(NamedNode(text)))),
+                TermNode::Term(Self::BlankNode(label)) => memory
+                    .string(label)
+                    .map(|text| Nested::Leaf(Self::BlankNode(text))),
+                TermNode::Term(Self::Literal(literal)) => {
+                    Ok(Nested::Leaf(Self::Literal(Literal {
+                        lexical: memory.string(&literal.lexical)?,
+                        datatype: memory.string(&literal.datatype)?,
+                        language: literal
+                            .language
+                            .as_deref()
+                            .map(|text| memory.string(text))
+                            .transpose()?,
+                        direction: literal.direction,
+                    })))
+                }
+            },
+            |(), _, subject, predicate, object, memory| {
+                let Self::NamedNode(predicate) = predicate else {
+                    unreachable!("a cloned predicate remains an IRI")
+                };
+                memory
+                    .boxed(Triple {
+                        subject,
+                        predicate,
+                        object,
+                    })
+                    .map(Self::Triple)
+            },
+            |(), answer, _| drop(answer),
+            |error: StorageError, _| error,
+            &mut memory,
+        );
+        if result.is_err() {
+            // This local account owns only this copier's destroyed partial payloads.
+            let bytes = memory.admitted_bytes();
+            let _ = memory.release_bytes(bytes);
+        }
+        result
+    }
     /// The blank-node label, if this term is a blank node.
     #[inline]
     pub fn blank_label(&self) -> Option<&str> {
@@ -1108,7 +1195,8 @@ impl std::fmt::Display for Term {
     /// back in that order until the subject's whole nesting is written.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = String::new();
-        self.write_canonical(&mut out);
+        self.write_canonical(&mut out)
+            .map_err(|_| std::fmt::Error)?;
         f.write_str(&out)
     }
 }
@@ -1120,7 +1208,12 @@ impl Term {
     /// A quoted triple is written over a work list: its opening `<<( ` at once, then
     /// its subject next, with its predicate, its object and the closing ` )>>` held
     /// back in that order until the subject's whole nesting is written.
-    fn write_canonical<W: TextOut + ?Sized>(&self, out: &mut W) {
+    fn write_canonical<W: TextOut + ?Sized>(
+        &self,
+        out: &mut W,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
         enum Piece<'t> {
             Term(&'t Term),
             Predicate(&'t NamedNode),
@@ -1145,15 +1238,31 @@ impl Term {
                 Piece::Term(Self::Triple(t)) => {
                     out.push_str(TRIPLE_TERM_OPEN);
                     out.push(' ');
-                    held.extend([
-                        Piece::Close,
-                        Piece::Term(&t.object),
-                        Piece::Predicate(&t.predicate),
-                    ]);
+                    memory.extend(
+                        &mut held,
+                        [
+                            Piece::Close,
+                            Piece::Term(&t.object),
+                            Piece::Predicate(&t.predicate),
+                        ],
+                    )?;
                     next = Some(Piece::Term(&t.subject));
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn try_spelling(&self) -> Result<String, purrdf_lex::allocation::StorageError> {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        let mut text = String::new();
+        let mut traversal = Ok(());
+        memory.append_text(&mut text, |out| {
+            traversal = self.write_canonical(out);
+        })?;
+        traversal?;
+        Ok(text)
     }
 }
 
@@ -1187,7 +1296,11 @@ fn write_literal<W: TextOut + ?Sized>(l: &Literal, out: &mut W) {
 /// subject, predicate and object are resolved in that order, each fully before the
 /// next.
 pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
-    match fold_native_term(term, &|id| Ok::<_, Infallible>(dataset.resolve_term(id))) {
+    match fold_native_term(
+        term,
+        &|id| Ok::<_, Infallible>(dataset.resolve_term(id)),
+        &|error| panic!("native term allocation failed: {error}"),
+    ) {
         Ok(term) => term,
     }
 }
@@ -1197,71 +1310,118 @@ pub(crate) fn try_term_id_to_native<'a, D>(dataset: &'a D, id: TermId) -> Result
 where
     D: ::purrdf_rdf::DatasetView<Id = TermId, TermGuard<'a> = TermRef<'a>>,
 {
-    fold_native_term(dataset.resolve(id)?, &|id| dataset.resolve(id))
+    fold_native_term(dataset.resolve(id)?, &|id| dataset.resolve(id), &|error| {
+        panic!("native term allocation failed: {error}")
+    })
 }
 
 /// One scoped RDF term conversion for resident and fallible read owners.
 fn fold_native_term<'a, E>(
     term: TermRef<'a>,
     resolve: &impl Fn(TermId) -> Result<TermRef<'a>, E>,
+    storage: &impl Fn(purrdf_lex::allocation::StorageError) -> E,
 ) -> Result<Term, E> {
-    /// The native form of a resolved term that is not a triple term.
-    fn leaf<'a, E>(
-        resolve: &impl Fn(TermId) -> Result<TermRef<'a>, E>,
-        term: TermRef<'a>,
-    ) -> Result<Term, E> {
-        Ok(match term {
-            TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
-            TermRef::Blank { label, scope } => {
-                Term::BlankNode(scope.qualify_label(label).into_owned())
-            }
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype_iri = match resolve(datatype)? {
-                    TermRef::Iri(iri) => iri.to_owned(),
-                    other => {
-                        unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
-                    }
-                };
-                Term::Literal(Literal {
-                    lexical: lexical.to_owned(),
-                    datatype: datatype_iri,
-                    language: language.map(str::to_owned),
+    use purrdf_lex::allocation::{Memory, Resident};
+    #[derive(Clone, Copy)]
+    enum Original<'a> {
+        Resolved(TermRef<'a>),
+        Id(TermId),
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    enum CopyError<E> {
+        Read(E),
+        Storage(purrdf_lex::allocation::StorageError),
+    }
+    let result = purrdf_core::ir::try_fold_nested_with_memory(
+        Original::Resolved(term),
+        &mut (),
+        |(), original, memory| {
+            let term = match original {
+                Original::Resolved(term) => term,
+                Original::Id(id) => resolve(id).map_err(CopyError::Read)?,
+            };
+            Ok(match term {
+                TermRef::Triple { s, p, o } => {
+                    Nested::Triple(Original::Id(s), Original::Id(p), Original::Id(o))
+                }
+                TermRef::Iri(iri) => Nested::Leaf(Term::NamedNode(NamedNode(
+                    memory.string(iri).map_err(CopyError::Storage)?,
+                ))),
+                TermRef::Blank { label, scope } => {
+                    let text = ::purrdf_rdf::blank_label::encode_blank_label_with_memory(
+                        label,
+                        scope,
+                        ::purrdf_rdf::blank_label::LabelAlphabet::Unconstrained,
+                        memory,
+                    )
+                    .map_err(CopyError::Storage)?;
+                    let text = match text {
+                        std::borrow::Cow::Borrowed(text) => {
+                            memory.string(text).map_err(CopyError::Storage)?
+                        }
+                        std::borrow::Cow::Owned(text) => text,
+                    };
+                    Nested::Leaf(Term::BlankNode(text))
+                }
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
                     direction,
+                } => {
+                    let TermRef::Iri(datatype) = resolve(datatype).map_err(CopyError::Read)? else {
+                        unreachable!("a literal datatype remains an IRI")
+                    };
+                    Nested::Leaf(Term::Literal(Literal {
+                        lexical: memory.string(lexical).map_err(CopyError::Storage)?,
+                        datatype: memory.string(datatype).map_err(CopyError::Storage)?,
+                        language: language
+                            .map(|text| memory.string(text).map_err(CopyError::Storage))
+                            .transpose()?,
+                        direction,
+                    }))
+                }
+            })
+        },
+        |(), _, subject, predicate, object, memory| {
+            let Term::NamedNode(predicate) = predicate else {
+                unreachable!("a triple predicate remains an IRI")
+            };
+            memory
+                .boxed(Triple {
+                    subject,
+                    predicate,
+                    object,
                 })
-            }
-            TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-        })
+                .map(Term::Triple)
+                .map_err(CopyError::Storage)
+        },
+        |(), answer, _| drop(answer),
+        |error, _| CopyError::Storage(error),
+        &mut memory,
+    );
+    if result.is_err() {
+        // Public error construction is deferred beyond this closed payload scope.
+        let bytes = memory.admitted_bytes();
+        let _ = memory.release_bytes(bytes);
     }
-    /// Assemble a native quoted triple from its three converted components.
-    fn triple(subject: Term, predicate: Term, object: Term) -> Term {
-        let predicate = match predicate {
-            Term::NamedNode(n) => n,
-            other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
-        };
-        Term::Triple(Box::new(Triple::new(subject, predicate, object)))
-    }
-    let TermRef::Triple { s, p, o } = term else {
-        return leaf(resolve, term);
-    };
-    let convert = |id: TermId| {
-        try_fold_nested(
-            id,
-            &mut (),
-            |(), id| {
-                Ok::<_, E>(match resolve(id)? {
-                    TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
-                    resolved => Nested::Leaf(leaf(resolve, resolved)?),
-                })
-            },
-            |(), _, s, p, o| Ok(triple(s, p, o)),
-        )
-    };
-    Ok(triple(convert(s)?, convert(p)?, convert(o)?))
+    result.map_err(|error| match error {
+        CopyError::Read(error) => error,
+        CopyError::Storage(error) => storage(error),
+    })
+}
+
+/// Materialize an original retained report focus through the same term producer.
+pub(crate) fn try_report_term(
+    dataset: &impl ShaclRead,
+    id: TermId,
+) -> Result<Term, purrdf_lex::allocation::StorageError> {
+    fold_native_term(
+        dataset.resolve_term(id),
+        &|id| Ok(dataset.resolve_term(id)),
+        &|error| error,
+    )
 }
 
 /// Convert a resolved IR term id into a native [`Term`].

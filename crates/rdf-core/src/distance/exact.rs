@@ -20,7 +20,7 @@
 use core::array;
 
 use super::binary64::Binary64;
-use super::{Bound, Bounded, Measure, RowsRef, Scalar};
+use super::{Bound, Bounded, Measure, NonFinite, RowsRef, Scalar};
 
 /// The number of independent accumulators.
 pub(crate) const LANES: usize = 16;
@@ -117,8 +117,8 @@ pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
         }
         if block_a.len() == CHECKPOINT_CHUNKS {
             let partial = tree(ops, &lanes);
-            if !partial.is_finite() {
-                return Bounded::NonFinite;
+            if let Err(cause) = finite(partial) {
+                return Bounded::NonFinite(cause);
             }
             if bound.is_met_by(partial) {
                 return Bounded::Beyond;
@@ -131,8 +131,8 @@ pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
         let square = ops.mul(delta, delta);
         sum = ops.add(sum, square);
     }
-    if !sum.is_finite() {
-        return Bounded::NonFinite;
+    if let Err(cause) = finite(sum) {
+        return Bounded::NonFinite(cause);
     }
     if bound.is_met_by(sum) {
         return Bounded::Beyond;
@@ -144,21 +144,26 @@ pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
 ///
 /// Literally the bounded fold with a bound no finite sum can meet, so there is one
 /// squared-Euclidean body and the bounded form cannot drift from the full one. An
-/// overflow comes back as an infinity, which the caller reports as a non-finite result.
+/// overflow retains the original value at the refusal checkpoint.
 #[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
 )]
 #[inline(always)]
-pub(crate) fn squared_euclidean<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> f64 {
+pub(crate) fn squared_euclidean<A: Scalar, B: Scalar>(
+    ops: Binary64<'_>,
+    a: &[A],
+    b: &[B],
+) -> Result<f64, NonFinite> {
     match squared_euclidean_bounded(ops, a, b, Bound::Above(f64::INFINITY)) {
-        Bounded::Below(sum) => sum,
-        Bounded::NonFinite | Bounded::Beyond => f64::INFINITY,
+        Bounded::Below(sum) => Ok(sum),
+        Bounded::NonFinite(cause) => Err(cause),
+        Bounded::Beyond => unreachable!("a finite distance cannot exceed infinity"),
     }
 }
 
-/// The finished distance under `measure`, or `None` when it left the finite range.
+/// The finished distance under `measure`, retaining a non-finite refusal.
 #[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
@@ -172,9 +177,9 @@ pub(crate) fn distance<A: Scalar, B: Scalar>(
     a_norm: f64,
     b: &[B],
     b_norm: f64,
-) -> Option<f64> {
+) -> Result<f64, NonFinite> {
     let value = match measure {
-        Measure::SquaredEuclidean => squared_euclidean(ops, a, b),
+        Measure::SquaredEuclidean => return squared_euclidean(ops, a, b),
         Measure::NegativeDot => -dot(ops, a, b),
         Measure::Cosine => cosine(ops, dot(ops, a, b), a_norm, b_norm),
     };
@@ -215,21 +220,27 @@ pub(crate) fn distance_bounded<A: Scalar, B: Scalar>(
         return squared_euclidean_bounded(ops, a, b, bound);
     }
     match distance(ops, measure, a, a_norm, b, b_norm) {
-        None => Bounded::NonFinite,
-        Some(value) if bound.is_met_by(value) => Bounded::Beyond,
-        Some(value) => Bounded::Below(value),
+        Err(cause) => Bounded::NonFinite(cause),
+        Ok(value) if bound.is_met_by(value) => Bounded::Beyond,
+        Ok(value) => Bounded::Below(value),
     }
 }
 
-/// A finished value, or `None` when it is not finite.
+/// A finished value, retaining the original bits when it is not finite.
 #[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
 )]
 #[inline(always)]
-pub(crate) fn finite(value: f64) -> Option<f64> {
-    value.is_finite().then_some(value)
+pub(crate) fn finite(value: f64) -> Result<f64, NonFinite> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(NonFinite {
+            bits: value.to_bits(),
+        })
+    }
 }
 
 /// Every row of `rows` against `query`, in row order.
@@ -248,7 +259,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
     query: &[Q],
     query_norm: f64,
     rows: RowsRef<'_, T>,
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     assert_eq!(
         query.len(),
@@ -267,7 +278,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (row, slot) in out.iter_mut().enumerate() {
-                *slot = finite(squared_euclidean(ops, query, rows.row(row)));
+                *slot = squared_euclidean(ops, query, rows.row(row));
             }
         }
         Measure::NegativeDot => {
@@ -303,7 +314,7 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
     query_norm: f64,
     rows: RowsRef<'_, T>,
     ids: &[usize],
-    out: &mut [Option<f64>],
+    out: &mut [Result<f64, NonFinite>],
 ) {
     assert_eq!(
         query.len(),
@@ -322,7 +333,7 @@ pub(crate) fn distances_indexed<Q: Scalar, T: Scalar>(
     match measure {
         Measure::SquaredEuclidean => {
             for (&row, slot) in ids.iter().zip(out.iter_mut()) {
-                *slot = finite(squared_euclidean(ops, query, rows.row(row)));
+                *slot = squared_euclidean(ops, query, rows.row(row));
             }
         }
         Measure::NegativeDot => {

@@ -10,7 +10,7 @@
 
 use purrdf_core::ir::pack::bits::{read_varint, write_varint, zigzag_decode, zigzag_encode};
 
-use crate::ColumnarError;
+use crate::{ColumnarError, CompactReason};
 
 pub(crate) const TYPE_STOP: u8 = 0;
 pub(crate) const TYPE_BOOL_TRUE: u8 = 1;
@@ -26,7 +26,6 @@ pub(crate) const TYPE_SET: u8 = 10;
 pub(crate) const TYPE_MAP: u8 = 11;
 pub(crate) const TYPE_STRUCT: u8 = 12;
 
-const MAX_METADATA_COLLECTION_ITEMS: usize = 1_024;
 const MAX_SKIP_DEPTH: usize = 64;
 
 #[derive(Debug, Default)]
@@ -112,6 +111,38 @@ impl CompactWriter {
         }
     }
 
+    pub(crate) fn list_i64_field(&mut self, id: i16, values: impl ExactSizeIterator<Item = i64>) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_I64);
+        for value in values {
+            write_varint(&mut self.bytes, zigzag_encode(value));
+        }
+    }
+
+    pub(crate) fn list_bool_field(&mut self, id: i16, values: impl ExactSizeIterator<Item = bool>) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_BOOL_TRUE);
+        for value in values {
+            self.bytes.push(if value {
+                TYPE_BOOL_TRUE
+            } else {
+                TYPE_BOOL_FALSE
+            });
+        }
+    }
+
+    pub(crate) fn list_binary_field<'a>(
+        &mut self,
+        id: i16,
+        values: impl ExactSizeIterator<Item = &'a [u8]>,
+    ) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_BINARY);
+        for value in values {
+            self.binary_value(value);
+        }
+    }
+
     pub(crate) fn list_string_field(&mut self, id: i16, values: &[&str]) {
         self.field_header(id, TYPE_LIST);
         self.list_header(values.len(), TYPE_BINARY);
@@ -190,9 +221,9 @@ impl<'a> CompactReader<'a> {
         let field_type = header & 0x0f;
         if field_type == TYPE_STOP {
             if header != TYPE_STOP {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::compact(
                     "compact field header",
-                    "STOP field carries a non-zero delta",
+                    CompactReason::StopDelta { header },
                 ));
             }
             state.stopped = true;
@@ -202,17 +233,27 @@ impl<'a> CompactReader<'a> {
         let delta = i16::from(header >> 4);
         let id = if delta == 0 {
             let raw = self.read_signed("compact field id")?;
-            i16::try_from(raw)
-                .map_err(|_| ColumnarError::malformed("compact field id", "value exceeds i16"))?
+            i16::try_from(raw).map_err(|cause| {
+                ColumnarError::compact(
+                    "compact field id",
+                    CompactReason::FieldIdRange { value: raw, cause },
+                )
+            })?
         } else {
             state.last_field.checked_add(delta).ok_or_else(|| {
-                ColumnarError::malformed("compact field id", "delta overflows i16")
+                ColumnarError::compact(
+                    "compact field id",
+                    CompactReason::FieldDelta {
+                        previous: state.last_field,
+                        delta,
+                    },
+                )
             })?
         };
         if id <= 0 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::compact(
                 "compact field id",
-                "field ids must be positive",
+                CompactReason::NonpositiveFieldId { id },
             ));
         }
         state.last_field = id;
@@ -222,8 +263,9 @@ impl<'a> CompactReader<'a> {
     pub(crate) fn read_i32(&mut self, field: CompactField) -> Result<i32, ColumnarError> {
         Self::expect_type(field, TYPE_I32, "compact i32")?;
         let value = self.read_signed("compact i32")?;
-        i32::try_from(value)
-            .map_err(|_| ColumnarError::malformed("compact i32", "value exceeds i32"))
+        i32::try_from(value).map_err(|cause| {
+            ColumnarError::compact("compact i32", CompactReason::IntegerRange { value, cause })
+        })
     }
 
     pub(crate) fn read_i64(&mut self, field: CompactField) -> Result<i64, ColumnarError> {
@@ -235,9 +277,12 @@ impl<'a> CompactReader<'a> {
         match field.field_type {
             TYPE_BOOL_TRUE => Ok(true),
             TYPE_BOOL_FALSE => Ok(false),
-            _ => Err(ColumnarError::malformed(
+            _ => Err(ColumnarError::compact(
                 "compact bool",
-                format!("field {} has type {}", field.id, field.field_type),
+                CompactReason::BooleanType {
+                    id: field.id,
+                    field_type: field.field_type,
+                },
             )),
         }
     }
@@ -249,8 +294,9 @@ impl<'a> CompactReader<'a> {
 
     pub(crate) fn read_string(&mut self, field: CompactField) -> Result<&'a str, ColumnarError> {
         let bytes = self.read_binary(field)?;
-        std::str::from_utf8(bytes)
-            .map_err(|_| ColumnarError::malformed("compact string", "invalid UTF-8"))
+        std::str::from_utf8(bytes).map_err(|cause| {
+            ColumnarError::compact("compact string", CompactReason::Utf8 { cause })
+        })
     }
 
     pub(crate) fn expect_struct(field: CompactField) -> Result<StructState, ColumnarError> {
@@ -269,19 +315,23 @@ impl<'a> CompactReader<'a> {
     pub(crate) fn read_list_i32(&mut self, field: CompactField) -> Result<Vec<i32>, ColumnarError> {
         let (len, element_type) = self.read_list_header(field)?;
         if element_type != TYPE_I32 {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::compact(
                 "compact i32 list",
-                format!("element type is {element_type}"),
+                CompactReason::ElementType {
+                    actual: element_type,
+                    expected: TYPE_I32,
+                },
             ));
         }
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
             let value = self.read_signed("compact list i32")?;
-            values.push(
-                i32::try_from(value).map_err(|_| {
-                    ColumnarError::malformed("compact list i32", "value exceeds i32")
-                })?,
-            );
+            values.push(i32::try_from(value).map_err(|cause| {
+                ColumnarError::compact(
+                    "compact list i32",
+                    CompactReason::IntegerRange { value, cause },
+                )
+            })?);
         }
         Ok(values)
     }
@@ -292,9 +342,12 @@ impl<'a> CompactReader<'a> {
     ) -> Result<Vec<String>, ColumnarError> {
         let (len, element_type) = self.read_list_header(field)?;
         if element_type != TYPE_BINARY {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::compact(
                 "compact string list",
-                format!("element type is {element_type}"),
+                CompactReason::ElementType {
+                    actual: element_type,
+                    expected: TYPE_BINARY,
+                },
             ));
         }
         let mut values = Vec::with_capacity(len);
@@ -302,7 +355,9 @@ impl<'a> CompactReader<'a> {
             let value = self.binary_value()?;
             values.push(
                 std::str::from_utf8(value)
-                    .map_err(|_| ColumnarError::malformed("compact string list", "invalid UTF-8"))?
+                    .map_err(|cause| {
+                        ColumnarError::compact("compact string list", CompactReason::Utf8 { cause })
+                    })?
                     .to_owned(),
             );
         }
@@ -367,9 +422,9 @@ impl<'a> CompactReader<'a> {
                 }
             }
             TYPE_STOP => {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::compact(
                     "compact value",
-                    "STOP is not a value type",
+                    CompactReason::StopValue,
                 ));
             }
             _ => unreachable!("validated compact type"),
@@ -382,9 +437,9 @@ impl<'a> CompactReader<'a> {
         let element_type = header & 0x0f;
         Self::validate_type(element_type)?;
         if element_type == TYPE_STOP {
-            return Err(ColumnarError::malformed(
+            return Err(ColumnarError::compact(
                 "compact list header",
-                "STOP is not a valid element type",
+                CompactReason::StopElement,
             ));
         }
         let short_len = usize::from(header >> 4);
@@ -398,13 +453,14 @@ impl<'a> CompactReader<'a> {
 
     fn read_collection_len(&mut self, context: &'static str) -> Result<usize, ColumnarError> {
         let value = self.read_unsigned(context)?;
-        let len = usize::try_from(value)
-            .map_err(|_| ColumnarError::malformed(context, "length exceeds usize"))?;
-        if len > MAX_METADATA_COLLECTION_ITEMS {
-            return Err(ColumnarError::limit(
+        let len = usize::try_from(value).map_err(|cause| {
+            ColumnarError::compact(context, CompactReason::CollectionLength { value, cause })
+        })?;
+        if len > self.bytes.len() - self.pos {
+            return Err(ColumnarError::truncated(
                 context,
                 len,
-                MAX_METADATA_COLLECTION_ITEMS,
+                self.bytes.len() - self.pos,
             ));
         }
         Ok(len)
@@ -412,8 +468,11 @@ impl<'a> CompactReader<'a> {
 
     fn binary_value(&mut self) -> Result<&'a [u8], ColumnarError> {
         let value = self.read_unsigned("compact binary length")?;
-        let len = usize::try_from(value).map_err(|_| {
-            ColumnarError::malformed("compact binary length", "value exceeds usize")
+        let len = usize::try_from(value).map_err(|cause| {
+            ColumnarError::compact(
+                "compact binary length",
+                CompactReason::BinaryLength { value, cause },
+            )
         })?;
         self.take(len, "compact binary")
     }
@@ -423,8 +482,10 @@ impl<'a> CompactReader<'a> {
     }
 
     fn read_unsigned(&mut self, context: &'static str) -> Result<u64, ColumnarError> {
-        read_varint(self.bytes, &mut self.pos)
-            .map_err(|error| ColumnarError::malformed(context, error.to_string()))
+        let offset = self.pos;
+        read_varint(self.bytes, &mut self.pos).map_err(|cause| {
+            ColumnarError::compact(context, CompactReason::Varint { offset, cause })
+        })
     }
 
     fn read_u8(&mut self, context: &'static str) -> Result<u8, ColumnarError> {
@@ -437,10 +498,15 @@ impl<'a> CompactReader<'a> {
     }
 
     fn take(&mut self, len: usize, context: &'static str) -> Result<&'a [u8], ColumnarError> {
-        let end = self
-            .pos
-            .checked_add(len)
-            .ok_or_else(|| ColumnarError::malformed(context, "byte range overflows usize"))?;
+        let end = self.pos.checked_add(len).ok_or_else(|| {
+            ColumnarError::compact(
+                context,
+                CompactReason::ByteRange {
+                    offset: self.pos,
+                    length: len,
+                },
+            )
+        })?;
         let value = self
             .bytes
             .get(self.pos..end)
@@ -457,12 +523,13 @@ impl<'a> CompactReader<'a> {
         if field.field_type == expected {
             Ok(())
         } else {
-            Err(ColumnarError::malformed(
+            Err(ColumnarError::compact(
                 context,
-                format!(
-                    "field {} has type {}, expected {expected}",
-                    field.id, field.field_type
-                ),
+                CompactReason::FieldType {
+                    id: field.id,
+                    actual: field.field_type,
+                    expected,
+                },
             ))
         }
     }
@@ -549,14 +616,14 @@ mod tests {
         ));
 
         let mut oversized = vec![0x19, 0xf5];
-        write_varint(&mut oversized, (MAX_METADATA_COLLECTION_ITEMS + 1) as u64);
+        write_varint(&mut oversized, 1_025);
         oversized.push(TYPE_STOP);
         let mut reader = CompactReader::new(&oversized);
         let mut root = StructState::default();
         let field = reader.next_field(&mut root).unwrap().unwrap();
         assert!(matches!(
             reader.read_list_i32(field),
-            Err(ColumnarError::LimitExceeded { .. })
+            Err(ColumnarError::Truncated { .. })
         ));
     }
 }

@@ -33,7 +33,7 @@ pub struct PhraseOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
 impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
     /// Match phrases over all configured indexed predicates, preserving original positions.
     pub fn new(index: Arc<TextIndex<P>>) -> Self {
-        let generation = crate::relation::index_generation(&index);
+        let generation = crate::relation::index_generation(&*index);
         let rows = index.phrase_row_bound();
         Self {
             index,
@@ -55,7 +55,14 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
             .predicates()
             .iter()
             .position(|configured| configured == predicate)
-            .ok_or_else(|| EvalError::config("phrase predicate is not configured in the index"))?;
+            .ok_or_else(|| {
+                EvalError::from(
+                    crate::configuration::ConfigurationRefusal::PhrasePredicate {
+                        predicate: predicate.clone(),
+                    }
+                    .into_error(),
+                )
+            })?;
         self.predicate = Some(u32::try_from(at).map_err(|_| EvalError::WorkspaceBoundOverflow)?);
         Ok(self)
     }
@@ -75,7 +82,7 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
             phrase: needle,
             payload: &[],
         }];
-        let dictionary = Dictionary::compile(&self.index, &entries, workspace)?;
+        let dictionary = Dictionary::compile(&*self.index, &entries, workspace)?;
         let matches = literal_matches(
             self.index.clone(),
             dictionary,
@@ -168,7 +175,7 @@ impl<P: CorpusProfile> PropertyFunction for PhraseOccurrenceRelation<P> {
                 payload,
             })?;
         }
-        let dictionary = self.cache.get(&self.index, &entries, workspace)?;
+        let dictionary = self.cache.get(&*self.index, &entries, workspace)?;
         let results = share(
             dictionary.scan(self.index.clone(), self.predicate, workspace)?,
             workspace,
@@ -407,7 +414,6 @@ fn literal_matches<P: CorpusProfile>(
                     for token in index
                         .token_occurrences(document)
                         .expect("index stream")
-                        .iter()
                         .filter(|token| {
                             token.position == position
                                 && index.occurrence_term(token.term) == Some(term.as_str())

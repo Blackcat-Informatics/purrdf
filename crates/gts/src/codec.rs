@@ -12,8 +12,11 @@ use std::borrow::Cow;
 mod error;
 pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
-use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
-use structured_zstd::encoding::{
+mod stream;
+pub use stream::decode_chain_reader;
+
+use purrdf_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
+use purrdf_zstd::encoding::{
     CompressionLevel, FrameCompressor, MatchGeneratorDriver, compress_to_vec,
 };
 
@@ -106,20 +109,18 @@ fn decode_one<'a>(
         }
         "zstd" | "zstd-rsyncable" => {
             let mut decoder = FrameDecoder::new();
+            decoder.set_content_checksum(ContentChecksum::Verify);
             if let Some(dict) = codec.dct.as_deref() {
                 decoder
                     .add_dict_from_bytes(dict)
-                    .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
+                    .map_err(|e| CodecError::Failed(CodecFailure::ZstdDecodeDictionary(e)))?;
             }
             // Start with a generous expansion factor and grow until the frame fits.
             let mut capacity = data.len().saturating_mul(4).max(4096).min(limit);
             loop {
                 let mut out = Vec::new();
                 out.try_reserve_exact(capacity).map_err(|e| {
-                    CodecError::Failed(CodecFailure::ZstdAllocation {
-                        capacity,
-                        message: e.to_string(),
-                    })
+                    CodecError::Failed(CodecFailure::ZstdAllocation { capacity, cause: e })
                 })?;
                 match decoder.decode_all_to_vec(data, &mut out) {
                     Ok(()) => return Ok(Cow::Owned(out)),
@@ -130,7 +131,7 @@ fn decode_one<'a>(
                         capacity = capacity.saturating_mul(2).max(1).min(limit);
                     }
                     Err(e) => {
-                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(e.to_string())));
+                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(e)));
                     }
                 }
             }
@@ -153,7 +154,7 @@ fn encode_zstd(data: &[u8], level: Option<i32>) -> Vec<u8> {
 fn dict_compressor(level: Option<i32>, dict: &[u8]) -> Result<DictCompressor, CodecError> {
     let mut cctx: DictCompressor = FrameCompressor::new(zstd_level(level));
     cctx.set_dictionary_from_bytes(dict)
-        .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
+        .map_err(|e| CodecError::Failed(CodecFailure::ZstdEncodeDictionary(e)))?;
     Ok(cctx)
 }
 
@@ -294,7 +295,7 @@ pub struct ZstdBlockInfo {
 /// Returns [`CodecError::Failed`] when the byte stream is not an exact sequence
 /// of zstd frames, or a frame omits its `Frame_Content_Size`.
 pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecError> {
-    use structured_zstd::decoding::{
+    use purrdf_zstd::decoding::{
         FrameContentSize, find_frame_compressed_size, read_frame_header_info,
     };
 
@@ -302,9 +303,9 @@ pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecErro
     let mut rest = payload;
     while !rest.is_empty() {
         let header = read_frame_header_info(rest, false)
-            .map_err(|e| CodecError::Failed(CodecFailure::ZstdHeader(e.to_string())))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdHeader(e)))?;
         let compressed_len = find_frame_compressed_size(rest)
-            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(format!("{e:?}"))))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(e)))?;
         if compressed_len == 0 || compressed_len > rest.len() {
             return Err(CodecError::Failed(CodecFailure::CompressedLength {
                 compressed_len,
@@ -406,7 +407,6 @@ pub(crate) fn decode_chain_with_decrypt_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dict::DictSeed;
 
     #[test]
     fn bounded_decode_checks_empty_identity_and_every_chain_intermediate() {
@@ -493,6 +493,62 @@ mod tests {
     }
 
     #[test]
+    fn zstd_checksums_are_verified_in_each_concatenated_frame() {
+        let first = b"first checksummed frame payload ".repeat(512);
+        let second = b"second checksummed frame payload ".repeat(512);
+        let expected = [first.as_slice(), second.as_slice()].concat();
+        let corpus = dict_corpus();
+        let samples: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
+        let dictionary = crate::dict::raw_content_dict(&samples, 4096).unwrap();
+        for dictionary in [None, Some(dictionary)] {
+            let mut encoder: DictCompressor = FrameCompressor::new(CompressionLevel::Fastest);
+            encoder.set_content_checksum(true);
+            if let Some(dictionary) = &dictionary {
+                encoder.set_dictionary_from_bytes(dictionary).unwrap();
+            }
+            let frames = [
+                encoder.compress_independent_frame(&first),
+                encoder.compress_independent_frame(&second),
+            ];
+            // RFC 8878: bit 2 of each frame descriptor announces its real trailer.
+            for frame in &frames {
+                assert_ne!(frame[4] & 4, 0, "the encoder must emit a content checksum");
+            }
+            let encoded = [frames[0].as_slice(), frames[1].as_slice()].concat();
+            if dictionary.is_none() {
+                purrdf_testkit::golden::check_bytes(
+                    &purrdf_testkit::paths::workspace_root()
+                        .join("crates/gts/tests/golden/zstd-checksummed-concat.bin"),
+                    &encoded,
+                    purrdf_testkit::golden::REGENERATE_ENV,
+                )
+                .unwrap();
+            }
+            for name in ["zstd", "zstd-rsyncable"] {
+                let mut codec = Codec::new(name, "compress");
+                codec.dct.clone_from(&dictionary);
+                assert_eq!(
+                    decode_chain_bounded(std::slice::from_ref(&codec), &encoded, expected.len())
+                        .unwrap(),
+                    expected
+                );
+                for trailer in [frames[0].len() - 1, encoded.len() - 1] {
+                    let mut damaged = encoded.clone();
+                    damaged[trailer] ^= 1;
+                    assert!(matches!(
+                        decode_chain_bounded(
+                            std::slice::from_ref(&codec),
+                            &damaged,
+                            expected.len()
+                        ),
+                        Err(CodecError::Failed(CodecFailure::ZstdDecode(_)))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn zstd_level_is_per_encode_chain() {
         let payload = b"<https://ex/s> <https://ex/p> \"repeat repeat repeat\" .\n".repeat(2048);
 
@@ -573,7 +629,7 @@ mod tests {
 
         for dict in [
             crate::dict::raw_content_dict(&corpus, 4096).expect("raw content dict builds"),
-            crate::dict::trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("trained dict"),
+            crate::dict::trained_dict(&corpus, 4096).expect("trained dict"),
         ] {
             let encoded = encode_chain_with_options(
                 &["zstd".to_string()],
@@ -714,7 +770,7 @@ mod tests {
 
         for dict in [
             crate::dict::raw_content_dict(&corpus, 4096).expect("raw content dict builds"),
-            crate::dict::trained_dict(&corpus, 4096, DictSeed::FromCorpus).expect("trained dict"),
+            crate::dict::trained_dict(&corpus, 4096).expect("trained dict"),
         ] {
             let encoded = encode_chain_with_options(
                 &["zstd-rsyncable".to_string()],

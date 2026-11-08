@@ -47,6 +47,18 @@ pub enum SchemaObstruction {
     Allocation,
 }
 
+impl purrdf_hash::error::StructuredError for SchemaObstruction {
+    purrdf_hash::error_visit! {
+        Work { spent, limit } => "owl-schema-work" {
+            "spent" => Unsigned(u128::from(*spent)), "limit" => Unsigned(u128::from(*limit)),
+        },
+        Storage { requested, limit } => "owl-schema-storage" {
+            "requested" => ByteCount(*requested as u128), "limit" => ByteCount(*limit as u128),
+        },
+        Allocation => "owl-schema-allocation" {},
+    }
+}
+
 /// Deterministic accounting of the owning knowledge base's schema preparation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SchemaPreparationStats {

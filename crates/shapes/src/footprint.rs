@@ -85,6 +85,16 @@ use crate::plan::LoweredPath;
 use crate::shapes::{Constraint, Path, Target};
 use crate::term::NamedNode;
 
+mod references;
+pub(crate) use references::resolve;
+
+#[derive(Debug)]
+pub(crate) struct ReferenceSite {
+    pub(crate) target: usize,
+    chain: Option<Vec<Path>>,
+    root: Option<usize>,
+}
+
 // ── Opacity reasons ─────────────────────────────────────────────────────────────
 
 /// A SHACL-SPARQL constraint or target: the nodes it reads live in query text this
@@ -119,7 +129,7 @@ pub(crate) const OPAQUE_UNROOTED: &str = "a shape reads from a node the shapes w
 // ── The footprint ───────────────────────────────────────────────────────────────
 
 /// Which end of a matched triple stands at the far end of a trigger's chain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Endpoint {
     /// A forward read, `(node, p, ?)`.
     Subject,
@@ -209,9 +219,13 @@ pub(crate) struct Footprint {
     triggers: Vec<Trigger>,
     broadcasts: Vec<Broadcast>,
     opaque: Option<&'static str>,
+    paths: Vec<LoweredPath>,
 }
 
 impl Footprint {
+    pub(crate) fn paths(&self) -> &[LoweredPath] {
+        &self.paths
+    }
     /// Why this footprint is TOP, or `None` when it is bounded.
     pub(crate) fn opaque(&self) -> Option<&'static str> {
         self.opaque
@@ -290,6 +304,8 @@ pub(crate) struct FootprintWalk {
     /// read for every top-level shape — `(n, sh:shape, ?)` offering `n` itself —
     /// so it is recorded once per walk, not once per shape.
     declared_targets: bool,
+    references: purrdf_core::SmallVec<[ReferenceSite; 2]>,
+    targets: bool,
 }
 
 impl Default for FootprintWalk {
@@ -302,27 +318,44 @@ impl Default for FootprintWalk {
             broadcasts: Vec::new(),
             root: None,
             declared_targets: false,
+            references: purrdf_core::SmallVec::new(),
+            targets: true,
         }
     }
 }
 
 impl FootprintWalk {
-    /// Hand over every read recorded so far, for reversal and lowering.
-    ///
-    /// Taken rather than borrowed because the caller holds the slot row a
-    /// [`LoweredPath`] indexes and needs it mutably while it lowers these chains;
-    /// the walk is finished with them either way.
-    pub(crate) fn take_triggers(&mut self) -> Vec<PendingTrigger> {
-        std::mem::take(&mut self.triggers)
+    pub(crate) fn definition() -> Self {
+        Self {
+            root: Some(0),
+            targets: false,
+            ..Self::default()
+        }
     }
 
+    pub(crate) fn reference(&mut self, target: usize, computed: bool) {
+        self.references.push(ReferenceSite {
+            target,
+            chain: if computed { None } else { self.chain.clone() },
+            root: self.root,
+        });
+    }
+
+    pub(crate) fn catalog_member(&mut self, target: usize) {
+        self.references.push(ReferenceSite {
+            target,
+            chain: Some(Vec::new()),
+            root: Some(0),
+        });
+    }
     /// Seal the accumulator into the footprint it derived, given the reversed,
-    /// lowered form of every trigger [`Self::take_triggers`] handed out.
+    /// lowered form of its directly recorded triggers.
     pub(crate) fn finish(self, triggers: Vec<Trigger>) -> Footprint {
         Footprint {
             triggers,
             broadcasts: self.broadcasts,
             opaque: self.opaque,
+            paths: Vec::new(),
         }
     }
 
@@ -434,6 +467,9 @@ impl FootprintWalk {
     /// being walked — the property-pair constraints walk their compared path from
     /// the DECLARING node.
     fn record_path_steps_at(&mut self, root: Root, path: &Path, prefix: &[Path]) {
+        if purrdf_stack::walk_is_low("SHACL preparation") {
+            return;
+        }
         match path {
             Path::Predicate(predicate) => {
                 self.emit(root, prefix, Some(predicate.clone()), Endpoint::Subject);
@@ -547,6 +583,9 @@ impl FootprintWalk {
     /// The match carries no wildcard for the reason [`Self::record_constraint`]'s
     /// does not.
     pub(crate) fn record_target(&mut self, target: &Target) {
+        if !self.targets {
+            return;
+        }
         match target {
             Target::Class(_) | Target::ImplicitClass(_) => {
                 self.record_class_membership(Root::Node);
@@ -667,7 +706,9 @@ impl FootprintWalk {
             | Constraint::SingleLine(_) => {}
             // Structural: the reads belong to what these REACH, and the lowering
             // walk reaches it.
-            Constraint::Not(_)
+            Constraint::Reference(_)
+            | Constraint::PropertyReference(_)
+            | Constraint::Not(_)
             | Constraint::And(_)
             | Constraint::Or(_)
             | Constraint::Xone(_)
@@ -741,6 +782,7 @@ impl FootprintWalk {
     /// over-approximates. A wildcard in the OUTER match would fall the other way.
     pub(crate) fn record_expression(&mut self, expr: &NodeExpr) {
         match expr {
+            NodeExpr::Owned { expr, .. } => self.record_expression(expr),
             // A path expression is evaluated from the current focus node, so its
             // steps are read exactly as a property shape's are.
             NodeExpr::Path(path) => self.record_path_steps(path, &[]),

@@ -10,7 +10,8 @@
 //! content-addressed blobs — without pulling pyo3.
 //!
 //! [`SnapshotBuilder`] interns terms (append-order, scope-aware blank nodes),
-//! content-sorts them (`(kind, value, datatype-IRI, lang, direction)`, IRIs first), and
+//! content-sorts scalars (`(kind, value, datatype-IRI, lang, direction)`, IRIs first),
+//! then dependency-orders native quoted terms, and
 //! [`emit_gts`] authors the single `dist`-profile `snapshot` frame preceded by the
 //! blob frames (sorted by `(rep, decoded-bytes)`). All CBOR encoding,
 //! canonicalization, frame-id chaining, and signing is delegated to `purrdf-gts`.
@@ -18,14 +19,21 @@
 //! The Python wrapper delegates to THIS core; there is one
 //! definition of "the snapshot".
 
+mod error;
+use error::term_evidence;
+pub use error::{GtsEmitError, GtsIngestError, IngestCheckpoint, OffendingTerm};
+use purrdf_hash::error::StructuredError;
+
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
 use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
 use purrdf_lex::cbor::Value;
+use purrdf_lex::walk::WorkList;
 
 use crate::{
     BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,
@@ -77,17 +85,28 @@ struct TermRow {
     /// intern key and the content-sort key. Omitting it from the key merged them
     /// into one term and silently rewrote the graph.
     direction: Option<String>,
+    /// Native components, hash-consed after their scoped identities are interned.
+    triple: Option<(usize, usize, usize)>,
+    /// Zero for scalar terms; quoted terms follow all their dependencies.
+    nesting: usize,
 }
 
 /// The borrowed intern key of a NON-blank term row:
-/// `(kind, value, datatype-or-empty, lang-or-empty, direction-or-empty)`.
+/// `(kind, value, datatype-or-empty, lang-or-empty, direction-or-empty, triple)`.
 ///
 /// Borrowed, not owned: this is the key a per-row LOOKUP hashes and compares,
 /// and a lookup that owned its key allocated five strings per ingested term
 /// position just to discover the term was already interned. Insertion of a
 /// genuinely new term still owns its strings — that is the dictionary itself,
 /// not scratch.
-type RowKey<'a> = (u8, &'a str, &'a str, &'a str, &'a str);
+type RowKey<'a> = (
+    u8,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    Option<(usize, usize, usize)>,
+);
 
 /// The borrowed intern key of an already-stored row.
 fn row_key_of(row: &TermRow) -> RowKey<'_> {
@@ -97,6 +116,7 @@ fn row_key_of(row: &TermRow) -> RowKey<'_> {
         row.datatype.as_deref().unwrap_or(""),
         row.lang.as_deref().unwrap_or(""),
         row.direction.as_deref().unwrap_or(""),
+        row.triple,
     )
 }
 
@@ -268,7 +288,7 @@ impl SnapshotBuilder {
     }
 
     fn intern_iri(&mut self, iri: &str) -> usize {
-        let key = (TermKind::Iri as u8, iri, "", "", "");
+        let key = (TermKind::Iri as u8, iri, "", "", "", None);
         if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
             return id;
         }
@@ -278,6 +298,8 @@ impl SnapshotBuilder {
             datatype: None,
             lang: None,
             direction: None,
+            triple: None,
+            nesting: 0,
         })
     }
 
@@ -340,6 +362,8 @@ impl SnapshotBuilder {
             datatype: None,
             lang: None,
             direction: None,
+            triple: None,
+            nesting: 0,
         });
         let terms = &self.terms;
         self.bnode_wire.insert_unique(wire_hash, id, |&other| {
@@ -379,6 +403,7 @@ impl SnapshotBuilder {
             datatype.unwrap_or(""),
             lang.unwrap_or(""),
             direction.unwrap_or(""),
+            None,
         );
         if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
             return id;
@@ -389,6 +414,26 @@ impl SnapshotBuilder {
             datatype: datatype.map(str::to_owned),
             lang: lang.map(str::to_owned),
             direction: direction.map(str::to_owned),
+            triple: None,
+            nesting: 0,
+        })
+    }
+
+    /// Hash-cons a quoted term by its already-interned component identities.
+    fn intern_triple(&mut self, s: usize, p: usize, o: usize) -> usize {
+        let triple = Some((s, p, o));
+        let key = (TermKind::Triple as u8, "", "", "", "", triple);
+        if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
+            return id;
+        }
+        self.push_term_row(TermRow {
+            kind: TermKind::Triple,
+            value: String::new(),
+            datatype: None,
+            lang: None,
+            direction: None,
+            triple,
+            nesting: self.terms[o].nesting + 1,
         })
     }
 
@@ -403,9 +448,8 @@ impl SnapshotBuilder {
     /// # Errors
     /// A term cannot be represented by the snapshot's native tables, the builder
     /// is already poisoned by an earlier ingestion failure, or one of the
-    /// refusals [`GtsIngestError`] enumerates applies — rendered through its
-    /// `Display`, because this signature is frozen for the Python producer.
-    pub fn add_dataset(&mut self, dataset: &crate::RdfDataset) -> Result<(), String> {
+    /// refusals [`GtsIngestError`] enumerates applies. Native causes remain owned.
+    pub fn add_dataset(&mut self, dataset: &crate::RdfDataset) -> Result<(), GtsIngestError> {
         self.add_dataset_scoped(dataset, None, None)
     }
 
@@ -421,22 +465,19 @@ impl SnapshotBuilder {
     /// # Errors
     /// A term cannot be represented by the snapshot's native tables, the builder
     /// is already poisoned by an earlier ingestion failure, or one of the
-    /// refusals [`GtsIngestError`] enumerates applies — rendered through its
-    /// `Display`, because this signature is frozen for the Python producer.
+    /// refusals [`GtsIngestError`] enumerates applies. Native causes remain owned.
     pub fn add_dataset_scoped(
         &mut self,
         dataset: &crate::RdfDataset,
         default_graph_name: Option<&str>,
         scope: Option<&str>,
-    ) -> Result<(), String> {
+    ) -> Result<(), GtsIngestError> {
         // ONE PATH: the frozen carrier is itself a `DatasetView`/`FallibleDatasetView`,
         // so the flat surface is a delegation through the same ingestion core the view
         // surface uses, not a second definition of "ingest a dataset". The receipt is
-        // discarded here (this signature is frozen); the cumulative figures stay
+        // discarded here; the cumulative figures stay
         // readable through [`Self::ingest_totals`].
-        let _ = self
-            .ingest_view(dataset, default_graph_name, scope)
-            .map_err(|err| err.to_string())?;
+        let _ = self.ingest_view(dataset, default_graph_name, scope)?;
         Ok(())
     }
 
@@ -446,7 +487,7 @@ impl SnapshotBuilder {
     ///
     /// # Errors
     /// [`GtsIngestError`], which is also what poisons the builder.
-    pub fn add_view<D: FallibleDatasetView>(
+    pub fn add_view<D: FallibleDatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
     ) -> Result<IngestReport, GtsIngestError> {
@@ -465,7 +506,7 @@ impl SnapshotBuilder {
     ///
     /// # Errors
     /// [`GtsIngestError`], which is also what poisons the builder.
-    pub fn add_view_scoped<D: FallibleDatasetView>(
+    pub fn add_view_scoped<D: FallibleDatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         default_graph_name: Option<&str>,
@@ -496,7 +537,7 @@ impl SnapshotBuilder {
     /// `add_dataset[_scoped]` and the generic `add_view[_scoped]` — run through
     /// exactly this body, so a refusal, a checkpoint and the poison flag mean the
     /// same thing on both.
-    fn ingest_view<D: FallibleDatasetView>(
+    fn ingest_view<D: FallibleDatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         default_graph_name: Option<&str>,
@@ -505,9 +546,7 @@ impl SnapshotBuilder {
         if let Some(poison) = &self.poison {
             // Naming the EARLIER failure, not this call: the only honest thing a
             // poisoned builder can say is which ingestion left it that way.
-            return Err(GtsIngestError::Poisoned {
-                cause: poison.to_string(),
-            });
+            return Err(GtsIngestError::poisoned(poison));
         }
         // ATOMIC PER INGESTION. A refusal can fire after an arbitrary number of
         // rows have already been interned, and the accessors that answer over the
@@ -564,7 +603,7 @@ impl SnapshotBuilder {
 
     /// The row-consuming body of [`Self::ingest_view`], separated only so that
     /// EVERY early return through it is caught by one poison assignment.
-    fn ingest_view_rows<D: FallibleDatasetView>(
+    fn ingest_view_rows<D: FallibleDatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         default_graph_name: Option<&str>,
@@ -628,19 +667,19 @@ impl SnapshotBuilder {
             return Err(err);
         }
         if let Err(failure) = drained {
-            return Err(GtsIngestError::ViewNotReady {
-                checkpoint: match failure.checkpoint {
+            return Err(GtsIngestError::not_ready(
+                match failure.checkpoint {
                     DrainCheckpoint::Before => IngestCheckpoint::BeforeRows,
                     DrainCheckpoint::After => IngestCheckpoint::AfterRows,
                 },
-                cause: failure.error.to_string(),
-            });
+                failure.error,
+            ));
         }
 
         let mut declarations_omitted: Vec<String> = view
             .named_graphs()
             .filter(|graph| !occupied_graphs.contains(graph))
-            .map(|graph| render_term(view, graph))
+            .map(|graph| term_evidence(view, graph).map(|term| term.to_string()))
             .collect::<Result<_, _>>()?;
         declarations_omitted.sort_unstable();
         declarations_omitted.dedup();
@@ -680,7 +719,7 @@ impl SnapshotBuilder {
     /// [`GtsIngestError::UnrepresentableTerm`] or
     /// [`GtsIngestError::BlankWireCollision`] — exactly the refusals
     /// [`Self::intern_view_term`]/[`Self::intern_view_iri`] can raise.
-    fn consume_rows<D: DatasetView>(
+    fn consume_rows<D: DatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         default_graph_name: Option<&str>,
@@ -691,16 +730,12 @@ impl SnapshotBuilder {
             std::collections::BTreeSet::new();
         let default_gid = default_graph_name.map(|name| self.intern_iri(name));
 
-        // FAIL CLOSED (no-optionality): a row whose subject/object/graph is not
-        // directly representable in the snapshot frame (a quoted-triple term, or a
-        // non-IRI/blank graph name) is NOT silently dropped — that would make the
-        // emitted `purrdf.gts` diverge from the view. Quoted triples are
-        // representable ONLY via the reifier/annotation tables (below), so a Triple
-        // term in plain-quad position is genuine loss and aborts the ingestion.
+        // Objects admit native quoted terms. Subject, predicate and graph slots
+        // retain their RDF 1.2 position restrictions; no refused row is omitted.
         for quad in view.quads() {
             let sid = self.intern_view_term(view, quad.s, scope, "quad subject")?;
             let pid = self.intern_view_iri(view, quad.p, "quad predicate")?;
-            let oid = self.intern_view_term(view, quad.o, scope, "quad object")?;
+            let oid = self.intern_view_object(view, quad.o, scope, "quad object", 0)?;
             let gid = match quad.g {
                 None => default_gid,
                 Some(graph) => {
@@ -715,7 +750,7 @@ impl SnapshotBuilder {
         // The RDF 1.2 statement layer rides the NATIVE side-table accessors, never
         // `quads()`: its virtual rows are excluded from the ordinary row partition,
         // so reading them here neither double-ingests them nor routes a binding's
-        // quoted-triple object through the plain-slot guard above.
+        // quoted-triple object into an ordinary quad.
         for binding in view.reifier_quads() {
             let rid = self.intern_view_term(view, binding.s, scope, "reifier term")?;
             let guard = view
@@ -724,12 +759,13 @@ impl SnapshotBuilder {
             let TermRef::Triple { s, p, o } = guard.term() else {
                 return Err(GtsIngestError::UnrepresentableTerm {
                     position: "reifier binding object",
-                    term: render_term(view, binding.o)?,
+                    term: term_evidence(view, binding.o)?,
                 });
             };
             let qs = self.intern_view_term(view, s, scope, "reified subject")?;
             let qp = self.intern_view_iri(view, p, "reified predicate")?;
-            let qo = self.intern_view_term(view, o, scope, "reified object")?;
+            // The binding's enclosing quoted triple consumes one nesting level.
+            let qo = self.intern_view_object(view, o, scope, "reified object", 1)?;
             let gid = match binding.g {
                 None => default_gid,
                 Some(graph) => {
@@ -744,7 +780,7 @@ impl SnapshotBuilder {
         for annotation in view.annotation_quads() {
             let rid = self.intern_view_term(view, annotation.s, scope, "annotation reifier")?;
             let pid = self.intern_view_iri(view, annotation.p, "annotation predicate")?;
-            let oid = self.intern_view_term(view, annotation.o, scope, "annotation object")?;
+            let oid = self.intern_view_object(view, annotation.o, scope, "annotation object", 0)?;
             let gid = match annotation.g {
                 None => default_gid,
                 Some(graph) => {
@@ -759,8 +795,7 @@ impl SnapshotBuilder {
         Ok((rows_consumed, occupied_graphs))
     }
 
-    /// Intern a view term in subject/object/graph position (triple terms are NOT
-    /// interned — the RDF 1.2 layer rides the reifies/annot tables).
+    /// Intern a scalar view term in a slot that does not admit quoted triples.
     ///
     /// Reproduces the flat carrier path's literal normalization exactly: a view's
     /// `TermRef::Literal` ALWAYS carries a datatype id, but a language tag implies
@@ -771,7 +806,7 @@ impl SnapshotBuilder {
     /// `scope` prefixes blank labels after the view's OWN dataset-level scope
     /// qualification, so two composite sources that both spell `_:b0` stay two
     /// terms (C0.2) and a caller scope separates whole sources on top of that.
-    fn intern_view_term<D: DatasetView>(
+    fn intern_view_term<D: DatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         id: D::Id,
@@ -779,7 +814,70 @@ impl SnapshotBuilder {
         position: &'static str,
     ) -> Result<usize, GtsIngestError> {
         let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
-        match guard.term() {
+        self.intern_resolved_term(view, id, guard.term(), scope, position)
+    }
+
+    /// Intern an object, preserving nested native triples without machine-stack
+    /// recursion. RDF 1.2 allows a quoted triple only in the object component.
+    fn intern_view_object<D: DatasetView<ReadError: StructuredError>>(
+        &mut self,
+        view: &D,
+        id: D::Id,
+        scope: Option<&str>,
+        position: &'static str,
+        outer_nesting: usize,
+    ) -> Result<usize, GtsIngestError> {
+        // The native bound fits wholly inline: this traversal adds no heap
+        // scratch allocation to the ingestion report's capacity accounting.
+        let mut parents: WorkList<(D::Id, usize, usize), MAX_TERM_NESTING_DEPTH> = WorkList::new();
+        let mut current = id;
+        let mut object = loop {
+            let guard = view.resolve(current).map_err(GtsIngestError::source_read)?;
+            let term = guard.term();
+            let TermRef::Triple { s, p, o } = term else {
+                break self.intern_resolved_term(view, current, term, scope, position)?;
+            };
+            if parents.iter().any(|&(held, _, _)| held == current) {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "cyclic quoted triple",
+                    term: term_evidence(view, current)?,
+                });
+            }
+            if parents.len() + outer_nesting == MAX_TERM_NESTING_DEPTH {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "quoted triple exceeding the native nesting limit",
+                    term: term_evidence(view, current)?,
+                });
+            }
+            let subject = view.resolve(s).map_err(GtsIngestError::source_read)?;
+            if !matches!(subject.term(), TermRef::Iri(_) | TermRef::Blank { .. }) {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "quoted triple subject",
+                    term: term_evidence(view, s)?,
+                });
+            }
+            let sid =
+                self.intern_resolved_term(view, s, subject.term(), scope, "quoted subject")?;
+            let pid = self.intern_view_iri(view, p, "quoted predicate")?;
+            parents.push((current, sid, pid));
+            current = o;
+        };
+        while let Some((_, s, p)) = parents.pop() {
+            object = self.intern_triple(s, p, object);
+        }
+        Ok(object)
+    }
+
+    /// Shared scalar normalization for bare slots and quoted-term leaves.
+    fn intern_resolved_term<D: DatasetView<ReadError: StructuredError>>(
+        &mut self,
+        view: &D,
+        id: D::Id,
+        term: TermRef<'_, D::Id>,
+        scope: Option<&str>,
+        position: &'static str,
+    ) -> Result<usize, GtsIngestError> {
+        match term {
             TermRef::Iri(iri) => Ok(self.intern_iri(iri)),
             TermRef::Blank {
                 label,
@@ -797,7 +895,7 @@ impl SnapshotBuilder {
                 let TermRef::Iri(datatype_iri) = datatype_guard.term() else {
                     return Err(GtsIngestError::UnrepresentableTerm {
                         position: "literal datatype",
-                        term: render_term(view, datatype)?,
+                        term: term_evidence(view, datatype)?,
                     });
                 };
                 if let Some(language) = language {
@@ -817,13 +915,13 @@ impl SnapshotBuilder {
             }
             TermRef::Triple { .. } => Err(GtsIngestError::UnrepresentableTerm {
                 position,
-                term: render_term(view, id)?,
+                term: term_evidence(view, id)?,
             }),
         }
     }
 
     /// Intern a view term that MUST be an IRI (a predicate slot).
-    fn intern_view_iri<D: DatasetView>(
+    fn intern_view_iri<D: DatasetView<ReadError: StructuredError>>(
         &mut self,
         view: &D,
         id: D::Id,
@@ -834,7 +932,7 @@ impl SnapshotBuilder {
             TermRef::Iri(iri) => Ok(self.intern_iri(iri)),
             _ => Err(GtsIngestError::UnrepresentableTerm {
                 position,
-                term: render_term(view, id)?,
+                term: term_evidence(view, id)?,
             }),
         }
     }
@@ -867,17 +965,32 @@ impl SnapshotBuilder {
     /// Re-id every term by content and sort every row (`_Builder._canonical_tables`).
     ///
     /// Returns the canonical `(wire_terms, quads, reifies, annot)` ready for the
-    /// snapshot payload. Terms sort by `(kind, value, datatype-IRI, lang)` with
-    /// IRIs first, so every literal's datatype IRI precedes it.
+    /// snapshot payload. Scalars retain their content order, with IRIs before
+    /// literals; quoted terms follow all their component dependencies.
     fn canonical_tables(&self) -> CanonTables {
         let n = self.terms.len();
         let mut order: Vec<usize> = (0..n).collect();
-        // Compare BORROWED rows: the owned sort key allocated five strings per
-        // element on every comparison to express an order the rows already carry.
-        order.sort_by(|&a, &b| term_order(&self.terms[a], &self.terms[b]));
+        // Scalars keep their existing order. Every quoted term follows its
+        // components, and equal-height triples sort by canonical child ids.
+        order.sort_unstable_by_key(|&id| self.terms[id].nesting);
         let mut remap = vec![0usize; n];
-        for (new_id, &old) in order.iter().enumerate() {
-            remap[old] = new_id;
+        let mut first = 0;
+        while first < n {
+            let nesting = self.terms[order[first]].nesting;
+            let end =
+                first + order[first..].partition_point(|&id| self.terms[id].nesting == nesting);
+            order[first..end].sort_unstable_by(|&a, &b| {
+                match (self.terms[a].triple, self.terms[b].triple) {
+                    (Some((as_, ap, ao)), Some((bs, bp, bo))) => {
+                        (remap[as_], remap[ap], remap[ao]).cmp(&(remap[bs], remap[bp], remap[bo]))
+                    }
+                    _ => term_order(&self.terms[a], &self.terms[b]),
+                }
+            });
+            for (offset, &old) in order[first..end].iter().enumerate() {
+                remap[old] = first + offset;
+            }
+            first = end;
         }
 
         // Wire terms in new-id order; the datatype field becomes the remapped id
@@ -887,7 +1000,7 @@ impl SnapshotBuilder {
             .map(|&old| {
                 let row = &self.terms[old];
                 let datatype = row.datatype.as_deref().map(|dt| {
-                    let key = (TermKind::Iri as u8, dt, "", "", "");
+                    let key = (TermKind::Iri as u8, dt, "", "", "", None);
                     let old_dt = lookup_term_row(&self.terms, &self.index, key)
                         .expect("a literal's datatype IRI is interned before the literal");
                     remap[old_dt]
@@ -899,7 +1012,7 @@ impl SnapshotBuilder {
                     lang: row.lang.clone(),
                     direction: row.direction.clone(),
                     reifier: None,
-                    triple: None,
+                    triple: row.triple.map(|(s, p, o)| (remap[s], remap[p], remap[o])),
                 }
             })
             .collect();
@@ -1083,215 +1196,6 @@ fn wire_id(n: usize) -> Value {
     Value::Integer(purrdf_lex::cbor::Integer::from(n as i64))
 }
 
-/// How deep [`render_term`] follows a term's constituents.
-///
-/// A diagnostic is not a serializer: it must terminate over ANY view, including
-/// one whose `resolve` is cyclic, and it does not need to be exhaustive to be
-/// useful. Quoted triples nest far more shallowly than this in practice; past it
-/// the rendering says so rather than recursing.
-const RENDER_TERM_DEPTH: usize = 8;
-
-/// Render a view term for a diagnostic, in its own TEXT rather than in the view's
-/// internal ids.
-///
-/// Every constituent is followed: a quoted triple renders its subject, predicate
-/// and object, and a typed literal renders its datatype IRI. This is the whole
-/// point of the function — a message reading `Triple { s: Id(41), p: Id(7), ... }`
-/// names the offending term in a vocabulary only the view itself speaks, and
-/// leaves the reader unable to find the row it came from.
-fn render_term<D: DatasetView>(view: &D, id: D::Id) -> Result<String, GtsIngestError> {
-    render_term_within(view, id, RENDER_TERM_DEPTH)
-}
-
-/// [`render_term`] with the remaining recursion budget carried explicitly.
-fn render_term_within<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    depth: usize,
-) -> Result<String, GtsIngestError> {
-    let Some(next) = depth.checked_sub(1) else {
-        return Ok("…".to_owned());
-    };
-    let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
-    Ok(match guard.term() {
-        TermRef::Iri(iri) => iri.to_owned(),
-        TermRef::Blank { label, scope } => format!("_:{}", scope.qualify_label(label)),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            // N-Triples-shaped, and deliberately: a language tag suppresses the
-            // datatype exactly as the ingestion path does, so the rendering
-            // describes the term the snapshot would have stored.
-            let mut rendered = format!("{lexical:?}");
-            match (language, direction) {
-                (Some(language), Some(direction)) => {
-                    rendered.push('@');
-                    rendered.push_str(language);
-                    rendered.push_str("--");
-                    rendered.push_str(direction.as_str());
-                }
-                (Some(language), None) => {
-                    rendered.push('@');
-                    rendered.push_str(language);
-                }
-                (None, _) => {
-                    rendered.push_str("^^<");
-                    rendered.push_str(&render_term_within(view, datatype, next)?);
-                    rendered.push('>');
-                }
-            }
-            rendered
-        }
-        TermRef::Triple { s, p, o } => format!(
-            "<<( {} {} {} )>>",
-            render_term_within(view, s, next)?,
-            render_term_within(view, p, next)?,
-            render_term_within(view, o, next)?,
-        ),
-    })
-}
-
-/// Which ingestion boundary sampled a fallible view's operational status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum IngestCheckpoint {
-    /// Sampled before the first row was consumed.
-    BeforeRows,
-    /// Sampled after every row — ordinary, reifier and annotation alike — had
-    /// been consumed, and before any figure derived from them was published.
-    AfterRows,
-}
-
-impl std::fmt::Display for IngestCheckpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BeforeRows => f.write_str("before row consumption"),
-            Self::AfterRows => f.write_str("after row consumption"),
-        }
-    }
-}
-
-/// A terminal, typed ingestion refusal.
-///
-/// Every variant is a REFUSAL, never a degraded success. Two things follow from
-/// one, and both are load-bearing:
-///
-/// * The failing ingestion is ROLLED BACK. Every row it had already interned is
-///   taken back out, so the builder is left at exactly the state the last fully
-///   accepted ingestion left it in. This is what makes the infallible
-///   [`SnapshotBuilder::snapshot_content_id`] and
-///   [`SnapshotBuilder::snapshot_payload`] safe to keep infallible: there is no
-///   half-ingested interior for them to describe.
-/// * The builder is POISONED. It is nonetheless refused for all further use:
-///   every later `add_*` returns [`Self::Poisoned`] and [`emit_gts`] refuses to
-///   publish. A caller asked for content that could not be ingested, and shipping
-///   the subset that could — however internally consistent — would answer a
-///   question nobody asked.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum GtsIngestError {
-    /// Forward or reverse access to the source dictionary failed.
-    SourceRead {
-        /// The source read failure, rendered without losing the failure category.
-        cause: String,
-    },
-    /// The view's operational status was not `Ready` at an ingestion checkpoint,
-    /// so the rows read are a truncation, not the view.
-    ViewNotReady {
-        /// Which boundary observed the failure.
-        checkpoint: IngestCheckpoint,
-        /// The view's own sticky root cause, rendered.
-        cause: String,
-    },
-    /// A term occupies a plain snapshot slot it cannot be represented in — a
-    /// quoted-triple term outside the reifier/annotation tables, or a non-IRI in
-    /// a predicate or datatype slot.
-    UnrepresentableTerm {
-        /// The slot the term was read from.
-        position: &'static str,
-        /// The offending term, rendered.
-        term: String,
-    },
-    /// Two DISTINCT blank intern keys encode onto one wire value.
-    ///
-    /// The frozen wire encoding `"{scope}-{label}"` is not injective over
-    /// `(scope, label)`: `(Some("a"), "b-c")` and `(Some("a-b"), "c")` both
-    /// spell `a-b-c`. Minting the second row would leave two indistinguishable
-    /// blank terms whose relative order the stable canonical sort takes from the
-    /// INGESTION order, so the emitted bytes would stop being a pure function of
-    /// the content. Changing the encoding would move every existing scoped
-    /// caller's bytes, so the collision is refused instead.
-    BlankWireCollision {
-        /// The wire value both keys encode onto.
-        wire_value: String,
-        /// The ingest scope of the key already holding that wire value.
-        held_scope: Option<String>,
-        /// The label of the key already holding that wire value.
-        held_label: String,
-        /// The ingest scope of the key that collided with it.
-        incoming_scope: Option<String>,
-        /// The label of the key that collided with it.
-        incoming_label: String,
-    },
-    /// An earlier ingestion failed; this builder can no longer ingest or publish.
-    /// Its tables still describe the last fully accepted state — the failed
-    /// ingestion was rolled back — but that state is not what the caller asked
-    /// for, so it is not publishable.
-    Poisoned {
-        /// The earlier failure, rendered.
-        cause: String,
-    },
-}
-
-impl GtsIngestError {
-    fn source_read(error: impl std::fmt::Display) -> Self {
-        Self::SourceRead {
-            cause: error.to_string(),
-        }
-    }
-}
-
-impl std::fmt::Display for GtsIngestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SourceRead { cause } => write!(f, "snapshot source read failed: {cause}"),
-            Self::ViewNotReady { checkpoint, cause } => write!(
-                f,
-                "the view reported an operational failure {checkpoint}, so the rows read are \
-                 a truncation rather than the view: {cause}"
-            ),
-            Self::UnrepresentableTerm { position, term } => write!(
-                f,
-                "carrier {position} is not directly representable in the gts snapshot frame \
-                 (quoted-triple terms must ride the reifier/annotation tables): {term}"
-            ),
-            Self::BlankWireCollision {
-                wire_value,
-                held_scope,
-                held_label,
-                incoming_scope,
-                incoming_label,
-            } => write!(
-                f,
-                "two distinct blank-node intern keys encode onto the single wire value \
-                 {wire_value:?}: ({held_scope:?}, {held_label:?}) already holds it and \
-                 ({incoming_scope:?}, {incoming_label:?}) would mint an indistinguishable \
-                 second term row"
-            ),
-            Self::Poisoned { cause } => write!(
-                f,
-                "the snapshot builder is poisoned by an earlier ingestion failure and can \
-                 neither ingest nor publish: {cause}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for GtsIngestError {}
-
 /// What ONE ingestion consumed, minted and deliberately omitted.
 ///
 /// A caller cannot obtain a snapshot without receiving this: the omitted
@@ -1406,18 +1310,17 @@ impl MediumPlan {
     /// With no dictionaries pinned there is nothing to choose between, so the
     /// baseline is the only inhabitant of the choice and needs no row. With
     /// dictionaries pinned, a missing row is a hard error.
-    fn select(&self, slot: &FrameSlot) -> Result<Option<&str>, String> {
+    fn select(&self, slot: &FrameSlot) -> Result<Option<&str>, GtsEmitError> {
         if self.dicts.is_empty() {
             return Ok(None);
         }
         match self.assignment.get(slot) {
             Some(DictSelection::Named(name)) => Ok(Some(name)),
             Some(DictSelection::Baseline) => Ok(None),
-            None => Err(format!(
-                "the medium plan pins {} dictionar(y/ies) but assigns none to {slot:?}; \
-                 every frame slot needs an explicit DictSelection",
-                self.dicts.len()
-            )),
+            None => Err(GtsEmitError::MissingAssignment {
+                dictionaries: self.dicts.len(),
+                slot: slot.clone(),
+            }),
         }
     }
 }
@@ -1435,15 +1338,14 @@ pub fn emit_gts(
     public_key_armor: Option<String>,
     rsyncable_threshold: usize,
     plan: &MediumPlan,
-) -> Result<Vec<u8>, String> {
-    // TERMINAL POISON. A mid-ingestion failure leaves a partially interned
-    // builder; publishing it would emit a bundle that is a prefix of the data the
-    // caller asked for and call it a snapshot. Refuse, naming the failure.
+) -> Result<Vec<u8>, GtsEmitError> {
+    // TERMINAL POISON. Rollback restored the last accepted tables, but publishing
+    // that accepted subset would omit content the caller requested. Refuse before
+    // inspecting any authoring configuration, retaining the original failure.
     if let Some(poison) = builder.poison() {
-        return Err(GtsIngestError::Poisoned {
-            cause: poison.to_string(),
-        }
-        .to_string());
+        let cause = purrdf_lex::allocation::retain_native_cause(poison.clone())
+            .map_err(GtsEmitError::Storage)?;
+        return Err(GtsEmitError::Poisoned(cause));
     }
 
     // No-optionality: signing is all-or-nothing across ALL THREE fields
@@ -1455,11 +1357,11 @@ pub fn emit_gts(
         (Some(_), Some(_), Some(_)) => true,
         (None, None, None) => false,
         _ => {
-            return Err(
-                "signing requires signer_secret, signer_kid, and public_key_armor together \
-                 (all three or none)"
-                    .to_string(),
-            );
+            return Err(GtsEmitError::SigningFields {
+                secret_present: signer_secret.is_some(),
+                kid_present: signer_kid.is_some(),
+                armor_present: public_key_armor.is_some(),
+            });
         }
     };
 
@@ -1476,18 +1378,17 @@ pub fn emit_gts(
         .iter()
         .any(|t| t == "zstd" || t == "zstd-rsyncable");
     let zstd_level: Option<i32> = plan.zstd_level.filter(|_| chain_is_zstd);
-    if plan.zstd_level.is_some() && !chain_is_zstd {
-        return Err(format!(
-            "the medium plan declares zstd level {:?} but the transform chain {base_chain:?} \
-             carries no zstd-family codec",
-            plan.zstd_level
-        ));
+    if let Some(level) = plan.zstd_level.filter(|_| !chain_is_zstd) {
+        return Err(GtsEmitError::ZstdLevelTransform {
+            level,
+            transform: base_chain,
+        });
     }
     if !plan.dicts.is_empty() && !chain_is_zstd {
-        return Err(format!(
-            "the medium plan pins in-band dictionaries but the transform chain \
-             {base_chain:?} carries no zstd-family codec to prime"
-        ));
+        return Err(GtsEmitError::DictionariesTransform {
+            dictionaries: plan.dicts.len(),
+            transform: base_chain,
+        });
     }
 
     let mut writer = Writer::with_options(
@@ -1497,11 +1398,12 @@ pub fn emit_gts(
             zstd_level,
             ..purrdf_gts::writer::WriterOptions::default()
         },
-    )
-    .map_err(|err| err.to_string())?;
+    )?;
     if signing {
+        // The exhaustive presence match above sets signing only when all three
+        // owned fields are Some; none has been consumed or changed since then.
         let secret = signer_secret.expect("signing implies a secret");
-        let kid = signer_kid.ok_or("signing requires a kid")?;
+        let kid = signer_kid.expect("signing implies a kid");
         writer.sign_with(purrdf_ed25519::SigningKey::from_bytes(&secret), &kid);
         // The transport-key meta frame, signed along with every later frame.
         let armor = public_key_armor.expect("signing implies a public key");
@@ -1540,9 +1442,7 @@ pub fn emit_gts(
             dict: dict.map(str::to_string),
             ..Default::default()
         };
-        writer
-            .add_frame_with_options("blob", options)
-            .map_err(|e| e.to_string())?;
+        writer.add_frame_with_options("blob", options)?;
     }
 
     let payload = builder.snapshot_payload();
@@ -1556,9 +1456,7 @@ pub fn emit_gts(
         dict: snapshot_dict.map(str::to_string),
         ..Default::default()
     };
-    writer
-        .add_frame_with_options("snapshot", options)
-        .map_err(|e| e.to_string())?;
+    writer.add_frame_with_options("snapshot", options)?;
 
     Ok(writer.into_bytes())
 }
@@ -1968,8 +1866,24 @@ mod tests {
         // `sources` fixture — never caller-supplied and never reachable through a
         // binding, so the panicking wrapper is sound here.
         assert_eq!(
-            crate::canonical_flat_nquads(&actual).unwrap(),
-            crate::canonical_flat_nquads(&expected).unwrap(),
+            crate::canonical_flat_nquads(
+                &actual,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            crate::canonical_flat_nquads(
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
         );
     }
 
@@ -2117,7 +2031,14 @@ mod tests {
         let err = plan
             .select(&FrameSlot::Snapshot)
             .expect_err("a populated plan may not omit a frame slot");
-        assert!(err.contains("assigns none"), "{err}");
+        assert!(err.to_string().contains("assigns none"), "{err}");
+        assert!(matches!(
+            err,
+            GtsEmitError::MissingAssignment {
+                dictionaries: 1,
+                slot: FrameSlot::Snapshot
+            }
+        ));
     }
 
     #[test]
@@ -2296,7 +2217,10 @@ mod tests {
             &MediumPlan::undicted(Some(12)),
         )
         .expect_err("a level on a non-zstd chain must hard-fail");
-        assert!(err.contains("no zstd-family codec"), "{err}");
+        assert!(err.to_string().contains("no zstd-family codec"), "{err}");
+        assert!(
+            matches!(err, GtsEmitError::ZstdLevelTransform { level: 12, transform } if transform == ["identity"])
+        );
     }
 
     /// [`MediumPlan::dist_default`] is likewise gated on the CHAIN it is handed.
@@ -2343,6 +2267,14 @@ mod tests {
             &MediumPlan::undicted(None),
         )
         .expect_err("partial signing must hard-fail");
-        assert!(err.contains("all three or none"), "{err}");
+        assert!(err.to_string().contains("all three or none"), "{err}");
+        assert!(matches!(
+            err,
+            GtsEmitError::SigningFields {
+                secret_present: false,
+                kid_present: true,
+                armor_present: false
+            }
+        ));
     }
 }

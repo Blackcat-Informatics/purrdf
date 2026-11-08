@@ -1095,6 +1095,7 @@ pub enum OrderFidelity {
 ///     stratum,
 ///     accepted_terms: Vec::new(),
 ///     depth_placement: None,
+///     rank_source: purrdf_sparql_eval::RankSource::Ordinal,
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
 ///     arithmetic: RankArithmetic::FloatFree,
@@ -1117,6 +1118,7 @@ pub enum OrderFidelity {
 ///     stratum,
 ///     accepted_terms: Vec::new(),
 ///     depth_placement: None,
+///     rank_source: purrdf_sparql_eval::RankSource::Ordinal,
 ///     candidate_position: 0,
 ///     duplicates: DuplicatePolicy::Unique,
 ///     fidelity: RankFidelity::EXACT,
@@ -1342,6 +1344,49 @@ impl RankArithmetic {
     #[must_use]
     pub const fn float_distance<A: purrdf_core::distance::Arithmetic>() -> Self {
         Self::FloatDistance(DeclaredArithmetic::of::<A>())
+    }
+}
+
+/// The progression a ranked producer promises, checked on every consumed row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RankLaw {
+    /// Ranks 1, 2, 3, with one row per rank and no gaps.
+    Ordinal,
+    /// Positive, nondecreasing ranks; distinct candidates may share a rank.
+    Shared,
+}
+
+impl RankLaw {
+    /// Stable spelling carried by producer identities and evidence.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ordinal => "ordinal",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+/// The production source of a ranked invocation's rank values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RankSource {
+    /// Assign one contiguous ordinal to each emitted row.
+    Ordinal,
+    /// Read positive nondecreasing integer ranks from this output position.
+    Shared {
+        /// Flattened subject/object argument position, distinct from other outputs.
+        position: usize,
+    },
+}
+
+impl RankSource {
+    /// The progression law consumers must apply to these ranks.
+    #[must_use]
+    pub const fn law(self) -> RankLaw {
+        match self {
+            Self::Ordinal => RankLaw::Ordinal,
+            Self::Shared { .. } => RankLaw::Shared,
+        }
     }
 }
 
@@ -1771,23 +1816,12 @@ pub struct DepthPlacement {
 /// deliberately no function pointer anywhere in this type. It is not `Hash`
 /// because [`Iri`] is not.
 ///
-/// # The rank law is single and unconditional
-///
-/// A declaration says nothing about rank order because there is nothing to say:
-/// one law holds for every ranked producer without exception. The ranks of one
-/// invocation's rows are 1-based, contiguous and ascending — rank 1, then 2,
-/// then 3, with no gap, no repeat and no step backwards. A producer emits rows
-/// best-first and numbers them as it goes, and rows that a producer considers
-/// equally good still receive distinct consecutive ranks under whatever total
-/// tie-break it applies.
-///
-/// The law is enforced on the consuming side, per row, as the rows arrive: the
-/// fusion engine in `purrdf-retrieval` holds the next expected rank for every
-/// stream it reads and refuses a lower rank as `OutOfOrderRanks` and a higher
-/// one as `NonContiguousRanks`. Because it is checked rather than believed, it
-/// is not a field a registration can vary.
+/// The declared rank source determines whether rows receive distinct ordinal
+/// ranks or retain a producer's positive, nondecreasing shared ranks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankedDeclaration {
+    /// Where this producer's ranks come from, including their progression law.
+    pub rank_source: RankSource,
     /// The caller-supplied stratum label these rows are ranked within. No
     /// vocabulary is minted here; the caller names its own strata.
     pub stratum: Iri,
@@ -1939,6 +1973,10 @@ impl RankedDeclaration {
 
     fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
         out.write_char('r')?;
+        write_canonical_field(out, self.rank_source.law().as_str())?;
+        if let RankSource::Shared { position } = self.rank_source {
+            write_canonical_number(out, position)?;
+        }
         write_canonical_field(out, self.stratum.as_str())?;
         write_canonical_field(out, self.duplicates.as_str())?;
         self.fidelity.write_canonical(out)?;
@@ -3646,6 +3684,25 @@ fn validate_declaration(iri: &str, decl: &RankedDeclaration, relation: &dyn Prop
              cannot also be the projected candidate",
             placement.facet.as_str(),
             placement.position
+        );
+    }
+    if let RankSource::Shared { position } = decl.rank_source {
+        assert!(
+            position < total,
+            "ranked declaration for <{iri}> projects its rank from nonexistent position {position} ({arity})"
+        );
+        assert!(
+            position != decl.candidate_position && Some(position) != decl.block_position,
+            "ranked declaration for <{iri}> must project its rank from a distinct output position"
+        );
+        assert!(
+            decl.placements()
+                .all(|placement| placement.position != position)
+                && decl
+                    .depth_placement
+                    .as_ref()
+                    .is_none_or(|depth| depth.position != position),
+            "ranked declaration for <{iri}> cannot bind a request or depth into its rank output position {position}"
         );
     }
     // The block column is the candidate column's sibling: both are positions the

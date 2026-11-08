@@ -16,7 +16,7 @@
 //! q = store.prepare("SELECT ?o WHERE { ?this <http://example.org/p> ?o }",
 //!                   parameters=["this"])
 //! for node in nodes:
-//!     for row in q.run(this=node):
+//!     for row in q.run({"this": node}):
 //!         ...
 //! ```
 //!
@@ -191,7 +191,7 @@ impl GraphDerivedRelations {
                 &self.query,
                 None,
                 &borrowed,
-                purrdf_sparql_eval::QueryOptions::new()
+                &purrdf_sparql_eval::QueryOptions::new()
                     .with_geo(geo)
                     .with_env(&env)
                     .with_division(self.division),
@@ -290,16 +290,19 @@ impl PyPreparedQuery {
     }
 
     /// Bind every declared parameter and run, returning the results exactly as
-    /// `Store.query` does.
+    /// `Store.query` does. `now` and `entropy_seed` select fresh execution inputs
+    /// for this run only; omitted inputs request native defaults, never the
+    /// selections from a preceding run. Bindings named `now`, `entropy_seed` or
+    /// `bindings` remain ordinary entries in the dictionary.
     ///
-    /// Each keyword names a declared parameter. An unknown keyword raises, and so
+    /// Each dictionary key names a declared parameter. An unknown key raises, and so
     /// does a parameter left unbound: an unbound focus would answer over every
     /// subject, which is a silently wider answer rather than a visible mistake.
     ///
-    /// A keyword-argument call reads as TOTAL: every slot is reset to unbound
-    /// before this call's keywords are applied, so `run(this=X)` means "these are
+    /// A bindings dictionary is TOTAL: every slot is reset to unbound
+    /// before this call's bindings are applied, so `run({"this": X})` means "these are
     /// the bindings", never "these, plus whatever an earlier call left behind". A
-    /// bare `run()` after a prior `run(this=X)` is refused exactly as it would be
+    /// bare `run()` after a prior `run({"this": X})` is refused exactly as it would be
     /// on a handle nothing had ever bound — it does not silently re-answer for `X`.
     ///
     /// A relation registered from the store's own graph (`relations_from_graph`,
@@ -307,9 +310,16 @@ impl PyPreparedQuery {
     /// re-admitted under the rebuilt registry — see [`GraphDerivedRelations`]. Without
     /// that, the relation would answer about the store as it was at `prepare` time
     /// while the rest of the query answered about the store as it is now.
-    #[pyo3(signature = (**bindings))]
-    fn run(&mut self, py: Python<'_>, bindings: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyAny>> {
-        // The keyword values are Python objects, so they are read HERE, under the GIL.
+    #[pyo3(signature = (bindings=None, *, now=None, entropy_seed=None))]
+    fn run(
+        &mut self,
+        py: Python<'_>,
+        bindings: Option<&Bound<'_, PyDict>>,
+        now: Option<&str>,
+        entropy_seed: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        let coordinates = super::env::query_coordinates(now, entropy_seed)?;
+        // The mapping values are Python objects, so they are read HERE, under the GIL.
         // They are read into owned terms BEFORE anything else this call does, because
         // a rebuild below may replace the execution the slots live in — a binding
         // written into an execution that is then discarded would silently not be a
@@ -338,6 +348,8 @@ impl PyPreparedQuery {
         // exactly as the evaluation is, and a relation on this surface is data rather
         // than a Python callable precisely so nothing here can re-enter the
         // interpreter.
+        let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+        let capture_ref = &capture;
         let result = py.detach(move || {
             // The engine is built HERE rather than held, because it is deliberately
             // `!Sync` — its plan cache is a `RefCell` — so it cannot live in a Python
@@ -369,11 +381,11 @@ impl PyPreparedQuery {
                 self.env = env;
             }
 
-            // Every slot goes back to unbound before this call's own keywords are
+            // Every slot goes back to unbound before this call's own bindings are
             // applied, so a parameter an EARLIER call bound but this call does not
             // (re)mention is `None` again here — not a stale value left over from that
-            // earlier call. That is what makes a keyword-argument call read as TOTAL:
-            // `run(this=X)` means "these are the bindings", never "these, plus whatever
+            // earlier call. That is what makes a bindings dictionary read as TOTAL:
+            // `run({"this": X})` means "these are the bindings", never "these, plus whatever
             // a prior call left behind". See `PreparedExecution::unbind_all`'s own doc
             // for why this is the engine's job rather than a second bookkeeping layer
             // here. A re-admitted execution starts unbound anyway; this is what makes
@@ -395,17 +407,30 @@ impl PyPreparedQuery {
             // the engine's own `check_prepared_registries_unchanged` guard inside
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
-            let options = purrdf_sparql_eval::QueryOptions::new()
-                .with_geo(&self.geo)
-                .with_env(&self.env)
-                .with_division(self.division);
+            let options = coordinates.apply(
+                purrdf_sparql_eval::QueryOptions::new()
+                    .with_geo(&self.geo)
+                    .with_env(&self.env)
+                    .with_division(self.division)
+                    .with_coordinate_observer(capture_ref),
+            );
             engine
-                .execute(&mut self.execution, &*dataset, options, |outcome| {
+                .execute(&mut self.execution, &*dataset, &options, |outcome| {
                     materialize_interned(&outcome)
                 })
                 .map_err(|e| presentation::value_error(format!("query evaluation error: {e}"), &e))
+        });
+        let receipt = capture
+            .into_coordinates()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let result = result.map_err(|error| {
+            presentation::with_execution_receipt(
+                py,
+                error,
+                purrdf_validate::query::execution_receipt_json(&receipt),
+            )
         })?;
-        materialize_results(py, result)
+        materialize_results(py, result, Some(&receipt))
     }
 
     fn __repr__(&self) -> String {
@@ -493,7 +518,7 @@ pub(super) fn prepare(
             query,
             None,
             &borrowed,
-            purrdf_sparql_eval::QueryOptions::new()
+            &purrdf_sparql_eval::QueryOptions::new()
                 .with_geo(&geo)
                 .with_env(&env)
                 .with_division(division),

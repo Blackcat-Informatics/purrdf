@@ -76,6 +76,7 @@
 pub mod algebra;
 pub mod ast;
 pub mod error;
+pub mod identity;
 pub mod lexer;
 mod owned;
 pub mod parser;

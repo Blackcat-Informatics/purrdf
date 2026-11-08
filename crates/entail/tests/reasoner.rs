@@ -429,6 +429,37 @@ fn an_undecidable_facet_is_reported_within_boundaries_rather_than_guessed() {
         certificate.boundaries()[0].reason().contains("xsd:pattern"),
         "the reason must name the facet that was not decided"
     );
+
+    // A completely searched fragment can still hide an intermediate class or
+    // a more-specific type from an omitted axiom.
+    let classified = reasoner.classify().expect("partial classification");
+    let realized = reasoner.realize().expect("partial realization");
+    assert_ne!(classified.answer().subsumptions(), []);
+    for (refusal, original) in [
+        (
+            classified.direct_subsumptions().expect_err("omitted axiom"),
+            classified.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("omitted axiom"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(
+            original.completeness(),
+            DlCompleteness::DecidedWithinBoundaries
+        );
+        assert!(std::ptr::eq(refusal.certificate(), original));
+        let captured = purrdf_testkit::error_capture::Capture::read(&refusal);
+        assert_eq!(captured.code, "owl-directness-unavailable");
+        let purrdf_hash::error::ErrorValue::Record(record) = captured.field("certificate") else {
+            panic!("the original certificate must remain a structured record");
+        };
+        assert!(std::ptr::addr_eq(
+            record,
+            original as &dyn purrdf_hash::error::StructuredError,
+        ));
+    }
 }
 
 #[test]
@@ -450,7 +481,11 @@ fn classification_computes_the_transitive_relation_and_its_reduction() {
     assert!(subsumptions.contains(&(NOTHING.to_owned(), ex("Cat"))));
 
     // The reduction drops the transitive edge.
-    let direct = pairs(hierarchy.direct_subsumptions());
+    let direct = pairs(
+        answer
+            .direct_subsumptions()
+            .expect("fully decided hierarchy"),
+    );
     assert!(direct.contains(&(ex("Kitten"), ex("Cat"))));
     assert!(direct.contains(&(ex("Cat"), ex("Animal"))));
     assert!(
@@ -514,7 +549,7 @@ fn realization_reports_every_entailed_type_and_the_most_specific_ones() {
         "everything is an owl:Thing, and an entailed answer is not omitted for being obvious"
     );
 
-    let direct = pairs(realization.direct_types());
+    let direct = pairs(answer.direct_types().expect("fully decided realization"));
     assert_eq!(
         direct,
         expect(&[("tom", "Kitten")]),
@@ -809,6 +844,20 @@ fn a_narrowed_budget_reports_unknown_rather_than_a_false_negative() {
         DlCompleteness::BudgetExhausted
     );
     honest(&hierarchy);
+    let realized = reasoner.realize().expect("partial realization");
+    for (refusal, original) in [
+        (
+            hierarchy.direct_subsumptions().expect_err("round cap"),
+            hierarchy.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("round cap"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(original.completeness(), DlCompleteness::BudgetExhausted);
+        assert!(std::ptr::eq(refusal.certificate(), original));
+    }
 }
 
 /// The SECOND budget degrades the same way, and the certificate says it was the one.
@@ -848,6 +897,22 @@ fn a_narrowed_work_budget_reports_unknown_through_the_same_channel() {
         certificate.steps() * 10 < certificate.budget(),
         "the ROUND figures show what they could not see: {certificate:?}"
     );
+    let classified = reasoner.classify().expect("partial classification");
+    let realized = reasoner.realize().expect("partial realization");
+    for (refusal, original) in [
+        (
+            classified.direct_subsumptions().expect_err("work cap"),
+            classified.certificate(),
+        ),
+        (
+            realized.direct_types().expect_err("work cap"),
+            realized.certificate(),
+        ),
+    ] {
+        assert_eq!(original.completeness(), DlCompleteness::BudgetExhausted);
+        assert_eq!(original.work(), original.work_budget());
+        assert!(std::ptr::eq(refusal.certificate(), original));
+    }
 }
 
 /// A NARROW work cap must cut a LARGE bulk scan off near its own cap rather than letting one
@@ -1327,7 +1392,16 @@ fn a_module_entails_everything_the_full_ontology_entails_over_its_signature() {
     ] {
         for method in purrdf_entail::ModuleMethod::ALL {
             let terms: Vec<TermValue> = seed.iter().map(|local| iri(local)).collect();
-            let extracted = purrdf_entail::extract_module(&full, &terms, method).expect("extract");
+            let extracted = purrdf_entail::extract_module(
+                &full,
+                &terms,
+                method,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("extract");
             module_preserves_entailments(&full, extracted.module(), &seed);
             assert!(
                 extracted.module().quads().count() <= full.quads().count(),
@@ -1345,9 +1419,13 @@ fn an_axiom_whose_only_signature_contact_is_inside_its_complex_left_side_is_kept
     // `∃eats.⊤ ⊑ Predator`: the seed names only `eats`, which occurs nowhere in the axiom
     // except INSIDE the blank-node class expression on its left. An extractor that tested
     // the object endpoint alone would drop it.
-    let extracted =
-        purrdf_entail::extract_module(&zoo(), &[iri("eats")], purrdf_entail::ModuleMethod::Bot)
-            .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &zoo(),
+        &[iri("eats")],
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let module = extracted.module();
     let kept_lhs = module.quads().any(|quad| {
         matches!(module.term_value(quad.s), TermValue::Blank { .. })
@@ -1374,8 +1452,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
     let full = zoo();
     let seed = [iri("Mammal")];
 
-    let bot = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Bot)
-        .expect("extract");
+    let bot = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let bot_signature: Vec<String> = bot.signature().iter().map(show).collect();
     assert!(
         bot_signature.contains(&ex("Animal")),
@@ -1386,8 +1469,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
         "…and does not reach a sibling of `Mammal`: {bot_signature:?}"
     );
 
-    let top = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Top)
-        .expect("extract");
+    let top = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Top,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let top_signature: Vec<String> = top.signature().iter().map(show).collect();
     assert!(
         top_signature.contains(&ex("Cat")),
@@ -1403,8 +1491,13 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
 fn a_module_carries_the_whole_class_expression_under_a_kept_axiom() {
     let full = zoo();
     let seed = [iri("Cat")];
-    let extracted = purrdf_entail::extract_module(&full, &seed, purrdf_entail::ModuleMethod::Bot)
-        .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &full,
+        &seed,
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     // `Cat ⊑ ∃eats.Fish` is kept, so the restriction's THREE defining triples must all be
     // in the module — a class expression truncated halfway is not a class expression.
     let module = extracted.module();
@@ -1441,9 +1534,13 @@ fn a_construct_locality_does_not_decide_is_kept_conservatively_and_reported() {
         (N::B("cell0"), N::V(FIRST), N::E("chipId")),
         (N::B("cell0"), N::V(REST), N::V(NIL)),
     ]);
-    let extracted =
-        purrdf_entail::extract_module(&full, &[iri("Cat")], purrdf_entail::ModuleMethod::Bot)
-            .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &full,
+        &[iri("Cat")],
+        purrdf_entail::ModuleMethod::Bot,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     let reported: Vec<(String, String)> = extracted
         .conservative_keeps()
         .iter()
@@ -1466,8 +1563,13 @@ fn a_construct_locality_does_not_decide_is_kept_conservatively_and_reported() {
 
 #[test]
 fn an_empty_seed_extracts_an_empty_module() {
-    let extracted = purrdf_entail::extract_module(&zoo(), &[], purrdf_entail::ModuleMethod::Star)
-        .expect("extract");
+    let extracted = purrdf_entail::extract_module(
+        &zoo(),
+        &[],
+        purrdf_entail::ModuleMethod::Star,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("extract");
     assert_eq!(extracted.axioms(), 0);
     assert_eq!(extracted.module().quads().count(), 0);
     assert_eq!(extracted.conservative_keeps(), []);
@@ -1478,8 +1580,26 @@ fn module_extraction_is_reproducible() {
     let full = zoo();
     let seed = [iri("Cat"), iri("Plant")];
     for method in purrdf_entail::ModuleMethod::ALL {
-        let one = purrdf_entail::extract_module(&full, &seed, method).expect("extract");
-        let two = purrdf_entail::extract_module(&full, &seed, method).expect("extract");
+        let one = purrdf_entail::extract_module(
+            &full,
+            &seed,
+            method,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("extract");
+        let two = purrdf_entail::extract_module(
+            &full,
+            &seed,
+            method,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("extract");
         assert_eq!(one.signature(), two.signature());
         assert_eq!(one.conservative_keeps(), two.conservative_keeps());
         assert_eq!(one.axioms(), two.axioms());
@@ -2099,8 +2219,222 @@ fn a_finite_tagged_enumeration_cannot_supply_two_distinct_qualified_values() {
 }
 
 #[test]
+fn query_only_roles_preserve_source_support_boundaries_and_proof_replay() {
+    use purrdf_entail::{Construct, Question};
+    use purrdf_iri::vocab::owl::{TOP_DATA_PROPERTY, TOP_OBJECT_PROPERTY};
+    for (role, bounded) in [(TOP_DATA_PROPERTY, true), ("http://example.org/p", false)] {
+        for mentioned in [false, true] {
+            let input = ds(&if mentioned {
+                vec![
+                    typed(N::V(role), N::V(DATATYPE_PROPERTY)),
+                    (N::E("C"), N::V(SUB_CLASS), N::B("restriction")),
+                    typed(N::B("restriction"), N::V(RESTRICTION)),
+                    (N::B("restriction"), N::V(ON_PROPERTY), N::V(role)),
+                    (N::B("restriction"), N::V(ALL_VALUES), N::V(XSD_STRING)),
+                ]
+            } else {
+                Vec::new()
+            });
+            let property = TermValue::Iri(role.to_owned());
+            let mut control =
+                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            for axiom in [
+                DlAxiom::ObjectPropertyAssertion {
+                    subject: iri("a"),
+                    property: property.clone(),
+                    object: iri("b"),
+                },
+                DlAxiom::SubObjectPropertyOf {
+                    sub: iri("q"),
+                    sup: property.clone(),
+                },
+            ] {
+                let mut producer = Reasoner::with_proofs(&input, &mut control).unwrap();
+                let answer = producer.entails(&axiom).unwrap();
+                assert_eq!(
+                    answer.certificate().completeness() == DlCompleteness::Decided,
+                    !bounded
+                );
+                assert_eq!(
+                    answer
+                        .certificate()
+                        .boundaries()
+                        .iter()
+                        .any(|b| { b.construct() == Construct::BuiltinRole }),
+                    bounded
+                );
+                let question = Question::AxiomEntailment {
+                    axiom: Box::new(axiom),
+                };
+                let mut consumer = Reasoner::with_proofs(&input, &mut control).unwrap();
+                consumer.prepare(&question).unwrap();
+                let replay = answer
+                    .proof()
+                    .unwrap()
+                    .verify(
+                        &input,
+                        &question,
+                        Some(answer.certificate()),
+                        &consumer.proof_context().unwrap(),
+                        &mut control,
+                    )
+                    .unwrap();
+                assert_eq!(replay.runs(), replay.replayed());
+                assert_eq!(
+                    producer.consistency().certificate().completeness() == DlCompleteness::Decided,
+                    !(bounded && mentioned)
+                );
+            }
+            for (s, p, o) in [
+                (
+                    QNode::Var("s".to_owned()),
+                    QNode::Term(property.clone()),
+                    QNode::Var("o".to_owned()),
+                ),
+                (
+                    QNode::Term(property),
+                    QNode::Term(TermValue::Iri(purrdf_iri::vocab::rdfs::DOMAIN.to_owned())),
+                    QNode::Var("c".to_owned()),
+                ),
+            ] {
+                let (_, report) =
+                    purrdf_entail::materialize_dl_reported(&input, &[QTriple { s, p, o }]).unwrap();
+                assert_eq!(
+                    report.completeness() == purrdf_entail::Completeness::Exact,
+                    !bounded
+                );
+                assert_eq!(
+                    report
+                        .boundaries()
+                        .iter()
+                        .any(|b| { b.construct() == Construct::BuiltinRole }),
+                    bounded
+                );
+            }
+        }
+    }
+    let input = ds(&[typed(N::E("a"), N::V(THING)), typed(N::E("b"), N::V(THING))]);
+    let (augmented, report) = purrdf_entail::materialize_dl_reported(
+        &input,
+        &[pattern(var("s"), TOP_OBJECT_PROPERTY, var("o"))],
+    )
+    .unwrap();
+    assert_eq!(report.completeness(), purrdf_entail::Completeness::Exact);
+    for subject in ["a", "b"] {
+        for object in ["a", "b"] {
+            assert!(holds(
+                &augmented,
+                &ex(subject),
+                TOP_OBJECT_PROPERTY,
+                &ex(object)
+            ));
+        }
+    }
+}
+
+#[test]
 fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
+    use purrdf_entail::proof_source::{ResolvedAxiomSource, ResolvedTerm};
+    use purrdf_entail::{Question, ServiceProof};
     use purrdf_iri::vocab::owl::{BOTTOM_DATA_PROPERTY, BOTTOM_OBJECT_PROPERTY};
+    let bottom = TermValue::Iri(BOTTOM_OBJECT_PROPERTY.to_owned());
+    for mentioned in [false, true] {
+        let input = if mentioned {
+            ds(&[typed(N::V(BOTTOM_OBJECT_PROPERTY), N::V(OBJECT_PROPERTY))])
+        } else {
+            ds(&[])
+        };
+        for (axiom, expected) in [
+            (
+                DlAxiom::SubObjectPropertyOf {
+                    sub: bottom.clone(),
+                    sup: iri("p"),
+                },
+                Verdict::True,
+            ),
+            (
+                DlAxiom::SubObjectPropertyOf {
+                    sub: iri("p"),
+                    sup: bottom.clone(),
+                },
+                Verdict::False,
+            ),
+            (
+                DlAxiom::ObjectPropertyAssertion {
+                    subject: iri("a"),
+                    property: bottom.clone(),
+                    object: iri("b"),
+                },
+                Verdict::False,
+            ),
+        ] {
+            let mut producer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("ontology prepares");
+            let answer = producer.entails(&axiom).expect("bottom property query");
+            honest(&answer);
+            assert_eq!(*answer.answer(), expected);
+            let question = Question::AxiomEntailment {
+                axiom: Box::new(axiom),
+            };
+            let original_input = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("original source")
+            .proof_context()
+            .expect("recording")
+            .input();
+            let mut consumer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("independent consumer");
+            consumer
+                .prepare(&question)
+                .expect("consumer prepares query");
+            let context = consumer.proof_context().expect("prepared context");
+            assert_eq!(context.input(), original_input);
+            let proof = ServiceProof::decode(&answer.proof().expect("recorded").encode())
+                .expect("proof codec");
+            let replay = proof
+                .verify(
+                    &input,
+                    &question,
+                    Some(answer.certificate()),
+                    &context,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("independently prepared replay");
+            assert_eq!(replay.runs(), replay.replayed());
+            let expected_origin = ResolvedAxiomSource::EmptyRole(if mentioned {
+                ResolvedTerm::Source(&bottom)
+            } else {
+                ResolvedTerm::QuerySymbol(&bottom)
+            });
+            assert!(
+                (0..context.clause_count())
+                    .filter_map(|index| context.clause_tbox_origin(index).expect("clause"))
+                    .chain(context.internalized_axioms().map(|(_, origin)| origin))
+                    .any(|origin| origin == expected_origin),
+                "the native empty-role law keeps its original source/query ownership"
+            );
+        }
+    }
     for (role, kind, object) in [
         (BOTTOM_OBJECT_PROPERTY, OBJECT_PROPERTY, N::E("b")),
         (
@@ -2227,26 +2561,824 @@ fn finite_cyclic_class_equations_have_meaningful_positive_and_negative_models() 
 #[test]
 fn malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals() {
     use purrdf_iri::vocab::owl::DATATYPE_COMPLEMENT_OF;
-    for malformed in [
-        ds(&[
-            (N::B("c"), N::V(UNION), N::B("list")),
-            (N::B("list"), N::V(FIRST), N::E("A")),
-            (N::B("list"), N::V(REST), N::B("list")),
-            typed(N::E("x"), N::B("c")),
-        ]),
-        ds(&[
-            typed(N::B("d"), N::V(RDFS_DATATYPE)),
-            (N::B("d"), N::V(DATATYPE_COMPLEMENT_OF), N::B("d")),
-            typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
-            (N::E("p"), N::V(purrdf_iri::vocab::rdfs::RANGE), N::B("d")),
-        ]),
+    for (malformed, collection) in [
+        (
+            ds(&[
+                (N::B("c"), N::V(UNION), N::B("list")),
+                (N::B("list"), N::V(FIRST), N::E("A")),
+                (N::B("list"), N::V(REST), N::B("list")),
+                typed(N::E("x"), N::B("c")),
+            ]),
+            true,
+        ),
+        (
+            ds(&[
+                typed(N::B("d"), N::V(RDFS_DATATYPE)),
+                (N::B("d"), N::V(DATATYPE_COMPLEMENT_OF), N::B("d")),
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(purrdf_iri::vocab::rdfs::RANGE), N::B("d")),
+            ]),
+            false,
+        ),
     ] {
+        let error = Reasoner::new(malformed.as_ref()).unwrap_err();
+        if collection {
+            assert!(
+                matches!(error, purrdf_entail::EntailError::Collection(ref error)
+                if error.phase == purrdf_entail::CollectionPhase::OwlDirect
+                && error.original.kind == purrdf_core::collections::ListErrorKind::Cycle)
+            );
+        } else {
+            assert!(
+                matches!(error, purrdf_entail::EntailError::OwlSyntax(ref original)
+                if matches!(original.as_ref(), purrdf_entail::OwlSyntaxError::DataRangeCycle { .. }))
+            );
+        }
+    }
+}
+
+/// Semantic role inclusion sees empty roles and reduces equivalence classes once.
+#[test]
+fn object_property_hierarchy_is_semantic_strict_and_source_fixed() {
+    use purrdf_iri::vocab::owl::{
+        BOTTOM_OBJECT_PROPERTY, EQUIVALENT_PROPERTY, TOP_OBJECT_PROPERTY,
+    };
+    use purrdf_iri::vocab::rdfs::DOMAIN;
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        typed(N::E("empty"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+        (N::E("q"), N::V(EQUIVALENT_PROPERTY), N::E("qAlias")),
+        (N::E("q"), N::V(SUB_PROPERTY), N::E("r")),
+        (N::E("empty"), N::V(DOMAIN), N::V(NOTHING)),
+    ]);
+    let mut reasoner = Reasoner::new(&input).unwrap();
+    let answer = reasoner.classify_object_properties().unwrap();
+    honest(&answer);
+    let bottom = TermValue::Iri(BOTTOM_OBJECT_PROPERTY.to_owned());
+    let top = TermValue::Iri(TOP_OBJECT_PROPERTY.to_owned());
+    let pairs = answer.answer().subsumptions();
+    for edge in [
+        (iri("p"), iri("r")),
+        (iri("empty"), iri("p")),
+        (bottom, iri("empty")),
+        (iri("r"), top.clone()),
+    ] {
+        assert!(pairs.contains(&edge), "missing semantic edge {edge:?}");
+    }
+    assert!(
+        answer
+            .answer()
+            .equivalences()
+            .contains(&(iri("q"), iri("qAlias")))
+    );
+    let direct = answer.direct_subsumptions().unwrap();
+    assert!(direct.contains(&(iri("p"), iri("q"))));
+    assert!(direct.contains(&(iri("q"), iri("r"))));
+    assert!(!direct.contains(&(iri("p"), iri("r"))));
+    assert!(direct.iter().all(|(a, b)| a != b));
+    reasoner
+        .entails(&DlAxiom::SubObjectPropertyOf {
+            sub: iri("queryOnly"),
+            sup: top,
+        })
+        .unwrap();
+    let repeated = reasoner.classify_object_properties().unwrap();
+    assert_eq!(answer.answer(), repeated.answer());
+    assert!(!repeated.answer().properties().contains(&iri("queryOnly")));
+}
+
+/// Undeclared kinds propagate from native uses; annotations and data stay out of the object universe.
+#[test]
+fn object_property_inventory_resolves_kinds_without_guessing() {
+    use purrdf_iri::vocab::owl::{ANNOTATION_PROPERTY, EQUIVALENT_PROPERTY};
+    let input = ds(&[
+        (N::E("a"), N::E("data"), N::L("7", XSD_INTEGER)),
+        (N::E("data"), N::V(SUB_PROPERTY), N::E("dataParent")),
+        (
+            N::E("dataParent"),
+            N::V(EQUIVALENT_PROPERTY),
+            N::E("dataAlias"),
+        ),
+        typed(N::E("note"), N::V(ANNOTATION_PROPERTY)),
+        (N::E("a"), N::E("note"), N::L("text", XSD_STRING)),
+        (N::E("a"), N::E("note"), N::E("b")),
+        (N::E("note"), N::V(SUB_PROPERTY), N::E("noteParent")),
+        (N::E("a"), N::E("object"), N::E("b")),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    for excluded in ["data", "dataParent", "dataAlias", "note", "noteParent"] {
+        assert!(!answer.answer().properties().contains(&iri(excluded)));
+    }
+    assert!(answer.answer().properties().contains(&iri("object")));
+
+    for (triples, conflict) in [
+        (vec![typed(N::E("p"), N::V(FUNCTIONAL_PROPERTY))], false),
+        (
+            vec![(N::E("p"), N::V(purrdf_iri::vocab::rdfs::DOMAIN), N::E("C"))],
+            false,
+        ),
+        (
+            vec![
+                typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+                typed(N::E("q"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+            ],
+            true,
+        ),
+        (
+            vec![
+                typed(N::E("p"), N::V(ANNOTATION_PROPERTY)),
+                (N::E("p"), N::V(EQUIVALENT_PROPERTY), N::E("q")),
+            ],
+            true,
+        ),
+    ] {
+        let source = ds(&triples);
+        let mut reasoner = Reasoner::new(&source).unwrap();
         assert!(
-            matches!(
-                Reasoner::new(malformed.as_ref()),
-                Err(purrdf_entail::EntailError::Parse(_))
+            matches!(reasoner.classify_object_properties(), Err(purrdf_entail::EntailError::PropertyKind { conflict: actual, .. }) if actual == conflict)
+        );
+        // The new kind refusal is confined to this service.
+        assert_eq!(*reasoner.consistency().answer(), Verdict::True);
+    }
+}
+
+/// Every accepted source role form contributes its named operand, including inverse and chain-only names.
+#[test]
+fn object_property_inventory_covers_native_source_producers() {
+    use purrdf_iri::vocab::{owl, rdfs};
+    let cases = [
+        vec![typed(N::E("p"), N::V(OBJECT_PROPERTY))],
+        vec![(N::E("a"), N::E("p"), N::E("b"))],
+        vec![(N::E("p"), N::V(rdfs::RANGE), N::E("C"))],
+        vec![typed(N::E("p"), N::V(owl::SYMMETRIC_PROPERTY))],
+        vec![
+            sub(N::E("C"), N::B("r")),
+            (N::B("r"), N::V(ON_PROPERTY), N::E("p")),
+            (N::B("r"), N::V(SOME_VALUES), N::E("D")),
+        ],
+        vec![
+            sub(N::E("C"), N::B("r")),
+            (N::B("r"), N::V(ON_PROPERTY), N::B("inverse")),
+            (N::B("inverse"), N::V(owl::INVERSE_OF), N::E("p")),
+            (N::B("r"), N::V(ALL_VALUES), N::E("D")),
+        ],
+        vec![
+            (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+            (N::B("negative"), N::V(owl::ASSERTION_PROPERTY), N::E("p")),
+            (N::B("negative"), N::V(owl::TARGET_INDIVIDUAL), N::E("b")),
+        ],
+        vec![
+            (N::E("head"), N::V(PROPERTY_CHAIN), N::B("list")),
+            (N::B("list"), N::V(FIRST), N::E("p")),
+            (N::B("list"), N::V(REST), N::B("tail")),
+            (N::B("tail"), N::V(FIRST), N::E("q")),
+            (N::B("tail"), N::V(REST), N::V(NIL)),
+        ],
+    ];
+    for triples in cases {
+        let answer = Reasoner::new(&ds(&triples))
+            .unwrap()
+            .classify_object_properties()
+            .unwrap();
+        assert!(answer.answer().properties().contains(&iri("p")));
+        answer.direct_subsumptions().unwrap();
+    }
+}
+
+/// A key's data and object members do not force one another's kinds.
+#[test]
+fn object_property_inventory_preserves_mixed_keys_and_negative_kinds() {
+    use purrdf_iri::vocab::owl;
+    let input = ds(&[
+        (N::E("C"), N::V(owl::HAS_KEY), N::B("list")),
+        (N::B("list"), N::V(FIRST), N::E("object")),
+        (N::B("list"), N::V(REST), N::B("tail")),
+        (N::B("tail"), N::V(FIRST), N::E("data")),
+        (N::B("tail"), N::V(REST), N::V(NIL)),
+        typed(N::E("object"), N::V(OBJECT_PROPERTY)),
+        (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+        (
+            N::B("negative"),
+            N::V(owl::ASSERTION_PROPERTY),
+            N::E("data"),
+        ),
+        (
+            N::B("negative"),
+            N::V(owl::TARGET_VALUE),
+            N::L("7", XSD_INTEGER),
+        ),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    assert!(answer.answer().properties().contains(&iri("object")));
+    assert!(!answer.answer().properties().contains(&iri("data")));
+    let contradictory = ds(&[
+        typed(N::E("note"), N::V(owl::ANNOTATION_PROPERTY)),
+        (N::B("negative"), N::V(owl::SOURCE_INDIVIDUAL), N::E("a")),
+        (
+            N::B("negative"),
+            N::V(owl::ASSERTION_PROPERTY),
+            N::E("note"),
+        ),
+        (N::B("negative"), N::V(owl::TARGET_INDIVIDUAL), N::E("b")),
+    ]);
+    assert!(matches!(
+        Reasoner::new(&contradictory)
+            .unwrap()
+            .classify_object_properties(),
+        Err(purrdf_entail::EntailError::PropertyKind { conflict: true, .. })
+    ));
+}
+
+/// The new service retains native proof preparation, wire round trips and replay.
+#[test]
+fn object_property_classification_proofs_replay_and_boundaries_refuse_directness() {
+    use purrdf_entail::{Question, ServiceProof};
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+    ]);
+    let mut producer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let question = producer.object_property_classification_question().unwrap();
+    let answer = producer.classify_object_properties().unwrap();
+    let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+    proof
+        .covers(&purrdf_entail::reasoner::proof::object_hierarchy_claims(
+            answer.answer(),
+        ))
+        .unwrap();
+    let mut consumer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    consumer.prepare(&question).unwrap();
+    proof
+        .verify(
+            &input,
+            &question,
+            Some(answer.certificate()),
+            &consumer.proof_context().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
             ),
-            "class-expression cut points never turn a malformed RDF list or cyclic data range into a decided answer"
+        )
+        .unwrap();
+    let mut wrong = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    assert!(
+        wrong
+            .prepare(&Question::ObjectPropertyClassification {
+                properties: vec![iri("p")]
+            })
+            .is_err()
+    );
+    for cap in [1, 2] {
+        let answer = Reasoner::new(&input)
+            .unwrap()
+            .with_work_cap(cap)
+            .classify_object_properties()
+            .unwrap();
+        assert_ne!(answer.certificate().completeness(), DlCompleteness::Decided);
+        assert!(answer.direct_subsumptions().is_err());
+    }
+    let inconsistent = ds(&[(
+        N::E("a"),
+        N::V(purrdf_iri::vocab::owl::BOTTOM_OBJECT_PROPERTY),
+        N::E("b"),
+    )]);
+    assert!(matches!(
+        Reasoner::new(&inconsistent)
+            .unwrap()
+            .classify_object_properties(),
+        Err(purrdf_entail::EntailError::Unsatisfiable)
+    ));
+}
+
+#[derive(Debug)]
+struct HierarchyStop {
+    calls: std::sync::atomic::AtomicUsize,
+    cut: std::sync::atomic::AtomicUsize,
+}
+
+impl HierarchyStop {
+    fn unlimited() -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            cut: std::sync::atomic::AtomicUsize::new(usize::MAX),
+        }
+    }
+    fn arm(&self, cut: usize) {
+        use std::sync::atomic::Ordering;
+        self.calls.store(0, Ordering::Relaxed);
+        self.cut.store(cut, Ordering::Relaxed);
+    }
+}
+
+impl purrdf_datalog::StopSignal for HierarchyStop {
+    fn stopped(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.calls.fetch_add(1, Ordering::Relaxed) >= self.cut.load(Ordering::Relaxed)
+    }
+}
+
+/// Stops during preparation/search/reduction never expose exact direct edges or detach answer claims.
+#[test]
+fn object_property_cancellation_preserves_partial_proof_coverage() {
+    use purrdf_entail::{EntailError, ServiceProof};
+    use std::sync::atomic::Ordering;
+    let input = ds(&[
+        typed(N::E("p"), N::V(OBJECT_PROPERTY)),
+        (N::E("p"), N::V(SUB_PROPERTY), N::E("q")),
+        (N::E("q"), N::V(SUB_PROPERTY), N::E("r")),
+    ]);
+    let signal = Arc::new(HierarchyStop::unlimited());
+    let mut reference = Reasoner::with_proofs_and_stop(
+        &input,
+        purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+        signal.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let question = reference.object_property_classification_question().unwrap();
+    signal.arm(usize::MAX);
+    reference
+        .classify_object_properties()
+        .unwrap()
+        .direct_subsumptions()
+        .unwrap();
+    let polls = signal.calls.load(Ordering::Relaxed);
+    let mut partial = 0;
+    for cut in [0, polls / 4, polls / 2, polls.saturating_sub(2)] {
+        let signal = Arc::new(HierarchyStop::unlimited());
+        let mut reasoner = Reasoner::with_proofs_and_stop(
+            &input,
+            purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+            signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        signal.arm(cut);
+        match reasoner.classify_object_properties() {
+            Err(EntailError::Stopped) => {}
+            Ok(answer) => {
+                partial += 1;
+                assert!(answer.certificate().stopped());
+                assert!(answer.direct_subsumptions().is_err());
+                let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+                proof
+                    .covers(&purrdf_entail::reasoner::proof::object_hierarchy_claims(
+                        answer.answer(),
+                    ))
+                    .unwrap();
+                let mut consumer = Reasoner::with_proofs(
+                    &input,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
+                consumer.prepare(&question).unwrap();
+                proof
+                    .verify(
+                        &input,
+                        &question,
+                        Some(answer.certificate()),
+                        &consumer.proof_context().unwrap(),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .unwrap();
+            }
+            Err(error) => panic!("unexpected cancellation outcome: {error}"),
+        }
+    }
+    assert!(
+        partial > 0,
+        "the cuts must exercise native partial certificates, not only preparation refusal"
+    );
+}
+
+#[global_allocator]
+static HIERARCHY_ALLOCATOR: purrdf_alloc_probe::CountingAllocator =
+    purrdf_alloc_probe::CountingAllocator;
+
+/// Same-source reasoning and owned allocations remain deterministic as the property universe grows.
+/// The window excludes source parsing and includes hierarchy preparation, native
+/// decisions and the returned answer; its peak is incremental to that starting point.
+#[test]
+fn object_property_classification_reports_deterministic_native_costs() {
+    for count in [1, 2, 4] {
+        let names = ["p", "q", "r", "s"];
+        let triples: Vec<_> = names[..count]
+            .iter()
+            .map(|&name| typed(N::E(name), N::V(OBJECT_PROPERTY)))
+            .collect();
+        let input = ds(&triples);
+        let run = || {
+            let mut reasoner = Reasoner::new(&input).unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let answer = reasoner.classify_object_properties().unwrap();
+            let memory = window.close();
+            (answer, memory)
+        };
+        let (first, memory) = run();
+        let (second, repeated) = run();
+        assert_eq!(first.answer(), second.answer());
+        assert_eq!(first.certificate(), second.certificate());
+        assert_eq!(memory, repeated);
+        first.direct_subsumptions().unwrap();
+        println!(
+            "object hierarchy: source properties {count}, decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}",
+            first.certificate().decisions(),
+            first.certificate().work(),
+            memory.allocations,
+            memory.requested_bytes,
+            memory.peak_working_bytes
+        );
+    }
+}
+
+/// Typed data restrictions and all-disjoint groups propagate kinds without turning data into objects.
+#[test]
+fn object_property_inventory_resolves_typed_ranges_and_disjoint_groups() {
+    use purrdf_iri::vocab::{owl, rdfs};
+    let input = ds(&[
+        sub(N::E("C"), N::B("restriction")),
+        (N::B("restriction"), N::V(ON_PROPERTY), N::E("data")),
+        (
+            N::B("restriction"),
+            N::V(owl::ON_DATA_RANGE),
+            N::V(XSD_INTEGER),
+        ),
+        (
+            N::B("restriction"),
+            N::V(owl::MIN_QUALIFIED_CARDINALITY),
+            N::L("1", XSD_NON_NEGATIVE_INTEGER),
+        ),
+        (N::E("rangedData"), N::V(rdfs::RANGE), N::V(XSD_STRING)),
+        typed(N::B("disjoint"), N::V(owl::ALL_DISJOINT_PROPERTIES)),
+        (N::B("disjoint"), N::V(owl::MEMBERS), N::B("list")),
+        (N::B("list"), N::V(FIRST), N::E("data")),
+        (N::B("list"), N::V(REST), N::B("tail")),
+        (N::B("tail"), N::V(FIRST), N::E("inferredData")),
+        (N::B("tail"), N::V(REST), N::V(NIL)),
+        (
+            N::E("object"),
+            N::V(owl::PROPERTY_DISJOINT_WITH),
+            N::E("inferredObject"),
+        ),
+        typed(N::E("object"), N::V(OBJECT_PROPERTY)),
+    ]);
+    let answer = Reasoner::new(&input)
+        .unwrap()
+        .classify_object_properties()
+        .unwrap();
+    answer.direct_subsumptions().unwrap();
+    for property in ["data", "rangedData", "inferredData"] {
+        assert!(!answer.answer().properties().contains(&iri(property)));
+    }
+    for property in ["object", "inferredObject"] {
+        assert!(answer.answer().properties().contains(&iri(property)));
+    }
+}
+
+/// A nominal makes classification depend on the ABox and exercise residual refutations.
+fn class_analysis_nominal() -> Arc<RdfDataset> {
+    ds(&[
+        typed(N::E("Female"), N::V(OWL_CLASS)),
+        typed(N::E("Only"), N::V(OWL_CLASS)),
+        (N::E("Only"), N::V(EQUIVALENT_CLASS), N::B("justAlice")),
+        (N::B("justAlice"), N::V(ONE_OF), N::B("cell0")),
+        (N::B("cell0"), N::V(FIRST), N::E("alice")),
+        (N::B("cell0"), N::V(REST), N::V(NIL)),
+        typed(N::E("alice"), N::E("Female")),
+    ])
+}
+
+/// The joint service preserves both standalone answers, including quotient and empty-class views.
+#[test]
+fn class_analysis_shares_classification_without_changing_native_answers() {
+    let empty = ds(&[
+        (N::E("A"), N::V(EQUIVALENT_CLASS), N::E("B")),
+        sub(N::E("Empty"), N::V(NOTHING)),
+    ]);
+    for input in [kittens(), class_analysis_nominal(), empty] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let hierarchy = reasoner.classify().unwrap();
+        let realization = reasoner.realize().unwrap();
+        let analysis = reasoner.classify_and_realize().unwrap();
+        assert_eq!(analysis.answer().hierarchy(), hierarchy.answer());
+        assert_eq!(analysis.answer().realization(), realization.answer());
+        assert_eq!(
+            analysis.direct_subsumptions().unwrap(),
+            hierarchy.direct_subsumptions().unwrap()
+        );
+        assert_eq!(
+            analysis.direct_types().unwrap(),
+            realization.direct_types().unwrap()
+        );
+        assert_eq!(honest(&analysis).completeness(), DlCompleteness::Decided);
+        assert_eq!(
+            analysis.certificate().decisions(),
+            realization.certificate().decisions()
+        );
+        assert_eq!(
+            analysis.certificate().work(),
+            realization.certificate().work()
+        );
+        assert!(
+            hierarchy.certificate().decisions() + realization.certificate().decisions()
+                > analysis.certificate().decisions()
+        );
+    }
+}
+
+/// Source-bound replay covers exactly both positive views and checks the residual native decisions.
+#[test]
+fn class_analysis_proof_binds_both_source_universes() {
+    use purrdf_entail::{ClaimBasis, Question, ServiceProof};
+    for (residual, input) in [(false, kittens()), (true, class_analysis_nominal())] {
+        let producer = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let question = producer.class_analysis_question();
+        let answer = producer.classify_and_realize().unwrap();
+        let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+        proof
+            .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                answer.answer(),
+            ))
+            .unwrap();
+        let mut consumer = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        consumer.prepare(&question).unwrap();
+        proof
+            .verify(
+                &input,
+                &question,
+                Some(answer.certificate()),
+                &consumer.proof_context().unwrap(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+        let mut wrong = Reasoner::with_proofs(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        assert!(
+            wrong
+                .prepare(&Question::ClassAnalysis {
+                    individuals: Vec::new(),
+                    classes: Vec::new()
+                })
+                .is_err()
+        );
+        assert!(
+            proof
+                .verify(
+                    &input,
+                    &producer.realization_question(),
+                    Some(answer.certificate()),
+                    &producer.borrowed_proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .is_err()
+        );
+        if residual {
+            assert!(proof.claims().iter().any(|claim| matches!(
+                claim.subject(),
+                purrdf_entail::ClaimSubject::Subsumption { .. }
+            ) && matches!(
+                claim.basis(),
+                ClaimBasis::CounterModel { .. }
+            )));
+        }
+    }
+}
+
+/// Inconsistency is refused; source boundaries and native exhaustion gate both direct views.
+#[test]
+fn class_analysis_retains_native_refusals_and_joint_directness() {
+    let inconsistent = ds(&[typed(N::E("a"), N::V(NOTHING))]);
+    assert!(matches!(
+        Reasoner::new(&inconsistent).unwrap().classify_and_realize(),
+        Err(purrdf_entail::EntailError::Unsatisfiable)
+    ));
+    let bounded = ds(&[(
+        N::E("a"),
+        N::V(purrdf_iri::vocab::owl::TOP_DATA_PROPERTY),
+        N::L("1", XSD_INTEGER),
+    )]);
+    let reasoner = Reasoner::new(&bounded).unwrap();
+    let answer = reasoner.classify_and_realize().unwrap();
+    assert_eq!(
+        answer.certificate().boundaries(),
+        reasoner.realize().unwrap().certificate().boundaries()
+    );
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::DecidedWithinBoundaries
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let input = class_analysis_nominal();
+    let producer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .with_work_cap(1);
+    let answer = producer.classify_and_realize().unwrap();
+    assert_eq!(
+        honest(&answer).completeness(),
+        DlCompleteness::BudgetExhausted
+    );
+    assert!(answer.direct_subsumptions().is_err());
+    assert!(answer.direct_types().is_err());
+    let mut consumer = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let question = producer.class_analysis_question();
+    consumer.prepare(&question).unwrap();
+    answer
+        .proof()
+        .unwrap()
+        .verify(
+            &input,
+            &question,
+            Some(answer.certificate()),
+            &consumer.proof_context().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+}
+
+/// A late stop, including with no individuals, retains native evidence and withholds BOTH direct views.
+#[test]
+fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage() {
+    use purrdf_entail::ServiceProof;
+    use std::sync::atomic::Ordering;
+    for input in [kittens(), ds(&[sub(N::E("A"), N::E("B"))])] {
+        let signal = Arc::new(HierarchyStop::unlimited());
+        let reference = Reasoner::with_proofs_and_stop(
+            &input,
+            purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+            signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let question = reference.class_analysis_question();
+        signal.arm(usize::MAX);
+        let completed = reference.classify_and_realize().unwrap();
+        let polls = signal.calls.load(Ordering::Relaxed);
+        let mut retained_hierarchy = false;
+        for cut in [0, polls / 3, polls * 2 / 3, polls.saturating_sub(1)] {
+            let signal = Arc::new(HierarchyStop::unlimited());
+            let reasoner = Reasoner::with_proofs_and_stop(
+                &input,
+                purrdf_entail::reasoner::SchemaPreparationBudget::default(),
+                signal.clone(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            signal.arm(cut);
+            let answer = reasoner.classify_and_realize().unwrap();
+            assert!(answer.certificate().stopped(), "cut {cut} of {polls}");
+            assert!(answer.direct_subsumptions().is_err());
+            assert!(answer.direct_types().is_err());
+            retained_hierarchy |= answer.answer().hierarchy().subsumptions()
+                == completed.answer().hierarchy().subsumptions();
+            let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
+            proof
+                .covers(&purrdf_entail::reasoner::proof::class_analysis_claims(
+                    answer.answer(),
+                ))
+                .unwrap();
+            let mut consumer = Reasoner::with_proofs(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            consumer.prepare(&question).unwrap();
+            proof
+                .verify(
+                    &input,
+                    &question,
+                    Some(answer.certificate()),
+                    &consumer.proof_context().unwrap(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
+        }
+        assert!(
+            retained_hierarchy,
+            "a late stop retains the finished hierarchy but gates its direct view"
+        );
+    }
+}
+
+/// Compare owned allocation and native work for the same source, excluding source parsing.
+/// Both windows retain both answers; peak bytes are incremental to each window's start.
+#[test]
+fn class_analysis_measures_avoided_duplicate_native_classification() {
+    for (label, input) in [("Horn", kittens()), ("nominal", class_analysis_nominal())] {
+        let reasoner = Reasoner::new(&input).unwrap();
+        let run = || {
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let analysis = reasoner.classify_and_realize().unwrap();
+            let combined = window.close();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let hierarchy = reasoner.classify().unwrap();
+            let realization = reasoner.realize().unwrap();
+            let separate = window.close();
+            (analysis, combined, hierarchy, realization, separate)
+        };
+        let (analysis, combined, hierarchy, realization, separate) = run();
+        let (again, repeated_combined, _, _, repeated_separate) = run();
+        assert_eq!(analysis, again);
+        assert_eq!(combined, repeated_combined);
+        assert_eq!(separate, repeated_separate);
+        let saved = hierarchy.certificate().decisions() + realization.certificate().decisions()
+            - analysis.certificate().decisions();
+        if label == "Horn" {
+            assert_eq!(saved, 1);
+        } else {
+            assert!(saved > 1);
+        }
+        println!(
+            "class analysis {label}: combined decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; separate decisions {}, work {}, allocations {}, requested bytes {}, incremental peak bytes {}; avoided decisions {saved}",
+            analysis.certificate().decisions(),
+            analysis.certificate().work(),
+            combined.allocations,
+            combined.requested_bytes,
+            combined.peak_working_bytes,
+            hierarchy.certificate().decisions() + realization.certificate().decisions(),
+            hierarchy.certificate().work() + realization.certificate().work(),
+            separate.allocations,
+            separate.requested_bytes,
+            separate.peak_working_bytes
         );
     }
 }

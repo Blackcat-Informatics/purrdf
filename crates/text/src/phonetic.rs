@@ -85,6 +85,27 @@ impl core::fmt::Display for PhoneticRefusal {
 
 impl std::error::Error for PhoneticRefusal {}
 
+impl purrdf_hash::error::StructuredError for PhoneticRefusal {
+    purrdf_hash::error_visit! {
+        SurfaceWordCount { observed } => "text-phonetic-surface-word-count" {
+            "observed" => Unsigned(*observed as u128),
+        },
+        UnsupportedScalar { scalar } => "text-phonetic-unsupported-scalar" {
+            "scalar" => Character(*scalar),
+        },
+        InvalidApostrophe => "text-phonetic-invalid-apostrophe" {},
+        EmptySpelling => "text-phonetic-empty-spelling" {},
+        InputTooLong { limit, observed } => "text-phonetic-input-too-long" {
+            "limit" => Unsigned(*limit as u128),
+            "observed" => Unsigned(*observed as u128),
+        },
+        NonCanonicalSpelling { scalar } => "text-phonetic-noncanonical-spelling" {
+            "scalar" => Character(*scalar),
+        },
+        EmptyCode => "text-phonetic-empty-code" {},
+    }
+}
+
 /// Primary and alternate pronunciation keys, kept even when equal.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PhoneticCodes {
@@ -107,7 +128,12 @@ impl DoubleMetaphone {
     /// Returns a configuration error for a bound outside that interval.
     pub fn new(max_code_len: usize) -> Result<Self, TextError> {
         if !(1..=MAX_CODE_LENGTH).contains(&max_code_len) {
-            return Err(TextError::config("phonetic code length must be in 1..=64"));
+            return Err(
+                crate::configuration::ConfigurationRefusal::PhoneticCodeLength {
+                    requested: max_code_len,
+                }
+                .into_error(),
+            );
         }
         Ok(Self { max_code_len })
     }
@@ -793,9 +819,10 @@ impl PreparedDistance {
 
 fn validate_threshold(threshold: usize) -> Result<(), TextError> {
     if threshold > MAX_EDIT_DISTANCE {
-        Err(TextError::config(
-            "edit-distance threshold must be in 0..=64",
-        ))
+        Err(crate::configuration::ConfigurationRefusal::EditThreshold {
+            requested: threshold,
+        }
+        .into_error())
     } else {
         Ok(())
     }

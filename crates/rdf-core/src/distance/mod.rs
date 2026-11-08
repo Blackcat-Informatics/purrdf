@@ -264,6 +264,32 @@ impl Bound {
     }
 }
 
+/// The original result observed at a distance's non-finite refusal check.
+///
+/// Every distance arithmetic computes in `binary64`, including when its stored
+/// operands are `f32`. The bits are retained at the existing check, without
+/// finishing an abandoned fold or recomputing a diagnostic value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NonFinite {
+    bits: u64,
+}
+
+impl purrdf_hash::error::StructuredError for NonFinite {
+    purrdf_hash::error_visit! {
+        @record self { bits } => "distance-non-finite" {
+            "value" => Float64Bits(self.bits),
+        }
+    }
+}
+
+impl fmt::Display for NonFinite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the computed distance left the finite binary64 range")
+    }
+}
+
+impl std::error::Error for NonFinite {}
+
 /// The outcome of a bounded distance evaluation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Bounded {
@@ -271,8 +297,8 @@ pub enum Bounded {
     Below(f64),
     /// The bound was reached; the distance's value was never completed.
     Beyond,
-    /// A partial sum left the finite range, exactly as a full distance reports `None`.
-    NonFinite,
+    /// An observed partial or final result left the finite range.
+    NonFinite(NonFinite),
 }
 
 /// Which distance a kernel computes, in PURREMB's sense: smaller ranks first.
@@ -663,7 +689,7 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
 
     /// Score every row of `rows` against `query` into `out`, in row order.
     ///
-    /// `out[r]` is `None` when row `r`'s distance left the finite range.
+    /// `out[r]` retains a [`NonFinite`] cause when row `r`'s distance left the finite range.
     ///
     /// # Panics
     ///
@@ -675,7 +701,7 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     );
 
     /// Score the rows named by `ids` against `query` into `out`, in `ids` order.
@@ -691,10 +717,10 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     );
 
-    /// The distance from `a` to `b`, or `None` when it left the finite range.
+    /// The distance from `a` to `b`, retaining the original checked result on refusal.
     ///
     /// The operands are folded over their common prefix.
     fn distance_on<Q: Scalar, T: Scalar>(
@@ -704,7 +730,7 @@ pub trait Arithmetic: sealed::Sealed + Copy + fmt::Debug + Send + Sync + 'static
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64>;
+    ) -> Result<f64, NonFinite>;
 
     /// [`Arithmetic::distance_on`], permitted to stop once the answer cannot clear
     /// `bound`.
@@ -837,7 +863,7 @@ impl<A: Arithmetic> Resolved<A> {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         A::distances(self, measure, query, query_norm, rows, out);
     }
@@ -850,13 +876,12 @@ impl<A: Arithmetic> Resolved<A> {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         A::distances_indexed(self, measure, query, query_norm, rows, ids, out);
     }
 
     /// See [`Arithmetic::distance_on`].
-    #[must_use]
     pub fn distance<Q: Scalar, T: Scalar>(
         self,
         measure: Measure,
@@ -864,7 +889,7 @@ impl<A: Arithmetic> Resolved<A> {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         A::distance_on(self, measure, a, a_norm, b, b_norm)
     }
 
@@ -1088,7 +1113,7 @@ impl Arithmetic for Exact {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         dispatch::distances(resolved.path, measure, query, query_norm, rows, out);
     }
@@ -1100,7 +1125,7 @@ impl Arithmetic for Exact {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         dispatch::distances_indexed(resolved.path, measure, query, query_norm, rows, ids, out);
     }
@@ -1112,7 +1137,7 @@ impl Arithmetic for Exact {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         dispatch::distance(resolved.path, measure, a, a_norm, b, b_norm)
     }
 
@@ -1189,7 +1214,7 @@ impl Arithmetic for Reassociated {
         query: &[Q],
         query_norm: f64,
         rows: RowsRef<'_, T>,
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         reassociated::distances(resolved.path, measure, query, query_norm, rows, out);
     }
@@ -1201,7 +1226,7 @@ impl Arithmetic for Reassociated {
         query_norm: f64,
         rows: RowsRef<'_, T>,
         ids: &[usize],
-        out: &mut [Option<f64>],
+        out: &mut [Result<f64, NonFinite>],
     ) {
         reassociated::distances_indexed(resolved.path, measure, query, query_norm, rows, ids, out);
     }
@@ -1213,7 +1238,7 @@ impl Arithmetic for Reassociated {
         a_norm: f64,
         b: &[T],
         b_norm: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, NonFinite> {
         reassociated::distance(resolved.path, measure, a, a_norm, b, b_norm)
     }
 

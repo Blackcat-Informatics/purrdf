@@ -57,7 +57,7 @@ where
     );
     let env = ExtensionEnv::over_relations(relations).unwrap();
     NativeSparqlEngine::new()
-        .query_fallible_view(dataset, request(query), QueryOptions::new().with_env(&env))
+        .query_fallible_view(dataset, request(query), &QueryOptions::new().with_env(&env))
         .expect("the original physical corpus query completes")
         .result
 }
@@ -108,7 +108,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
     )
     .unwrap();
     let index = Arc::new(TextIndex::from_dataset(&read, &config).unwrap());
-    purrdf_text::verify_binding(&index, &read, &config).unwrap();
+    purrdf_text::verify_binding(&*index, &read, &config).unwrap();
     assert_eq!(
         size_of::<PartitionKey<GraphFree>>(),
         size_of::<Option<String>>()
@@ -128,18 +128,18 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
     assert_ne!(index.source_fingerprint(), quad.source_fingerprint());
     assert_eq!(
         purrdf_hash::hex::encode(&index.fingerprint()),
-        "f3db46450a4276ea8b854b8e7b3c2746c625603e9f60884650c0ae4b71bc0806",
+        "a3b848138dd6e067908437f62a086b82f3ecda0104cee1b0943b41d67b9b239a",
         "the graph-free index identity"
     );
     assert_eq!(
         purrdf_hash::hex::encode(&index.source_fingerprint()),
-        "437159b6041d315f3d10e109b0e977c2301615708e64eae09e6eaf6b9319a9fa",
+        "b857dde328bad38b1551da367e6a4991d2b2fa86e6efe1568573b9ca774ff7ed",
         "the graph-free source identity"
     );
 
     let lexical_config = config.with_surface_index(false);
     let lexical = Arc::new(TextIndex::from_dataset(&read, &lexical_config).unwrap());
-    purrdf_text::verify_binding(&lexical, &read, &lexical_config).unwrap();
+    purrdf_text::verify_binding(&*lexical, &read, &lexical_config).unwrap();
     assert_ne!(lexical.fingerprint(), index.fingerprint());
     assert_eq!(lexical.source_fingerprint(), index.source_fingerprint());
     assert!(lexical.surface_index().is_none());
@@ -147,7 +147,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
 
     assert_eq!(
         select(
-            &index,
+            &*index,
             &["river".into()],
             &PartitionFilter::unconstrained(),
             None,
@@ -155,7 +155,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
         )
         .unwrap(),
         select(
-            &quad,
+            &*quad,
             &["river".into()],
             &PartitionFilter::unconstrained(),
             None,
@@ -230,10 +230,16 @@ pub(crate) fn graph_free_rdf12_partitions_and_named_refusal() {
     .unwrap();
     for source in [&dataset, &empty] {
         let read = source.read().unwrap();
-        assert!(matches!(
-            TextIndex::from_dataset(&read, &named),
-            Err(TextError::SourceRead(_))
-        ));
+        let error = TextIndex::from_dataset(&read, &named).unwrap_err();
+        let TextError::SourceRead(retained) = &error else {
+            panic!("named graph refusal keeps its native source");
+        };
+        assert_eq!(
+            std::error::Error::source(retained)
+                .unwrap()
+                .downcast_ref::<TripleReadError>(),
+            Some(&TripleReadError::NamedGraphsUnsupported)
+        );
         assert_eq!(
             read.read_error(),
             Some(TripleReadError::NamedGraphsUnsupported)
@@ -309,7 +315,7 @@ impl Fixture {
             .query_with_options_view(
                 &*self.dataset,
                 request(query),
-                QueryOptions::new().with_env(&self.env),
+                &QueryOptions::new().with_env(&self.env),
             )
             .unwrap_or_else(|error| panic!("query failed: {error:?}\n{query}"))
     }
@@ -333,7 +339,7 @@ impl Fixture {
                 &self.dataset,
                 query,
                 None,
-                QueryOptions::new().with_env(&self.env),
+                &QueryOptions::new().with_env(&self.env),
             )
             .expect("actual EXPLAIN");
         assert!(
@@ -531,11 +537,11 @@ pub(crate) fn dictionary_cache_and_size() {
             })
             .collect();
         let first = cache
-            .get(&fixture.index, &entries, &capability)
+            .get(&*fixture.index, &entries, &capability)
             .expect("all authored rows compile");
         assert_eq!(first.len(), count);
         let second = cache
-            .get(&fixture.index, &entries, &capability)
+            .get(&*fixture.index, &entries, &capability)
             .expect("repeat native key");
         if count != 0 {
             assert!(
@@ -575,8 +581,8 @@ pub(crate) fn dictionary_cache_and_size() {
         phrase: "audley",
         payload: &[],
     }];
-    let first = cache.get(&fixture.index, &a, &capability).unwrap();
-    let changed = cache.get(&fixture.index, &b, &capability).unwrap();
+    let first = cache.get(&*fixture.index, &a, &capability).unwrap();
+    let changed = cache.get(&*fixture.index, &b, &capability).unwrap();
     assert!(
         !std::ptr::eq(first.entry(0).unwrap().0, changed.entry(0).unwrap().0),
         "authored dictionary change invalidates compilation"
@@ -587,7 +593,7 @@ pub(crate) fn dictionary_cache_and_size() {
         None,
         false,
     )]);
-    let rebound = cache.get(&fresh.index, &b, &capability).unwrap();
+    let rebound = cache.get(&*fresh.index, &b, &capability).unwrap();
     assert!(
         std::ptr::eq(changed.entry(0).unwrap().0, rebound.entry(0).unwrap().0),
         "same analyzer reuses index-independent automaton"
@@ -635,7 +641,7 @@ pub(crate) fn dictionary_projection_and_aliases() {
             .query_governed_view(
                 &*aliases.dataset,
                 request(&aliased_query),
-                QueryOptions::new().with_env(&aliases.env),
+                &QueryOptions::new().with_env(&aliases.env),
                 &purrdf_sparql_eval::QueryGovernors::METERED,
             )
             .unwrap();
@@ -824,7 +830,7 @@ pub(crate) fn longest_first_reference() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&fixture.env),
+            &QueryOptions::new().with_env(&fixture.env),
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
                     panic!("SELECT");
@@ -909,8 +915,8 @@ pub(crate) fn window_barrier_property() {
                 &format!("ABS(?j - ?i) <= {width}"),
                 &format!("ABS(?j - ?i) <= {width} && NOT EXISTS {{ ?c <{SEQUENCE}> ?seq ; <{POS}> ?k . FILTER(?k > IF(?i < ?j, ?i, ?j) && ?k < IF(?i < ?j, ?j, ?i) {nested}) }}"),
             );
-            let literal = engine(true).query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY).unwrap();
-            let shaped = engine(false).query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY).unwrap();
+            let literal = engine(true).query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY).unwrap();
+            let shaped = engine(false).query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY).unwrap();
             prop_assert_eq!(bytes(&shaped), bytes(&literal));
             let report = engine(false).explain_query(&dataset, &query, None).unwrap();
             prop_assert!(report.shapes().iter().any(|shape| shape.operator == Some("ordered-window")));
@@ -946,7 +952,7 @@ pub(crate) fn dictionary_analyzer_identity() {
             )
             .unwrap();
             let fixture = Fixture::analyzed(&corpus, analyzer);
-            let compiled = cache.get(&fixture.index, &entries, &capability).unwrap();
+            let compiled = cache.get(&*fixture.index, &entries, &capability).unwrap();
             if let Some(prior) = previous.take() {
                 let prior: purrdf_text::dictionary::Dictionary = prior;
                 assert!(
@@ -983,11 +989,11 @@ pub(crate) fn window_property() {
         );
         let query = window_query("0");
         let literal = engine(true)
-            .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
             .unwrap();
         let allocation = purrdf_alloc_probe::CurrentThreadWindow::open();
         let shaped = engine(false)
-            .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
             .unwrap();
         let measured = allocation.close();
         assert_eq!(bytes(&shaped), bytes(&literal));
@@ -1037,10 +1043,10 @@ pub(crate) fn window_property() {
     for width in ["0", "1"] {
         let query = window_query(width);
         let literal = engine(true)
-            .query_with_options_view(&*ambiguous, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*ambiguous, request(&query), &QueryOptions::EMPTY)
             .unwrap();
         let shaped = engine(false)
-            .query_with_options_view(&*ambiguous, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*ambiguous, request(&query), &QueryOptions::EMPTY)
             .unwrap();
         assert_eq!(
             bytes(&shaped),
@@ -1058,10 +1064,10 @@ pub(crate) fn window_property() {
                 let dataset = positions(&values);
                 let query = window_query(&bound.to_string());
                 let literal = engine(true)
-                    .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                    .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                     .unwrap();
                 let shaped = engine(false)
-                    .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                    .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                     .unwrap();
                 prop_assert_eq!(bytes(&shaped), bytes(&literal));
                 let report = engine(false).explain_query(&dataset, &query, None).unwrap();
@@ -1092,12 +1098,12 @@ pub(crate) fn window_property() {
         assert_eq!(
             bytes(
                 &engine(false)
-                    .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                    .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                     .unwrap()
             ),
             bytes(
                 &engine(true)
-                    .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                    .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                     .unwrap()
             )
         );
@@ -1163,10 +1169,10 @@ pub(crate) fn typed_series_property() {
                 "SELECT ?bucket ({aggregate} AS ?value) WHERE {{ ?s <{TIME}> ?t ; <{POS}> ?n . BIND(<{target}>(?t) AS ?bucket) }} GROUP BY ?bucket"
             );
             let expected = engine(true)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             let actual = engine(false)
-                .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
                 .unwrap();
             assert_eq!(
                 bytes(&actual),
@@ -1192,8 +1198,8 @@ pub(crate) fn typed_series_property() {
             }).collect::<Vec<_>>().join(" ");
             let query = format!("SELECT ?bucket (SUM(?n) AS ?total) (SAMPLE(?n) AS ?first) (FOLD(?n) AS ?ordered) WHERE {{ VALUES (?t ?n) {{ {values} }} BIND(<{}>(?t) AS ?bucket) }} GROUP BY ?bucket", purrdf_xsd::datatype::XSD_G_YEAR_MONTH);
             let empty = RdfDatasetBuilder::new().freeze().unwrap();
-            let literal = engine(true).query_with_options_view(&*empty, request(&query), QueryOptions::EMPTY).unwrap();
-            let shaped = engine(false).query_with_options_view(&*empty, request(&query), QueryOptions::EMPTY).unwrap();
+            let literal = engine(true).query_with_options_view(&*empty, request(&query), &QueryOptions::EMPTY).unwrap();
+            let shaped = engine(false).query_with_options_view(&*empty, request(&query), &QueryOptions::EMPTY).unwrap();
             prop_assert_eq!(bytes(&shaped), bytes(&literal));
             let report = engine(false).explain_query(&empty, &query, None).unwrap();
             prop_assert!(report.shapes().iter().any(|shape| shape.operator == Some("typed-bucketed-series")));
@@ -1316,7 +1322,7 @@ pub(crate) fn bucket_custom_and_parallel_order() {
     );
     let options = QueryOptions::new().with_env(&env);
     let reference = engine(true)
-        .query_with_options_view(&*dataset, request(&query), options)
+        .query_with_options_view(&*dataset, request(&query), &options)
         .unwrap();
     for sequential in [false, true] {
         let native = NativeSparqlEngine::new().with_eval_options(EvalOptions {
@@ -1324,7 +1330,7 @@ pub(crate) fn bucket_custom_and_parallel_order() {
             ..EvalOptions::default()
         });
         let found = native
-            .query_with_options_view(&*dataset, request(&query), options)
+            .query_with_options_view(&*dataset, request(&query), &options)
             .unwrap();
         assert_eq!(
             bytes(&found),
@@ -1333,7 +1339,7 @@ pub(crate) fn bucket_custom_and_parallel_order() {
         );
     }
     let report = engine(false)
-        .explain_query_with_options(&dataset, &query, None, options)
+        .explain_query_with_options(&dataset, &query, None, &options)
         .unwrap();
     assert!(
         report
@@ -1349,12 +1355,12 @@ pub(crate) fn bucket_custom_and_parallel_order() {
     assert_eq!(
         bytes(
             &engine(false)
-                .query_with_options_view(&*dataset, request(&lateral), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&lateral), &QueryOptions::EMPTY)
                 .unwrap()
         ),
         bytes(
             &engine(true)
-                .query_with_options_view(&*dataset, request(&lateral), QueryOptions::EMPTY)
+                .query_with_options_view(&*dataset, request(&lateral), &QueryOptions::EMPTY)
                 .unwrap()
         )
     );
@@ -1408,7 +1414,7 @@ pub(crate) fn host_refusal_and_governor_boundary() {
         let result = engine(false).query_with_options_view(
             &*dataset,
             request("SELECT * WHERE { VALUES ?x { 1 } }"),
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         );
         assert!(
             result.is_err(),
@@ -1434,7 +1440,7 @@ pub(crate) fn host_refusal_and_governor_boundary() {
             .query_governed_view(
                 dataset,
                 request(&query),
-                options,
+                &options,
                 &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_fuel(0),
             )
             .unwrap();
@@ -1461,7 +1467,7 @@ pub(crate) fn dictionary_long_phrase_and_determinism() {
     let entry = TermValue::iri("https://example.org/long-entry");
     let dictionary = DictionaryCache::default()
         .get(
-            &fixture.index,
+            &*fixture.index,
             &[DictionaryEntry {
                 identity: &entry,
                 phrase: &phrase,
@@ -1504,33 +1510,9 @@ pub(crate) fn dictionary_long_phrase_and_determinism() {
     );
 }
 
-pub(crate) fn segmented(dataset: &RdfDataset) -> purrdf_core::SegmentedImage {
-    let mut builder = purrdf_core::SegmentedBuilder::new(
-        purrdf_core::SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap(),
-    )
-    .unwrap();
-    for quad in dataset.quads() {
-        let mut values = vec![
-            dataset.term_value(quad.s),
-            dataset.term_value(quad.p),
-            dataset.term_value(quad.o),
-        ];
-        if let Some(graph) = quad.g {
-            values.push(dataset.term_value(graph));
-        }
-        let mut ids = Vec::new();
-        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
-        builder
-            .push_quad(purrdf_core::QuadIds {
-                s: ids[0],
-                p: ids[1],
-                o: ids[2],
-                g: quad.g.map(|_| ids[3]),
-            })
-            .unwrap();
-    }
-    builder.seal().unwrap()
-}
+#[path = "segmented.rs"]
+mod segmented_fixture;
+pub(crate) use segmented_fixture::segmented;
 
 pub(crate) fn bounded_shapes_keep_original_owners() {
     use purrdf_alloc_probe::CurrentThreadWindow;
@@ -1555,7 +1537,7 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
         let options = QueryOptions::new().with_env(&env);
         let native = engine(false);
         let prepared = native
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
         let source = image
             .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
@@ -1569,13 +1551,13 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
         let result = match route {
             0 => {
                 native
-                    .query_fallible_view(&source, request(&query), options)
+                    .query_fallible_view(&source, request(&query), &options)
                     .unwrap()
                     .result
             }
             1 => {
                 native
-                    .query_prepared_fallible_view(&source, &prepared, &[], options)
+                    .query_prepared_fallible_view(&source, &prepared, &[], &options)
                     .unwrap()
                     .result
             }
@@ -1584,7 +1566,7 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
                     .query_governed_fallible_view(
                         &source,
                         request(&query),
-                        options,
+                        &options,
                         &purrdf_sparql_eval::QueryGovernors::METERED,
                     )
                     .unwrap()
@@ -1596,7 +1578,7 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
                         &source,
                         &prepared,
                         &[],
-                        options,
+                        &options,
                         &purrdf_sparql_eval::QueryGovernors::METERED,
                     )
                     .unwrap()
@@ -1669,7 +1651,7 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
     let failure = engine(false).query_fallible_view(
         &denied,
         request(&query),
-        QueryOptions::new().with_env(&fixture.env),
+        &QueryOptions::new().with_env(&fixture.env),
     );
     assert!(
         matches!(
@@ -1694,13 +1676,13 @@ pub(crate) fn bounded_shapes_keep_original_owners() {
     assert!(!source.certifies_probe_order());
     let query = window_query("1");
     let shaped = engine(false)
-        .query_fallible_view(&source, request(&query), QueryOptions::EMPTY)
+        .query_fallible_view(&source, request(&query), &QueryOptions::EMPTY)
         .unwrap();
     let other = segmented(&positions)
         .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
         .unwrap();
     let literal = engine(true)
-        .query_fallible_view(&other, request(&query), QueryOptions::EMPTY)
+        .query_fallible_view(&other, request(&query), &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(
         shaped.result.solutions().unwrap(),
@@ -1735,7 +1717,7 @@ impl ShapeProvider for CompileProbe {
             })?;
         }
         self.entered.store(2, Ordering::Relaxed);
-        let compiled = self.cache.get(&self.index, &entries, workspace)?;
+        let compiled = self.cache.get(&*self.index, &entries, workspace)?;
         assert_eq!(compiled.len(), self.entries.len());
         ShapeOffer::new_admitted(
             "dictionary-refusal-probe",
@@ -1763,7 +1745,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
         payload: &[],
     }];
     let before = cache
-        .get(&fixture.index, &original, &WorkspaceCapability::resident())
+        .get(&*fixture.index, &original, &WorkspaceCapability::resident())
         .unwrap();
     let entries: Arc<[(TermValue, String)]> = (0..4_097)
         .map(|index| {
@@ -1795,7 +1777,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
     let failure = engine(false).query_fallible_view(
         &source,
         request("SELECT ?x WHERE { VALUES ?x { 1 } }"),
-        QueryOptions::new().with_env(&env),
+        &QueryOptions::new().with_env(&env),
     );
     assert!(
         matches!(
@@ -1820,7 +1802,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
         purrdf_core::ViewOperationStatus::Ready { .. }
     ));
     let after = cache
-        .get(&fixture.index, &original, &WorkspaceCapability::resident())
+        .get(&*fixture.index, &original, &WorkspaceCapability::resident())
         .unwrap();
     assert!(
         std::ptr::eq(before.entry(0).unwrap().0, after.entry(0).unwrap().0),
@@ -1849,7 +1831,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
         .query_fallible_view(
             &healthy,
             request("SELECT ?x WHERE { VALUES ?x { 1 } }"),
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         )
         .unwrap();
     assert_eq!(answer.result.solutions().unwrap().1.len(), 1);
@@ -1915,7 +1897,7 @@ pub(crate) fn registered_host_and_decline() {
     let dataset = RdfDatasetBuilder::new().freeze().unwrap();
     let query = "SELECT ?value WHERE { VALUES ?value { 2 1 2 UNDEF } }";
     let expected = engine(true)
-        .query_with_options_view(&*dataset, request(query), QueryOptions::EMPTY)
+        .query_with_options_view(&*dataset, request(query), &QueryOptions::EMPTY)
         .unwrap();
     for decline in [false, true] {
         let offered = Arc::new(AtomicUsize::new(0));
@@ -1936,7 +1918,7 @@ pub(crate) fn registered_host_and_decline() {
             .query_with_options_view(
                 &*dataset,
                 request(query),
-                QueryOptions::new().with_env(&env),
+                &QueryOptions::new().with_env(&env),
             )
             .unwrap();
         assert_eq!(bytes(&answer), bytes(&expected));
@@ -1960,12 +1942,12 @@ pub(crate) fn prepared_and_query_forms() {
     let native = engine(false);
     let options = QueryOptions::new().with_env(&fixture.env);
     let prepared = native
-        .prepare_query_with_options(&query, None, options)
+        .prepare_query_with_options(&query, None, &options)
         .unwrap();
     assert_eq!(
         bytes(
             &native
-                .query_prepared(&fixture.dataset, &prepared, &[], options)
+                .query_prepared(&fixture.dataset, &prepared, &[], &options)
                 .unwrap()
         ),
         bytes(&fixture.answer(&query, true))
@@ -1985,8 +1967,24 @@ pub(crate) fn prepared_and_query_forms() {
         match (shaped, literal) {
             (SparqlResult::Boolean(a), SparqlResult::Boolean(b)) => assert_eq!(a, b),
             (SparqlResult::Graph(a), SparqlResult::Graph(b)) => assert_eq!(
-                purrdf_core::ir::canon::canonicalize(&a).nquads,
-                purrdf_core::ir::canon::canonicalize(&b).nquads
+                purrdf_core::ir::canon::try_canonicalize(
+                    &a,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads(),
+                purrdf_core::ir::canon::try_canonicalize(
+                    &b,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads()
             ),
             (a, b) => panic!("same original form: {a:?}/{b:?}"),
         }
@@ -1996,11 +1994,11 @@ pub(crate) fn prepared_and_query_forms() {
         format!("SELECT ?doc ?start WHERE {{ ?doc <{PHRASE}> (?needle ?lang ?start ?end) }}");
     let declared = ["needle"];
     let mut prepared = native
-        .prepare_execution(&parameterized, None, &declared, options)
+        .prepare_execution(&parameterized, None, &declared, &options)
         .unwrap();
     let literal = engine(true);
     let mut reference = literal
-        .prepare_execution(&parameterized, None, &declared, options)
+        .prepare_execution(&parameterized, None, &declared, &options)
         .unwrap();
     let collect = |outcome: InternedOutcome<'_, '_, RdfDataset>| {
         let InternedOutcome::Solutions(rows) = outcome else {
@@ -2021,10 +2019,10 @@ pub(crate) fn prepared_and_query_forms() {
             .bind(0, TermValue::simple_literal(phrase))
             .unwrap();
         let actual = native
-            .execute(&mut prepared, &*fixture.dataset, options, collect)
+            .execute(&mut prepared, &*fixture.dataset, &options, collect)
             .unwrap();
         let expected = literal
-            .execute(&mut reference, &*fixture.dataset, options, collect)
+            .execute(&mut reference, &*fixture.dataset, &options, collect)
             .unwrap();
         assert_eq!(actual, expected);
     }
@@ -2103,7 +2101,7 @@ struct EvidenceAnswer {
 fn evidence_answer(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
     disabled: bool,
 ) -> EvidenceAnswer {
@@ -2163,7 +2161,7 @@ fn evidence_answer(
 fn equal_evidence(
     dataset: &RdfDataset,
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     claims: &dyn purrdf_sparql_eval::evidence_exec::EvidenceSource<purrdf_core::TermId>,
 ) -> EvidenceAnswer {
     let literal = evidence_answer(dataset, query, options, claims, true);
@@ -2308,7 +2306,7 @@ pub(crate) fn false_expression_gaps_keep_original_traversal() {
     let dataset = positions(&["0".into(), "1".into(), "3".into(), "4".into()]);
     let query = window_query("0");
     let standard = engine(false)
-        .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+        .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(
         rows(&standard).len(),
@@ -2324,10 +2322,10 @@ pub(crate) fn false_expression_gaps_keep_original_traversal() {
         "standard execution keeps the indexed production path"
     );
     let source = ExpressionGaps::new(GapSite::FalseWindowPair);
-    let literal = evidence_answer(&dataset, &query, QueryOptions::EMPTY, &source, true);
+    let literal = evidence_answer(&dataset, &query, &QueryOptions::EMPTY, &source, true);
     let reached = source.reached.swap(0, Ordering::Relaxed);
     let declared = source.declared.swap(0, Ordering::Relaxed);
-    let shaped = evidence_answer(&dataset, &query, QueryOptions::EMPTY, &source, false);
+    let shaped = evidence_answer(&dataset, &query, &QueryOptions::EMPTY, &source, false);
     assert_eq!(shaped.rows, literal.rows);
     assert_eq!(
         shaped.rows.len(),
@@ -2369,7 +2367,7 @@ pub(crate) fn false_expression_gaps_keep_original_traversal() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &denied,
                 |_| (),
             )
@@ -2395,7 +2393,7 @@ pub(crate) fn false_expression_gaps_keep_original_traversal() {
     let answer = equal_evidence(
         &fixture.dataset,
         &adjacency,
-        QueryOptions::new().with_env(&fixture.env),
+        &QueryOptions::new().with_env(&fixture.env),
         &gaps,
     );
     assert_eq!(
@@ -2407,7 +2405,7 @@ pub(crate) fn false_expression_gaps_keep_original_traversal() {
 
     let barrier = query.replace("ABS(?j - ?i) <= 0", &format!("ABS(?j - ?i) <= 0 && NOT EXISTS {{ ?c <{SEQUENCE}> ?seq ; <{POS}> ?k . FILTER(?k > IF(?i < ?j, ?i, ?j) && ?k < IF(?i < ?j, ?j, ?i)) }}"));
     let gaps = ExpressionGaps::new(GapSite::Barrier);
-    let answer = equal_evidence(&dataset, &barrier, QueryOptions::EMPTY, &gaps);
+    let answer = equal_evidence(&dataset, &barrier, &QueryOptions::EMPTY, &gaps);
     assert_ne!(answer.rows, []);
     assert!(
         answer.rows.iter().all(|(_, _, undecided)| *undecided),
@@ -2473,19 +2471,24 @@ pub(crate) fn original_evidence_and_empty_barriers() {
             let dictionary = equal_evidence(
                 &fixture.dataset,
                 &query,
-                QueryOptions::new().with_env(&fixture.env),
+                &QueryOptions::new().with_env(&fixture.env),
                 &claims,
             );
             assert_ne!(dictionary.rows, []);
             assert!(dictionary.rows.iter().all(|(_, identity, _)| *identity
                 != purrdf_core::evidence::EvidenceRecord::default().identity()));
-            equal_evidence(&positions, &window_query("2"), QueryOptions::EMPTY, &claims);
-            equal_evidence(&calendar, &group, QueryOptions::EMPTY, &claims);
+            equal_evidence(
+                &positions,
+                &window_query("2"),
+                &QueryOptions::EMPTY,
+                &claims,
+            );
+            equal_evidence(&calendar, &group, &QueryOptions::EMPTY, &claims);
             // Empty and nonempty intervals both retain the original reached
             // source scope. ClosedAbsence is decided by the EXISTS owner.
             for bound in ["0", "2", "10"] {
                 let query = window_query(bound).replace(&format!("ABS(?j - ?i) <= {bound}"), &format!("ABS(?j - ?i) <= {bound} && NOT EXISTS {{ ?c <{SEQUENCE}> ?seq ; <{POS}> ?k . FILTER(?k > IF(?i < ?j, ?i, ?j) && ?k < IF(?i < ?j, ?j, ?i)) }}"));
-                let answer = equal_evidence(&positions, &query, QueryOptions::EMPTY, &claims);
+                let answer = equal_evidence(&positions, &query, &QueryOptions::EMPTY, &claims);
                 if !closed {
                     assert!(
                         answer.rows.iter().all(|(_, _, undecided)| *undecided),
@@ -2494,7 +2497,7 @@ pub(crate) fn original_evidence_and_empty_barriers() {
                 }
             }
             let empty = format!("SELECT ?a WHERE {{ ?a <{POS}> ?i FILTER(?i < -100) }}");
-            let retained = equal_evidence(&positions, &empty, QueryOptions::EMPTY, &claims);
+            let retained = equal_evidence(&positions, &empty, &QueryOptions::EMPTY, &claims);
             assert_eq!(retained.rows, []);
             assert_eq!(
                 retained
@@ -2519,7 +2522,7 @@ pub(crate) fn original_evidence_and_empty_barriers() {
     equal_evidence(
         &fixture.dataset,
         &host_query,
-        QueryOptions::new().with_env(&env),
+        &QueryOptions::new().with_env(&env),
         &claims,
     );
     // The explicit geometric consumer returns the exact original borrowed row
@@ -2532,7 +2535,7 @@ pub(crate) fn original_evidence_and_empty_barriers() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&fixture.env),
+            &QueryOptions::new().with_env(&fixture.env),
             &claims,
             |outcome| {
                 let InternedOutcome::Solutions(rows) = outcome else {
@@ -2564,7 +2567,7 @@ pub(crate) fn original_evidence_and_empty_barriers() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &denied,
                 |_| (),
             )
@@ -2644,8 +2647,8 @@ pub(crate) fn scoped_streams_and_update_where() {
     let ordinary = window_query("2");
     for query in [ordinary.clone(), ordinary.replace("WHERE", "FROM <https://example.org/g1> FROM <https://example.org/g2> WHERE"), ordinary.replace("WHERE {", "FROM NAMED <https://example.org/g1> FROM NAMED <https://example.org/g2> WHERE { GRAPH ?g {") ] {
         let query = if query.contains("GRAPH ?g") { format!("{query} }}") } else { query };
-        let literal = engine(true).query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY).unwrap();
-        let shaped = engine(false).query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY).unwrap();
+        let literal = engine(true).query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY).unwrap();
+        let shaped = engine(false).query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY).unwrap();
         assert_eq!(bytes(&shaped), bytes(&literal), "actual default/named/merged/virtual native probe order: {query}");
         let report = engine(false).explain_query(&dataset, &query, None).unwrap();
         assert!(report.shapes().iter().any(|shape| shape.operator == Some("ordered-window")));
@@ -2663,14 +2666,30 @@ pub(crate) fn scoped_streams_and_update_where() {
     let mut shaped = fixture.dataset.clone();
     let options = QueryOptions::new().with_env(&fixture.env);
     engine(true)
-        .update_with_options(&mut literal, request(&update), options)
+        .update_with_options(&mut literal, request(&update), &options)
         .unwrap();
     engine(false)
-        .update_with_options(&mut shaped, request(&update), options)
+        .update_with_options(&mut shaped, request(&update), &options)
         .unwrap();
     assert_eq!(
-        purrdf_core::ir::canon::canonicalize(&literal).nquads,
-        purrdf_core::ir::canon::canonicalize(&shaped).nquads,
+        purrdf_core::ir::canon::try_canonicalize(
+            &literal,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
+        purrdf_core::ir::canon::try_canonicalize(
+            &shaped,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads(),
         "UPDATE WHERE uses the same native physical dispatch and original graph writer"
     );
 }

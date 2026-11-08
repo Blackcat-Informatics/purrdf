@@ -87,7 +87,7 @@ impl<C> Id<C> {
     }
 
     /// The one logical mint, also used with an owner-local reduced test limit.
-    fn from_index_with_limit(index: u64, limit: u64) -> Result<Self, CapacityError>
+    pub(crate) fn from_index_with_limit(index: u64, limit: u64) -> Result<Self, CapacityError>
     where
         C: IdClass,
     {

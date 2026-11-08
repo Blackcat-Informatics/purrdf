@@ -46,6 +46,13 @@ pub(crate) struct ExactBound {
 }
 
 impl ExactBound {
+    pub(crate) fn lexical(&self) -> &str {
+        &self.lexical
+    }
+    pub(crate) fn datatype(&self) -> XsdDatatype {
+        self.datatype
+    }
+
     /// A ShExC `INTEGER` / `DECIMAL` / `DOUBLE` token, or a ShExJ number's lexeme
     /// (an exponent makes it a double, a point a decimal, neither an integer).
     pub(crate) fn from_lexical(lexical: &str) -> Self {
@@ -268,7 +275,7 @@ fn aligned(expr: &ShapeExpr, groups: &[ExactBounds]) -> bool {
 ///     TermValue::Iri("http://example.org/x".to_owned()),
 ///     ShapeSelector::Label("http://example.org/S".to_owned()),
 /// )];
-/// let result = validate_exact(&schema, &data, &map, &Default::default());
+/// let result = validate_exact(&schema, &data, &map, &Default::default()).expect("validation finishes");
 /// assert_eq!(result.entries[0].status, ConformanceStatus::Nonconformant);
 /// # Ok::<(), purrdf_shex::ShexError>(())
 /// ```
@@ -481,13 +488,15 @@ impl ExactSchema {
 
 /// [`crate::validate_with`] over an [`ExactSchema`]: every numeric facet compares the
 /// node's value against the bound exactly as written.
-#[must_use]
+///
+/// # Errors
+/// Returns typed matcher or native pattern refusal without a partial report.
 pub fn validate_exact(
     schema: &ExactSchema,
     data: &RdfDataset,
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
-) -> ResultShapeMap {
+) -> core::result::Result<ResultShapeMap, crate::ValidationError> {
     let bounds = schema.bounds_by_constraint();
     crate::validate::validate_with_bounds(&schema.schema, data, map, options, Some(&bounds))
 }
@@ -503,7 +512,7 @@ pub fn validate_shape_map_exact(
     map_src: &str,
     base: Option<&str>,
     options: &ValidationOptions<'_>,
-) -> Result<ResultShapeMap> {
+) -> core::result::Result<ResultShapeMap, crate::ValidationError> {
     let bounds = schema.bounds_by_constraint();
     crate::shapemap::validate_shape_map_with_bounds(
         &schema.schema,
@@ -530,7 +539,7 @@ pub fn validate_exact_with_xpath(
     options: &ValidationOptions<'_>,
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
-) -> core::result::Result<ResultShapeMap, purrdf_core::xsd_regex::xpath::Error> {
+) -> core::result::Result<ResultShapeMap, crate::ValidationError> {
     crate::validate::XPathValidator::exact(schema).validate(data, map, options, profile, limits)
 }
 
@@ -548,7 +557,7 @@ pub fn validate_shape_map_exact_with_xpath(
     options: &ValidationOptions<'_>,
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
-) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
+) -> core::result::Result<ResultShapeMap, crate::error::ValidationError> {
     crate::shapemap::validate_shape_map_with_validator(
         &mut crate::validate::XPathValidator::exact(schema),
         data,
@@ -558,4 +567,12 @@ pub fn validate_shape_map_exact_with_xpath(
         profile,
         limits,
     )
+}
+
+impl purrdf_hash::error::StructuredError for ExactBound {
+    purrdf_hash::error_visit! {
+        @record self { lexical, datatype } => "shex-exact-bound" {
+            "lexical" => Text(&self.lexical), "datatype" => Iri(self.datatype.iri())
+        }
+    }
 }

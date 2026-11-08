@@ -325,6 +325,7 @@ impl Reads {
     /// the rule's focus node (rather than at the nodes of an enclosing expression).
     fn node_expression(&mut self, expression: &NodeExpr, at_focus: bool) {
         match expression {
+            NodeExpr::Owned { expr, .. } => self.node_expression(expr, at_focus),
             NodeExpr::Constant(_)
             | NodeExpr::This
             | NodeExpr::Empty

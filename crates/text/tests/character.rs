@@ -154,7 +154,6 @@ fn auxiliary_only_documents_remain_addressable_without_changing_lexical_scores()
             .surface_index()
             .expect("default surface index")
             .spans()
-            .iter()
             .any(|term| term.text() == "---")
     );
 }

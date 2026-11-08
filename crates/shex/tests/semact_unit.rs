@@ -29,15 +29,16 @@ fn data() -> Arc<RdfDataset> {
 fn conformant_with_test(schema_src: &str) -> bool {
     let schema = parse_shexc(schema_src, Some("http://a.example/")).expect("schema parses");
     let data = data();
-    let options = ValidationOptions {
-        sem_acts: SemActRegistry::with_test(),
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(SemActRegistry::with_test());
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    validate_with(&schema, &data, &map, &options).entries[0].status == ConformanceStatus::Conformant
+    validate_with(&schema, &data, &map, &options)
+        .expect("validation finishes")
+        .entries[0]
+        .status
+        == ConformanceStatus::Conformant
 }
 
 const TEST: &str = "http://shex.io/extensions/Test/";
@@ -74,15 +75,12 @@ fn start_action_fail_fails() {
     )
     .expect("schema parses");
     let data = data();
-    let options = ValidationOptions {
-        sem_acts: SemActRegistry::with_test(),
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(SemActRegistry::with_test());
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    let out = validate_with(&schema, &data, &map, &options);
+    let out = validate_with(&schema, &data, &map, &options).expect("validation finishes");
     assert_eq!(out.entries[0].status, ConformanceStatus::Nonconformant);
     assert_eq!(
         out.entries[0].reason.as_deref(),
@@ -112,7 +110,10 @@ fn default_registry_ignores_actions() {
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
     assert_eq!(
-        validate(&schema, &data, &map).entries[0].status,
+        validate(&schema, &data, &map)
+            .expect("validation finishes")
+            .entries[0]
+            .status,
         ConformanceStatus::Conformant
     );
 }
@@ -177,16 +178,16 @@ fn custom_extension_can_veto() {
             },
         ),
     );
-    let options = ValidationOptions {
-        sem_acts: registry,
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(registry);
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
     assert_eq!(
-        validate_with(&schema, &data, &map, &options).entries[0].status,
+        validate_with(&schema, &data, &map, &options)
+            .expect("validation finishes")
+            .entries[0]
+            .status,
         ConformanceStatus::Nonconformant
     );
 }
@@ -230,15 +231,12 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
             },
         ),
     );
-    let options = ValidationOptions {
-        sem_acts: registry,
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(registry);
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    let out = validate_with(&schema, &data, &map, &options);
+    let out = validate_with(&schema, &data, &map, &options).expect("validation finishes");
     assert_eq!(out.entries[0].status, ConformanceStatus::Conformant);
     drop(options);
 
@@ -270,4 +268,57 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
         .map(|(_, value)| value.clone().expect("value populated"))
         .collect();
     assert_eq!(q1_values, vec![TermValue::iri("http://a.example/o3")]);
+}
+
+#[test]
+fn pruned_ambiguous_occurrences_keep_first_witness_and_action_order() {
+    const EXT: &str = "http://example.org/Recorder";
+    let mut builder = RdfDatasetBuilder::new();
+    let focus = builder.intern_iri("http://a.example/s1").unwrap();
+    let predicate = builder.intern_iri("http://a.example/p1").unwrap();
+    for suffix in ["o1", "o2"] {
+        let object = builder
+            .intern_iri(&format!("http://a.example/{suffix}"))
+            .unwrap();
+        builder.push_quad(focus, predicate, object, None).unwrap();
+    }
+    let data = builder.freeze().unwrap();
+    let schema = parse_shexc(
+        &format!(
+            "<S1> {{ ( <p1> . {{0}} %<{EXT}>{{ forbidden %}} ; \
+         <p1> . {{1}} %<{EXT}>{{ first %}} ; \
+         <p1> . {{1}} %<{EXT}>{{ second %}} ) %<{EXT}>{{ group %}} }}"
+        ),
+        Some("http://a.example/"),
+    )
+    .unwrap();
+    let calls = RefCell::new(Vec::new());
+    let mut registry = SemActRegistry::default();
+    registry.register(
+        EXT,
+        Box::new(
+            |act: &purrdf_shex::SemAct, ctx: &purrdf_shex::SemActContext| {
+                calls
+                    .borrow_mut()
+                    .push((act.code.clone().unwrap(), ctx.value.clone()));
+                true
+            },
+        ),
+    );
+    let options = ValidationOptions::default().with_sem_acts(registry);
+    let map = [(
+        TermValue::iri("http://a.example/s1"),
+        ShapeSelector::Label("http://a.example/S1".into()),
+    )];
+    assert!(
+        validate_with(&schema, &data, &map, &options)
+            .unwrap()
+            .all_conformant()
+    );
+    drop(options);
+    let calls = calls.into_inner();
+    let codes: Vec<_> = calls.iter().map(|(code, _)| code.trim()).collect();
+    assert_eq!(codes, ["first", "second", "group"]);
+    assert_eq!(calls[0].1, Some(TermValue::iri("http://a.example/o1")));
+    assert_eq!(calls[1].1, Some(TermValue::iri("http://a.example/o2")));
 }

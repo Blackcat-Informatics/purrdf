@@ -31,11 +31,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_rdf::RdfDataset;
+use purrdf_shacl_conformance::vocab::declared;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::function_resolution::FunctionBinding;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::shapes::{__linked_declarations, Constraint};
-use purrdf_shapes::spec::{Carrier, FunctionClass, SPEC_TEXT_OPTIONALITY, declared, implemented};
+use purrdf_shapes::spec::{Carrier, FunctionClass, SPEC_TEXT_OPTIONALITY, implemented};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = r"
@@ -1259,7 +1260,7 @@ fn every_call_site_names_what_it_bound_to() {
         "#,
     )
     .expect("shapes load");
-    let report = shapes.function_resolution();
+    let report = shapes.function_resolution().unwrap();
     let expect = [
         (format!("{SPARQL_NS}equals"), FunctionBinding::Native),
         (format!("{SPARQL_NS}abs"), FunctionBinding::Native),

@@ -44,6 +44,7 @@
 //! counts only the measuring thread — which is the whole of this measurement,
 //! because `fuse` drives its streams on the polling thread and spawns nothing.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -51,8 +52,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_retrieval::{
     CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, ExclusionBasis, ExclusionVerdict,
-    Fixed, FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity,
-    RankedRow, RankedStream, RowBlock, StreamContract, Term, TopK, contribution, fuse,
+    FusionProfile, Iri, ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow,
+    RankedStream, RowBlock, Score, StreamContract, Term, TopK, contribution, fuse,
 };
 
 #[path = "support/streams.rs"]
@@ -118,7 +119,7 @@ struct LazyStream {
     /// The stratum weight this stream's contributions are computed at. Read from
     /// the fixture's own profile, so the rows always carry the value that
     /// profile would re-derive for them.
-    weight: Fixed,
+    weight: Score,
 }
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
@@ -163,6 +164,7 @@ impl RankedStream for LazyStream {
 
     fn contract(&self) -> StreamContract {
         StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             self.duplicates,
             RankFidelity::EXACT,
             self.domains.clone(),
@@ -188,11 +190,12 @@ fn fixture(
     total: u64,
     duplicates: DuplicatePolicy,
     pulls: &Arc<AtomicUsize>,
-    weight: Fixed,
+    weight: Score,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let weights: BTreeMap<Iri, Score> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     assert_eq!(
         profile.max_contributions(),
         u32::try_from(STRATA.len()).expect("three strata"),
@@ -244,11 +247,12 @@ fn disjoint_fixture(
     total: u64,
     duplicates: DuplicatePolicy,
     pulls: &Arc<AtomicUsize>,
-    weight: Fixed,
+    weight: Score,
 ) -> (FusionProfile, Vec<(Iri, LazyStream)>) {
-    let weights: BTreeMap<Iri, Fixed> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
-    let profile = FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K })
-        .expect("the fixture profile is valid");
+    let weights: BTreeMap<Iri, Score> = STRATA.iter().map(|name| (stratum(name), weight)).collect();
+    let profile =
+        FusionProfile::with_decay(weights, DecayRule::ReciprocalRank { k: K }, PRECISION_12)
+            .expect("the fixture profile is valid");
     let streams = STRATA
         .iter()
         .enumerate()
@@ -310,14 +314,19 @@ fn measure(total: u64, duplicates: DuplicatePolicy) -> Measurement {
 
 /// The same measurement at a weight whose contributions collide, so the fusion
 /// is driven through the plateau regime rather than around it.
-fn measure_at_weight(total: u64, duplicates: DuplicatePolicy, weight: Fixed) -> Measurement {
+fn measure_at_weight(total: u64, duplicates: DuplicatePolicy, weight: Score) -> Measurement {
     measure_rows_at_weight(total, CERTIFIED_ROWS, duplicates, weight)
 }
 
 /// Fuse `rows` rows out of three streams of `total` rows each through the
 /// shipped [`fuse`], measuring the peak heap it held while doing it.
 fn measure_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measurement {
-    measure_rows_at_weight(total, rows, duplicates, Fixed::ONE)
+    measure_rows_at_weight(
+        total,
+        rows,
+        duplicates,
+        PRECISION_12.score(PRECISION_12.scale()),
+    )
 }
 
 /// Fuse `rows` rows out of three streams of `total` rows each, at `weight`,
@@ -346,7 +355,7 @@ fn measure_rows_at_weight(
     total: u64,
     rows: usize,
     duplicates: DuplicatePolicy,
-    weight: Fixed,
+    weight: Score,
 ) -> Measurement {
     let _warm_up = measure_rows_at_weight_once(total, rows, duplicates, weight);
     measure_rows_at_weight_once(total, rows, duplicates, weight)
@@ -357,7 +366,7 @@ fn measure_rows_at_weight_once(
     total: u64,
     rows: usize,
     duplicates: DuplicatePolicy,
-    weight: Fixed,
+    weight: Score,
 ) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
     let (profile, streams) = fixture(total, duplicates, &pulls, weight);
@@ -368,7 +377,12 @@ fn measure_rows_at_weight_once(
 /// producers declare the one block they draw from.
 fn measure_disjoint_rows(total: u64, rows: usize, duplicates: DuplicatePolicy) -> Measurement {
     let pulls = Arc::new(AtomicUsize::new(0));
-    let (profile, streams) = disjoint_fixture(total, duplicates, &pulls, Fixed::ONE);
+    let (profile, streams) = disjoint_fixture(
+        total,
+        duplicates,
+        &pulls,
+        PRECISION_12.score(PRECISION_12.scale()),
+    );
     measure_built(&profile, streams, rows, &pulls)
 }
 
@@ -651,7 +665,7 @@ fn a_unique_declaration_is_what_keeps_a_deep_answer_affordable() {
 fn the_frontier_stays_bounded_past_the_collision() {
     // A thousand raw units is `10^-9`, not the number one thousand: at this
     // weight ranks one and two already share a contribution.
-    let colliding = Fixed::from_raw(1_000);
+    let colliding = Score::from_raw(1_000, PRECISION_12);
     // Warm the lazy one-time allocations outside the measured window, at this
     // weight, exactly as the other measurements in this file do. Without it the
     // first window on this thread can be the one that pays a one-time initialization

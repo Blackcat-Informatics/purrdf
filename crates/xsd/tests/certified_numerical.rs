@@ -222,11 +222,15 @@ fn bounded_rational_ownership_and_rounding_replay() {
     let normalized = Rat::from_decimal_in(&decimal, 400, &scratch).unwrap();
     assert_eq!(normalized, Rat::from_i64(3));
     assert_eq!(scratch.available(), scratch.destination_capacity());
-    let source = Rat::new(Int::one().shl(448).add(&Int::one()), Int::one()).unwrap();
+    let source = Rat::new(
+        Int::one().shl(448).add(&Int::one()),
+        Int::one().shl(449).add(&Int::one()),
+    )
+    .unwrap();
     let copy = || {
         Rat::new(
             source.numerator().copy_in(&scratch).unwrap(),
-            source.denominator().into_owned(),
+            source.denominator().copy_in(&scratch).unwrap(),
         )
         .unwrap()
     };
@@ -236,13 +240,13 @@ fn bounded_rational_ownership_and_rounding_replay() {
     let retained = copied.clone();
     // Sharing preserves the original admitted destination; it must neither
     // detach into unpriced storage nor return a slot while a value owns it.
-    assert_eq!(scratch.available(), scratch.destination_capacity() - 1);
+    assert_eq!(scratch.available(), scratch.destination_capacity() - 2);
     assert_eq!(
         source.compare_in(&copied, &scratch).unwrap(),
         std::cmp::Ordering::Equal
     );
     drop(copied);
-    assert_eq!(scratch.available(), scratch.destination_capacity() - 1);
+    assert_eq!(scratch.available(), scratch.destination_capacity() - 2);
     assert_eq!(source, retained);
     drop(retained);
     assert_eq!(scratch.available(), scratch.destination_capacity());
@@ -250,8 +254,21 @@ fn bounded_rational_ownership_and_rounding_replay() {
     assert_eq!(receipt.allocations, 0);
     assert_eq!(receipt.requested_bytes, 0);
     let escaped = copy().into_shared();
+    let expected_inverse = Rat::new(
+        source.denominator().into_owned(),
+        source.numerator().into_owned(),
+    )
+    .unwrap();
+    let allocations = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let inverse = escaped.recip().expect("positive canonical reciprocal");
+    drop(escaped);
+    assert_eq!(scratch.available(), scratch.destination_capacity() - 2);
+    drop(source);
     drop(scratch);
-    assert_eq!(source, escaped);
+    assert_eq!(inverse, expected_inverse);
+    let receipt = allocations.close();
+    assert_eq!(receipt.allocations, 0);
+    assert_eq!(receipt.requested_bytes, 0);
 }
 
 fn reusable_taylor_pool_admission_and_allocation_replay() {

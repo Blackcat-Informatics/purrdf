@@ -112,7 +112,7 @@ fn check(schema_src: &str, label: &str, node: TermValue) -> Result<(), String> {
     let schema = parse_shexc(schema_src, None).expect("schema parses");
     let data = data();
     let map = vec![(node, ShapeSelector::Label(label.to_owned()))];
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     assert_eq!(result.entries.len(), 1);
     match result.entries[0].status {
         ConformanceStatus::Conformant => Ok(()),
@@ -329,9 +329,16 @@ fn merged_arcs_are_order_stable_across_repeated_validations() {
             )
         })
         .collect();
-    let first = validate(&schema, &data(), &map).to_result_json();
+    let first = validate(&schema, &data(), &map)
+        .expect("validation finishes")
+        .to_result_json();
     for _ in 0..4 {
-        assert_eq!(validate(&schema, &data(), &map).to_result_json(), first);
+        assert_eq!(
+            validate(&schema, &data(), &map)
+                .expect("validation finishes")
+                .to_result_json(),
+            first
+        );
     }
     assert!(
         !first.contains("nonconformant"),
@@ -359,7 +366,7 @@ fn plain_dataset_validates_unchanged() {
         TermValue::iri(ALICE),
         ShapeSelector::Label("http://example.org/User".to_owned()),
     )];
-    let result = validate(&schema, &plain, &map);
+    let result = validate(&schema, &plain, &map).expect("validation finishes");
     assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);
 
     let sel = parse_shape_map(&format!("{{FOCUS <{NAME}> _}}@START"), None).expect("parses");
@@ -386,9 +393,10 @@ fn validate_with_default_options_matches_validate() {
         TermValue::iri(R1),
         ShapeSelector::Label("http://example.org/Stmt".to_owned()),
     )];
-    let plain = validate(&schema, &data, &map);
+    let plain = validate(&schema, &data, &map).expect("validation finishes");
     let with_options =
-        purrdf_shex::validate_with(&schema, &data, &map, &ValidationOptions::default());
+        purrdf_shex::validate_with(&schema, &data, &map, &ValidationOptions::default())
+            .expect("validation finishes");
     assert_eq!(plain, with_options);
     assert!(plain.all_conformant());
 }

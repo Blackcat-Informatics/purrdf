@@ -88,7 +88,7 @@ fn native_error_retains_original_payload_across_all_public_entries_and_extractio
     let options = QueryOptions::EMPTY.with_functions(&bound);
     let query = "SELECT (<http://example.org/fail>() AS ?value) WHERE {}";
     let prepared = engine
-        .prepare_query_with_options(query, None, options)
+        .prepare_query_with_options(query, None, &options)
         .unwrap();
     let request = || SparqlRequest {
         query,
@@ -101,12 +101,12 @@ fn native_error_retains_original_payload_across_all_public_entries_and_extractio
         let diagnostic = match entry {
             0 => extract(
                 engine
-                    .query_fallible_view(&source, request(), options)
+                    .query_fallible_view(&source, request(), &options)
                     .unwrap_err(),
             ),
             1 => extract(
                 engine
-                    .query_prepared_fallible_view(&source, &prepared, &[], options)
+                    .query_prepared_fallible_view(&source, &prepared, &[], &options)
                     .unwrap_err(),
             ),
             2 => extract(
@@ -114,7 +114,7 @@ fn native_error_retains_original_payload_across_all_public_entries_and_extractio
                     .query_governed_fallible_view(
                         &source,
                         request(),
-                        options,
+                        &options,
                         &QueryGovernors::METERED,
                     )
                     .unwrap_err(),
@@ -125,7 +125,7 @@ fn native_error_retains_original_payload_across_all_public_entries_and_extractio
                         &source,
                         &prepared,
                         &[],
-                        options,
+                        &options,
                         &QueryGovernors::METERED,
                     )
                     .unwrap_err(),
@@ -168,13 +168,13 @@ fn prepared_unbound_names_render_under_the_original_execution_grant() {
             &query,
             None,
             &[first.as_str(), second.as_str()],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap();
     let source = open_with_evidence(&image, CEILING, 2, 16_384);
     let window = CurrentThreadWindow::open();
     let error = engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| ())
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| ())
         .unwrap_err();
     let measured = window.close();
     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());

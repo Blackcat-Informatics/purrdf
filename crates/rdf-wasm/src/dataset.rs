@@ -20,7 +20,7 @@ use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
     CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
     SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
-    datasets_isomorphic, empty_named_graphs_dropped, parse_dataset, serialize_dataset_to_format,
+    datasets_isomorphic, empty_named_graphs_dropped, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
@@ -535,10 +535,17 @@ impl Dataset {
         format: &str,
         base: Option<String>,
         remember_empty_graphs: Option<bool>,
+        input_options: Option<String>,
     ) -> Result<Self, JsValue> {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-        let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
-            .map_err(|e| diag_to_err(&e))?;
+        let dataset = purrdf_validate::rdf_input::parse(
+            input.as_bytes(),
+            media_type,
+            base.as_deref(),
+            input_options.as_deref().map(str::as_bytes),
+        )
+        .map_err(crate::operation::diagnostic_to_js)?
+        .dataset;
         Self::from_frozen_in(dataset.into(), Self::mode_of(remember_empty_graphs))
     }
 
@@ -754,17 +761,31 @@ impl Dataset {
     /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
-    pub fn canonicalize(&self) -> Result<String, JsValue> {
-        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        match try_canonicalize_flat_view(&frozen, CanonHash::Sha256) {
-            Ok(canonicalized) => Ok(canonicalized.nquads),
-            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string()).into()),
-            Err(ViewCanonError::NotReady { error, .. }) => match error {
-                // LAW: a freshly-frozen `Arc<RdfDataset>`'s `FallibleDatasetView::Error`
-                // is `Infallible` — the frozen dataset never faults, so this arm is
-                // unreachable by construction.
-            },
-        }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn canonicalize(
+        &self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<crate::CanonicalResult, JsValue> {
+        let (text, receipts) =
+            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+                let frozen = self
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                match try_canonicalize_flat_view(&frozen, CanonHash::Sha256, control) {
+                    Ok(canonicalized) => Ok(canonicalized),
+                    Err(ViewCanonError::Refused(cause)) => Err(cause),
+                    Err(ViewCanonError::NotReady { error, .. }) => match error {},
+                }
+            })?;
+        Ok(crate::CanonicalResult::new(
+            JsValue::from_str(text.nquads()),
+            receipts,
+        ))
     }
 
     /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
@@ -775,10 +796,32 @@ impl Dataset {
     /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
     /// materializing them for obviously-different inputs.
     #[wasm_bindgen(js_name = isomorphic)]
-    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsValue> {
-        let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        Ok(datasets_isomorphic(&a, &b))
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn isomorphic(
+        &self,
+        other: &Self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<crate::CanonicalResult, JsValue> {
+        let (equal, receipts) =
+            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+                let a = self
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                let b = other
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                datasets_isomorphic(&a, &b, control)
+            })?;
+        Ok(crate::CanonicalResult::new(
+            JsValue::from_bool(equal),
+            receipts,
+        ))
     }
 
     /// `size` — the number of effective quads.
@@ -1059,8 +1102,8 @@ mod identity_fixture {
     use super::Dataset;
     use wasm_bindgen::prelude::*;
 
-    /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
-    /// exact integer range without adding a seed operation to the release package.
+    /// Unit-test-module fixture only: seed the real exported getters beyond JavaScript's
+    /// safe integer range without adding a seed operation to the release package.
     #[wasm_bindgen]
     pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsValue> {
         let mut dataset = Dataset::new(None)?;
@@ -1211,7 +1254,7 @@ mod tests {
             .update(
                 &mut dataset,
                 "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
-                None, None,
+                None, None, None, None,
             )
             .expect("update applies");
         assert_eq!(dataset.size(), 1);
@@ -1235,7 +1278,7 @@ mod tests {
         // isomorphism check below (a quad-count check alone would miss it).
         let nt = "<https://e/s> <https://e/p> <https://e/o> .\n\
                   <https://e/s> <https://e/label> \"value\" .\n";
-        let Ok(ds) = Dataset::parse(nt, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(nt, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for fmt in [
@@ -1247,10 +1290,17 @@ mod tests {
             let Ok(text) = ds.serialize(fmt, None) else {
                 panic!("serialize {fmt} failed");
             };
-            let Ok(reparsed) = Dataset::parse(&text, fmt, None, None) else {
+            let Ok(reparsed) = Dataset::parse(&text, fmt, None, None, None) else {
                 panic!("re-parse {fmt} failed");
             };
-            let Ok(iso) = reparsed.isomorphic(&ds) else {
+            let Ok(iso) = datasets_isomorphic(
+                &reparsed.inner.freeze().expect("parsed dataset freezes"),
+                &ds.inner.freeze().expect("parsed dataset freezes"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            ) else {
                 panic!("isomorphic {fmt} failed");
             };
             assert!(iso, "wasm round-trip via {fmt} preserves the graph");
@@ -1377,6 +1427,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .unwrap();
         let quads = ds.quads().unwrap();
@@ -1390,6 +1441,7 @@ mod tests {
         let ds = Dataset::parse(
             "<https://e/alice> <https://e/knows> <https://e/bob> .\n",
             "ntriples",
+            None,
             None,
             None,
         )
@@ -1473,7 +1525,7 @@ mod tests {
             "nquads",
             None,
             None,
-        )
+         None)
         .expect("parse");
         let mut added = Dataset::new(None).expect("empty");
         for quad in parsed.quads().expect("quads") {
@@ -1507,14 +1559,14 @@ mod tests {
     #[test]
     fn parse_then_serialize_round_trips_ntriples() {
         let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1);
         let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://e/s"));
         assert!(out.contains("https://e/p"));
         assert!(out.contains("https://e/o"));
         // Re-parsing the output yields the same single quad.
-        let reparsed = Dataset::parse(&out, "ntriples", None, None).unwrap();
+        let reparsed = Dataset::parse(&out, "ntriples", None, None, None).unwrap();
         assert_eq!(reparsed.size(), 1);
     }
 
@@ -1534,7 +1586,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s1> <https://e/p> <https://e/o1> )>> <https://e/g1> .\n",
         );
-        let ds = Dataset::parse(MIXED, "nquads", None, None)
+        let ds = Dataset::parse(MIXED, "nquads", None, None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         let lossy = ds
@@ -1581,7 +1633,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
         );
-        let ds = Dataset::parse(WITH_LAYER, "nquads", None, None)
+        let ds = Dataset::parse(WITH_LAYER, "nquads", None, None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         // Star-capable: one document, both lanes, the triple term intact and no loss.
@@ -1632,6 +1684,7 @@ mod tests {
             "turtle",
             Some("https://example.org/".to_owned()),
             None,
+            None,
         )
         .unwrap();
         let out = ds.serialize("ntriples", None).unwrap();
@@ -1647,7 +1700,7 @@ mod tests {
         let base = "https://example.org/base/";
         let input = "<https://example.org/base/s> <https://example.org/base/p> \
                      <https://example.org/base/o> .\n";
-        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1675,7 +1728,7 @@ mod tests {
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
             "<https://e/r> <https://e/confidence> \"0.9\" .\n",
         );
-        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1707,7 +1760,7 @@ mod tests {
         // The factory uses the same native datatype expansion rule.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1, "the directional literal parsed into one quad");
 
         // Build the IDENTICAL directional literal the way a DataFactory would (which
@@ -1745,7 +1798,7 @@ mod tests {
         // Parse the plain (no-direction) language-tagged literal into the base.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1);
 
         // A directional query literal of the same text + language must NOT match it.

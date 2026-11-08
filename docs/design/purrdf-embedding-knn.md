@@ -160,7 +160,7 @@ The arithmetic contract applies across targets. The numeric pins below execute
 natively; `make wasm` checks that the release crates build for wasm32. Compilation
 alone does not establish numeric agreement on a second target.
 
-`crates/sparql-eval/tests/knn_wasm_determinism.rs` pins the exact numeric
+`crates/purrdf/tests/knn_wasm_determinism.rs` pins the exact numeric
 expectations in native Rust. Real SPARQL queries reach PURREMB artifacts whose
 components are not exactly representable in binary64, and assert five literal
 `xsd:double` lexicals in order. The six-dimensional fixture reaches the

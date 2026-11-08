@@ -612,7 +612,7 @@ fn tagged_list(tag: &str) -> Result<CdtValue, CdtError> {
 fn a_subtag_over_the_length_ceiling_is_refused_in_a_cdt_literal() {
     let error = tagged_list("cantbethislong")
         .expect_err("a bare fourteen-character subtag is over the §2.1 ceiling");
-    let CdtError::BadLanguageTag { offset, reason } = error else {
+    let CdtError::BadLanguageTag { offset, reason, .. } = error else {
         panic!("the error type is unchanged: {error:?}");
     };
     // `["x"@…` — the `@` sits at byte 4, which is where the tag starts, and the

@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Segmented storage focused tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/segmented-storage.yaml
+      - crates/rdf-core/src/ir/segmented/**
+      - crates/rdf-core/tests/segmented.rs
+      - crates/rdf-core/tests/segmented_stack.rs
+      - crates/rdf-core/tests/support/segmented_text.rs
+      - crates/deflate/**
+  push:
+    branches-ignore: [main]
+    paths:
+      - .github/workflows/segmented-storage.yaml
+      - crates/rdf-core/src/ir/segmented/**
+      - crates/rdf-core/tests/segmented.rs
+      - crates/rdf-core/tests/segmented_stack.rs
+      - crates/rdf-core/tests/support/segmented_text.rs
+      - crates/deflate/**
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 8
+  RUST_TEST_THREADS: 4
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    # Same-repository changes already run on push; forks need the PR event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+      - name: Record exact source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+      - name: Execute dictionary, original ownership and persisted visibility controls
+        run: |
+          mkdir -p target
+          cargo test --locked -p purrdf-core --test segmented -- --list > target/segmented-inventory.txt
+          grep -Fq reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot target/segmented-inventory.txt
+          cargo test --locked -p purrdf-core --lib ir::segmented::format::tests::
+          cargo test --locked -p purrdf-core --lib ir::segmented::build::certification_tests::
+          cargo test --locked -p purrdf-core --test segmented
+          cargo test --locked -p purrdf-core --test segmented_stack
+      - name: Execute public query and native refusal neighbors
+        run: |
+          cargo test --locked -p purrdf-sparql-eval --test segmented_query -- --exact \
+            selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger \
+            bounded_virtual_streams_and_empty_graph_declarations_match_resident

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use purrdf_lex::json::{self, Limits, Value};
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, ProjectionLimits,
-    canonicalize, datasets_isomorphic, parse_dataset, read_csvw,
+    datasets_isomorphic, parse_dataset, read_csvw, try_canonicalize,
 };
 
 const CORPUS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/csvw-w3c");
@@ -388,7 +388,13 @@ fn run_case(entry: &Value) -> Result<(), String> {
         Some(&expected_iri),
     )
     .map_err(|error| error.to_string())?;
-    if datasets_isomorphic(&actual.dataset, &expected) {
+    if datasets_isomorphic(
+        &actual.dataset,
+        &expected,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    {
         Ok(())
     } else {
         let summary = format!(
@@ -404,8 +410,24 @@ fn run_case(entry: &Value) -> Result<(), String> {
         if std::env::var_os("CSVW_CASE").is_some() {
             Err(format!(
                 "{summary}\nACTUAL:\n{}EXPECTED:\n{}",
-                canonicalize(&actual.dataset).nquads,
-                canonicalize(&expected).nquads,
+                try_canonicalize(
+                    &actual.dataset,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads(),
+                try_canonicalize(
+                    &expected,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads(),
             ))
         } else {
             Err(summary)

@@ -165,7 +165,7 @@ fn bench_pattern_dispatch(c: &mut Bench) {
         assert_eq!(
             result_size(
                 &warm
-                    .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
                     .expect("the prepared plan evaluates")
             ),
             expected
@@ -187,7 +187,7 @@ fn bench_pattern_dispatch(c: &mut Bench) {
             bencher.iter(|| {
                 black_box(result_size(
                     &warm
-                        .query_prepared(&data, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared(&data, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("the prepared plan evaluates"),
                 ))
             });
@@ -203,7 +203,7 @@ fn bench_pattern_dispatch(c: &mut Bench) {
     let run_heavy = || {
         result_size(
             &warm
-                .query_prepared(&heavy, &prepared, &[], QueryOptions::EMPTY)
+                .query_prepared(&heavy, &prepared, &[], &QueryOptions::EMPTY)
                 .expect("the prepared plan evaluates"),
         )
     };

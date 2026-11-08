@@ -48,7 +48,7 @@ fn select_over(dataset: &RdfDataset, query: &str) -> Option<TermValue> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("evaluate `{query}`: {e}"));
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -728,7 +728,7 @@ fn lang_matches_rows(filter: &str) -> Vec<String> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("evaluate `{query}`: {e}"));
     let SparqlResult::Solutions { rows, .. } = result else {

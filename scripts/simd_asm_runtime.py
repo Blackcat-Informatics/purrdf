@@ -277,17 +277,13 @@ def report_identity(gate):
 
 
 def merge_reports(gate, manifest, directory, identity):
-    cells = {}
-    seen = set()
-    for path in sorted(directory.glob("*.json")):
-        report = read_json(path)
-        if not isinstance(report, dict) or report.get("identity") != identity or report.get("status") != "passed":
-            raise gate.GateError(f"invalid, stale or failed assembly report: {path}")
-        for name, column in report.get("cells", {}).items():
-            if name not in gate.CONFIG_NAMES or name in seen or set(column) != manifest.ids():
-                raise gate.GateError(f"duplicate/unknown configuration or incomplete site coverage: {path}")
-            seen.add(name)
-            cells.update({(site, name): value for site, value in column.items()})
-    if seen != set(gate.CONFIG_NAMES):
-        raise gate.GateError(f"incomplete assembly matrix: got {sorted(seen)}")
-    return cells
+    request = dict(directory=str(directory), schema=identity["schema"],
+                   source=identity["source"], manifest=identity["manifest"],
+                   configurations=gate.CONFIG_NAMES, sites=sorted(manifest.ids()))
+    result = subprocess.run(
+        ["cargo", "run", "-q", "--locked", "-p", "helper-census", "--", "--merge-asm-reports"],
+        cwd=gate.REPO_ROOT, input=json.dumps(request), text=True, capture_output=True)
+    if result.returncode:
+        raise gate.GateError(f"native assembly aggregation failed: {result.stderr.strip()}")
+    return {(site, name): value for name, column in json.loads(result.stdout)["cells"].items()
+            for site, value in column.items()}

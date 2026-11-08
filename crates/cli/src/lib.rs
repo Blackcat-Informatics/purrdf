@@ -3,8 +3,10 @@
 
 //! The `purrdf` command-line interface.
 //!
-//! A single `Source → [transform] → Sink` pipeline exposed as sixteen subcommands:
+//! A single `Source → [transform] → Sink` pipeline with subcommands:
 //!
+//! * `glob` — match a literal or explicitly selected IRI lexical surface using a
+//!   compiled Unicode glob and caller-stated work allowance;
 //! * `convert` — transcode RDF between the native syntaxes and the pack container;
 //! * `query` — evaluate a SPARQL query over an RDF or pack source;
 //! * `update` — atomically apply a SPARQL UPDATE to an RDF source;
@@ -86,13 +88,19 @@
 //! it without parsing the RDF or JSON artifact stdout must stay.
 
 mod argv_documents;
+mod canonical;
 mod cli;
 mod consistency;
 mod convert;
 mod describe;
 mod entails;
 mod error;
+mod fingerprint;
 mod format;
+mod glob;
+mod glob_rdf;
+pub use glob_rdf::Failure as GlobRdfFailure;
+mod document_expansion;
 mod governors;
 pub mod immutable;
 mod ingest;
@@ -104,6 +112,7 @@ mod path_relation;
 mod premise_imports;
 mod projection;
 mod query;
+mod rdf_imports;
 mod reason;
 mod report;
 mod shacl;
@@ -114,6 +123,11 @@ mod sink;
 mod source;
 mod update;
 mod validate;
+mod word_id;
+mod yaml_source;
+pub use source::RawReadError;
+pub use word_id::Failure as WordIdFailure;
+pub use yaml_source::Failure as YamlSourceFailure;
 
 // The one derivation of a filesystem input's RFC-8089 `file://` retrieval IRI, re-exported
 // so the integration tests assert against the pipeline's own function instead of keeping a
@@ -166,15 +180,48 @@ pub fn run() {
 const fn cli_materialize_limits(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
+    max_term_arena_bytes: Option<u64>,
 ) -> purrdf_validate::regime::MaterializeLimits {
     purrdf_validate::regime::MaterializeLimits {
         max_stored_facts,
         max_join_steps,
+        max_term_arena_bytes,
         host: purrdf_validate::regime::RegimeHost::Cli,
     }
 }
 
 fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
+    let mut canonical = canonical::Request::new(
+        cli.canonical_search.as_deref(),
+        cli.canonicalization_receipts.as_deref(),
+    )?;
+    if cli.canonical_search.is_some()
+        && matches!(
+            &cli.cmd,
+            Command::GlobRdf(_)
+                | Command::DocumentExpand { .. }
+                | Command::DocumentCompact { .. }
+                | Command::DocumentFlatten { .. }
+                | Command::DocumentFrame { .. }
+                | Command::YamlSource { .. }
+                | Command::WordId { .. }
+                | Command::Glob { .. }
+                | Command::GlobSet { .. }
+                | Command::Geo { .. }
+                | Command::Lift { .. }
+        )
+    {
+        return Err(CliError::Usage("the selected command performs no canonicalization; remove --canonical-search and --canonicalization-receipts".to_owned()));
+    }
+    canonical.protect(&cli.canonical_paths())?;
+    let result = dispatch_with_request(cli, &mut canonical);
+    canonical.finish(result)
+}
+
+fn dispatch_with_request(
+    cli: &Cli,
+    canonical: &mut canonical::Request,
+) -> Result<CliOutcome, CliError> {
     if cli.geo_profile.is_some()
         && !matches!(
             &cli.cmd,
@@ -219,6 +266,141 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         })
         .transpose()?;
     match &cli.cmd {
+        Command::DocumentExpand {
+            request,
+            input,
+            output,
+        }
+        | Command::DocumentCompact {
+            request,
+            input,
+            output,
+        }
+        | Command::DocumentFlatten {
+            request,
+            input,
+            output,
+        } => {
+            let (operation, command) = match &cli.cmd {
+                Command::DocumentExpand { .. } => (
+                    purrdf_validate::document::Operation::Expand,
+                    "document-expand",
+                ),
+                Command::DocumentCompact { .. } => (
+                    purrdf_validate::document::Operation::Compact,
+                    "document-compact",
+                ),
+                Command::DocumentFlatten { .. } => (
+                    purrdf_validate::document::Operation::Flatten,
+                    "document-flatten",
+                ),
+                _ => unreachable!("the enclosing match selects document operations"),
+            };
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                &format!("{command} accepts no loss ledger"),
+                &format!("{command} accepts no JSON-LD serialization options"),
+            )?;
+            document_expansion::run(operation, request, input, None, output, canonical)
+        }
+        Command::DocumentFrame {
+            request,
+            input,
+            frame,
+            output,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "document-frame accepts no loss ledger",
+                "document-frame accepts no JSON-LD serialization options",
+            )?;
+            document_expansion::run(
+                purrdf_validate::document::Operation::Frame,
+                request,
+                input,
+                Some(frame),
+                output,
+                canonical,
+            )
+        }
+        Command::YamlSource { command } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "yaml-source accepts no loss ledger",
+                "yaml-source accepts no JSON-LD options",
+            )?;
+            command.run(canonical)
+        }
+        Command::WordId { command } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "word-id accepts no loss ledger",
+                "word-id accepts no JSON-LD options",
+            )?;
+            word_id::run(command)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::Fingerprint {
+            digest,
+            symbols,
+            max_bytes,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "fingerprint presents a digest and has no RDF loss ledger",
+                "fingerprint presents a digest and accepts no JSON-LD options",
+            )?;
+            fingerprint::run(digest, *symbols, *max_bytes, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::GlobRdf(args) => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-rdf uses lossless Turtle or N-Triples and accepts no loss ledger",
+                "glob-rdf accepts no JSON-LD options",
+            )?;
+            glob_rdf::run(args)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::GlobSet {
+            value,
+            patterns,
+            mode,
+            surface,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-set emits matching indices and has no RDF loss ledger",
+                "glob-set emits matching indices and accepts no JSON-LD options",
+            )?;
+            glob::run_set(patterns, value, *mode, *surface, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::Glob {
+            pattern,
+            value,
+            mode,
+            surface,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob emits a match decision and has no RDF loss ledger",
+                "glob emits a match decision and accepts no JSON-LD options",
+            )?;
+            glob::run(pattern, value, *mode, *surface, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
         Command::Geo { input, output } => {
             cli::refuse_document_flags(
                 &ledger_target,
@@ -249,6 +431,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             }
         }
         Command::Convert {
+            yamlld_input_options,
             from,
             inputs,
             transport,
@@ -259,12 +442,15 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             report,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             imports,
-            canonical,
+            import_yamlld_input_options,
+            canonical: canonical_output,
             input,
             output,
         } => convert::run(
             &convert::ConvertOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 from: *from,
                 to: *to,
                 inputs,
@@ -272,26 +458,35 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 base: base.as_deref(),
                 entailment: *entailment,
                 rules: rules.as_deref(),
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
                 imports,
-                canonical: *canonical,
+                import_yamlld_input_options,
+                canonical: *canonical_output,
                 jsonld_options: jsonld_options.as_ref(),
             },
             input,
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Query {
+            yamlld_input_options,
             data,
             base,
             entailment,
             rules,
             report,
             imports,
+            import_yamlld_input_options,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             results_format,
             fuel,
             deadline,
@@ -299,6 +494,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             explain,
             aggregate_namespace,
@@ -306,16 +503,24 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             path_relation,
             xpath_regex,
             division,
+            now,
+            entropy_seed,
             query,
         } => query::run(
             &query::QueryOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 geo: selected_geo,
                 data,
                 base: base.as_deref(),
                 entailment: *entailment,
                 rules: rules.as_deref(),
                 imports,
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                import_yamlld_input_options,
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
                 results_format: *results_format,
                 query,
                 governors: GovernorFlags {
@@ -325,6 +530,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 explain: *explain,
@@ -336,11 +543,17 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 path_relations: path_relation,
                 xpath_regex: *xpath_regex,
                 division: division.unwrap_or_default(),
+                now: now.as_deref(),
+                entropy_seed: entropy_seed.as_deref(),
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         ),
         Command::Update {
+            yamlld_input_options,
+            now,
+            entropy_seed,
             data,
             from,
             output,
@@ -351,6 +564,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             aggregate_namespace,
             path_relation,
@@ -360,6 +575,9 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             graph_existence,
         } => update::run(
             &update::UpdateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                now: now.as_deref(),
+                entropy_seed: entropy_seed.as_deref(),
                 geo: selected_geo,
                 data,
                 from: *from,
@@ -375,6 +593,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 jsonld_options: jsonld_options.as_ref(),
@@ -384,14 +604,18 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 division: division.unwrap_or_default(),
             },
             &ledger_target,
+            canonical,
         ),
         Command::Reason {
+            yamlld_input_options,
             regime,
             rules,
             report,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             imports,
+            import_yamlld_input_options,
             from,
             to,
             base,
@@ -399,9 +623,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
         } => reason::run(
             *regime,
+            yamlld_input_options.as_deref(),
             rules.as_deref(),
-            &cli_materialize_limits(*max_stored_facts, *max_join_steps),
+            &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
             imports,
+            import_yamlld_input_options,
             *from,
             *to,
             base.as_deref(),
@@ -410,6 +636,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             jsonld_options.as_ref(),
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Entails {
@@ -419,9 +646,13 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             pattern,
             verify,
             imports,
+            import_yamlld_input_options,
             max_stored_facts,
             max_join_steps,
+            max_term_arena_bytes,
             report,
+            yamlld_input_options,
+            conclusion_yamlld_input_options,
             from,
             base,
             output,
@@ -433,7 +664,14 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 pattern: pattern.as_deref(),
                 verify: *verify,
                 imports,
-                limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                import_yamlld_input_options,
+                limits: cli_materialize_limits(
+                    *max_stored_facts,
+                    *max_join_steps,
+                    *max_term_arena_bytes,
+                ),
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                conclusion_yamlld_input_options: conclusion_yamlld_input_options.as_deref(),
                 from: *from,
                 base: base.as_deref(),
                 jsonld_options: jsonld_options.as_ref(),
@@ -441,21 +679,26 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
+            yamlld_input_options,
             proof,
             check_proof,
             step_cap,
             work_cap,
             imports,
+            import_yamlld_input_options,
             from,
             base,
             input,
         } => consistency::run(
             &consistency::ConsistencyOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 input,
                 imports,
+                import_yamlld_input_options,
                 from: *from,
                 base: base.as_deref(),
                 step_cap: *step_cap,
@@ -465,8 +708,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             },
             &ledger_target,
             jsonld_options.as_ref(),
+            canonical,
         ),
         Command::Validate {
+            yamlld_input_options,
+            shapes_yamlld_input_options,
             shapes,
             shapes_product,
             expect_identity,
@@ -475,6 +721,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             shapes_graph,
             shapes_base,
             import,
+            import_yamlld_input_options,
             box_role_vocab,
             conformance_disallows,
             subclass_of_in_shapes_graph,
@@ -482,6 +729,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             base,
             changes,
             changes_removed,
+            changes_yamlld_input_options,
+            changes_removed_yamlld_input_options,
             changes_from,
             format,
             fuel,
@@ -489,6 +738,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
             no_ceiling,
             xpath_regex,
             shacl_profile,
@@ -496,11 +747,16 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
         } => validate::run(
             &validate::ValidateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 shacl_profile: shacl_profile.as_deref(),
                 input,
                 output,
                 changes: changes.as_deref(),
                 changes_removed: changes_removed.as_deref(),
+                changes_yamlld_input_options: changes_yamlld_input_options.as_deref(),
+                changes_removed_yamlld_input_options: changes_removed_yamlld_input_options
+                    .as_deref(),
                 changes_from: *changes_from,
                 shapes: shapes.as_deref(),
                 shapes_product: shapes_product.as_deref(),
@@ -510,6 +766,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 shapes_graph: shapes_graph.as_deref(),
                 shapes_base: shapes_base.as_deref(),
                 imports: import,
+                import_yamlld_input_options,
                 box_role_vocab: box_role_vocab.as_deref(),
                 conformance_disallows,
                 subclass_of_in_shapes_graph: *subclass_of_in_shapes_graph,
@@ -526,21 +783,26 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     max_intermediate_cells: *max_intermediate_cells,
                     max_scratch_bytes: *max_scratch_bytes,
                     max_remote_requests: *max_remote_requests,
+                    max_udf_depth: *max_udf_depth,
+                    unlimited_udf_depth: *unlimited_udf_depth,
                     no_ceiling: *no_ceiling,
                 },
                 xpath_regex: *xpath_regex,
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         ),
         Command::Shex {
             schema,
             schema_from,
             imports,
             data,
+            yamlld_input_options,
             from,
             base,
             xpath_regex,
+            matcher_maximum_states,
             map,
             output,
         } => shex::run(
@@ -549,17 +811,21 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 schema_from: *schema_from,
                 imports,
                 data,
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 from: *from,
                 base: base.as_deref(),
                 xpath_regex: *xpath_regex,
+                matcher_maximum_states: *matcher_maximum_states,
                 map,
                 output,
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Describe {
+            yamlld_input_options,
             iris,
             from,
             to,
@@ -568,6 +834,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
         } => describe::run(
             &describe::DescribeOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 iris,
                 from: *from,
                 to: *to,
@@ -577,9 +844,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Project {
+            yamlld_input_options,
             profile,
             config,
             assets,
@@ -589,6 +858,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
         } => projection::run_project(
             *profile,
+            yamlld_input_options.as_deref(),
             config,
             assets.as_deref(),
             *from,
@@ -597,6 +867,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Lift {
@@ -615,18 +886,21 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             output,
             jsonld_options.as_ref(),
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Pack { command } => match command {
-            PackCommand::Verify { input } => pack::verify(input),
+            PackCommand::Verify { input } => pack::verify(input, canonical),
         }
         .map(|()| CliOutcome::Complete),
         Command::Shacl { command } => match command {
             ShaclCommand::Pack {
                 shapes,
+                yamlld_input_options,
                 shapes_from,
                 base,
                 import,
+                import_yamlld_input_options,
                 shapes_graph,
                 box_role_vocab,
                 out,
@@ -636,18 +910,23 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                     purrdf_rdf::SourceFormat::Native(purrdf_rdf::NativeRdfFormat::Turtle),
                     CliRdfFormat::to_source_format,
                 ),
+                yamlld_input_options.as_deref(),
                 base.as_deref(),
                 import,
+                import_yamlld_input_options,
                 shapes_graph.as_deref(),
                 box_role_vocab.as_deref(),
                 out,
+                canonical,
             ),
-            ShaclCommand::Verify { input } => shacl::verify(input),
-            ShaclCommand::Explain { input } => shacl::explain(input),
-            ShaclCommand::Diff { a, b } => shacl::diff(a, b),
+            ShaclCommand::Verify { input } => shacl::verify(input, canonical),
+            ShaclCommand::Explain { input } => shacl::explain(input, canonical),
+            ShaclCommand::Diff { a, b } => shacl::diff(a, b, canonical),
         }
         .map(|()| CliOutcome::Complete),
         Command::Rules {
+            now,
+            entropy_seed,
             shapes,
             shapes_from,
             shapes_base,
@@ -655,6 +934,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             srl,
             srl_base,
             import,
+            import_yamlld_input_options,
             check,
             explain,
             max_term_generating_rounds,
@@ -663,12 +943,16 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             max_join_steps,
             xpath_regex,
             from,
+            yamlld_input_options,
+            shapes_yamlld_input_options,
             to,
             base,
             input,
             output,
         } => shapes_tools::run_rules(
             &shapes_tools::RulesOptions {
+                now: now.as_deref(),
+                entropy_seed: entropy_seed.as_deref(),
                 shapes: shapes.as_deref(),
                 shapes_from: *shapes_from,
                 shapes_base: shapes_base.as_deref(),
@@ -676,6 +960,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 srl: srl.as_deref(),
                 srl_base: srl_base.as_deref(),
                 imports: import,
+                import_yamlld_input_options,
                 check: check.map(cli::CliSrlCheckLevel::level),
                 explain: ReportTarget::decode(explain.as_ref()),
                 max_term_generating_rounds: *max_term_generating_rounds,
@@ -684,6 +969,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 max_join_steps: *max_join_steps,
                 xpath_regex: *xpath_regex,
                 from: *from,
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 to: *to,
                 base: base.as_deref(),
                 input,
@@ -691,6 +978,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 jsonld_options: jsonld_options.as_ref(),
             },
             &ledger_target,
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::NodeExpr {
@@ -698,6 +986,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             shapes_from,
             shapes_base,
             import,
+            import_yamlld_input_options,
             expr,
             expr_at,
             expr_via,
@@ -707,6 +996,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             scope,
             xpath_regex,
             from,
+            yamlld_input_options,
+            shapes_yamlld_input_options,
             base,
             input,
             output,
@@ -716,6 +1007,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 shapes_from: *shapes_from,
                 shapes_base: shapes_base.as_deref(),
                 imports: import,
+                import_yamlld_input_options,
                 expr: shapes_tools::ExprFlags {
                     expr: expr.as_deref(),
                     expr_at: expr_at.as_deref(),
@@ -727,19 +1019,24 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 scope,
                 xpath_regex: *xpath_regex,
                 from: *from,
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 base: base.as_deref(),
                 input,
                 output,
             },
             &ledger_target,
             jsonld_options.as_ref(),
+            canonical,
         )
         .map(|()| CliOutcome::Complete),
         Command::Shapes { command } => match command {
             ShapesCommand::Lint {
                 from,
+                yamlld_input_options,
                 base,
                 import,
+                import_yamlld_input_options,
                 box_role_vocab,
                 shapes_graph,
                 input,
@@ -747,8 +1044,10 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             } => shapes_tools::run_lint(
                 &shapes_tools::LintOptions {
                     from: *from,
+                    yamlld_input_options: yamlld_input_options.as_deref(),
                     base: base.as_deref(),
                     imports: import,
+                    import_yamlld_input_options,
                     box_role_vocab: box_role_vocab.as_deref(),
                     shapes_graph: shapes_graph.as_deref(),
                     input,
@@ -756,6 +1055,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 },
                 &ledger_target,
                 jsonld_options.as_ref(),
+                canonical,
             ),
         }
         .map(|()| CliOutcome::Complete),

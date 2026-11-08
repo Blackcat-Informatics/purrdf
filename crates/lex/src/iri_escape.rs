@@ -206,7 +206,15 @@ fn push_uchar<W: TextOut + ?Sized>(ch: char, out: &mut W) {
 fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W) {
     let bytes = iri.as_bytes();
     let mut run_start = at;
-    while let Some(offset) = find_first_candidate(&bytes[at..]) {
+    while at < bytes.len() {
+        let end = at.saturating_add(out.scan_limit().max(1)).min(bytes.len());
+        if !out.checkpoint(end - at) {
+            return;
+        }
+        let Some(offset) = find_first_candidate(&bytes[at..end]) else {
+            at = end;
+            continue;
+        };
         let hit = at + offset;
         let ch = iri[hit..]
             .chars()
@@ -216,6 +224,9 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W)
         if is_iriref_escape_required(ch) {
             out.push_str(&iri[run_start..hit]);
             push_uchar(ch, out);
+            if out.failed() {
+                return;
+            }
             run_start = at;
         }
     }

@@ -30,8 +30,8 @@
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
 
-use purrdf_gts::model::{Graph, Term, TermKind};
-use purrdf_gts::reader::read;
+use purrdf_gts::model::{Graph, ReifierRow, Term, TermKind};
+use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::writer::Writer;
 
 /// The legacy indirect spelling: components come from the `reifies` row bound
@@ -304,6 +304,56 @@ fn a_binding_loop_is_refused_across_frame_boundaries() {
         "only the innocent binding survives",
     );
     assert_no_term_reaches_itself(&graph);
+}
+
+/// The streaming reader folds each frame with a fresh fold state, so what a
+/// `reifies` row is checked against (the segment's anchors and first bindings)
+/// has to be carried from frame to frame. Dropping it would admit the loop in
+/// silence on exactly the path event importers take: it must refuse the same
+/// row, and report the same diagnostics, as the materializing reader.
+#[test]
+fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
+    #[derive(Default)]
+    struct Rows(Vec<ReifierRow>);
+    impl StreamingSink for Rows {
+        fn reifier(&mut self, _segment_index: u64, reifier: ReifierRow) {
+            self.0.push(reifier);
+        }
+    }
+
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
+    ]);
+    writer.add_terms(&[indirect_triple_term(0)]); // 2
+    writer.add_reifies(&[(0, (1, 1, 1), None)]); // innocent: term 2 = <<( p p p )>>
+    writer.add_terms(&[indirect_triple_term(0)]); // 3, sharing reifier 0
+    writer.add_reifies(&[(0, (3, 1, 1), None)]); // would make 3 contain itself
+    let bytes = writer.into_bytes();
+
+    let mut rows = Rows::default();
+    let streamed = read_to_sink_with_options(&bytes, ReadOptions::new(false, None), &mut rows);
+    let streamed_codes: Vec<&str> = streamed
+        .diagnostics
+        .iter()
+        .map(|d| d.code.as_str())
+        .collect();
+    assert!(
+        streamed_codes.contains(&"DamagedFrame"),
+        "{:?}",
+        streamed.diagnostics
+    );
+    assert_eq!(
+        streamed_codes,
+        diagnostic_codes(&read(&bytes, false, None)),
+        "the streaming fold reports what the materializing fold reports",
+    );
+    assert_eq!(
+        rows.0,
+        vec![(0, (1, 1, 1), None)],
+        "only the innocent binding is streamed",
+    );
 }
 
 /// An explicitly self-bound term (`rf == its own id`) is the same hazard

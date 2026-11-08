@@ -15,6 +15,9 @@
 //! does not re-allocate the shape's variable names once per focus node.
 
 pub(crate) mod coordinates;
+mod operation;
+
+pub use operation::OperationError;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -28,7 +31,7 @@ use purrdf_sparql_eval::{
     AggregateRegistry, BoundFunctionRegistry, ExtensionEnv, GovernorState, GraphResolver,
     InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, NativeSparqlEngine,
     Prebinding, PreparedExecution, PropertyFunctionRegistry, QueryOptions, ServiceResolver,
-    StopCause, UserFunctionRegistry, ValueAggregate, fold_values, order_values,
+    StopCause, ValueAggregate, fold_values, order_values,
 };
 
 use crate::report::{Severity, ValidationResult};
@@ -685,13 +688,13 @@ pub(crate) fn eval_select_nodes_view<
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, or if
+/// Returns a typed SHACL failure if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, or if
 /// the accumulator refuses an operand.
 pub fn eval_aggregate(
     dataset: &Arc<RdfDataset>,
     agg: &str,
     values: &[Term],
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, crate::error::ShapesError> {
     eval_aggregate_view(dataset, agg, values)
 }
 
@@ -706,20 +709,18 @@ pub(crate) fn eval_aggregate_view<
     _dataset: &D,
     agg: &str,
     values: &[Term],
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, crate::error::ShapesError> {
     let aggregate = match agg {
         "MIN" => ValueAggregate::Min,
         "MAX" => ValueAggregate::Max,
         "SUM" => ValueAggregate::Sum,
         other => {
-            return Err(format!(
-                "unsupported aggregate {other} (expected MIN/MAX/SUM)"
-            ));
+            return Err(format!("unsupported aggregate {other} (expected MIN/MAX/SUM)").into());
         }
     };
     let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
-    let folded = fold_values(aggregate, &operands)
-        .map_err(|e| format!("aggregate {agg} evaluation error: {e}"))?;
+    let folded =
+        fold_values(aggregate, &operands).map_err(|error| OperationError::aggregate(agg, error))?;
     Ok(folded.as_ref().map(term_value_to_native))
 }
 
@@ -740,14 +741,14 @@ pub(crate) fn eval_aggregate_view<
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` never in the current implementation; the signature keeps
+/// Returns no error in the current implementation; the signature keeps
 /// the fallible shape its callers already thread so a future comparator that can
 /// refuse an operand does not become a breaking change.
 pub fn eval_order(
     dataset: &Arc<RdfDataset>,
     values: &[Term],
     descending: bool,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_order_view(dataset, values, descending)
 }
 
@@ -760,7 +761,7 @@ pub(crate) fn eval_order_view<
     _dataset: &D,
     values: &[Term],
     descending: bool,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
     Ok(order_values(operands, descending)
         .iter()
@@ -1212,7 +1213,7 @@ fn run_query_view<
                         base_iri: None,
                         substitutions,
                     },
-                    options,
+                    &options,
                 )
             })
             .map_err(crate::xpath::query_error)?;
@@ -1221,13 +1222,13 @@ fn run_query_view<
 
     let Some(state) = scopes.governors.as_ref() else {
         return Ok(SPARQL_ENGINE
-            .with(|engine| engine.query_interned_view(dataset, request, options, visit))
+            .with(|engine| engine.query_interned_view(dataset, request, &options, visit))
             .map_err(crate::xpath::query_error)??);
     };
 
     let outcome = SPARQL_ENGINE
         .with(|engine| {
-            engine.query_governed_interned_in_operation(dataset, request, options, state, visit)
+            engine.query_governed_interned_in_operation(dataset, request, &options, state, visit)
         })
         .map_err(crate::xpath::query_error)?;
     certify_governed(outcome)
@@ -1256,14 +1257,16 @@ fn certify_governed<R>(
             // was not whole is not a verdict, for exactly the reason the truncated arm
             // below is not one, so the incompleteness is refused here by name rather
             // than discarded along with the receipt it rode in on.
-            let incomplete: Vec<String> = relations
+            let incomplete: Vec<crate::error::IncompleteRelation> = relations
                 .witness
                 .iter()
                 .flat_map(|(iri, attested)| {
-                    attested
-                        .incompleteness
-                        .iter()
-                        .map(move |reason| format!("<{iri}>: {reason}"))
+                    attested.incompleteness.iter().map(move |reason| {
+                        crate::error::IncompleteRelation {
+                            iri: iri.to_owned(),
+                            reason: reason.clone(),
+                        }
+                    })
                 })
                 .collect();
             if !incomplete.is_empty() {
@@ -1306,6 +1309,7 @@ static EMPTY_FUNCTIONS: BoundFunctionRegistry = BoundFunctionRegistry::EMPTY;
 /// held them apart is a door that can forget one of them. See that module's
 /// documentation for why the separateness was the bug.
 struct AmbientScopes {
+    coordinate_recorder: Option<Arc<coordinates::Recorder>>,
     now: Option<Arc<purrdf_xsd::temporal::DateTime>>,
     /// The SHACL-AF function table in scope, if a validation installed one. Bound
     /// against `env` already — see [`bind_in_current_env`].
@@ -1336,8 +1340,8 @@ impl AmbientScopes {
     ///
     /// # Errors
     ///
-    /// `Err(String)` if the extension environment cannot be derived.
-    fn snapshot() -> Result<Self, String> {
+    /// A typed native failure if the extension environment cannot be derived.
+    fn snapshot() -> Result<Self, crate::error::ShapesError> {
         let governors = current_governors();
         // Sources exist only beside a governor state (see `CURRENT_SOURCES`), so the
         // ungoverned path does not touch their slot at all.
@@ -1351,9 +1355,10 @@ impl AmbientScopes {
             .as_ref()
             .map(crate::query_law::Runtime::function_admission);
         Ok(Self {
+            coordinate_recorder: coordinates::recorder(),
             now: coordinates::now(),
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
-            env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
+            env: current_env()?,
             governors,
             sources,
             call_depth: current_call_depth(),
@@ -1419,6 +1424,29 @@ impl AmbientScopes {
             .map_or(options, |now| options.with_now(now));
         let options =
             coordinates::next_seed().map_or(options, |seed| options.with_entropy_seed(seed));
+        let options = self
+            .coordinate_recorder
+            .as_ref()
+            .map_or(options, |recorder| {
+                let options = options.with_coordinate_observer(recorder.as_ref());
+                // The typed rule program binds parser-generated scalar closures.
+                // Arbitrary external producers and remote sources require their own
+                // caller certification, which a shapes model cannot manufacture.
+                if options.remote.is_none()
+                    && options.load.is_none()
+                    && options.candidate_scope.is_none()
+                    && options.property_functions().is_empty()
+                    && options.aggregates().is_empty()
+                {
+                    recorder
+                        .implementation_identity()
+                        .map_or(options, |identity| {
+                            options.with_implementation_identity(identity)
+                        })
+                } else {
+                    options
+                }
+            });
         let options = self.native_xpath.as_ref().map_or(options, |configuration| {
             options.with_xpath_regex(configuration.profile, configuration.limits)
         });
@@ -1594,7 +1622,7 @@ impl ShaclExecution {
             .with_env(&scopes.env)
             .with_declared_prebound(declared_shape_context(parameters, scopes));
         let execution = SPARQL_ENGINE
-            .with(|engine| engine.prepare_execution(query, None, parameters, options))
+            .with(|engine| engine.prepare_execution(query, None, parameters, &options))
             .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
@@ -1750,7 +1778,7 @@ fn run_bound_view<
 
     let Some(state) = scopes.governors.as_ref() else {
         return Ok(SPARQL_ENGINE
-            .with(|engine| engine.execute(&mut handle.execution, dataset, options, visit))
+            .with(|engine| engine.execute(&mut handle.execution, dataset, &options, visit))
             .map_err(crate::xpath::query_error)??);
     };
 
@@ -1759,7 +1787,7 @@ fn run_bound_view<
             engine.execute_governed_in_operation(
                 &mut handle.execution,
                 dataset,
-                options,
+                &options,
                 state,
                 visit,
             )
@@ -2132,8 +2160,9 @@ impl Drop for FunctionScope {
 ///
 /// # Errors
 ///
-/// A message if a registered relation's or aggregate's declaration methods panic.
-pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
+/// The original evaluator failure if a registered relation's or aggregate's
+/// declaration methods panic.
+pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, crate::error::ShapesError> {
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let options = current_parser_options();
@@ -2159,12 +2188,12 @@ pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
                 .unwrap_or_else(ParserOptions::default),
             relations
                 .as_deref()
-                .map_or_else(|| PropertyFunctionRegistry::EMPTY, Clone::clone),
+                .map_or(PropertyFunctionRegistry::EMPTY, Clone::clone),
             aggregates
                 .as_deref()
-                .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+                .map_or(AggregateRegistry::EMPTY, Clone::clone),
         )
-        .map_err(|e| format!("extension environment: {e}"))?,
+        .map_err(OperationError::environment)?,
     );
     CACHED_ENV.with(|slot| {
         *slot.borrow_mut() = Some(CachedEnv {
@@ -2221,7 +2250,7 @@ impl CachedEnv {
     }
 }
 
-/// Bind `functions`' SPARQL bodies against the extension environment currently in
+/// Bind `shapes`' function bodies and validation request against the environment currently in
 /// force — the only route from a parsed shapes graph's declarations to something
 /// the evaluator will accept.
 ///
@@ -2231,6 +2260,9 @@ impl CachedEnv {
 /// of them, and the parse that used to happen at load time was correct for none of
 /// them that used a relation. It happens here, where the declarations and the
 /// environment finally meet.
+/// `shapes_graph` is the executing binding's graph placement, when supplied;
+/// otherwise the parsed shapes' placement applies. The query still supplies its
+/// own fresh focus graph. Raw SPARQL engine binding supplies no SHACL request.
 ///
 /// Repeated calls under the same environment are cheap rather than wasteful: the
 /// engine's plan cache is keyed on the body text and the environment's identity, so
@@ -2239,13 +2271,16 @@ impl CachedEnv {
 ///
 /// # Errors
 ///
-/// A message naming the function whose body failed to parse or to admit — a body
+/// A typed native diagnostic naming the function whose body failed to parse or to admit — a body
 /// naming a declared-but-unregistered relation IRI, or one whose relation chain no
 /// declared access mode can serve, fails HERE, once, rather than per row during
 /// evaluation.
 pub fn bind_in_current_env(
-    functions: &UserFunctionRegistry,
-) -> Result<Arc<BoundFunctionRegistry>, String> {
+    shapes: &crate::shapes::Shapes,
+    shapes_graph: Option<&str>,
+) -> Result<Arc<BoundFunctionRegistry>, crate::error::ShapesError> {
+    let functions = &shapes.functions;
+    let shapes_graph = shapes_graph.or(shapes.shapes_graph.as_deref());
     // Nothing declared, nothing to bind — and an empty bound registry is compatible
     // with every environment, because it bound no body and so cannot have bound one
     // against the wrong one (see `BoundFunctionRegistry::EMPTY`).
@@ -2262,16 +2297,97 @@ pub fn bind_in_current_env(
         return Ok(Arc::clone(&EMPTY));
     }
     let env = current_env()?;
-    SPARQL_ENGINE
-        .with(|engine| engine.bind_functions(functions.clone(), &env))
-        .map(Arc::new)
-        .map_err(|e| e.to_string())
+    // The orchestration scope already owns this immutable binding. Reuse it in
+    // focus chunks instead of cloning declarations and rescanning shape-class
+    // edges per shape. Every match is about original owners and request law;
+    // no data graph or conformance answer is retained here.
+    if let Some(bound) = CURRENT_FUNCTIONS.with(|slot| {
+        let slot = slot.borrow();
+        let bound = slot.as_ref()?;
+        let request = bound.owned_invocation_context::<FunctionRequest>()?;
+        (request.matches(shapes, shapes_graph) && bound.admits(&env)).then(|| Arc::clone(bound))
+    }) {
+        return Ok(bound);
+    }
+    let bound = SPARQL_ENGINE
+        .with(|engine| engine.bind_functions(functions.as_ref().clone(), &env))
+        .map_err(OperationError::binding)?;
+    if !bound.requires_focus_graph()
+        && shapes.validation_options.is_default()
+        && shapes_graph.is_none()
+    {
+        return Ok(Arc::new(bound));
+    }
+    let subclasses = crate::engine::request_subclasses(shapes);
+    Ok(Arc::new(bound.with_invocation_context(|registry| {
+        FunctionRequest {
+            registry: Arc::new(registry),
+            declarations: Arc::downgrade(functions),
+            shapes_source: Arc::downgrade(&shapes.shapes_dataset),
+            request: shapes.validation_options.clone(),
+            shapes_graph: shapes_graph.map(Arc::from),
+            subclasses,
+        }
+    })))
+}
+
+/// The request is retained with the bound registry; the graph is supplied anew
+/// by each query. Function declarations continue to retain their original model.
+#[derive(Debug)]
+pub(crate) struct FunctionRequest {
+    registry: Arc<BoundFunctionRegistry>,
+    declarations: std::sync::Weak<purrdf_sparql_eval::UserFunctionRegistry>,
+    shapes_source: std::sync::Weak<RdfDataset>,
+    pub(crate) request: crate::engine::ValidationRequest,
+    shapes_graph: Option<Arc<str>>,
+    subclasses: Option<Box<crate::data::ClassSupplement>>,
+}
+
+impl FunctionRequest {
+    fn matches(&self, shapes: &crate::shapes::Shapes, graph: Option<&str>) -> bool {
+        // Weak anchors preserve allocation identity without retaining the raw
+        // shape acquisition. Its payload may drop when only bindings remain.
+        self.declarations.as_ptr() == Arc::as_ptr(&shapes.functions)
+            && self.shapes_source.as_ptr() == Arc::as_ptr(&shapes.shapes_dataset)
+            && self.request.same_options(&shapes.validation_options)
+            && self.shapes_graph.as_deref() == graph
+    }
+    pub(crate) fn enter(call: &purrdf_sparql_eval::ExprFnCall<'_>) -> Option<FunctionScope> {
+        let context = call.invocation_context::<Self>()?;
+        Some(enter_function_scope(Arc::clone(&context.registry)))
+    }
+
+    pub(crate) fn store(
+        call: &purrdf_sparql_eval::ExprFnCall<'_>,
+    ) -> Result<crate::data::ShaclData, crate::ShapesError> {
+        let context = call.invocation_context::<Self>();
+        let store = crate::data::ShaclData::new(
+            Arc::clone(call.focus_graph),
+            Arc::clone(call.focus_graph),
+            None,
+        )
+        .with_shapes_graph(context.and_then(|context| context.shapes_graph.clone()));
+        match context.and_then(|context| context.subclasses.as_deref()) {
+            Some(subclasses) => subclasses.apply(&store),
+            _ => Ok(store),
+        }
+    }
+
+    pub(crate) fn guard(
+        call: &purrdf_sparql_eval::ExprFnCall<'_>,
+    ) -> crate::expression::RecursionGuard {
+        let guard = crate::expression::RecursionGuard::with_depth(call.depth);
+        match call.invocation_context::<Self>() {
+            Some(context) => guard.with_request(&context.request),
+            None => guard,
+        }
+    }
 }
 
 /// Install `registry` as the current SHACL-AF function table, returning a guard that
 /// restores the previous table when dropped.
 ///
-/// Takes a [`BoundFunctionRegistry`], not a [`UserFunctionRegistry`]: a function
+/// Takes a [`BoundFunctionRegistry`], not a [`purrdf_sparql_eval::UserFunctionRegistry`]: a function
 /// body is SPARQL, so which of its predicate IRIs are calls to registered relations
 /// is decided by the extension environment in force, and a registry that has not
 /// been bound to one has no answer to that question. Requiring the bound form here
@@ -3340,7 +3456,10 @@ mod tests {
     fn eval_aggregate_rejects_unknown_agg() {
         let dataset = dataset_from_ntriples(&[]);
         let err = eval_aggregate(&dataset, "AVG", &[int_lit("1")]).unwrap_err();
-        assert!(err.contains("unsupported aggregate"), "got: {err}");
+        assert!(
+            err.to_string().contains("unsupported aggregate"),
+            "got: {err}"
+        );
     }
 
     // ── eval_order ────────────────────────────────────────────────────────────
@@ -3468,12 +3587,86 @@ mod tests {
     /// test is evidence it does.
     #[derive(Debug)]
     struct DenyListRelation {
+        panic_arity: bool,
         modes: [purrdf_sparql_eval::BindingPattern; 1],
+    }
+
+    #[test]
+    fn current_environment_retains_native_declaration_failure_after_scope_drop() {
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let error = {
+            let mut registry = PropertyFunctionRegistry::new();
+            let mut relation = DenyListRelation::new();
+            relation.panic_arity = true;
+            registry.register("http://example.org/broken", Arc::new(relation));
+            let _scope = enter_property_function_scope(Arc::new(registry));
+            current_env().expect_err("a broken declaration must fail")
+        };
+        assert_eq!(error.failure_class(), crate::error::FailureClass::Processor);
+        let native = error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_sparql_eval::EvalError>()
+            .unwrap();
+        let captured = Capture::read(&error).child("cause");
+        assert_eq!(captured.code, "shapes-sparql-environment");
+        assert_eq!(captured.child("cause").code, Capture::read(native).code);
+        assert!(
+            current_env().is_ok(),
+            "the restored empty scope remains valid"
+        );
+    }
+
+    #[test]
+    fn function_binding_retains_original_diagnostic_after_declarations_drop() {
+        use purrdf_sparql_eval::{TypeConstraint, UserFnBody, UserFunction};
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let declared = |body: &str| {
+            let mut shapes = crate::shapes::Shapes::default();
+            Arc::make_mut(&mut shapes.functions).insert(
+                "http://example.org/f",
+                UserFunction {
+                    params: Vec::new(),
+                    required: 0,
+                    body: Arc::from(body),
+                    kind: UserFnBody::Select,
+                    return_constraint: TypeConstraint::default(),
+                },
+            );
+            shapes
+        };
+        let error = bind_in_current_env(&declared("SELECT WHERE {"), None)
+            .expect_err("the malformed function body must fail");
+        let native = error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_core::RdfDiagnostic>()
+            .unwrap();
+        assert_eq!(native.code, "native-sparql-query-parse");
+        assert!(native.message.contains("http://example.org/f"));
+        assert_eq!(
+            error.failure_class(),
+            crate::error::FailureClass::Evaluation
+        );
+        let captured = Capture::read(&error).child("cause");
+        assert_eq!(captured.code, "shapes-sparql-function-binding");
+        assert_eq!(captured.child("cause").code, Capture::read(native).code);
+        bind_in_current_env(&declared("SELECT (1 AS ?value) WHERE {}"), None)
+            .expect("the neighboring valid function body still binds");
     }
 
     impl DenyListRelation {
         fn new() -> Self {
             Self {
+                panic_arity: false,
                 modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
             }
         }
@@ -3485,6 +3678,7 @@ mod tests {
         }
 
         fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            assert!(!self.panic_arity, "native declaration failed");
             purrdf_sparql_eval::PfArity::new(1, 1)
         }
 

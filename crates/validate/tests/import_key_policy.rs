@@ -24,7 +24,14 @@ fn two_distinct_absolute_keys_are_accepted_by_both_boundaries() {
 #[test]
 fn a_repeated_key_is_refused_by_both_boundaries() {
     let error = premise_import_map(&[(A, DOC), (A, DOC)], &[]).expect_err("a repeated key");
-    assert!(error.contains("twice") && error.contains(A), "{error}");
+    let fields = purrdf_validate::native_error::to_json(&error).expect("native import fields");
+    let original = &fields["fields"]["cause"]["value"];
+    assert_eq!(original["code"].as_str(), Some("imports-key-duplicate"));
+    assert_eq!(original["fields"]["iri"]["value"].as_str(), Some(A));
+    assert!(
+        error.to_string().contains("twice") && error.to_string().contains(A),
+        "{error}"
+    );
     let error = ShapesImports::from_turtle(&[(A, TTL), (A, TTL)]).expect_err("a repeated key");
     assert!(error.to_string().contains("twice"), "{error}");
 }
@@ -33,7 +40,10 @@ fn a_repeated_key_is_refused_by_both_boundaries() {
 fn a_relative_or_empty_key_is_refused_by_both_boundaries() {
     for key in ["lib", "../lib"] {
         let error = premise_import_map(&[(key, DOC)], &[]).expect_err("a non-absolute key");
-        assert!(error.contains("import key <"), "{key:?}: {error}");
+        assert!(
+            error.to_string().contains("import key <"),
+            "{key:?}: {error}"
+        );
         let error = ShapesImports::from_turtle(&[(key, TTL)]).expect_err("a non-absolute key");
         assert!(
             error.to_string().contains("import key <"),
@@ -45,7 +55,7 @@ fn a_relative_or_empty_key_is_refused_by_both_boundaries() {
 #[test]
 fn the_empty_key_is_refused_by_both_boundaries() {
     let error = premise_import_map(&[("", DOC)], &[]).expect_err("the empty key");
-    assert!(error.contains("empty ontology IRI"), "{error}");
+    assert!(error.to_string().contains("empty ontology IRI"), "{error}");
     let error = ShapesImports::from_turtle(&[("", TTL)]).expect_err("the empty key");
     assert!(error.to_string().contains("empty ontology IRI"), "{error}");
 }

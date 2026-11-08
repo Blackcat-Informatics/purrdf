@@ -18,7 +18,7 @@
 
 use purrdf_core::TermValue;
 
-use super::certificate::{Session, Verdict};
+use super::certificate::{Certified, DirectnessRefusal, Session, Verdict};
 use super::classify::Subsumptions;
 use super::proof::{Claim, ClaimSubject, refutation_claim};
 use crate::owl_dl::graph::Assumptions;
@@ -36,12 +36,17 @@ pub(crate) fn is_instance(session: &mut Session<'_>, individual: u32, concept: u
 }
 
 /// The realized types of an ontology's named individuals.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct Realization {
     /// Every established `a : C`, sorted.
     types: Vec<(TermValue, TermValue)>,
     /// The subset of [`Self::types`] that is most specific, sorted.
-    direct: Vec<(TermValue, TermValue)>,
+    pub(super) direct: Vec<(TermValue, TermValue)>,
+}
+
+purrdf_hash::debug_non_exhaustive! {
+    /// Unproved direct candidates remain private, including in debug output.
+    Realization { types }
 }
 
 impl Realization {
@@ -54,18 +59,6 @@ impl Realization {
     #[must_use]
     pub fn types(&self) -> &[(TermValue, TermValue)] {
         &self.types
-    }
-
-    /// The MOST SPECIFIC entailed types: those `a : C` for which no entailed `a : D` has
-    /// `D` strictly subsumed by `C`. Sorted.
-    ///
-    /// Two equivalent classes that are both types are BOTH listed. Collapsing them to a
-    /// representative would answer a question about the hierarchy inside an answer about
-    /// an individual, and a caller who wants the collapse has
-    /// [`ClassHierarchy::equivalences`](super::ClassHierarchy::equivalences) to do it with.
-    #[must_use]
-    pub fn direct_types(&self) -> &[(TermValue, TermValue)] {
-        &self.direct
     }
 
     /// Realize `individuals` against `classes`, reusing the classifier's matrix for the
@@ -81,67 +74,72 @@ impl Realization {
         classes: &[(u32, u32)],
         m: &Subsumptions,
     ) -> (Self, Vec<Claim>) {
+        Self::decide_until(session, individuals, classes, m, || true)
+    }
+
+    /// Retain answers and their run bindings before polling the next decision.
+    pub(super) fn decide_until(
+        session: &mut Session<'_>,
+        individuals: &[u32],
+        classes: &[(u32, u32)],
+        m: &Subsumptions,
+        mut poll: impl FnMut() -> bool,
+    ) -> (Self, Vec<Claim>) {
         let n = classes.len();
-        let cells = individuals.len() * n;
-        let records = session.records();
-        // `entailed[i][c]` — whether individual `i` was established an instance of the
-        // `c`-th class. Dense and positional, so no map order reaches the answer.
-        let mut entailed = vec![false; cells];
-        // WHICH run decided each pair, in the same dense layout: a realization's answer
-        // binding has to name one run per (individual, class) question, and reconstructing
-        // that afterwards from a count would be a guess about the order they were asked in.
-        // Both of these exist for the binding alone, and so only when there is one.
-        let mut runs = if records {
-            vec![0_usize; cells]
-        } else {
-            Vec::new()
-        };
-        let mut verdicts = if records {
-            vec![Verdict::Unknown; cells]
-        } else {
-            Vec::new()
-        };
-        for (i, &individual) in individuals.iter().enumerate() {
-            for (c, &(_, concept)) in classes.iter().enumerate() {
-                let verdict = is_instance(session, individual, concept);
-                entailed[i * n + c] = verdict.is_true();
-                if records {
-                    verdicts[i * n + c] = verdict;
-                    runs[i * n + c] = session.last_run();
-                }
-            }
-        }
-
-        let kb = session.kb();
-        let individual_name = |i: usize| kb.interner.value(individuals[i]).clone();
-        let class_name = |c: usize| kb.interner.value(classes[c].0).clone();
-
+        let mut entailed = vec![false; individuals.len() * n];
         let mut types = Vec::new();
         let mut direct = Vec::new();
         let mut claims = Vec::new();
-        for i in 0..individuals.len() {
-            for c in 0..n {
-                // Every pair the realizer ASKED about gets a claim, established or not: an
-                // answer binding that listed only the positive ones would leave a reader
-                // unable to tell a type the search ruled out from one it never reached.
-                if records {
+        'decisions: for (i, &individual) in individuals.iter().enumerate() {
+            for (c, &(class, concept)) in classes.iter().enumerate() {
+                if !poll() {
+                    break 'decisions;
+                }
+                let verdict = is_instance(session, individual, concept);
+                entailed[i * n + c] = verdict.is_true();
+                let kb = session.kb();
+                if session.records() {
                     claims.push(refutation_claim(
                         ClaimSubject::Type {
-                            individual: individual_name(i),
-                            class: class_name(c),
+                            individual: kb.interner.value(individual).clone(),
+                            class: kb.interner.value(class).clone(),
                         },
-                        verdicts[i * n + c],
-                        &[runs[i * n + c]],
+                        verdict,
+                        &[session.last_run()],
                     ));
+                }
+                if verdict.is_true() {
+                    types.push((
+                        kb.interner.value(individual).clone(),
+                        kb.interner.value(class).clone(),
+                    ));
+                }
+            }
+        }
+        let kb = session.kb();
+        'direct: for (i, &individual) in individuals.iter().enumerate() {
+            for (c, &(class, _)) in classes.iter().enumerate() {
+                if !poll() {
+                    break 'direct;
                 }
                 if !entailed[i * n + c] {
                     continue;
                 }
-                types.push((individual_name(i), class_name(c)));
-                let specialized =
-                    (0..n).any(|d| entailed[i * n + d] && m.holds(d, c) && !m.holds(c, d));
+                let mut specialized = false;
+                for d in 0..n {
+                    if !poll() {
+                        break 'direct;
+                    }
+                    if entailed[i * n + d] && m.holds(d, c) && !m.holds(c, d) {
+                        specialized = true;
+                        break;
+                    }
+                }
                 if !specialized {
-                    direct.push((individual_name(i), class_name(c)));
+                    direct.push((
+                        kb.interner.value(individual).clone(),
+                        kb.interner.value(class).clone(),
+                    ));
                 }
             }
         }
@@ -149,5 +147,19 @@ impl Realization {
         types.sort();
         direct.sort();
         (Self { types, direct }, claims)
+    }
+}
+
+impl Certified<Realization> {
+    /// Exact most-specific types, sorted, including every equivalent class that
+    /// is a type. No strictly more specific entailed type exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original certificate in [`DirectnessRefusal`] unless the
+    /// complete supplied ontology was decided. Positive types remain available
+    /// through [`Self::answer`].
+    pub fn direct_types(&self) -> Result<&[(TermValue, TermValue)], DirectnessRefusal<'_>> {
+        Ok(&self.direct_answer()?.direct)
     }
 }

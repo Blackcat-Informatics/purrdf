@@ -67,7 +67,11 @@ impl Meter<'_, '_, '_> {
     }
     fn div(&mut self, a: &Rat, b: &Rat) -> Result<Rat, GeoError> {
         if b.is_zero() {
-            return Err(GeoError::domain("polynomial contact division by zero"));
+            return Err(crate::GeometryDomainError::polynomial_scalar_quotient(
+                a,
+                b,
+                self.progress,
+            ));
         }
         Ok(
             crate::numerical::ExactAdmission::new(self.context, self.progress)
@@ -227,9 +231,16 @@ impl Poly {
         divisor: &Self,
         meter: &mut Meter<'_, '_, '_>,
     ) -> Result<(Self, Self), GeoError> {
-        let degree = divisor
-            .degree()
-            .ok_or_else(|| GeoError::domain("polynomial contact division by zero"))?;
+        let degree = divisor.degree().ok_or_else(|| {
+            GeoError::retained_failure_with_progress(
+                crate::GeometryDomainError::PolynomialDivision {
+                    dividend: self.0.clone(),
+                    divisor: divisor.0.clone(),
+                },
+                GeoError::GeometryDomain,
+                meter.progress,
+            )
+        })?;
         let lead = divisor.leading();
         let mut remainder = self.clone();
         let mut quotient = meter.zeros(self.0.len().saturating_sub(degree))?;
@@ -826,6 +837,70 @@ mod tests {
 
     fn rat(text: &str) -> Rat {
         Rat::parse_decimal(text).unwrap()
+    }
+
+    #[test]
+    fn zero_divisors_keep_original_scalar_and_polynomial_operands() {
+        use crate::{GeoError, GeometryDomainError};
+        use purrdf_testkit::error_capture::Capture;
+
+        let numerator = rat("18446744073709551617.125");
+        let (scalar, polynomial) = {
+            let mut context = MetricContext::wgs84().unwrap();
+            let mut progress = WorkProgress::new(None);
+            let mut retained = 0;
+            let meter = &mut Meter {
+                context: &mut context,
+                progress: &mut progress,
+                retained: &mut retained,
+            };
+            let scalar = meter.div(&numerator, &Rat::zero()).unwrap_err();
+            let dividend = Poly::linear(numerator.clone(), rat("0.375"), meter).unwrap();
+            let polynomial = dividend.divide(&Poly::default(), meter).unwrap_err();
+            (scalar, polynomial)
+        };
+        let surviving = (scalar.clone(), polynomial.clone());
+        drop((scalar, polynomial, numerator));
+        let (scalar, polynomial) = surviving;
+        let GeoError::GeometryDomain(cause) = &scalar else {
+            panic!("scalar quotient retains its native domain cause")
+        };
+        let GeometryDomainError::PolynomialScalarQuotient {
+            numerator,
+            denominator,
+        } = &**cause
+        else {
+            panic!("scalar operands remain distinct fields")
+        };
+        assert_eq!(**numerator, rat("18446744073709551617.125"));
+        assert!(denominator.is_zero());
+        assert_eq!(
+            Capture::read(&scalar).child("cause").code,
+            "geometry-polynomial-scalar-quotient"
+        );
+        let GeoError::GeometryDomain(cause) = &polynomial else {
+            panic!("polynomial division retains its native domain cause")
+        };
+        let GeometryDomainError::PolynomialDivision { dividend, divisor } = &**cause else {
+            panic!("coefficient operands remain distinct fields")
+        };
+        assert_eq!(
+            &**dividend,
+            &[rat("18446744073709551617.125"), rat("0.375")]
+        );
+        assert!(divisor.is_empty());
+        let captured = Capture::read(&polynomial).child("cause");
+        assert_eq!(captured.code, "geometry-polynomial-division");
+        assert_eq!(captured.records("dividend").len(), 2);
+        assert!(captured.records("divisor").is_empty());
+        assert!(scalar.is_expression_error());
+        assert!(polynomial.is_expression_error());
+        for error in [&scalar, &polynomial] {
+            assert_eq!(
+                error.to_string(),
+                "geometry domain error: polynomial contact division by zero"
+            );
+        }
     }
 
     #[test]

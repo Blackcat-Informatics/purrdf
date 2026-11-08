@@ -23,10 +23,14 @@ const ASSERTED_BY: &str = "http://example.org/community/runner/community-conform
 /// The project IRI each route subject extends with a `#profile=..&surface=..` fragment.
 const SUBJECT: &str = "http://example.org/community/subject/purrdf-native";
 
-fn run(corpus: &Path, output: &Path) -> Result<bool, String> {
+fn run(
+    corpus: &Path,
+    output: &Path,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<bool, String> {
     let corpus = Corpus::acquire(corpus)?;
     std::fs::create_dir(output).map_err(|error| format!("{}: {error}", output.display()))?;
-    let (totals, executions) = corpus.run()?;
+    let (totals, executions) = corpus.run(control)?;
     let records: Vec<_> = executions
         .iter()
         .flat_map(|execution| execution.records.iter().cloned())
@@ -74,7 +78,9 @@ fn main() -> ExitCode {
         eprintln!("usage: community-conformance CORPUS NEW_OUTPUT_DIRECTORY");
         return ExitCode::from(2);
     };
-    match run(corpus, output) {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    match run(corpus, output, &mut control) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {

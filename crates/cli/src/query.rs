@@ -147,12 +147,30 @@ use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
 use crate::governors::{self, GovernorFlags};
+use purrdf_validate::query::{CoordinateInputError, CoordinateInputs};
+
 use crate::ledger;
 use crate::path_relation::{self, PathRelationSpec};
 use crate::reason;
 use crate::report;
 use crate::sink;
 use crate::source::{self, ViewOp};
+
+/// Surface the actual context even when evaluation or result collection fails.
+pub(crate) fn with_execution_receipt<T>(
+    run: impl FnOnce(&purrdf_validate::query::ExecutionReceiptCapture) -> Result<T, CliError>,
+) -> Result<T, CliError> {
+    let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
+    let outcome = run(&capture);
+    let coordinates = capture
+        .into_coordinates()
+        .map_err(|error| CliError::Runtime(error.to_string()))?;
+    eprintln!(
+        "purrdf-execution {}",
+        purrdf_validate::query::execution_receipt_json(&coordinates)
+    );
+    outcome
+}
 
 /// The generic query operation: evaluate the prepared query over whichever concrete
 /// view the data source resolved to, returning the (fully owned) [`SparqlResult`].
@@ -173,6 +191,7 @@ struct QueryOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 /// The `--path-relation` specs one lane will snapshot, plus the query text they force a
@@ -231,7 +250,7 @@ impl<'a> RelationSpecs<'a> {
         let prepared = engine.prepare_query_with_options(
             self.query,
             self.base,
-            EngineQueryOptions::new()
+            &EngineQueryOptions::new()
                 .with_geo(self.geo)
                 .with_env(&engine_env(aggregates, Some(&registry))?),
         )?;
@@ -264,11 +283,14 @@ fn engine_options<'a>(
     env: &'a ExtensionEnv<'a>,
     geo: &'a purrdf_validate::geo::GeoProfile,
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 ) -> EngineQueryOptions<'a, 'a> {
-    EngineQueryOptions::new()
-        .with_geo(geo)
-        .with_env(env)
-        .with_division(division)
+    coordinates.apply(
+        EngineQueryOptions::new()
+            .with_geo(geo)
+            .with_env(env)
+            .with_division(division),
+    )
 }
 
 impl ViewOp for QueryOp<'_> {
@@ -277,18 +299,21 @@ impl ViewOp for QueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<SparqlResult, CliError> {
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
-        Ok(self.engine.query_prepared_view(
-            view,
-            prepared.as_deref().unwrap_or(self.prepared),
-            &[],
-            options,
-        )?)
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
+        with_execution_receipt(|capture| {
+            Ok(self.engine.query_prepared_view(
+                view,
+                prepared.as_deref().unwrap_or(self.prepared),
+                &[],
+                &options.with_coordinate_observer(capture),
+            )?)
+        })
     }
 }
 
@@ -332,6 +357,7 @@ struct GovernedQueryOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
@@ -340,25 +366,28 @@ impl ViewOp for GovernedQueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<GovernedOutcome, CliError> {
         let governors: QueryGovernors = self.flags.to_governors()?;
         let (relations, prepared) =
             self.relations
                 .prepare_against(self.engine, view, self.aggregates)?;
-        // `QueryOptions::EMPTY` for every axis but the two registries: the CLI wires no
-        // SHACL-AF function table. Both registries here are the SAME instances the plan
+        // The CLI wires no SHACL-AF function table. Both registries here are the
+        // SAME instances the plan
         // being evaluated was parsed against — `aggregates` from `run` below, and
         // `property_functions` from the re-prepare `prepare_against` just did over this
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
-        Ok(self.engine.query_prepared_governed_view(
-            view,
-            prepared.as_deref().unwrap_or(self.prepared),
-            &[],
-            options,
-            &governors,
-        )?)
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
+        with_execution_receipt(|capture| {
+            Ok(self.engine.query_prepared_governed_view(
+                view,
+                prepared.as_deref().unwrap_or(self.prepared),
+                &[],
+                &options.with_coordinate_observer(capture),
+                &governors,
+            )?)
+        })
     }
 }
 
@@ -382,6 +411,7 @@ struct ExplainOp<'a> {
     relations: RelationSpecs<'a>,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for ExplainOp<'_> {
@@ -390,6 +420,7 @@ impl ViewOp for ExplainOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<QueryExplanation, CliError> {
         // Routed through the one options-carrying explain entry rather than a
         // narrower per-registry explain entry (none exist any more; see
@@ -400,10 +431,15 @@ impl ViewOp for ExplainOp<'_> {
         // registered.
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
-        let options = engine_options(&env, self.relations.geo, self.division);
-        Ok(self
-            .engine
-            .explain_query_with_options_view(view, self.query, self.base, options)?)
+        let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
+        with_execution_receipt(|capture| {
+            Ok(self.engine.explain_query_with_options_view(
+                view,
+                self.query,
+                self.base,
+                &options.with_coordinate_observer(capture),
+            )?)
+        })
     }
 }
 
@@ -422,6 +458,7 @@ fn emit_result(
     provenance_namespace: Option<&ProvenanceNamespace>,
     query: &str,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     match result {
         SparqlResult::Solutions { .. } | SparqlResult::Boolean(_) => {
@@ -452,7 +489,14 @@ fn emit_result(
             // results serializers' sink a caller in the shipped binary at all, and it is
             // what makes `purrdf query … | head -1` stop within a row instead of
             // formatting every row of an answer nobody is reading.
-            sink::write_results("-", result, fmt, &provenance, provenance_namespace)?;
+            sink::write_results(
+                "-",
+                result,
+                fmt,
+                &provenance,
+                provenance_namespace,
+                canonical,
+            )?;
             // A tabular/boolean result performs no lossy transcode; honor the flag
             // uniformly with an empty ledger.
             ledger::surface(ledger_target, &LossLedger::new())
@@ -490,6 +534,7 @@ fn emit_result(
                 base,
                 None,
                 jsonld_options,
+                canonical,
             )?;
             ledger::surface(ledger_target, &ledger)
         }
@@ -636,9 +681,10 @@ fn entailed_query<D: DatasetView>(
     regime: &str,
     closure: &EntailmentClosure<'_>,
     governors: &QueryGovernors,
-    options: EngineQueryOptions<'_, '_>,
+    options: &EngineQueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
+    canonical: &crate::canonical::Request,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
         query,
@@ -654,12 +700,12 @@ fn entailed_query<D: DatasetView>(
             // written — `--report` is refused without `--entailment` for the same reason a
             // report of a run that did not happen is not printed here.
             if let Some(report) = answered.report() {
-                report::surface(report_target, report)?;
+                report::surface(report_target, report, canonical)?;
             }
             Ok(answered)
         }
         Err(purrdf::ReasoningError::Entailment(EntailError::Inconsistent(run))) => {
-            report::surface(report_target, run.report())?;
+            report::surface(report_target, run.report(), canonical)?;
             let error: EntailError = EntailError::Inconsistent(run);
             Err(CliError::Runtime(error.to_string()))
         }
@@ -711,6 +757,7 @@ struct EntailedQueryOp<'a> {
     report_target: &'a ReportTarget,
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
+    coordinates: &'a CoordinateInputs,
 }
 
 impl ViewOp for EntailedQueryOp<'_> {
@@ -730,6 +777,7 @@ impl ViewOp for EntailedQueryOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
         let specs = self.relations.specs;
         let admitted = path_relation::build_registry(view, specs)?;
@@ -742,23 +790,28 @@ impl ViewOp for EntailedQueryOp<'_> {
         } else {
             ClosureRelations::rebuilt_by(&rebuild)
         };
-        entailed_query(
-            self.engine,
-            view,
-            self.query,
-            self.base,
-            self.plan.regime_name(),
-            &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
-                .with_limits(self.limits.eval_options()),
-            self.governors,
-            engine_options(
-                &engine_env(self.aggregates, admitted.as_ref())?,
-                self.relations.geo,
-                self.division,
-            ),
-            &relations,
-            self.report_target,
-        )
+        with_execution_receipt(|capture| {
+            entailed_query(
+                self.engine,
+                view,
+                self.query,
+                self.base,
+                self.plan.regime_name(),
+                &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
+                    .with_limits(self.limits.eval_options()),
+                self.governors,
+                &engine_options(
+                    &engine_env(self.aggregates, admitted.as_ref())?,
+                    self.relations.geo,
+                    self.division,
+                    self.coordinates,
+                )
+                .with_coordinate_observer(capture),
+                &relations,
+                self.report_target,
+                canonical,
+            )
+        })
     }
 }
 
@@ -769,6 +822,8 @@ impl ViewOp for EntailedQueryOp<'_> {
 /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
 /// is the only thing keeping them apart.
 pub(crate) struct QueryOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// The immutable geographic profile selected by `--geo-profile`.
     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     /// `--data`: the data-source path.
@@ -782,6 +837,8 @@ pub(crate) struct QueryOptions<'a> {
     /// `--import IRI=FILE`: the data's `owl:imports` table for the `--entailment` closure,
     /// in the order the operator wrote them.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--max-stored-facts` / `--max-join-steps`: the `--entailment` closure's evaluation
     /// limits, spelled for the command line.
     pub(crate) limits: MaterializeLimits,
@@ -820,6 +877,10 @@ pub(crate) struct QueryOptions<'a> {
     /// at, for `/` and `AVG` alike. The default is exact for terminating quotients,
     /// otherwise eighteen fractional digits rounded half to even.
     pub(crate) division: DivisionPolicy,
+    /// Raw `--now`, decoded once before query sources are opened.
+    pub(crate) now: Option<&'a str>,
+    /// Raw `--entropy-seed`, decoded with `now`.
+    pub(crate) entropy_seed: Option<&'a str>,
 }
 
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
@@ -834,14 +895,39 @@ pub(crate) fn run(
     options: &QueryOptions<'_>,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
-    let data_format = format::resolve(None, options.data)?;
+    let coordinates =
+        CoordinateInputs::from_parts(options.now, options.entropy_seed).map_err(|error| {
+            let flag = match &error {
+                CoordinateInputError::Now(_) => "--now",
+                CoordinateInputError::EntropySeed(_) => "--entropy-seed",
+                _ => "query coordinates",
+            };
+            CliError::Usage(format!("{flag}: {error}"))
+        })?;
     // A report of a run that will not happen is a request the flag cannot honor, and
     // honoring it with silence is what this pipeline refuses.
     if report_target.is_requested() && options.entailment.is_none() {
         return Err(report::requires_entailment("query"));
     }
     refuse_unenforceable_combinations(options, ledger_target)?;
+    let data_format = format::resolve(None, options.data)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        if options.entailment.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::PREMISE,
+        None,
+    )?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+
     // Resolved ONCE, here: `None` (the flag not named) defaults to `json`, exactly as
     // clap's own `default_value_t` used to before `--results-format` became an
     // `Option` — the only thing that changed is that "not named" and "named `json`"
@@ -878,6 +964,10 @@ pub(crate) fn run(
     // usage error before the query is even parsed — never discovered only after a
     // successful evaluation, when serializing the answer would otherwise be the first
     // place `ProvenanceNamespace::new` could fail.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The shared results error retains original cleanup owners inline without allocating after refusal; this adapter preserves it until the host usage conversion."
+    )]
     let provenance_namespace = options
         .provenance_namespace
         .map(|(prefix, iri)| ProvenanceNamespace::new(prefix, iri))
@@ -892,6 +982,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             ExplainOp {
                 engine: &engine,
                 query: options.query,
@@ -899,9 +990,11 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
                 relations,
                 division: options.division,
+                coordinates: &coordinates,
             },
+            canonical,
         )?;
-        sink::write_out("-", explanation.render().as_bytes())?;
+        sink::write_out_with_request("-", explanation.render().as_bytes(), canonical)?;
         return Ok(CliOutcome::Complete);
     }
 
@@ -914,7 +1007,7 @@ pub(crate) fn run(
     let prepared = engine.prepare_query_with_options(
         options.query,
         options.base,
-        EngineQueryOptions::new()
+        &EngineQueryOptions::new()
             .with_geo(options.geo)
             .with_env(&engine_env(aggregates.as_ref(), None)?),
     )?;
@@ -931,10 +1024,10 @@ pub(crate) fn run(
         // `reason` does — so the query runs over the imports closure the regime is defined
         // over, never over the data alone.
         let premise_imports = crate::premise_imports::PremiseImports::read(
-            options.imports,
-            None,
+            &import_plan,
             options.base,
             &[(options.data, data_format)],
+            canonical,
         )?;
         // Built HERE, with the source already read and the closure not yet started, for the
         // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
@@ -946,6 +1039,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             EntailedQueryOp {
                 engine: &engine,
                 query: options.query,
@@ -958,13 +1052,16 @@ pub(crate) fn run(
                 relations,
                 report_target,
                 division: options.division,
+                coordinates: &coordinates,
             },
+            canonical,
         )?;
         return emit_entailed(
             options,
             provenance_namespace.as_ref(),
             answered,
             ledger_target,
+            canonical,
         );
     }
 
@@ -973,6 +1070,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             GovernedQueryOp {
                 engine: &engine,
                 prepared: &prepared,
@@ -980,13 +1078,16 @@ pub(crate) fn run(
                 aggregates: aggregates.as_ref(),
                 relations,
                 division: options.division,
+                coordinates: &coordinates,
             },
+            canonical,
         )?;
         return emit_governed(
             options,
             provenance_namespace.as_ref(),
             &outcome,
             ledger_target,
+            canonical,
         );
     }
 
@@ -996,6 +1097,7 @@ pub(crate) fn run(
         options.data,
         data_format,
         options.base,
+        input_options.as_deref(),
         QueryOp {
             engine: &engine,
             // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
@@ -1003,7 +1105,9 @@ pub(crate) fn run(
             aggregates: aggregates.as_ref(),
             relations,
             division: options.division,
+            coordinates: &coordinates,
         },
+        canonical,
     )?;
     emit_result(
         &result,
@@ -1013,6 +1117,7 @@ pub(crate) fn run(
         provenance_namespace.as_ref(),
         options.query,
         ledger_target,
+        canonical,
     )?;
     Ok(CliOutcome::Complete)
 }
@@ -1084,6 +1189,11 @@ fn refuse_unenforceable_combinations(
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let named = options.governors.named();
+    if !options.import_yamlld_input_options.is_empty() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --entailment".to_owned(),
+        ));
+    }
     if !named.is_empty() && options.explain {
         let named = named.join(", ");
         return Err(CliError::Usage(format!(
@@ -1192,11 +1302,16 @@ fn emit_entailed(
     provenance_namespace: Option<&ProvenanceNamespace>,
     answered: GovernedEntailment,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     match answered {
-        GovernedEntailment::Answered { outcome, .. } => {
-            emit_governed(options, provenance_namespace, &outcome, ledger_target)
-        }
+        GovernedEntailment::Answered { outcome, .. } => emit_governed(
+            options,
+            provenance_namespace,
+            &outcome,
+            ledger_target,
+            canonical,
+        ),
         GovernedEntailment::ClosureStopped { tripped } => {
             eprint!("{}", governors::render_closure_stop(tripped));
             Ok(CliOutcome::BudgetExhausted)
@@ -1219,8 +1334,9 @@ fn emit_governed(
     provenance_namespace: Option<&ProvenanceNamespace>,
     outcome: &GovernedOutcome,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
-    let emit = |result: &SparqlResult| {
+    let mut emit = |result: &SparqlResult| {
         emit_result(
             result,
             options.results_format.unwrap_or(QueryFormat::DEFAULT),
@@ -1229,6 +1345,7 @@ fn emit_governed(
             provenance_namespace,
             options.query,
             ledger_target,
+            canonical,
         )
     };
     match outcome {

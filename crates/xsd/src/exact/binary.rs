@@ -41,10 +41,11 @@ pub(crate) fn log2_of_pow10(x: i64) -> i64 {
     })
 }
 
-/// Round `±n / d` (`n`, `d` non-negative, `d` nonzero) to `format`, to nearest
-/// with ties to even, returning the bit pattern (the low 32 bits for binary32).
-/// A zero `n` is `+0`; a nonzero value that rounds to zero keeps its sign; a value
-/// at or beyond the overflow threshold is the signed infinity.
+/// Round `±|n| / d` (`d` positive) to `format`, to nearest with ties to even.
+/// The numerator may be signed: its sign is ignored and `negative` supplies
+/// the result sign. Return the bit pattern (the low 32 bits for `f32`).
+/// A zero `n` is `+0`; a nonzero value that rounds to zero keeps the requested
+/// sign; a value at or beyond the overflow threshold is the signed infinity.
 pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Format) -> u64 {
     round_ratio_admitted_using(
         negative,

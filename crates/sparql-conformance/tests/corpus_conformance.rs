@@ -13,7 +13,7 @@
 use purrdf::capture_support::solutions_golden;
 use std::path::{Path, PathBuf};
 
-use purrdf::{NativeRdfFormat, canonicalize, parse_dataset};
+use purrdf::{NativeRdfFormat, parse_dataset, try_canonicalize};
 use purrdf_core::{BlankScope, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_sparql_eval::NativeSparqlEngine;
 
@@ -139,14 +139,18 @@ fn regression_cases() -> Vec<RegressionCase> {
     ]
 }
 
-fn canonical_ntriples(text: &str) -> String {
+fn canonical_ntriples(text: &str) -> purrdf_core::Canonicalized {
     let dataset = parse_dataset(
         text.as_bytes(),
         NativeRdfFormat::NTriples.media_type(),
         None,
     )
     .expect("parse expected graph");
-    canonicalize(&dataset).nquads
+    try_canonicalize(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }
 
 fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), String> {
@@ -171,8 +175,17 @@ fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), Str
             "ASK boolean differs: expected {expected}, native {native}"
         )),
         (Expected::GraphNTriples(expected), SparqlResult::Graph(native_graph)) => {
-            let expected = canonical_ntriples(expected);
-            let native = canonicalize(&native_graph).nquads;
+            let expected_owner = canonical_ntriples(expected);
+            let expected = expected_owner.nquads();
+            let native_owner = try_canonicalize(
+                &native_graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
+            let native = native_owner.nquads();
             if native == expected {
                 Ok(())
             } else {

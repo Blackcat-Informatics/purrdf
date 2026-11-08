@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Entailment error focused tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - .github/workflows/entail-errors.yaml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/entail/**
+      - crates/purrdf/Cargo.toml
+      - crates/purrdf/src/reasoning.rs
+      - crates/purrdf/tests/reasoning_inspection.rs
+      - crates/rdf-core/src/collections.rs
+      - crates/rdf-core/src/imports.rs
+      - crates/rdf-core/src/ir/import.rs
+      - crates/rdf-core/src/ir/pack/certify.rs
+      - crates/hash/src/error.rs
+      - crates/lex/src/diagnostic.rs
+
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 8
+  RUST_TEST_THREADS: 4
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Native role reasoning and refusal inspection
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-native
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+      - name: Capture source and compiler
+        run: |
+          git rev-parse HEAD 'HEAD^{tree}'
+          rustc -vV
+          cargo -vV
+      - name: Execute production role reasoning and refusal controls
+        run: |
+          mkdir -p target
+          cargo test --locked -p purrdf-entail --test regular_role_chains -- --list > target/role-error-test-inventory.txt
+          grep -Fq role_refusals_keep_native_fields_after_the_source_drops target/role-error-test-inventory.txt
+          grep -Fq entailment_inspection_keeps_native_reads_and_the_actual_inconsistent_run target/role-error-test-inventory.txt
+          grep -Fq import_conflict_inspection_keeps_original_versions_and_default_graph target/role-error-test-inventory.txt
+          grep -Fq actual_collection_refusals_keep_original_terms_and_the_ordered_prefix target/role-error-test-inventory.txt
+          grep -Fq empty_collection_admission_checks_nil_structure target/role-error-test-inventory.txt
+          grep -Fq dataset_diagnostics_retain_original_metadata_and_native_cause_without_rendering target/role-error-test-inventory.txt
+          grep -Fq authored_cardinality_refusals_retain_the_original_operands_and_integer_cause target/role-error-test-inventory.txt
+          grep -Fq actual_rif_refusals_keep_original_scope_and_survive_the_document target/role-error-test-inventory.txt
+          cargo test --locked -p purrdf-entail --test regular_role_chains
+      - name: Execute native collection indexing and existing structural refusal controls
+        run: |
+          cargo test --locked -p purrdf-entail --lib -- --list > target/collection-unit-test-inventory.txt
+          grep -Fq lists::tests:: target/collection-unit-test-inventory.txt
+          grep -Fq owl_dl::syntax::tests::malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax target/collection-unit-test-inventory.txt
+          cargo test --locked -p purrdf-entail --lib lists::tests::
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::syntax::tests::malformed_native_list_keeps_its_original_refusal_and_cannot_publish_syntax
+          cargo test --locked -p purrdf-entail --test reasoner -- --exact malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals
+      - name: Execute native RIF, original search certificate and key phase controls
+        run: |
+          grep -Fq owl_dl::hyper::tests::native_decision_refusal_keeps_the_executed_search_certificate target/collection-unit-test-inventory.txt
+          grep -Fq owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world target/collection-unit-test-inventory.txt
+          grep -Fq rif_xml::tests:: target/collection-unit-test-inventory.txt
+          grep -Fq rif::eval::tests::unbound_head_variable_is_rejected target/collection-unit-test-inventory.txt
+          cargo test --locked -p purrdf-entail --lib rif_xml::tests::
+          cargo test --locked -p purrdf-entail --lib -- --exact rif::eval::tests::unbound_head_variable_is_rejected
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::hyper::tests::native_decision_refusal_keeps_the_executed_search_certificate
+          cargo test --locked -p purrdf-entail --lib -- --exact owl_dl::key_proofs::tests::deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
+      - name: Execute public reasoning facade inspection
+        run: |
+          cargo test --locked -p purrdf --test reasoning_inspection
+          cargo test --locked -p purrdf-entail --test schema_cardinality_boundary
+          cargo test --locked -p purrdf-validate --test dl_proof_vectors
+          cargo test --locked -p purrdf-entail --lib

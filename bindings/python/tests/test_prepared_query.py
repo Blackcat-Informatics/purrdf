@@ -37,8 +37,8 @@ laundering.
 A fifth and sixth promise cover ``run``'s own statefulness:
 
 * **A binding does not outlive the call that made it.** ``run`` reads as total: a
-  keyword-argument call means "these are the bindings", not "these, plus whatever an
-  earlier call left behind". A bare ``run()`` after a prior ``run(this=X)`` must be
+  bindings-dictionary call means "these are the bindings", not "these, plus whatever an
+  earlier call left behind". A bare ``run()`` after a prior ``run({"this": X})`` must be
   refused exactly as an initially-unbound handle is, not silently re-answer for
   ``X``.
 * **``run`` reads the owning store fresh, every call.** What ``prepare`` admits is
@@ -254,7 +254,7 @@ def test_each_binding_answers_for_its_own_value() -> None:
     for i in range(4):
         # o{i} is the control: every other subject's object differs, so this cannot
         # pass for a binding that was dropped or reused.
-        assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s{i}"))) == (
+        assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s{i}")})) == (
             purrdf.NamedNode(f"{EX}o{i}")
         )
 
@@ -262,11 +262,11 @@ def test_each_binding_answers_for_its_own_value() -> None:
 def test_one_prepared_query_serves_many_runs() -> None:
     store = _store()
     prepared = store.prepare(QUERY, parameters=["this"])
-    seen = [_first(prepared.run(this=purrdf.NamedNode(f"{EX}s{i}"))) for i in range(4)]
+    seen = [_first(prepared.run({"this": purrdf.NamedNode(f"{EX}s{i}")})) for i in range(4)]
     assert seen == [purrdf.NamedNode(f"{EX}o{i}") for i in range(4)]
     # And the same handle still answers after all of them, so nothing about running
     # consumed it.
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s0"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s0")})) == purrdf.NamedNode(
         f"{EX}o0"
     )
 
@@ -279,7 +279,7 @@ def test_an_unbound_parameter_is_refused_but_a_bound_one_runs() -> None:
         prepared.run()
 
     # The neighbour: the same handle, once bound, must answer.
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s1"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s1")})) == purrdf.NamedNode(
         f"{EX}o1"
     )
 
@@ -288,7 +288,7 @@ def test_a_prior_binding_does_not_survive_into_a_later_unbound_call() -> None:
     """`run` reads as total: it must not silently re-answer a bare `run()` with a
     value an EARLIER call bound.
 
-    `prepared.run(this=X)` binds the engine's `this` slot to `X`. Because
+    `prepared.run({"this": X})` binds the engine's `this` slot to `X`. Because
     `PreparedExecution` has no public way to unbind that slot, a naive `run` that
     only applies the keywords it is GIVEN would leave the slot at `X` forever, and a
     later bare `run()` would silently re-answer for `X` instead of being refused —
@@ -299,7 +299,7 @@ def test_a_prior_binding_does_not_survive_into_a_later_unbound_call() -> None:
     store = _store()
     prepared = store.prepare(QUERY, parameters=["this"])
 
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s0"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s0")})) == purrdf.NamedNode(
         f"{EX}o0"
     )
 
@@ -308,7 +308,7 @@ def test_a_prior_binding_does_not_survive_into_a_later_unbound_call() -> None:
 
     # The neighbour: a second bound run for a DIFFERENT value answers for THAT
     # value, not the one the first call bound.
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s1"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s1")})) == purrdf.NamedNode(
         f"{EX}o1"
     )
 
@@ -318,10 +318,10 @@ def test_an_undeclared_parameter_name_is_refused() -> None:
     prepared = store.prepare(QUERY, parameters=["this"])
 
     with pytest.raises(ValueError, match="absent"):
-        prepared.run(absent=purrdf.NamedNode(f"{EX}s0"))
+        prepared.run({"absent": purrdf.NamedNode(f"{EX}s0")})
 
     # The neighbour: the declared name still binds.
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s2"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s2")})) == purrdf.NamedNode(
         f"{EX}o2"
     )
 
@@ -386,11 +386,11 @@ def test_prepare_parameter_reaches_inside_optional() -> None:
     """
     prepared = store.prepare(query, parameters=["this"])
 
-    rows_alice = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}alice")))
+    rows_alice = _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}alice")}))
     assert rows_alice == {(f"{EX}anchor", f"{EX}bonusA")}
     assert (f"{EX}anchor", f"{EX}bonusB") not in rows_alice
 
-    rows_bob = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}bob")))
+    rows_bob = _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}bob")}))
     assert rows_bob == {(f"{EX}anchor", f"{EX}bonusB")}
     assert (f"{EX}anchor", f"{EX}bonusA") not in rows_bob
 
@@ -440,7 +440,7 @@ def test_prepare_parameter_reaches_inside_minus_and_sees_the_bound_value_on_both
         """
         prepared = store.prepare(query, parameters=["this"])
         for value, expected in cases:
-            assert _rows(prepared.run(this=value)) == expected, (owner, value)
+            assert _rows(prepared.run({"this": value})) == expected, (owner, value)
             # Parity: `Store.query` with the same value as a substitution agrees.
             direct = store.query(query, substitutions={purrdf.Variable("this"): value})
             assert _rows(direct) == expected, (owner, value)
@@ -483,12 +483,12 @@ def test_prepare_parameter_reaches_inside_exists() -> None:
     """
     prepared = store.prepare(query, parameters=["this"])
 
-    assert _rows(prepared.run(this=purrdf.NamedNode(f"{EX}carol"))) == {(f"{EX}alice",)}
+    assert _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}carol")})) == {(f"{EX}alice",)}
     # The neighbour and the oracle in one: dave is not verified, so bob — whose
     # OWN `reportsTo` fact is perfectly genuine — must still be excluded. A leaked,
     # unconstrained `EXISTS` would answer `bob` here because `carol` (someone
     # else's manager) is verified.
-    assert _rows(prepared.run(this=purrdf.NamedNode(f"{EX}dave"))) == set()
+    assert _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}dave")})) == set()
 
     # Parity: `Store.query` given `?this` as an ordinary substitution agrees.
     direct = _rows(
@@ -536,11 +536,11 @@ def test_prepare_parameter_reaches_inside_a_sub_select() -> None:
     """
     prepared = store.prepare(query, parameters=["this"])
 
-    rows_alice = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}alice")))
+    rows_alice = _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}alice")}))
     assert rows_alice == {(f"{EX}carol",)}
     assert (f"{EX}dave",) not in rows_alice
 
-    rows_bob = _rows(prepared.run(this=purrdf.NamedNode(f"{EX}bob")))
+    rows_bob = _rows(prepared.run({"this": purrdf.NamedNode(f"{EX}bob")}))
     assert rows_bob == {(f"{EX}dave",)}
     assert (f"{EX}carol",) not in rows_bob
 
@@ -569,12 +569,12 @@ def test_a_prepared_query_reads_the_owning_store_fresh_on_every_run() -> None:
     prepared = store.prepare(QUERY, parameters=["this"])
 
     # Control: the pre-mutation answer, over what the store already held.
-    assert len(prepared.run(this=purrdf.NamedNode(f"{EX}s0"))) == 1
+    assert len(prepared.run({"this": purrdf.NamedNode(f"{EX}s0")})) == 1
 
     # A statement added after preparing — and after this SAME handle already ran —
     # must be visible to the next run on it.
     store.load(f"<{EX}s9> <{EX}p> <{EX}o9> .", purrdf.RdfFormat.N_TRIPLES)
-    assert _first(prepared.run(this=purrdf.NamedNode(f"{EX}s9"))) == purrdf.NamedNode(
+    assert _first(prepared.run({"this": purrdf.NamedNode(f"{EX}s9")})) == purrdf.NamedNode(
         f"{EX}o9"
     )
 
@@ -813,24 +813,24 @@ def test_a_parameter_binds_against_the_rebuilt_relation_not_the_one_prepare_buil
 
     ada = purrdf.NamedNode(f"{EX}ada")
     chen = purrdf.NamedNode(f"{EX}chen")
-    assert [str(row[0].value) for row in prepared.run(this=ada)] == [f"{EX}alpha"]  # type: ignore[union-attr]
-    assert len(prepared.run(this=chen)) == 0  # type: ignore[arg-type]
+    assert [str(row[0].value) for row in prepared.run({"this": ada})] == [f"{EX}alpha"]  # type: ignore[union-attr]
+    assert len(prepared.run({"this": chen})) == 0  # type: ignore[arg-type]
 
     _append_third_table_row(store)
 
     # The declared slots are the ones the caller named, across the re-admission.
     assert prepared.parameters == ["this"]
-    assert [str(row[0].value) for row in prepared.run(this=chen)] == [f"{EX}beta"]  # type: ignore[union-attr]
+    assert [str(row[0].value) for row in prepared.run({"this": chen})] == [f"{EX}beta"]  # type: ignore[union-attr]
     # …and `ada` still answers, so the rebuild replaced the table rather than the
     # relation's meaning.
-    assert [str(row[0].value) for row in prepared.run(this=ada)] == [f"{EX}alpha"]  # type: ignore[union-attr]
+    assert [str(row[0].value) for row in prepared.run({"this": ada})] == [f"{EX}alpha"]  # type: ignore[union-attr]
 
     # `run`'s own promises survive the re-admission: a binding does not outlive the
     # call that made it, and an undeclared name is still refused.
     with pytest.raises(ValueError, match="still unbound"):
         prepared.run()
     with pytest.raises(ValueError, match="no parameter named"):
-        prepared.run(nope=ada)
+        prepared.run({'nope': ada})
 
 
 # ── the five configuration axes, each with the control that can fail ─────────────

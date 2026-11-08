@@ -36,7 +36,15 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
         )
         .unwrap(),
     ));
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -44,7 +52,18 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
     let shapes = restored.shapes();
     let retained = Arc::clone(&shapes.shapes_dataset);
     assert!(shapes.sparql_sources.get().is_none());
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
     let rebuilt = shapes.report_sources().unwrap();
     let parsed = prepared.shapes().report_sources().unwrap();
     assert_eq!(rebuilt.constraints.len(), parsed.constraints.len());
@@ -74,7 +93,18 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
         cloned.report_sources().unwrap(),
         shapes.report_sources().unwrap()
     ));
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]
@@ -268,12 +298,17 @@ fn rec_core_messages_ignore_draft_reifier_overrides_and_legacy_keeps_them() {
         &format!("{PREFIXES}ex:S a sh:NodeShape; sh:targetNode ex:n; sh:nodeKind sh:BlankNode; sh:message 'shape' ."),
         None,
     ).unwrap();
-    shapes.node_shapes[0].constraint_annotations = vec![ConstraintAnnotation {
+    let root = &shapes.node_shapes[0];
+    let mut body = shapes.owner.definition(&root.id).unwrap().clone();
+    body.targets.clone_from(&root.targets);
+    body.owner = Some(Arc::clone(&shapes.owner));
+    body.constraint_annotations = vec![ConstraintAnnotation {
         constraint: AnnotatedConstraint::Constraint(0),
         severity: Some(Severity::Info),
         messages: vec![Literal::new_simple_literal("reifier")],
         deactivated_when: Vec::new(),
     }];
+    shapes.node_shapes[0] = body;
     let binding = PreparedShapes::new(Arc::new(shapes))
         .bind_complete_shared_dataset(RdfDatasetBuilder::new().freeze().unwrap())
         .unwrap();

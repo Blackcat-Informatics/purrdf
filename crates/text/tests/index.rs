@@ -441,7 +441,13 @@ fn a_document_without_lexical_terms_retains_auxiliary_evidence() {
         .expect("selective punctuation fragment");
     assert_eq!(evidence.len(), 1);
     let document = index
-        .document(evidence[0].term.documents()[0])
+        .document(
+            evidence[0]
+                .term
+                .documents()
+                .next()
+                .expect("matching surface term has a document"),
+        )
         .expect("retained document");
     assert_eq!(
         document.subject(),

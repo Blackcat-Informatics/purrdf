@@ -78,6 +78,15 @@ pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
     }
 }
 
+pub(crate) fn write_out_with_request(
+    out: &str,
+    bytes: &[u8],
+    canonical: &crate::canonical::Request,
+) -> Result<(), CliError> {
+    canonical.before_output()?;
+    write_out(out, bytes)
+}
+
 /// Where a command's bytes go, as a writer a serializer can stream into.
 ///
 /// The whole-buffer spelling above is this type with one `write_all`; the streaming
@@ -119,7 +128,7 @@ impl OutTarget {
         let path = std::path::PathBuf::from(out);
         // `File::create` is what `fs::write` does: create or truncate, follow
         // symlinks, keep existing permissions. The starting semantics are unchanged.
-        let file = std::fs::File::create(&path)?;
+        let file = std::fs::File::create(&path).map_err(CliError::OutputIo)?;
         // Only a REGULAR file may be unlinked on failure. A FIFO, a device node or
         // `/dev/stdout` would otherwise be removed by an error path, and a symlink
         // would lose the LINK while its target kept the half-written bytes.
@@ -169,19 +178,19 @@ impl OutTarget {
     /// error kind on stdout is a clean success; every other kind, and every kind on
     /// a file target, still propagates.
     ///
-    /// # This is the only flush
+    /// # The final target flush
     ///
     /// `TextSink::finish` drains what it has staged and deliberately does NOT flush
     /// the writer underneath it — "the owner of that writer owns its buffering", as
     /// it puts it. THIS type is that owner for both targets, and this method is where
-    /// the ownership is discharged. The two halves of that contract are written a
+    /// the ownership is discharged. A borrowed staging buffer must first be
+    /// explicitly drained and disarmed. The two halves of that contract are written a
     /// crate apart, so a reader of either one alone could reasonably conclude the
     /// other end was handling it and nobody was.
     ///
-    /// Nothing currently depends on it: a `File` is unbuffered, and stdout's
-    /// `LineWriter` flushes on drop. That is exactly why it is worth stating — the
-    /// invariant holds today by a property of the two targets that happen to be
-    /// wired up, not by anything that would fail if a buffered writer were added.
+    /// A borrowed `BufWriter` is explicitly drained and disarmed before this
+    /// handoff, including after failure; its destructor must never retry writes.
+    /// This owner retains the target's final flush and stdout classification.
     pub(crate) fn finish(mut self) -> Result<(), CliError> {
         if self.hung_up() {
             return Ok(());
@@ -194,7 +203,7 @@ impl OutTarget {
             {
                 Ok(())
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(CliError::OutputIo(error)),
         }
     }
 
@@ -208,7 +217,7 @@ impl OutTarget {
     pub(crate) fn abandon(self, error: CliError) -> CliError {
         // A downstream reader that closed early did not fail: the serializer's write
         // error is the MECHANISM that stopped it, not a fault to report.
-        if self.hung_up() {
+        if self.hung_up() && !matches!(error, CliError::OutputPublication { .. }) {
             return CliError::DownstreamClosed;
         }
         if let Self::File {
@@ -218,11 +227,10 @@ impl OutTarget {
         } = self
             && std::fs::remove_file(&path).is_ok()
         {
-            return CliError::Runtime(format!(
-                "{error}; the partial output file `{}` was removed (its previous \
-                 contents were replaced when the write began)",
-                path.display()
-            ));
+            return CliError::PartialOutputRemoved {
+                original: Box::new(error),
+                path,
+            };
         }
         error
     }
@@ -290,7 +298,9 @@ pub(crate) fn write_results(
     format: purrdf_sparql_results::SparqlResultsFormat,
     provenance: &purrdf_sparql_results::ResultProvenance,
     namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
+    canonical.before_output()?;
     let mut target = OutTarget::open(out)?;
     match purrdf_sparql_results::serialize_into(
         result,
@@ -315,10 +325,12 @@ pub(crate) fn write_rdf<D: DatasetView>(
     base: Option<&str>,
     src_codec: Option<&str>,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<LossLedger, CliError> {
     validate_jsonld_options(target, jsonld_options)?;
     match target {
         SourceFormat::Native(format) => {
+            canonical.before_output()?;
             // Read before the first byte is written, so a refused read leaves no
             // partial document behind. Empty for every target that spells an empty
             // graph, and for a dataset that declares none.
@@ -362,8 +374,8 @@ pub(crate) fn write_rdf<D: DatasetView>(
         }
         SourceFormat::Pack => {
             let dataset = dataset_from_view(view)?;
-            let bytes = PackBuilder::build_bytes(&dataset)?;
-            write_out(out, &bytes)?;
+            let bytes = PackBuilder::build_bytes(&dataset, canonical.control()?)?;
+            write_out_with_request(out, &bytes, canonical)?;
             // A pack is a lossless RDF-1.2 container — base quads, the statement layer
             // and declared empty named graphs (zero-row partitions) alike: no ledger
             // entries.
@@ -375,6 +387,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
         // for the caller who reaches the sink by some other route.
         SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
             .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
+        _ => Err(format::unsupported_format(target, "the output target")),
     }
 }
 

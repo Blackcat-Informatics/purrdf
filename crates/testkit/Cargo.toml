@@ -17,6 +17,12 @@ publish = false
 [lints]
 workspace = true
 
+[[bin]]
+name = "testkit-harness-serial-fixture"
+path = "src/bin/harness_serial_fixture.rs"
+test = false
+doc = false
+
 # The fixture the harness oracle runs as a real child process, so the exit
 # status and the exact console output are observed rather than modelled.
 [[bin]]

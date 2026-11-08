@@ -11,6 +11,9 @@
 //! parse round-trip in between.
 //! `tuples_from_ntriples()` round-trips back to the same tuple set for testing.
 
+mod conformance_error;
+pub use conformance_error::ConformanceError;
+
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
@@ -95,6 +98,15 @@ impl std::fmt::Display for SourceConstraintRefusal {
 
 impl std::error::Error for SourceConstraintRefusal {}
 
+impl purrdf_hash::error::StructuredError for SourceConstraintRefusal {
+    purrdf_hash::error_visit! {
+        @record self { shape, property, index } => "shacl-source-constraint-refused" {
+            "shape" => Term(&self.shape), "property" => Boolean(self.property),
+            "index" => Unsigned(self.index as u128),
+        }
+    }
+}
+
 /// A dated query execution lacks the declaration evidence required by its
 /// actual source role. Query text or supplied values cannot establish that role.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +171,18 @@ impl std::fmt::Display for QuerySourceRefusal {
 
 impl std::error::Error for QuerySourceRefusal {}
 
+impl purrdf_hash::error::StructuredError for QuerySourceRefusal {
+    purrdf_hash::error_visit! {
+        @record self { profile, purpose, source, index } => "shacl-query-source-refused" {
+            "profile" => Record(&self.profile), "source" => Term(&self.source),
+            "purpose" => Value(self.purpose.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "index" => Value(self.index.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Unsigned(value as u128))),
+        }
+    }
+}
+
 /// A query solution explicitly declared validation failure, rather than a
 /// constraint violation. The producing constraint and focus remain available.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +217,16 @@ impl std::fmt::Display for SemanticFailure {
 
 impl std::error::Error for SemanticFailure {}
 
+impl purrdf_hash::error::StructuredError for SemanticFailure {
+    purrdf_hash::error_visit! {
+        @record self { focus, source_constraint } => "shacl-semantic-failure" {
+            "focus" => Term(&self.focus),
+            "source_constraint" => Value(self.source_constraint.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Term(value))),
+        }
+    }
+}
+
 /// A validation stopped by its actual execution governor. No partial report is
 /// carried because it cannot establish conformance.
 #[derive(Debug, Clone)]
@@ -226,6 +260,14 @@ impl std::fmt::Display for ResourceRefusal {
 }
 
 impl std::error::Error for ResourceRefusal {}
+
+impl purrdf_hash::error::StructuredError for ResourceRefusal {
+    purrdf_hash::error_visit! {
+        @record self { tripped, evidence } => "shacl-resource-refused" {
+            "tripped" => Record(&self.tripped), "evidence" => Record(&self.evidence),
+        }
+    }
+}
 
 /// Identity of one retained source acquisition. Equal graph bytes do not imply
 /// equal source identity; clones of this handle deliberately share identity.
@@ -383,6 +425,13 @@ impl ReportSourceContext {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompleteValidationError {
+    /// Original typed refusal with the rule contexts captured before failure.
+    RuleExecution {
+        /// The authoritative dated, native or governor refusal.
+        cause: Box<Self>,
+        /// Supplied inputs and observed effective contexts.
+        coordinates: Box<crate::RuleCoordinates>,
+    },
     /// Parsing or admitting the underlying shape graph failed.
     Shapes(ShapesError),
     /// The existing authenticated prepared-product boundary refused restoration.
@@ -407,6 +456,25 @@ pub enum CompleteValidationError {
     Execution(String),
 }
 
+impl purrdf_hash::error::StructuredError for CompleteValidationError {
+    purrdf_hash::error_visit! {
+        RuleExecution { cause, coordinates } => "shacl-complete-rule-execution" {
+            "cause" => Cause(cause.as_ref()), "coordinates" => Record(coordinates.as_ref()),
+        },
+        Shapes(cause) => "shacl-complete-shapes" { "cause" => Cause(cause) },
+        Preparation(cause) => "shacl-complete-preparation" { "cause" => Cause(cause) },
+        SourceConstraint(cause) => "shacl-complete-source-constraint" { "cause" => Cause(cause) },
+        QuerySource(cause) => "shacl-complete-query-source" { "cause" => Cause(cause.as_ref()) },
+        SourceContext(message) => "shacl-complete-source-context" { "message" => Text(message) },
+        Semantic(cause) => "shacl-complete-semantic" { "cause" => Cause(cause.as_ref()) },
+        Resource(cause) => "shacl-complete-resource" { "cause" => Cause(cause.as_ref()) },
+        Admission(cause) => "shacl-complete-admission" { "cause" => Cause(cause.as_ref()) },
+        XPathProfile(cause) => "shacl-complete-xpath-profile" { "cause" => Cause(cause) },
+        XPath(cause) => "shacl-complete-xpath" { "cause" => Cause(cause.as_ref()) },
+        Execution(message) => "shacl-complete-execution" { "message" => Text(message) },
+    }
+}
+
 purrdf_lex::variant_from!(CompleteValidationError {
     Shapes(ShapesError),
     Preparation(crate::product::ShapesProductError), Execution(String)
@@ -415,6 +483,7 @@ purrdf_lex::variant_from!(CompleteValidationError {
 impl std::fmt::Display for CompleteValidationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RuleExecution { cause, .. } => cause.fmt(formatter),
             Self::Shapes(error) => error.fmt(formatter),
             Self::Preparation(error) => error.fmt(formatter),
             Self::SourceConstraint(error) => error.fmt(formatter),
@@ -432,6 +501,7 @@ impl std::fmt::Display for CompleteValidationError {
 impl std::error::Error for CompleteValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::RuleExecution { cause, .. } => Some(cause.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::Preparation(error) => Some(error),
             Self::SourceConstraint(error) => Some(error),
@@ -447,12 +517,46 @@ impl std::error::Error for CompleteValidationError {
 }
 
 impl CompleteValidationError {
+    /// Whether a selected-law capsule may refine this generic execution failure.
+    pub(crate) fn is_generic_execution(&self) -> bool {
+        match self {
+            Self::Execution(_)
+            | Self::Shapes(ShapesError::Invalid(_) | ShapesError::Processor(_)) => true,
+            Self::Shapes(ShapesError::RuleExecution(execution)) => {
+                let mut cause = execution.cause.as_ref();
+                while let crate::rules::RulesError::Execution(nested) = cause {
+                    cause = nested.cause.as_ref();
+                }
+                matches!(
+                    cause,
+                    crate::rules::RulesError::Failed(_)
+                        | crate::rules::RulesError::Shapes(
+                            ShapesError::Invalid(_) | ShapesError::Processor(_)
+                        )
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Keep an observed rule receipt when a more authoritative refusal wins.
+    pub(crate) fn with_rule_coordinates(self, original: Self) -> Self {
+        let coordinates = match original {
+            Self::RuleExecution { coordinates, .. } => coordinates,
+            Self::Shapes(ShapesError::RuleExecution(execution)) => Box::new(execution.coordinates),
+            _ => return self,
+        };
+        Self::RuleExecution {
+            cause: Box::new(self),
+            coordinates,
+        }
+    }
+
     /// Preserve the execution category of ordinary evaluator diagnostics while
     /// carrying operational causes without rendering them into that category.
     pub(crate) fn execution(error: ShapesError) -> Self {
         match error {
             ShapesError::Invalid(message) => Self::Execution(message),
-            ShapesError::Processor(failure) => Self::Execution(failure.to_string()),
             error => Self::Shapes(error),
         }
     }
@@ -462,14 +566,10 @@ impl CompleteValidationError {
     /// generic execution lane projects an attached native diagnostic.
     pub(crate) fn from_native_run(error: crate::xpath::RunError<Self>) -> Self {
         match error.into_parts() {
-            (
-                Some(cause),
-                None
-                | Some(
-                    Self::Execution(_)
-                    | Self::Shapes(ShapesError::Invalid(_) | ShapesError::Processor(_)),
-                ),
-            ) => Self::XPath(Box::new(cause.into_public())),
+            (Some(cause), Some(error)) if error.is_generic_execution() => {
+                Self::XPath(Box::new(cause.into_public())).with_rule_coordinates(error)
+            }
+            (Some(cause), None) => Self::XPath(Box::new(cause.into_public())),
             (_, Some(error)) => error,
             (None, None) => unreachable!("a refused run retains an actual error"),
         }
@@ -478,6 +578,12 @@ impl CompleteValidationError {
     /// Reuse the native public error vocabulary while retaining richer dated causes.
     pub(crate) fn into_xpath(self) -> crate::xpath::XPathValidationError {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                crate::xpath::XPathValidationError::RuleExecution {
+                    cause: Box::new(cause.into_xpath()),
+                    coordinates,
+                }
+            }
             Self::XPath(error) => *error,
             Self::Shapes(error) => crate::xpath::XPathValidationError::Shapes(error),
             Self::Execution(error) => crate::xpath::XPathValidationError::Execution(error),
@@ -486,7 +592,7 @@ impl CompleteValidationError {
     }
 
     /// Preserve existing product dimensions on the closed compatibility door.
-    pub(crate) fn into_product(self) -> crate::product::ShapesProductError {
+    pub fn into_product(self) -> crate::product::ShapesProductError {
         match self {
             Self::Preparation(error) => error,
             error => crate::product::ShapesProductError::new(
@@ -499,6 +605,12 @@ impl CompleteValidationError {
     /// Project through an existing closed compatibility error without changing it.
     pub(crate) fn into_shapes(self) -> ShapesError {
         match self {
+            Self::RuleExecution { cause, coordinates } => {
+                ShapesError::RuleExecution(Box::new(crate::rules::RuleExecutionError {
+                    cause: Box::new(crate::rules::RulesError::Shapes(cause.into_shapes())),
+                    coordinates: *coordinates,
+                }))
+            }
             Self::Shapes(error) => error,
             error => ShapesError::Invalid(error.to_string()),
         }
@@ -569,6 +681,7 @@ pub struct CompleteValidationReport {
     evidence: Box<[ResultEvidence]>,
     context: Arc<ReportSourceContext>,
     profile: crate::profile::ShaclProfile,
+    cycles: Vec<crate::recursion::RecursionCycle>,
 }
 
 impl CompleteValidationReport {
@@ -592,6 +705,7 @@ impl CompleteValidationReport {
         Self {
             legacy,
             evidence: evidence.into_boxed_slice(),
+            cycles: Vec::new(),
             context,
             profile,
         }
@@ -608,6 +722,23 @@ impl CompleteValidationReport {
     #[must_use]
     pub const fn legacy(&self) -> &ValidationReport {
         &self.legacy
+    }
+
+    /// Finite native cycle certificates under the explicitly selected recursive
+    /// law. These are separate from standard SHACL results and their severities;
+    /// the legacy RDF projection retains the same conformance verdict.
+    #[must_use]
+    pub fn cycles(&self) -> &[crate::recursion::RecursionCycle] {
+        &self.cycles
+    }
+
+    pub(crate) fn with_recursion(
+        mut self,
+        outcome: &crate::recursion::evidence::ReportOutcome,
+    ) -> Result<Self, ShapesError> {
+        self.legacy.conforms &= outcome.conforms();
+        self.cycles = outcome.take_cycles()?;
+        Ok(self)
     }
 
     /// Consume the complete report and retain its legacy projection.
@@ -656,6 +787,7 @@ impl CompleteValidationReport {
         let dataset = report.dataset_as_carried_with_evidence(Some(&evidence))?;
         Ok(CompleteReportGraph {
             dataset,
+            cycles: self.cycles.clone(),
             root: Term::BlankNode(format!("{mint}report")),
             labels,
             context: Arc::clone(&self.context),
@@ -739,9 +871,17 @@ pub struct CompleteReportGraph {
     root: Term,
     labels: CompleteBlankLabels,
     context: Arc<ReportSourceContext>,
+    cycles: Vec<crate::recursion::RecursionCycle>,
 }
 
 impl CompleteReportGraph {
+    /// Native cycle certificates retained beside the standard RDF projection.
+    /// SHACL leaf results and source blanks keep their existing RDF vocabulary.
+    #[must_use]
+    pub fn cycles(&self) -> &[crate::recursion::RecursionCycle] {
+        &self.cycles
+    }
+
     /// The emitted complete RDF graph.
     #[must_use]
     pub const fn dataset(&self) -> &Arc<RdfDataset> {
@@ -895,6 +1035,7 @@ pub(crate) struct ReportCapture<'a> {
     /// The occurrence context admitted for this request, which may differ from
     /// an older law already occupying the shape's compatibility cache.
     pub(crate) sources: Option<&'a Arc<crate::shapes::ConstraintSources>>,
+    pub(crate) recursion: Option<&'a crate::recursion::evidence::ReportOutcome>,
     failure: std::sync::Mutex<CapturedFailures>,
 }
 
@@ -989,6 +1130,7 @@ impl<'a> ReportCapture<'a> {
             shapes,
             profile,
             sources,
+            recursion: None,
             failure: std::sync::Mutex::new(CapturedFailures {
                 first: None,
                 policy: None,
@@ -1000,6 +1142,14 @@ impl<'a> ReportCapture<'a> {
         let mut failures = self.failure.lock().expect("report failure lock");
         failures.policy = None;
         failures.first.take().and_then(|captured| captured.failure)
+    }
+
+    pub(crate) const fn with_recursion(
+        mut self,
+        outcome: Option<&'a crate::recursion::evidence::ReportOutcome>,
+    ) -> Self {
+        self.recursion = outcome;
+        self
     }
 
     /// A hard policy refusal retained independently of suppressible semantics.
@@ -1303,7 +1453,7 @@ impl ConformanceDisallows {
     ///
     /// Returns an error when `levels` is empty: see the type docs for why an empty
     /// set cannot be echoed truthfully.
-    pub fn new(levels: impl IntoIterator<Item = Severity>) -> Result<Self, String> {
+    pub fn new(levels: impl IntoIterator<Item = Severity>) -> Result<Self, ConformanceError> {
         let mut builtin = 0u8;
         let mut others: Vec<NamedNode> = Vec::new();
         for level in levels {
@@ -1317,13 +1467,7 @@ impl ConformanceDisallows {
             }
         }
         if builtin == 0 && others.is_empty() {
-            return Err(
-                "the conformance-disallow set is empty; a validation report with no \
-                 sh:conformanceDisallows triple means the DEFAULT set (sh:Violation, sh:Warning, \
-                 sh:Info), so an empty set has no report that states it — name at least one \
-                 severity"
-                    .to_owned(),
-            );
+            return Err(ConformanceError::EmptySet);
         }
         others.sort_unstable();
         others.dedup();
@@ -1341,7 +1485,7 @@ impl ConformanceDisallows {
     /// Returns an error when `iris` is empty, or when an entry is not an absolute
     /// IRI ("All values of sh:conformanceDisallows MUST be IRIs", SHACL 1.2 Core,
     /// "Conformance-Disallow Set").
-    pub fn from_iris<I, S>(iris: I) -> Result<Self, String>
+    pub fn from_iris<I, S>(iris: I) -> Result<Self, ConformanceError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -1349,12 +1493,14 @@ impl ConformanceDisallows {
         let mut levels = Vec::new();
         for iri in iris {
             let iri = iri.as_ref();
-            let absolute = purrdf_iri::parse(iri).is_ok_and(|parsed| parsed.has_scheme());
-            if !absolute {
-                return Err(format!(
-                    "sh:conformanceDisallows value {iri:?} is not an absolute IRI; all values of \
-                     sh:conformanceDisallows must be IRIs"
-                ));
+            let parsed = purrdf_iri::parse(iri).map_err(|cause| ConformanceError::InvalidIri {
+                input: iri.to_owned(),
+                cause,
+            })?;
+            if !parsed.has_scheme() {
+                return Err(ConformanceError::RelativeIri {
+                    input: iri.to_owned(),
+                });
             }
             levels.push(Severity::from_iri_open(iri));
         }
@@ -1575,7 +1721,10 @@ fn dedup_roles(roles: &[NamedNode]) -> Vec<NamedNode> {
 pub struct ValidationReport {
     /// Whether the data graph conforms to the shapes graph: no result's severity
     /// is in [`Self::conformance_disallows`] (and no failure was reported, which
-    /// is an `Err` rather than a report).
+    /// is an `Err` rather than a report). Under an explicitly selected recursive
+    /// law the settled pair relation also determines conformance. A false LFP
+    /// cycle can have no finite leaf result; complete reports retain its separate
+    /// native cycle certificate in [`CompleteValidationReport::cycles`].
     pub conforms: bool,
     /// Individual violation/warning/info/debug/trace results.
     pub results: Vec<ValidationResult>,
@@ -2481,8 +2630,8 @@ fn emit_path_list(
 ///
 /// # Errors
 ///
-/// Returns an error string if the N-Triples cannot be parsed.
-pub fn conforms_from_ntriples(nt: &str) -> Result<bool, String> {
+/// Returns the original text diagnostics if the N-Triples cannot be parsed.
+pub fn conforms_from_ntriples(nt: &str) -> Result<bool, crate::text_ingest::TextErrors> {
     let data = dataset_from_ntriples(nt)?;
     Ok(conforms_from_dataset(&data).unwrap_or(true))
 }
@@ -2491,17 +2640,18 @@ pub fn conforms_from_ntriples(nt: &str) -> Result<bool, String> {
 ///
 /// # Errors
 ///
-/// Returns an error string if the N-Triples cannot be parsed.
-pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+/// Returns the original text diagnostics if the N-Triples cannot be parsed.
+pub fn tuples_from_ntriples(
+    nt: &str,
+) -> Result<BTreeSet<ResultTuple>, crate::text_ingest::TextErrors> {
     let data = dataset_from_ntriples(nt)?;
     Ok(tuples_from_dataset(&data))
 }
 
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
 /// via the native purrdf codec.
-fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
-    ::purrdf_rdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
-        .map_err(|e| format!("N-Triples parse error: {e}"))
+fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, crate::text_ingest::TextErrors> {
+    crate::text_ingest::parse_ntriples_to_dataset(nt)
 }
 
 /// Walk a SHACL report dataset and extract result tuples.
@@ -2565,7 +2715,7 @@ pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
 /// values of sh:conformanceDisallows MUST be IRIs").
 pub fn conformance_disallows_from_dataset(
     data: &RdfDataset,
-) -> Result<ConformanceDisallows, String> {
+) -> Result<ConformanceDisallows, ConformanceError> {
     let predicate = Term::NamedNode(NamedNode::from(sh::CONFORMANCE_DISALLOWS));
     let mut levels = Vec::new();
     for report_node in subjects_typed(data, sh::VALIDATION_REPORT) {
@@ -2577,10 +2727,7 @@ pub fn conformance_disallows_from_dataset(
             GraphFilter::AnyGraph,
         ) {
             let Term::NamedNode(level) = object else {
-                return Err(format!(
-                    "sh:conformanceDisallows value {object} is not an IRI; all values of \
-                     sh:conformanceDisallows must be IRIs"
-                ));
+                return Err(ConformanceError::NotIri { value: object });
             };
             levels.push(Severity::from_iri_open(level.as_str()));
         }
@@ -2964,8 +3111,24 @@ mod tests {
             "the direct dataset must carry exactly the quads the text does"
         );
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "to_dataset() and parse(to_ntriples()) must be the same graph"
         );
     }
@@ -3026,8 +3189,24 @@ mod tests {
                 .expect("must parse");
 
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads()
         );
         assert_eq!(conforms_from_dataset(&direct), Some(true));
         assert!(tuples_from_dataset(&direct).is_empty());
@@ -3049,8 +3228,24 @@ mod tests {
 
         // Same graph up to blank labelling…
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&round_tripped).nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &round_tripped,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "escaping a blank label must not change the graph"
         );
         // …and the direct path still holds the caller's label unescaped.
@@ -3063,8 +3258,24 @@ mod tests {
         );
         // …and the public report graph is the same graph under the report's labels.
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&direct).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &direct,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &report.to_dataset().expect("authored report emits"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "relabelling must not change the graph"
         );
     }
@@ -3193,15 +3404,44 @@ mod tests {
         }
         // …and the graph is still the same one the text path produces.
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&dataset).nquads,
-            ::purrdf_rdf::canonicalize(
-                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
+            ::purrdf_rdf::try_canonicalize(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
             )
-            .nquads
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads()
         );
         assert_eq!(
-            ::purrdf_rdf::canonicalize(&dataset).nquads,
-            ::purrdf_rdf::canonicalize(&report.to_dataset().expect("authored report emits")).nquads,
+            ::purrdf_rdf::try_canonicalize(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
+            ::purrdf_rdf::try_canonicalize(
+                &report.to_dataset().expect("authored report emits"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads(),
             "relabelling must not change the graph"
         );
     }
@@ -3513,5 +3753,11 @@ mod term_walk_tests {
             reference(&term, &mut expected);
             assert_eq!(found, expected, "seed {seed}");
         }
+    }
+}
+
+impl From<crate::data_view::ViewAdmissionError> for CompleteValidationError {
+    fn from(cause: crate::data_view::ViewAdmissionError) -> Self {
+        Self::Shapes(cause.into())
     }
 }

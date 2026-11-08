@@ -142,7 +142,7 @@ use crate::py_store::PyStore;
 /// `shacl_profile` selects the exact dated SHACL law by its stable id — see the
 /// [module documentation](self).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None, shacl_profile=None))]
+#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None, shacl_profile=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
 #[allow(clippy::fn_params_excessive_bools)] // one keyword per validation-request option
@@ -157,19 +157,26 @@ fn validate(
     subclass_of_in_shapes_graph: bool,
     xpath_regex: Option<&str>,
     shacl_profile: Option<&str>,
+    recursion: Option<&str>,
+    recursion_max_pairs: Option<u64>,
+    recursion_max_iterations: Option<u64>,
 ) -> PyResult<Py<PyAny>> {
     let selection = crate::xpath_regex::selection(xpath_regex)?;
     let base_options = requested_law(
+        py,
         engine::ValidationOptions::default()
             .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
         shacl_profile,
         selection,
+        recursion,
+        recursion_max_pairs,
+        recursion_max_iterations,
     )?;
     let options = match conformance_disallows {
         None => base_options,
         Some(iris) => base_options.with_conformance_disallows(
             purrdf_shapes::report::ConformanceDisallows::from_iris(&iris)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?,
+                .map_err(|error| shapes_error(py, error.into()))?,
         ),
     };
     // Parse + validation run detached (GIL released); the result dicts are
@@ -266,20 +273,42 @@ fn validate(
 /// `ValueError` naming both laws when `selection` (the caller's `xpath_regex`) is not the
 /// XPath law the selected dated law requires.
 fn requested_law(
+    py: Python<'_>,
     options: engine::ValidationOptions,
     shacl_profile: Option<&str>,
     selection: Option<(
         purrdf_core::xsd_regex::xpath::Profile,
         purrdf_core::xsd_regex::xpath::Limits,
     )>,
+    recursion: Option<&str>,
+    recursion_max_pairs: Option<u64>,
+    recursion_max_iterations: Option<u64>,
 ) -> PyResult<engine::ValidationOptions> {
     let profile =
         purrdf_validate::requested_shacl_profile(shacl_profile, selection.map(|(law, _)| law))
-            .map_err(|message| {
-                pyo3::exceptions::PyValueError::new_err(format!("shacl_profile: {message}"))
+            .map_err(|cause| {
+                let message = format!("shacl_profile: {cause}");
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+                let message = if diagnostic.storage_error().is_some() {
+                    diagnostic.message.clone()
+                } else {
+                    message
+                };
+                crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
             })?;
-    Ok(match profile {
+    let options = match profile {
         Some(profile) => options.with_profile(profile),
+        None => options,
+    };
+    let recursion = purrdf_validate::requested_shacl_recursion(
+        recursion,
+        recursion_max_pairs,
+        recursion_max_iterations,
+    )
+    .map_err(|cause| native_shacl_error(py, cause))?;
+    Ok(match recursion {
+        Some(recursion) => options.with_recursion(recursion),
         None => options,
     })
 }
@@ -292,13 +321,22 @@ fn requested_law(
 /// SPARQL method's is ([`crate::py_store::presentation::refusal_value_error`]).
 fn xpath_error(py: Python<'_>, error: XPathValidationError) -> PyErr {
     match error {
+        XPathValidationError::RuleExecution { cause, coordinates } => {
+            crate::py_store::presentation::with_execution_receipt(
+                py,
+                xpath_error(py, *cause),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            )
+        }
         XPathValidationError::Shapes(error) => shapes_error(py, error),
-        other => match purrdf_validate::xpath_regex::validation_refusal_code(&other) {
-            Some(code) => {
-                crate::py_store::presentation::refusal_value_error(other.to_string(), code)
-            }
-            None => pyo3::exceptions::PyValueError::new_err(other.to_string()),
-        },
+        XPathValidationError::Complete(error) => complete_error(py, *error),
+        other => {
+            let code = purrdf_validate::xpath_regex::validation_refusal_code(&other)
+                .unwrap_or("shapes-refused");
+            let diagnostic = purrdf_validate::native_error::diagnostic(code, other, None);
+            let message = diagnostic.message.clone();
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
     }
 }
 
@@ -417,6 +455,9 @@ fn messages_list<'py>(
     max_stored_facts=None,
     max_join_steps=None,
     xpath_regex=None,
+    now=None, entropy_seed=None,
+    canonical_search,
+    cancel=None,
 ))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
@@ -432,13 +473,21 @@ fn entail(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     xpath_regex: Option<&str>,
-) -> PyResult<Py<PyAny>> {
+    now: Option<&str>,
+    entropy_seed: Option<u64>,
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
     let profile = crate::xpath_regex::profile(xpath_regex)?;
+    let coordinates = crate::py_store::query_coordinates(now, entropy_seed)?;
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
-    let outcome = py
-        .detach(|| {
-            purrdf_validate::entail_to_ntriples_with_xpath_regex(
+    let (outcome, receipts) = crate::py_canonical::run_with(
+        py,
+        canonical_search,
+        cancel,
+        |control| {
+            purrdf_validate::entail_to_ntriples_with_coordinates(
                 &purrdf_validate::EntailRequest {
                     shapes_ttl,
                     shapes_base,
@@ -452,13 +501,20 @@ fn entail(
                     host: purrdf_validate::RulesHost::Python,
                 },
                 profile,
+                coordinates,
+                control,
             )
-        })
-        .map_err(|error| xpath_error(py, error))?;
+        },
+        xpath_error,
+    )?;
     let out = PyDict::new(py);
-    out.set_item("ntriples", outcome.ntriples)?;
+    out.set_item(
+        "execution_receipt_json",
+        purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates),
+    )?;
+    out.set_item("ntriples", outcome.ntriples.nquads())?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
-    Ok(out.into_any().unbind())
+    crate::py_canonical::finish(py, out.into_any().unbind(), receipts)
 }
 
 /// Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH — the
@@ -505,8 +561,8 @@ fn entail(
 /// every `sh:pattern` a rule condition decides, runs under — see the
 /// [module documentation](self).
 ///
-/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_xpath_regex`], the function
-/// the WASM and C-ABI bindings call.
+/// The work is [`purrdf_validate::apply_rules_to_ntriples_with_coordinates`],
+/// whose default-coordinate wrappers also serve the WASM and C-ABI bindings.
 #[pyfunction]
 #[pyo3(signature = (
     data_nt,
@@ -523,6 +579,7 @@ fn entail(
     imports=Vec::new(),
     shapes_graph=None,
     xpath_regex=None,
+    now=None, entropy_seed=None,
 ))]
 #[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
@@ -541,12 +598,15 @@ fn apply_rules(
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
     xpath_regex: Option<&str>,
+    now: Option<&str>,
+    entropy_seed: Option<u64>,
 ) -> PyResult<Py<PyAny>> {
     let profile = crate::xpath_regex::profile(xpath_regex)?;
+    let coordinates = crate::py_store::query_coordinates(now, entropy_seed)?;
     let pairs = crate::py_entail::import_list(&imports);
     let outcome = py
         .detach(|| {
-            purrdf_validate::apply_rules_to_ntriples_with_xpath_regex(
+            purrdf_validate::apply_rules_to_ntriples_with_coordinates(
                 &purrdf_validate::RulesRequest {
                     data_nt,
                     shapes_ttl,
@@ -563,10 +623,15 @@ fn apply_rules(
                     host: purrdf_validate::RulesHost::Python,
                 },
                 profile,
+                coordinates,
             )
         })
         .map_err(|error| xpath_error(py, error))?;
     let out = PyDict::new(py);
+    out.set_item(
+        "execution_receipt_json",
+        purrdf_validate::query::rule_execution_receipt_json(&outcome.coordinates),
+    )?;
     out.set_item("inferred", outcome.inferred_ntriples)?;
     out.set_item("proof", outcome.proof)?;
     out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
@@ -907,7 +972,7 @@ fn validate_nt_against(
 /// private-use language tags, every malformed line reported in one pass.
 fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, purrdf_validate::ShapesError> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| purrdf_validate::ShapesError::from(errors.join("\n")))
+        .map_err(purrdf_validate::ShapesError::from)
 }
 
 #[pymethods]
@@ -934,8 +999,9 @@ impl PyShapes {
     /// loaded and every validation of it answers under (see the [module documentation](self));
     /// `None` is the compatibility law.
     #[new]
-    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, shacl_profile=None))]
+    #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, shacl_profile=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
     fn new(
         py: Python<'_>,
         shapes_ttl: &str,
@@ -944,27 +1010,26 @@ impl PyShapes {
         shapes_graph: Option<&str>,
         subclass_of_in_shapes_graph: bool,
         shacl_profile: Option<&str>,
+        recursion: Option<&str>,
+        recursion_max_pairs: Option<u64>,
+        recursion_max_iterations: Option<u64>,
     ) -> PyResult<Self> {
         let options = requested_law(
+            py,
             engine::ValidationOptions::default()
                 .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
             shacl_profile,
             None,
+            recursion,
+            recursion_max_pairs,
+            recursion_max_iterations,
         )?;
         let pairs = crate::py_entail::import_list(&imports);
         // Shapes-graph parsing runs detached (GIL released).
-        let mut inner = py
+        let inner = py
             .detach(|| {
-                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
-                if shacl_profile.is_none() {
-                    return engine::parse_shapes_with_graph(
-                        shapes_ttl,
-                        base,
-                        None,
-                        shapes_graph,
-                        &table,
-                    );
-                }
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)
+                    .map_err(purrdf_validate::ShapesError::from)?;
                 engine::parse_shapes_with_options(
                     shapes_ttl,
                     base,
@@ -973,13 +1038,8 @@ impl PyShapes {
                     &table,
                     &options,
                 )
-                .map_err(|error| match error {
-                    purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
-                    other => purrdf_validate::ShapesError::Invalid(other.to_string()),
-                })
             })
-            .map_err(|error| shapes_error(py, error))?;
-        inner.set_validation_options(options);
+            .map_err(|error| complete_error(py, error))?;
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -1081,7 +1141,9 @@ impl PyShapes {
                 pyo3::exceptions::PyValueError::new_err(format!("extension usage: {e}"))
             })?;
 
-        let usage = py.detach(|| self.inner.extension_usage(&env));
+        let usage = py
+            .detach(|| self.inner.extension_usage(&env))
+            .map_err(|error| shapes_error(py, purrdf_validate::ShapesError::Preparation(error)))?;
 
         let sites = PyDict::new(py);
         for (site, used) in usage.sites() {
@@ -1363,12 +1425,22 @@ impl PyPreparedShapes {
     ///
     /// Raises `ShapesProductError` when the shapes graph declares something the
     /// product format cannot carry.
-    fn to_product<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
+    fn to_product(
+        &self,
+        py: Python<'_>,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
         let prepared = &self.inner;
-        let bytes = py
-            .detach(|| purrdf_validate::prepared_to_product(prepared))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
-        Ok(PyBytes::new(py, &bytes))
+        let (bytes, receipts) = crate::py_canonical::run_with(
+            py,
+            canonical_search,
+            cancel,
+            |control| purrdf_validate::prepared_to_product(prepared, control),
+            |py, error| product_error(py, &ShapesProductRefusal::Admission(error)),
+        )?;
+        crate::py_canonical::finish(py, PyBytes::new(py, &bytes), receipts)
     }
 
     /// Where this preparation came from, as one deterministic token — `parsed`,
@@ -1465,15 +1537,17 @@ impl PyPreparedShapes {
         // would not. A selected law runs that same loop inside its selection.
         let validation = match selection {
             None => py
-                .detach(|| -> Result<_, purrdf_validate::ShapesError> {
-                    let validator = prepared.bind_delta_with_shapes_graph(
-                        Arc::clone(&snapshot),
-                        None,
-                        ::purrdf::ir::ViewLimits::default(),
-                    )?;
-                    Ok(engine::validate_change(&validator, &snapshot)?)
-                })
-                .map_err(|error| shapes_error(py, error))?,
+                .detach(
+                    || -> Result<_, purrdf_shapes::report::CompleteValidationError> {
+                        let validator = prepared.bind_delta_with_shapes_graph(
+                            Arc::clone(&snapshot),
+                            None,
+                            ::purrdf::ir::ViewLimits::default(),
+                        )?;
+                        engine::validate_change(&validator, &snapshot)
+                    },
+                )
+                .map_err(|error| complete_error(py, error))?,
             Some((profile, limits)) => py
                 .detach(|| {
                     prepared
@@ -1729,12 +1803,23 @@ impl PyShapesProduct {
     /// `.dimension` to decide what to do: `stage-id` means try `rebuild()`, an
     /// identity dimension means this process's configuration is not the one the
     /// product was prepared against.
-    fn admit(&self, py: Python<'_>) -> PyResult<PyPreparedShapes> {
-        let bytes = &self.bytes;
-        let inner = py
-            .detach(|| purrdf_validate::admit_shapes_product(bytes))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
-        Ok(PyPreparedShapes { inner })
+    #[pyo3(signature = (*, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
+    fn admit(
+        &self,
+        py: Python<'_>,
+        recursion: Option<&str>,
+        recursion_max_pairs: Option<u64>,
+        recursion_max_iterations: Option<u64>,
+    ) -> PyResult<PyPreparedShapes> {
+        restore_product_request(
+            py,
+            &self.bytes,
+            None,
+            false,
+            recursion,
+            recursion_max_pairs,
+            recursion_max_iterations,
+        )
     }
 
     /// **The common path, bound to the product you MEANT.** Restore exactly as
@@ -1756,18 +1841,24 @@ impl PyShapesProduct {
     /// product carries a different binding, and `ValueError` when
     /// `expected_identity` is not 64 hexadecimal digits — no product was inspected in
     /// that case, so no dimension names it.
+    #[pyo3(signature = (expected_identity, *, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
     fn admit_expecting(
         &self,
         py: Python<'_>,
         expected_identity: &str,
+        recursion: Option<&str>,
+        recursion_max_pairs: Option<u64>,
+        recursion_max_iterations: Option<u64>,
     ) -> PyResult<PyPreparedShapes> {
-        let expected = purrdf_validate::parse_identity_digest(expected_identity)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let bytes = &self.bytes;
-        let inner = py
-            .detach(|| purrdf_validate::admit_shapes_product_expecting(bytes, &expected))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
-        Ok(PyPreparedShapes { inner })
+        restore_product_request(
+            py,
+            &self.bytes,
+            Some(expected_identity),
+            false,
+            recursion,
+            recursion_max_pairs,
+            recursion_max_iterations,
+        )
     }
 
     /// **The forward-compatibility path.** Ignore the memo and re-derive the
@@ -1776,12 +1867,23 @@ impl PyShapesProduct {
     /// Not a Turtle fallback: no RDF text is parsed and no file is read. The dataset
     /// travels inside the product under the envelope's own digests, and this
     /// re-derives the shapes from it under the product's recorded parse inputs.
-    fn rebuild(&self, py: Python<'_>) -> PyResult<PyPreparedShapes> {
-        let bytes = &self.bytes;
-        let inner = py
-            .detach(|| purrdf_validate::rebuild_shapes_product(bytes))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
-        Ok(PyPreparedShapes { inner })
+    #[pyo3(signature = (*, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
+    fn rebuild(
+        &self,
+        py: Python<'_>,
+        recursion: Option<&str>,
+        recursion_max_pairs: Option<u64>,
+        recursion_max_iterations: Option<u64>,
+    ) -> PyResult<PyPreparedShapes> {
+        restore_product_request(
+            py,
+            &self.bytes,
+            None,
+            true,
+            recursion,
+            recursion_max_pairs,
+            recursion_max_iterations,
+        )
     }
 
     /// **The forward-compatibility path, bound to the product you MEANT.**
@@ -1803,18 +1905,24 @@ impl PyShapesProduct {
     /// product carries a different binding, and `ValueError` when
     /// `expected_identity` is not 64 hexadecimal digits — no product was
     /// inspected in that case, so no dimension names it.
+    #[pyo3(signature = (expected_identity, *, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
     fn rebuild_expecting(
         &self,
         py: Python<'_>,
         expected_identity: &str,
+        recursion: Option<&str>,
+        recursion_max_pairs: Option<u64>,
+        recursion_max_iterations: Option<u64>,
     ) -> PyResult<PyPreparedShapes> {
-        let expected = purrdf_validate::parse_identity_digest(expected_identity)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let bytes = &self.bytes;
-        let inner = py
-            .detach(|| purrdf_validate::rebuild_shapes_product_expecting(bytes, &expected))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))?;
-        Ok(PyPreparedShapes { inner })
+        restore_product_request(
+            py,
+            &self.bytes,
+            Some(expected_identity),
+            true,
+            recursion,
+            recursion_max_pairs,
+            recursion_max_iterations,
+        )
     }
 
     /// **The cold path.** Independently corroborate the shapes dataset's canonical
@@ -1824,10 +1932,22 @@ impl PyShapesProduct {
     /// blank nodes and can cost more than the shapes parse a product exists to
     /// eliminate, so it is never on a restore path. Call it from a build step, a
     /// conformance harness or a test — not before every validation.
-    fn certify(&self, py: Python<'_>) -> PyResult<()> {
+    #[pyo3(signature = (*, canonical_search, cancel=None))]
+    fn certify(
+        &self,
+        py: Python<'_>,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
         let bytes = &self.bytes;
-        py.detach(|| purrdf_validate::certify_shapes_product(bytes))
-            .map_err(|error| product_error(py, &ShapesProductRefusal::Admission(error)))
+        let ((), receipts) = crate::py_canonical::run_with(
+            py,
+            canonical_search,
+            cancel,
+            |control| purrdf_validate::certify_shapes_product(bytes, control),
+            |py, error| product_error(py, &ShapesProductRefusal::Admission(error)),
+        )?;
+        crate::py_canonical::finish(py, py.None(), receipts)
     }
 }
 
@@ -1856,6 +1976,44 @@ impl PyShapesProduct {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // existing restore controls plus the complete recursion request
+fn restore_product_request(
+    py: Python<'_>,
+    bytes: &[u8],
+    expected_identity: Option<&str>,
+    rebuild: bool,
+    recursion: Option<&str>,
+    recursion_max_pairs: Option<u64>,
+    recursion_max_iterations: Option<u64>,
+) -> PyResult<PyPreparedShapes> {
+    let expected = expected_identity
+        .map(purrdf_validate::parse_identity_digest)
+        .transpose()
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let options = requested_law(
+        py,
+        engine::ValidationOptions::default(),
+        None,
+        None,
+        recursion,
+        recursion_max_pairs,
+        recursion_max_iterations,
+    )?;
+    let inner = py
+        .detach(|| {
+            purrdf_validate::restore_shapes_product_with_options(
+                bytes,
+                &options,
+                expected.as_ref(),
+                rebuild,
+            )
+        })
+        .map_err(|error| {
+            product_error(py, &ShapesProductRefusal::Admission(error.into_product()))
+        })?;
+    Ok(PyPreparedShapes { inner })
+}
+
 /// Compile a Turtle shapes graph into a prepared product in one call.
 ///
 /// The composition of `Shapes(shapes_ttl, base=shapes_base).prepare().to_product()`,
@@ -1877,30 +2035,51 @@ impl PyShapesProduct {
 /// [module documentation](self)), recorded in the product and bound by its identity —
 /// `purrdf shacl pack --shapes-graph`; a relative one resolves against `shapes_base`.
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
+#[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None, canonical_search, cancel=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-fn pack_product<'py>(
-    py: Python<'py>,
+#[allow(clippy::too_many_arguments)] // one keyword per validation-request option
+fn pack_product(
+    py: Python<'_>,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
-) -> PyResult<Bound<'py, PyBytes>> {
+    recursion: Option<&str>,
+    recursion_max_pairs: Option<u64>,
+    recursion_max_iterations: Option<u64>,
+    canonical_search: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+) -> PyResult<crate::py_canonical::PyCanonicalResult> {
+    let options = requested_law(
+        py,
+        engine::ValidationOptions::default(),
+        None,
+        None,
+        recursion,
+        recursion_max_pairs,
+        recursion_max_iterations,
+    )?;
     let pairs = crate::py_entail::import_list(&imports);
-    let bytes = py
-        .detach(|| {
-            purrdf_validate::pack_shapes_product_with_shapes_graph(
+    let (bytes, receipts) = crate::py_canonical::run_with(
+        py,
+        canonical_search,
+        cancel,
+        |control| {
+            purrdf_validate::pack_shapes_product_with_options(
                 shapes_ttl,
                 shapes_base,
                 shapes_graph,
                 &pairs,
+                &options,
+                control,
             )
-        })
-        .map_err(|refusal| match refusal.import_error() {
+        },
+        |py, refusal| match refusal.import_error() {
             Some(error) => import_error(py, error),
             None => product_error(py, &refusal),
-        })?;
-    Ok(PyBytes::new(py, &bytes))
+        },
+    )?;
+    crate::py_canonical::finish(py, PyBytes::new(py, &bytes), receipts)
 }
 
 // ── The shapes graph's owl:imports ──────────────────────────────────────────
@@ -1935,40 +2114,76 @@ create_exception!(
 /// `.kind` and `.iris` always present, and `ValueError` for anything else.
 fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
+        purrdf_validate::ShapesError::ScopeBinding(error) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+            let message = diagnostic.message.clone();
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
+        purrdf_validate::ShapesError::ImportArrays(error) => {
+            let storage = error.storage_error();
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", error, storage);
+            let message = diagnostic.message.clone();
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
+        purrdf_validate::ShapesError::Canonical(error) => {
+            crate::py_canonical::error_to_python(py, &error, "[]")
+        }
+        purrdf_validate::ShapesError::RuleExecution(error) => {
+            let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
+            let raised = match error.into_cause() {
+                purrdf_shapes::rules::RulesError::Shapes(error) => shapes_error(py, error),
+                other => native_shacl_error(py, other),
+            };
+            crate::py_store::presentation::with_execution_receipt(py, raised, receipt)
+        }
         purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
-        purrdf_validate::ShapesError::Invalid(message) => {
-            pyo3::exceptions::PyValueError::new_err(message)
+        other => native_shacl_error(py, other),
+    }
+}
+
+fn native_shacl_error(
+    py: Python<'_>,
+    error: impl purrdf_lex::error::NativeError + 'static,
+) -> PyErr {
+    let diagnostic = purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+    let message = diagnostic.message.clone();
+    crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+}
+
+fn complete_error(py: Python<'_>, error: purrdf_shapes::report::CompleteValidationError) -> PyErr {
+    match error {
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => shapes_error(py, error),
+        purrdf_shapes::report::CompleteValidationError::RuleExecution { cause, coordinates } => {
+            crate::py_store::presentation::with_execution_receipt(
+                py,
+                complete_error(py, *cause),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            )
         }
-        purrdf_validate::ShapesError::Processor(failure) => {
-            pyo3::exceptions::PyValueError::new_err(failure.to_string())
-        }
-        purrdf_validate::ShapesError::ShaclJs(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::IllFormed(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::Prebinding(violation) => {
-            pyo3::exceptions::PyValueError::new_err(violation.to_string())
-        }
-        purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
+        other => native_shacl_error(py, other),
     }
 }
 
 /// Raise `error` as [`ShapesImportError`].
 fn import_error(py: Python<'_>, error: &purrdf_validate::ShapesImportError) -> PyErr {
     let raised = ShapesImportError::new_err(error.to_string());
-    // Setting an attribute on a Python-level exception instance cannot fail; a failure
-    // is ignored rather than replacing a precise refusal with a vaguer one.
-    let _ = raised.value(py).setattr("kind", error.kind());
-    let _ = raised.value(py).setattr("iris", error.iris());
-    raised
+    let attach = || -> PyResult<()> {
+        raised.value(py).setattr("kind", error.kind())?;
+        raised.value(py).setattr("iris", error.iris())?;
+        Ok(())
+    };
+    if let Err(failure) = attach() {
+        return failure;
+    }
+    let diagnostic =
+        purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+    if diagnostic.storage_error().is_some() {
+        return crate::py_store::presentation::native_error(py, &diagnostic);
+    }
+    crate::py_store::presentation::with_native_cause(py, raised, &diagnostic)
 }
 
 /// Register the `purrdf-shapes` surface on a Python module.

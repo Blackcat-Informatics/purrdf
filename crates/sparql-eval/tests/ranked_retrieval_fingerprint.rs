@@ -97,6 +97,7 @@ fn ranked_declaration() -> RankedDeclaration {
             }],
         }],
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         // The fixture producer is exhaustive over its own table.
@@ -287,7 +288,7 @@ fn a_declared_block_column_moves_the_fingerprint() {
 /// framing change. Never edit it to match a run — re-run this test and record
 /// what it reports.
 const FIXTURE_FINGERPRINT: &str =
-    "8d6dea117e9324168c55206f57936e38deed009031f1aa6d5d9bc1082ef5e2d3";
+    "1ff7d9f12bb5b34eda88095f8da6e7a6b4ae814494a28187af0f7273739ed8bf";
 
 #[test]
 fn the_fingerprint_is_the_same_string_every_time_the_registry_is_rebuilt() {

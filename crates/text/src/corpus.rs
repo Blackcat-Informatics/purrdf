@@ -86,10 +86,10 @@ impl CorpusProfile for GraphFree {
         None
     }
     fn retain_graph(value: Option<TermValue>) -> Result<Self::Graph, TextError> {
-        if value.is_some() {
-            return Err(TextError::config(
-                "named graph data cannot enter a graph-free text corpus",
-            ));
+        if let Some(graph) = value {
+            return Err(
+                crate::configuration::ConfigurationRefusal::GraphFreeData { graph }.into_error(),
+            );
         }
         Ok(())
     }

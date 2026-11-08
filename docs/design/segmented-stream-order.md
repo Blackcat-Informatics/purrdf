@@ -10,8 +10,9 @@ for both dictionary order and statement order.
 ## What the current image orders
 
 `crates/rdf-core/src/ir/segmented/build.rs::encode_dataset` writes the forward
-dictionary in retained numeric term-ID order. It then sorts the same records by
-their encoded term bytes for the reverse dictionary. Each statement stream is
+dictionary in retained numeric term-ID order. It sorts the same records by
+their encoded term bytes and writes their identifiers as the reverse index,
+which reads keys through the forward dictionary. Each statement stream is
 sorted separately by `(subject ID, predicate ID, object ID, graph ID)`.
 `SegmentedBuildLimits::with_first_term_index` promises that numeric IDs survive
 sealing and reopening; they are not reassigned in semantic value order.
@@ -68,7 +69,7 @@ The implementation needs to distinguish these jobs:
    chronology. Annotation classification also depends on the original and
    effective reifier declarations, not just on duplicate row equality.
 
-The writer also emits a reverse dictionary in a second order, and the directory
+The writer also emits reverse identifiers in a second order, and the directory
 and statistics are completed after reading the inputs. Authentication includes
 the completed header and every output block. A bounded output interface therefore
 needs either a caller-owned seekable sink or an explicit host protocol that can

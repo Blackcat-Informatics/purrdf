@@ -188,9 +188,21 @@ class CompiledJsonLdContext:
     def canonical_context_json(self) -> str:
         ...
 
-class CanonicalizationAlgorithm:
-    RDFC_1_0: CanonicalizationAlgorithm
-    UNSTABLE: CanonicalizationAlgorithm
+class CanonicalCause:
+
+    @property
+    def json(self) -> str:
+        ...
+
+class CanonicalResult:
+
+    @property
+    def value(self) -> Any:
+        ...
+
+    @property
+    def canonicalization_json(self) -> str:
+        ...
 
 class NamedNode:
 
@@ -351,6 +363,10 @@ class _QuerySolutionIterator:
 class QuerySolutions:
 
     @property
+    def execution_receipt_json(self) -> str | None:
+        ...
+
+    @property
     def variables(self) -> list[Variable]:
         ...
 
@@ -365,6 +381,10 @@ class QuerySolutions:
 
 class QueryTriples:
 
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
+
     def __iter__(self) -> QueryTriples:
         ...
 
@@ -378,6 +398,10 @@ class QueryTriples:
         ...
 
 class QueryQuads:
+
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
 
     def __iter__(self) -> QueryQuads:
         ...
@@ -418,6 +442,10 @@ class SerializeLoss:
         ...
 
 class QueryBoolean:
+
+    @property
+    def execution_receipt_json(self) -> str | None:
+        ...
 
     def __bool__(self) -> bool:
         ...
@@ -527,6 +555,10 @@ class RelationAttestations(TypedDict):
 class QueryOutcome:
 
     @property
+    def execution_receipt_json(self) -> str:
+        ...
+
+    @property
     def is_complete(self) -> bool:
         ...
 
@@ -575,6 +607,10 @@ class EntailmentQueryOutcome:
 class UpdateOutcome:
 
     @property
+    def execution_receipt_json(self) -> str:
+        ...
+
+    @property
     def is_applied(self) -> bool:
         ...
 
@@ -583,7 +619,7 @@ class UpdateOutcome:
         ...
 
     @property
-    def evidence(self) -> GovernorEvidence:
+    def evidence(self) -> GovernorEvidence | None:
         ...
 
 class PreparedQuery:
@@ -592,7 +628,7 @@ class PreparedQuery:
     def parameters(self) -> list[str]:
         ...
 
-    def run(self, **bindings: _Term) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
+    def run(self, bindings: dict[str, _Term] | None=..., *, now: str | None=..., entropy_seed: int | None=...) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
         ...
 
 class QuadIter:
@@ -614,22 +650,22 @@ class _QuadStore:
     def named_graphs(self) -> list[NamedNode | BlankNode]:
         ...
 
-    def query(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=...) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
+    def query(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=...) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
         ...
 
-    def query_rdflib(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., named_graphs: bool=..., default_graph: NamedNode | BlankNode | None=..., default_union: bool=...) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
+    def query_rdflib(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., named_graphs: bool=..., default_graph: NamedNode | BlankNode | None=..., default_union: bool=...) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean:
         ...
 
-    def query_governed(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> QueryOutcome:
+    def query_governed(self, query: str, *, substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., max_udf_depth: int | None=..., unlimited_udf_depth: bool=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> QueryOutcome:
         ...
 
-    def query_entailment_governed(self, query: str, entailment: str, *, program: str=..., imports: Sequence[tuple[str, str]] | None=..., premise_iris: Sequence[str] | None=..., max_stored_facts: int | None=..., max_join_steps: int | None=..., substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> EntailmentQueryOutcome:
+    def query_entailment_governed(self, query: str, entailment: str, *, program: str=..., imports: Sequence[tuple[str, str]] | None=..., premise_iris: Sequence[str] | None=..., max_stored_facts: int | None=..., max_join_steps: int | None=..., max_term_arena_bytes: int | None=..., substitutions: dict[Variable, _Term] | None=..., extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_answers: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., max_udf_depth: int | None=..., unlimited_udf_depth: bool=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> EntailmentQueryOutcome:
         ...
 
-    def update(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=...) -> None:
+    def update(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=...) -> UpdateOutcome:
         ...
 
-    def update_governed(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> UpdateOutcome:
+    def update_governed(self, update: str, *, extension_namespaces: list[str] | None=..., property_fn_namespaces: list[str] | None=..., standpoint_predicates: tuple[str, str] | None=..., relations: dict[str, _Relation] | None=..., relations_from_graph: dict[str, _RelationFromGraph] | None=..., path_relations: dict[str, _PathRelation] | None=..., aggregate_namespace: str | None=..., xpath_regex: str | None=..., geo: GeoConfiguration=..., division: str | None=..., now: str | None=..., entropy_seed: int | None=..., fuel: int | None=..., deadline_ms: int | None=..., max_intermediate_cells: int | None=..., max_scratch_bytes: int | None=..., max_remote_requests: int | None=..., max_udf_depth: int | None=..., unlimited_udf_depth: bool=..., no_ceiling: bool=False, cancel: CancellationToken | None=...) -> UpdateOutcome:
         ...
 
     def dump_with_loss(self, format: RdfFormat) -> SerializeLoss:
@@ -646,10 +682,10 @@ class Store(_QuadStore):
     def __init__(self, *, remember_empty_graphs: bool=True) -> None:
         ...
 
-    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
-    def bulk_load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def bulk_load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
     def add(self, quad: Quad) -> None:
@@ -680,7 +716,7 @@ class MutableDataset(_QuadStore):
     def __init__(self, *, remember_empty_graphs: bool=True) -> None:
         ...
 
-    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
     def add(self, quad: Quad) -> bool:
@@ -714,7 +750,7 @@ class Dataset:
     def add(self, quad: Quad) -> None:
         ...
 
-    def canonicalize(self, algorithm: CanonicalizationAlgorithm) -> None:
+    def canonicalize(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def __iter__(self) -> QuadIter:
@@ -723,7 +759,7 @@ class Dataset:
     def __len__(self) -> int:
         ...
 
-def parse(input: bytes | str, format: RdfFormat, *, base: str | None=...) -> list[Quad]:
+def parse(input: bytes | str, format: RdfFormat, *, base: str | None=..., input_options: str | None=...) -> list[Quad]:
     ...
 
 @overload
@@ -797,6 +833,22 @@ def compile_gts_with_report(base_data: bytes, base_format: RdfFormat, *, base_sc
     ...
 
 def to_json_ld(data: bytes, *, format: RdfFormat, options_json: str | None=..., context: CompiledJsonLdContext | None=..., base: str | None=...) -> str:
+    ...
+
+def expand_document(source: bytes, *, request_json: bytes) -> str:
+    """Expand original document bytes under a closed version-one request."""
+    ...
+
+def compact_document(source: bytes, *, request_json: bytes) -> str:
+    """Compact source bytes using the explicit request output context."""
+    ...
+
+def flatten_document(source: bytes, *, request_json: bytes) -> str:
+    """Flatten source bytes, optionally compacting under an output context."""
+    ...
+
+def frame_document(source: bytes, frame: bytes, *, request_json: bytes) -> str:
+    """Frame separate source and frame bytes under a closed version-one request."""
     ...
 
 def serialize_jsonld(data: bytes, *, format: RdfFormat, output_format: str, options_json: str | None=..., context: CompiledJsonLdContext | None=..., yaml_schema_url: str | None=...) -> str:
@@ -950,20 +1002,168 @@ class ColumnarRows(TypedDict):
     annotations: list[tuple[int | str | bytes | None, ...]]
     blobs: list[tuple[int | str | bytes | None, ...]]
 
-def gts_columnar_rows_from_bytes(data: bytes) -> ColumnarRows:
+class NativeErrorValue(TypedDict):
+    kind: str
+    value: int | bool | str | bytes | None | NativeErrorRecord | tuple[NativeErrorValue, ...]
+
+class NativeErrorRecord(TypedDict):
+    code: str
+    fields: dict[str, NativeErrorValue]
+    items: tuple[NativeErrorValue, ...]
+
+class GtsBlobLimits:
+
+    def __init__(self, *, max_encoded_bytes: int | None, max_decoded_bytes: int | None, max_total_decoded_bytes: int | None, max_metadata_bytes: int | None, max_frame_decoded_bytes: int | None) -> None:
+        ...
+
+    @staticmethod
+    def unbounded() -> GtsBlobLimits:
+        ...
+
+    @property
+    def max_encoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_decoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_total_decoded_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_metadata_bytes(self) -> int | None:
+        ...
+
+    @property
+    def max_frame_decoded_bytes(self) -> int | None:
+        ...
+
+class GtsBlobUsage:
+
+    @property
+    def retained_payload_bytes(self) -> int:
+        ...
+
+    @property
+    def retained_refusal_metadata_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_payload_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_retained_bytes(self) -> int:
+        ...
+
+    @property
+    def peak_selected_digests(self) -> int:
+        ...
+
+class GtsBlobOmission:
+
+    @property
+    def reason(self) -> str:
+        ...
+
+    @property
+    def digest(self) -> str | None:
+        ...
+
+    @property
+    def digest_computed(self) -> bool:
+        ...
+
+    @property
+    def encoded_bytes(self) -> int:
+        ...
+
+    @property
+    def segment_index(self) -> int:
+        ...
+
+    @property
+    def frame_index(self) -> int:
+        ...
+
+    @property
+    def frame_range(self) -> tuple[int, int]:
+        ...
+
+    @property
+    def frame_id(self) -> bytes:
+        ...
+
+    @property
+    def segment_head(self) -> bytes:
+        ...
+
+    @property
+    def limits(self) -> GtsBlobLimits:
+        ...
+
+    @property
+    def usage(self) -> GtsBlobUsage:
+        ...
+
+    @property
+    def native_cause(self) -> NativeErrorRecord | None:
+        ...
+
+class GtsBlobExportReport:
+
+    @property
+    def losses(self) -> list[ProjectionLoss]:
+        ...
+
+    @property
+    def omissions(self) -> list[GtsBlobOmission]:
+        ...
+
+    @property
+    def usage(self) -> GtsBlobUsage:
+        ...
+
+class GtsExportResult:
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        ...
+
+    @property
+    def report(self) -> GtsBlobExportReport:
+        ...
+_GtsBlobPolicy: TypeAlias = GtsBlobLimits | TypingLiteral['unbounded']
+
+def gts_columnar_rows_from_bytes(data: bytes, *, blob_limits: _GtsBlobPolicy) -> tuple[ColumnarRows, GtsBlobExportReport]:
     ...
 
-def gts_columnar_parquet_from_bytes(data: bytes) -> dict[str, bytes]:
+def gts_columnar_parquet_from_bytes(data: bytes, *, blob_limits: _GtsBlobPolicy) -> tuple[dict[str, bytes], GtsBlobExportReport]:
     ...
 
-def gts_to_sqlite(data: bytes, path: str) -> str:
+def gts_to_sqlite(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
-def gts_to_duckdb(data: bytes, path: str) -> str:
+def gts_to_duckdb(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
-def gts_to_parquet(data: bytes, out_dir: str) -> list[str]:
+def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
+
+class YamlSourceExport:
+    @property
+    def root(self) -> str: ...
+    @property
+    def dataset(self) -> RdfDataset: ...
+
+def yaml_source_export(
+    source: bytes, *, source_iri: str, profile_json: bytes
+) -> YamlSourceExport: ...
+def yaml_source_reconstruct(
+    dataset: RdfDataset, *, root: str, profile_json: bytes
+) -> bytes: ...
 
 class RdfDataset:
 
@@ -979,7 +1179,7 @@ class RdfDataset:
     def __len__(self) -> int:
         ...
 
-    def to_nquads(self) -> str:
+    def to_nquads(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def serialize_jsonld(self, output_format: str, *, options_json: str | None=..., context: CompiledJsonLdContext | None=..., yaml_schema_url: str | None=...) -> str:
@@ -1023,7 +1223,7 @@ class ShexResultEntry(TypedDict):
 class shex:
 
     @staticmethod
-    def validate(schema: str, data: str, map: list[tuple[str, str]], *, schema_format: str=..., data_format: str=..., base: str | None=..., xpath_regex: str | None=...) -> list[ShexResultEntry]:
+    def validate(schema: str, data: str, map: list[tuple[str, str]], *, schema_format: str=..., data_format: str=..., base: str | None=..., xpath_regex: str | None=..., matcher_maximum_states: int=...) -> list[ShexResultEntry]:
         ...
 
     @staticmethod
@@ -1058,7 +1258,7 @@ class _ValidationReport:
 class _Shapes:
     """Parsed SHACL shapes, reusable across many data graphs."""
 
-    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None) -> None:
+    def __init__(self, shapes_ttl: str, *, base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> None:
         ...
 
     def validate_nt(self, data_nt: str, *, xpath_regex: str | None=None) -> _ValidationReport:
@@ -1107,12 +1307,14 @@ class _ShapesImportError(ValueError):
     """
     kind: str
     iris: list[str]
+    native_cause: dict[str, object]
+    native_cause_json: str
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as
     a prepared product."""
 
-    def to_product(self) -> bytes:
+    def to_product(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def provenance(self) -> str:
@@ -1177,19 +1379,19 @@ class _ShapesProduct:
     def identity_components(self) -> list[tuple[str, str]]:
         ...
 
-    def admit(self) -> _PreparedShapes:
+    def admit(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def admit_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def admit_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild(self) -> _PreparedShapes:
+    def rebuild(self, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def rebuild_expecting(self, expected_identity: str) -> _PreparedShapes:
+    def rebuild_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def certify(self) -> None:
+    def certify(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
 class shapes:
@@ -1202,19 +1404,19 @@ class shapes:
     ShapesImportError: TypeAlias = _ShapesImportError
 
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None) -> bytes:
+    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None) -> dict[str, builtins.object]:
+    def validate(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, conformance_disallows: Sequence[str] | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, subclass_of_in_shapes_graph: bool=False, xpath_regex: str | None=None, shacl_profile: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None) -> dict[str, builtins.object]:
+    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def apply_rules(data_nt: str, shapes_ttl: str | None=None, *, srl: str | None=None, shapes_base: str | None=None, srl_base: str | None=None, explain: bool=False, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, xpath_regex: str | None=None) -> dict[str, builtins.object]:
+    def apply_rules(data_nt: str, shapes_ttl: str | None=None, *, srl: str | None=None, shapes_base: str | None=None, srl_base: str | None=None, explain: bool=False, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
@@ -1245,11 +1447,11 @@ class entail:
     Regime: TypeAlias = _Regime
 
     @staticmethod
-    def materialize(dataset: RdfDataset, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[RdfDataset, str]:
+    def materialize(dataset: RdfDataset, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[RdfDataset, str]:
         ...
 
     @staticmethod
-    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1265,23 +1467,23 @@ class entail:
         ...
 
     @staticmethod
-    def consistency(data: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def consistency(data: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def classify(data: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def classify(data: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def realize(data: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def realize(data: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def instances(data: str, class_: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def instances(data: str, class_: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def entails(data: str, axiom: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def entails(data: str, axiom: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1289,11 +1491,11 @@ class entail:
         ...
 
     @staticmethod
-    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]:
+    def extract_module(data: str, signature: str, method: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def justify(data: str, axiom: str) -> tuple[str, str]:
+    def justify(data: str, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1301,11 +1503,11 @@ class entail:
         ...
 
     @staticmethod
-    def prove(data: str, service: str, argument: str=..., step_cap: int=..., work_cap: int=...) -> tuple[str, str, str]:
+    def prove(data: str, service: str, argument: str=..., step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def check_proof(data: str, service: str, argument: str, answer: str, certificate: str, proof: str) -> str:
+    def check_proof(data: str, service: str, argument: str, answer: str, certificate: str, proof: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1313,15 +1515,15 @@ class entail:
         ...
 
     @staticmethod
-    def certain_answers(regime: RegimeLike, data: str, pattern: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def certain_answers(regime: RegimeLike, data: str, pattern: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     @staticmethod
-    def graph_entails(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def graph_entails(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     @staticmethod
-    def verify_entailment(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None) -> tuple[str, str]:
+    def verify_entailment(regime: RegimeLike, premise: str, conclusion: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
         ...
 
     class Reasoner:
@@ -1333,31 +1535,31 @@ class entail:
         def records_proofs(self) -> bool:
             ...
 
-        def prove(self, service: str, argument: str=...) -> tuple[str, str, str]:
+        def prove(self, service: str, argument: str=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def consistency(self) -> tuple[str, str]:
+        def consistency(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def classify(self) -> tuple[str, str]:
+        def classify(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def realize(self) -> tuple[str, str]:
+        def realize(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def instances(self, class_: str) -> tuple[str, str]:
+        def instances(self, class_: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def entails(self, axiom: str) -> tuple[str, str]:
+        def entails(self, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
         def profile(self) -> tuple[str, str]:
             ...
 
-        def extract_module(self, signature: str, method: str) -> tuple[str, str]:
+        def extract_module(self, signature: str, method: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def justify(self, axiom: str) -> tuple[str, str]:
+        def justify(self, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
         def explain_conclusion(self, regime: RegimeLike, conclusion: str) -> tuple[str, str]:
@@ -1377,13 +1579,25 @@ _from_json_ld = from_json_ld
 _to_rdf_xml = to_rdf_xml
 _from_rdf_xml = from_rdf_xml
 _gts_relational_rows_from_bytes = gts_relational_rows_from_bytes
+_gts_columnar_rows_from_bytes = gts_columnar_rows_from_bytes
+_gts_columnar_parquet_from_bytes = gts_columnar_parquet_from_bytes
 _gts_to_sqlite = gts_to_sqlite
 _gts_to_duckdb = gts_to_duckdb
 _gts_to_parquet = gts_to_parquet
 _RdfDataset = RdfDataset
 _GtsFoldViewNative = GtsFoldViewNative
+_gts_GtsBlobLimits = GtsBlobLimits
+_gts_GtsBlobUsage = GtsBlobUsage
+_gts_GtsBlobOmission = GtsBlobOmission
+_gts_GtsBlobExportReport = GtsBlobExportReport
+_gts_GtsExportResult = GtsExportResult
 
 class gts:
+    GtsBlobLimits = _gts_GtsBlobLimits
+    GtsBlobUsage = _gts_GtsBlobUsage
+    GtsBlobOmission = _gts_GtsBlobOmission
+    GtsBlobExportReport = _gts_GtsBlobExportReport
+    GtsExportResult = _gts_GtsExportResult
     gts_from_quads = _gts_from_quads
     gts_from_rdf12_bytes = _gts_from_rdf12_bytes
     compile_gts_native = _compile_gts_native
@@ -1396,6 +1610,8 @@ class gts:
     to_rdf_xml = _to_rdf_xml
     from_rdf_xml = _from_rdf_xml
     gts_relational_rows_from_bytes = _gts_relational_rows_from_bytes
+    gts_columnar_rows_from_bytes = _gts_columnar_rows_from_bytes
+    gts_columnar_parquet_from_bytes = _gts_columnar_parquet_from_bytes
     gts_to_sqlite = _gts_to_sqlite
     gts_to_duckdb = _gts_to_duckdb
     gts_to_parquet = _gts_to_parquet
@@ -1524,8 +1740,12 @@ class _OwnershipReport:
 
 class _SliceCatalog:
 
+    @property
+    def canonicalization_json(self) -> str:
+        ...
+
     @staticmethod
-    def discover(root: str, namespace: str) -> _SliceCatalog:
+    def discover(root: str, namespace: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> _SliceCatalog:
         ...
 
     @property
@@ -1597,13 +1817,20 @@ class _PlanDocumentError(ValueError):
     """
     refusal: str
 
+class _RetrievalScore(TypedDict):
+    raw: int
+    scale_digits: int
+
+class _RetrievalOrdering(TypedDict):
+    semantics: str
+    leading: bool
+    keys: dict[str, tuple[bytes, bytes]]
+
 class retrieval:
-    SCALE_DIGITS: int
-    SCALE: int
     PlanDocumentError: TypeAlias = _PlanDocumentError
 
     @staticmethod
-    def plan(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def plan(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, caller_ordered: bool=False, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
@@ -1615,27 +1842,27 @@ class retrieval:
         ...
 
     @staticmethod
-    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def compile(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], statistics: dict[str, builtins.object], top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, weights: dict[str, int] | None=None, k: int | None=None, decay: str | None=None, scale_digits: int | None=None, ordering: _RetrievalOrdering | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, top_k: int, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
+    def search(data: str, request: list[tuple[builtins.object, ...]], *, text_producers: dict[str, _TextProducerSpec], weights: dict[str, int], statistics: dict[str, builtins.object], k: int, decay: str, scale_digits: int, top_k: int, ordering: _RetrievalOrdering | None=None, hnsw_producers: dict[str, _HnswProducerSpec] | None=None, knn_producers: dict[str, _KnnProducerSpec] | None=None, data_format: str='turtle', base: str | None=None) -> dict[str, builtins.object]:
         ...
 
     @staticmethod
-    def weight_for_depth(depth: int, k: int, *, decay: str) -> int:
+    def weight_for_depth(depth: int, k: int, *, decay: str, scale_digits: int) -> _RetrievalScore:
         ...
 
     @staticmethod
-    def class_width(weight_raw: int, k: int, rank: int, *, decay: str) -> int | None:
+    def class_width(weight_raw: int, k: int, rank: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 
     @staticmethod
-    def deepest_rank_within_width(weight_raw: int, k: int, max_width: int, *, decay: str) -> int | None:
+    def deepest_rank_within_width(weight_raw: int, k: int, max_width: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 
     @staticmethod
-    def crossing_rank_at(naming_raw: list[int], at_rank: int, sharing_raw: list[int], k: int, *, decay: str) -> int | None:
+    def crossing_rank_at(naming_raw: list[int], at_rank: int, sharing_raw: list[int], k: int, *, decay: str, scale_digits: int) -> int | None:
         ...
 ```
 

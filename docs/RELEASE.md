@@ -52,7 +52,7 @@ passes, `VERSION` matches the tree, the full changelog section and validated
 reviewed summary exist, and none
 of the three tags already exists locally or remotely. It then runs the Rust and
 wasm workspace gate, the generated C-ABI/header check, the native Python binding
-suite, the optimized size-gated npm/wasm package tests, and `make w3c-earl`, which
+suite, the optimized npm/wasm package tests, and `make w3c-earl`, which
 regenerates the two W3C SHACL implementation reports for the commit about to be
 tagged. Only after every
 surface passes does it recheck the clean synchronized state and atomically push
@@ -90,6 +90,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-cdt`
 - `purrdf-jsonschema`
 - `purrdf-deflate`
+- `purrdf-zstd`
 - `purrdf-ed25519`
 - `purrdf-gts`
 - `purrdf-core`
@@ -107,11 +108,14 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-markdown`
 - `purrdf-mime`
 - `purrdf-json`
+- `purrdf-toml`
+- `purrdf-yaml`
 - `purrdf-slice`
 - `purrdf-shapes`
 - `purrdf-geo`
 - `purrdf-shex`
 - `purrdf-validate`
+- `purrdf-glob`
 - `purrdf`
 - `purrdf-wasm`
 
@@ -149,10 +153,10 @@ first tagged run can publish the complete workspace in dependency order.
    bash scripts/bootstrap-crates-io.sh --publish --output /tmp/purrdf-empty-publish
    ```
 
-   Verification uses the `stable` Rust toolchain. Operators with a separate
-   stable validation installation may set `PURRDF_BOOTSTRAP_TOOLCHAIN` to that
-   installed toolchain (for example, `1.98.1`); the script rejects a nightly
-   or beta compiler.
+   Empty-package verification uses the installed Rust compiler and its Cargo
+   executable; it installs or selects no other toolchain. The retained receipt
+   records the compiler version. Functional release builds retain their separate
+   stable-toolchain policy.
 
    Both commands use fresh directories outside the workspace. Publication uses
    `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` without displaying its value. Normal
@@ -191,15 +195,23 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-geo-kernel` and `purrdf-mime`
+### Bootstrap: complete (ledger empty)
 
-Two crates are in the release set above and require new records before tagging.
-`purrdf-geo-kernel` is the **thirteenth** crate in publish order;
-`purrdf-mime` is the **twenty-fifth** crate in publish order. Their implementations
-are part of the workspace; the registry's public index has no records for them.
-Create the isolated empty bootstrap package, configure its Trusted Publisher
-entry and lock, then reconcile the ledger after the public preflight verifies
-the record. No functional publication is authorized by this source addition.
+All 37 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
+`purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and
+`purrdf-glob` received isolated, empty, dependency-free **0.0.0** versions.
+Native and WASM compilation, normal package verification and exact
+empty-source/license archive audits ran with the installed compiler before
+upload. The public registry confirmed each version. These packages expose no
+runtime API and contain no functional implementation.
+
+Record creation and Trusted Publisher setup are complete. On 2026-11-07 the
+maintainer confirmed the matching publisher entries, and the strict public
+preflight verified **Require trusted publishing** on all 37 release records
+(`trustpub_only=true`). Publisher entries have no public read API; the
+maintainer's confirmation and the independently checked registry locks are
+separate evidence. The release lane repeats the strict preflight before any
+functional publication.
 
 ### Established records
 
@@ -358,7 +370,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#outstanding-bootstrap-purrdf-geo-kernel-and-purrdf-mime). It publishes
+registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 
@@ -445,13 +457,45 @@ TypeScript, Node, and packed-tarball smoke), packs the
 tarball, attests provenance + SPDX SBOM, and publishes with `--access public`
 (npm's own sigstore provenance is added automatically).
 
-The js package version is bumped by hand in `crates/rdf-wasm/js/package.json`
-(it is not read from the workspace):
+Use `make bump VERSION=x.y.z` to update the workspace, Python distributions,
+JavaScript package and lockfiles together. The JavaScript package carries its
+own version field, and the shared bump command keeps it coherent. For a separately
+authorized single-lane publication, use the corresponding already-bumped version:
 
 ```sh
 git tag npm-v0.1.5
 git push origin npm-v0.1.5
 ```
+
+## W3C SHACL implementation reports
+
+Submit the EARL reports to the W3C data-shapes working group right after every
+release that changes SHACL behavior. Starting with 4.0.0, this is the first
+step after the release lanes finish.
+
+1. Download `purrdf-shacl-earl.ttl` (SHACL 2017) and `purrdf-shacl12-earl.ttl`
+   (SHACL 1.2) from the published GitHub Release and verify the build-provenance
+   attestation of each one:
+
+   ```sh
+   VERSION=4.0.0
+   gh release download "rust-v${VERSION}" --repo Blackcat-Informatics/purrdf \
+     --pattern 'purrdf-shacl*-earl.ttl'
+   gh attestation verify purrdf-shacl-earl.ttl --repo Blackcat-Informatics/purrdf
+   gh attestation verify purrdf-shacl12-earl.ttl --repo Blackcat-Informatics/purrdf
+   ```
+
+   Submit those exact bytes and do not regenerate them: they were produced on
+   the tagged commit by `make w3c-earl`.
+2. Check that each report names the released version and tag, and that its
+   pass counts agree with the [conformance scoreboard](./CONFORMANCE.md) at
+   that tag.
+3. Open a pull request to [`w3c/data-shapes`](https://github.com/w3c/data-shapes)
+   that adds or replaces the PurRDF reports. Put them where that repository's
+   implementation-report instructions say, and link the GitHub Release as their
+   provenance.
+4. After the reports merge, record the accepted report locations in
+   [CONFORMANCE.md](./CONFORMANCE.md).
 
 ## Verification
 

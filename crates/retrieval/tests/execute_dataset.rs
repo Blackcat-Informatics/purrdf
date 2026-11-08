@@ -13,6 +13,7 @@
 //! ranking. Every refusal is paired with the neighbouring case that must still
 //! succeed. Fixtures are `example.org` throughout.
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
@@ -22,7 +23,7 @@ use purrdf_core::{
 };
 use purrdf_retrieval::{
     AdmissionEnvironment, BoundMode, CandidateDomains, CompiledRetrieval, DecayRule,
-    ExecutionError, Fixed, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity,
+    ExecutionError, FusionProfile, IndexGeneration, Iri, ProducerStatus, RankFidelity,
     RankedStream, RankedStreamAdapter, RequestTerm, RetrievalRequest, ScoreExactness, SearchResult,
     ServiceLevel, Statistics, StratumUnit, StreamContract, Term, TopK, UnitError, compile, execute,
     plan, search,
@@ -318,6 +319,7 @@ fn declaring(stratum: &str, duplicates: DuplicatePolicy) -> RankedDeclaration {
             }],
         }],
         depth_placement: None,
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates,
         // These fixtures fuse strata that rank the same dataset, so the widest
@@ -392,9 +394,10 @@ fn fixture_profile() -> FusionProfile {
     FusionProfile::with_decay(
         STRATA
             .iter()
-            .map(|stratum| (iri(&ex(stratum)), Fixed::ONE))
+            .map(|stratum| (iri(&ex(stratum)), PRECISION_12.score(PRECISION_12.scale())))
             .collect(),
         DecayRule::ReciprocalRank { k: K },
+        PRECISION_12,
     )
     .expect("the fixture profile is valid")
 }
@@ -813,12 +816,14 @@ fn a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol() {
         let stats = statistics();
         let bundle = compiled(&registry, &stats);
         let expected = StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             duplicates,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
             ExclusionBasis::Unavailable,
         );
         let beta = StreamContract::new(
+            purrdf_sparql_eval::RankLaw::Ordinal,
             DuplicatePolicy::Unique,
             RankFidelity::EXACT,
             CandidateDomains::Unrestricted,
@@ -1460,8 +1465,8 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     );
 }
 
-/// **T4.6 — the one ceiling the unbounded lane keeps has no charge site a unit
-/// can reach.**
+/// **T4.6 — the unbounded lane engages no resource ceiling, and an unknown
+/// function fails only its own stratum.**
 ///
 /// `execute` runs every unit under [`QueryGovernors::UNBOUNDED`] for the
 /// receipt's sake, and then handles `GovernedOutcome::BudgetExhausted` by
@@ -1473,25 +1478,20 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
 ///
 /// It rests on two facts, one measured here directly and one demonstrated:
 ///
-/// * `UNBOUNDED` engages no caller-settable ceiling and carries no stop signal.
-///   Exactly one dimension keeps a ceiling — the evaluator's own recursion guard
-///   on user-defined function depth, which is a build constant no caller can
-///   raise or lower.
-/// * A compiled unit cannot charge that dimension, because reaching it means
-///   entering a user-defined function, and `execute` injects no user-function
-///   registry: the call resolves to nothing and the unit fails as its own
-///   stratum, which is the per-stratum report a malformed unit has always had.
+/// * `UNBOUNDED` engages no resource ceiling, including logical user-function
+///   depth, and carries no stop signal.
+/// * `execute` injects no user-function registry: an unknown call resolves to
+///   nothing and the unit fails as its own stratum, while sibling strata answer.
 #[test]
-fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
+fn the_unbounded_lane_has_no_ceiling_and_unknown_functions_fail_their_stratum() {
     let engaged: Vec<ResourceDimension> = ResourceDimension::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|dimension| QueryGovernors::UNBOUNDED.is_engaged_in(*dimension))
         .collect();
-    assert_eq!(
-        engaged,
-        vec![ResourceDimension::UdfDepth],
-        "one dimension keeps a ceiling under the unbounded lane, and it is the \
-         recursion guard"
+    assert!(
+        engaged.is_empty(),
+        "no resource dimension keeps a ceiling under the unbounded lane: {engaged:?}"
     );
     assert!(
         !QueryGovernors::UNBOUNDED.is_engaged(),
@@ -1642,6 +1642,7 @@ fn a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not(
     //     that policy before it pulls a row.
     let mut relaxed = compiled(&registry, &stats);
     relaxed.units[0].contract = StreamContract {
+        rank_law: relaxed.units[0].contract.rank_law,
         duplicates: DuplicatePolicy::Allowed,
         // Carried over rather than restated: this test rewrites the DUPLICATE
         // policy and nothing else, so a fidelity typed in here would be a second
@@ -1770,7 +1771,7 @@ fn whole_query(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),

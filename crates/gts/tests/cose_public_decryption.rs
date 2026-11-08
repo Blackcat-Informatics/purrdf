@@ -3,9 +3,11 @@
 
 //! Standalone COSE consumers must be able to open existing encrypted objects.
 
-use purrdf_gts::cose::{Encrypt0Error, decrypt0, encrypt0};
+use purrdf_gts::cose::{
+    Encrypt0Error, decrypt0, decrypt0_with_protected, encrypt0, encrypt0_with_protected,
+};
 use purrdf_gts::wire;
-use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::{self, Integer, Value};
 
 #[test]
 fn standalone_cose_decryption_authenticates_the_exact_plaintext() {
@@ -34,6 +36,21 @@ fn standalone_cose_decryption_authenticates_the_exact_plaintext() {
 #[test]
 fn standalone_decryption_opens_the_frozen_encrypt0_vector() {
     let fixture = frozen_fixture();
+    assert_eq!(
+        encrypt0(&fixture.plaintext, &fixture.kid, &fixture.key, &fixture.iv),
+        fixture.blob
+    );
+    assert_eq!(
+        encrypt0_with_protected(
+            &fixture.plaintext,
+            &fixture.kid,
+            &fixture.key,
+            &fixture.iv,
+            &[]
+        )
+        .unwrap(),
+        fixture.blob
+    );
     let plaintext = decrypt0(&fixture.blob, |found| {
         (found == fixture.kid).then_some(fixture.key)
     })
@@ -46,6 +63,7 @@ struct Fixture {
     key: [u8; 32],
     kid: String,
     plaintext: Vec<u8>,
+    iv: [u8; 12],
 }
 
 fn frozen_fixture() -> Fixture {
@@ -57,11 +75,207 @@ fn frozen_fixture() -> Fixture {
         key: bytes("key").try_into().unwrap(),
         kid: vector["kid"].as_str().unwrap().into(),
         plaintext: bytes("plaintext"),
+        iv: bytes("iv").try_into().unwrap(),
+    }
+}
+
+#[test]
+fn protected_headers_match_frozen_vectors_and_open_through_both_public_paths() {
+    for source in [
+        include_str!("../../../vectors/encrypt0/integer.json"),
+        include_str!("../../../vectors/encrypt0/text.json"),
+        include_str!("../../../vectors/encrypt0/alg-collision.json"),
+    ] {
+        let vector = purrdf_lex::json::read(source).unwrap();
+        let bytes =
+            |field: &str| purrdf_hash::hex::decode(vector[field].as_str().unwrap()).unwrap();
+        let extra = cbor::decode(&bytes("extra_protected"), cbor::Limits::DEFAULT)
+            .unwrap()
+            .into_map()
+            .unwrap();
+        let key = bytes("key").try_into().unwrap();
+        let iv = bytes("iv").try_into().unwrap();
+        let plaintext = bytes("plaintext");
+        let kid = vector["kid"].as_str().unwrap();
+        let sealed = encrypt0_with_protected(&plaintext, kid, &key, &iv, &extra);
+        if vector.get("error").is_some() {
+            assert_eq!(vector["error"].as_str(), Some("malformed"));
+            assert_eq!(sealed, Err(Encrypt0Error::Malformed));
+            continue;
+        }
+        let blob = bytes("cose");
+        assert_eq!(sealed.unwrap(), blob);
+        let opened = decrypt0_with_protected(&blob, |found| (found == kid).then_some(key)).unwrap();
+        assert_eq!(opened.plaintext, plaintext);
+        let mut expected = vec![(Value::from(1), Value::from(3))];
+        expected.extend(extra);
+        let mut expected = Value::Map(expected);
+        expected.canonicalize();
+        assert_eq!(Value::Map(opened.protected), expected);
+        assert_eq!(decrypt0(&blob, |_| Some(key)).unwrap(), plaintext);
+    }
+}
+
+#[test]
+fn protected_metadata_and_its_original_spelling_are_authenticated_before_return() {
+    let key = [91; 32];
+    let blob = encrypt0_with_protected(
+        b"secret",
+        "recipient",
+        &key,
+        &[92; 12],
+        &[(Value::from("object"), Value::from("original"))],
+    )
+    .unwrap();
+    assert_eq!(
+        decrypt0_with_protected(&blob, |_| None),
+        Err(Encrypt0Error::MissingKey)
+    );
+    assert_eq!(
+        decrypt0_with_protected(&blob, |_| Some([90; 32])),
+        Err(Encrypt0Error::AuthFailed)
+    );
+    let original = envelope_parts(&blob);
+    let protected = original[0].as_bytes().unwrap();
+    let mut equivalent = protected.to_vec();
+    assert_eq!(equivalent[1], 1);
+    equivalent.splice(1..2, [0x18, 1]);
+    assert_eq!(
+        cbor::decode(protected, cbor::Limits::DEFAULT).unwrap(),
+        cbor::decode(&equivalent, cbor::Limits::DEFAULT).unwrap()
+    );
+    let mut changed = original.clone();
+    changed[0] = Value::Bytes(equivalent);
+    assert_eq!(
+        decrypt0_with_protected(&encode_envelope(changed), |_| Some(key)),
+        Err(Encrypt0Error::AuthFailed)
+    );
+    let mut map = cbor::decode(protected, cbor::Limits::DEFAULT)
+        .unwrap()
+        .into_map()
+        .unwrap();
+    map.iter_mut()
+        .find(|(label, _)| label.as_text() == Some("object"))
+        .unwrap()
+        .1 = Value::from("tampered");
+    let mut changed = original;
+    changed[0] = Value::Bytes(wire::canonical(&Value::Map(map)));
+    assert_eq!(
+        decrypt0_with_protected(&encode_envelope(changed), |_| Some(key)),
+        Err(Encrypt0Error::AuthFailed)
+    );
+    let mut changed = blob;
+    *changed.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        decrypt0_with_protected(&changed, |_| Some(key)),
+        Err(Encrypt0Error::AuthFailed)
+    );
+}
+
+#[test]
+fn protected_header_labels_types_and_critical_references_have_admitted_neighbours() {
+    let key = [93; 32];
+    let invalid = [
+        vec![(Value::from(1), Value::from(3))],
+        vec![(Value::from(4), Value::Bytes(vec![]))],
+        vec![(Value::from(5), Value::Bytes(vec![0; 12]))],
+        vec![(Value::from(6), Value::Bytes(vec![0]))],
+        vec![(Value::Bool(true), Value::Null)],
+        vec![
+            (Value::from(-70_000), Value::Null),
+            (Value::from(-70_000), Value::from(1)),
+        ],
+        vec![
+            (Value::from("object"), Value::Null),
+            (Value::from("object"), Value::from(1)),
+        ],
+        vec![(Value::from(3), Value::Bool(true))],
+        vec![(Value::from(2), Value::Array(vec![]))],
+        vec![(Value::from(2), Value::Array(vec![Value::from("missing")]))],
+        vec![(
+            Value::from(2),
+            Value::Array(vec![Value::from(1), Value::from(1)]),
+        )],
+        vec![(Value::from(2), Value::Array(vec![Value::Null]))],
+    ];
+    for extra in invalid {
+        assert_eq!(
+            encrypt0_with_protected(b"data", "recipient", &key, &[0; 12], &extra),
+            Err(Encrypt0Error::Malformed)
+        );
+    }
+    let valid = [
+        vec![
+            (Value::Integer(Integer::MIN), Value::Null),
+            (Value::Integer(Integer::MAX), Value::Bytes(vec![0, 255])),
+        ],
+        vec![(Value::from("1"), Value::from("application label"))],
+        vec![(Value::from(3), Value::from("application/cbor"))],
+        vec![
+            (Value::from("profile"), Value::from("urn:profile")),
+            (Value::from(2), Value::Array(vec![Value::from("profile")])),
+        ],
+    ];
+    for (index, extra) in valid.into_iter().enumerate() {
+        let iv = [u8::try_from(index).unwrap(); 12];
+        let sealed = encrypt0_with_protected(b"data", "recipient", &key, &iv, &extra).unwrap();
+        let opened = decrypt0_with_protected(&sealed, |_| Some(key)).unwrap();
+        assert_eq!(opened.plaintext, b"data");
+        for entry in extra {
+            assert!(opened.protected.contains(&entry));
+        }
+    }
+    // New authenticated-map opening refuses ambiguous/invalid protected maps;
+    // the existing opaque protected-byte reader retains its separate contract.
+    let baseline = encrypt0(b"data", "recipient", &key, &[5; 12]);
+    for map in [
+        vec![
+            (Value::from(1), Value::from(3)),
+            (Value::from(1), Value::from(3)),
+        ],
+        vec![(Value::from(1), Value::from(2))],
+        vec![(Value::Bool(true), Value::Null)],
+    ] {
+        let mut parts = envelope_parts(&baseline);
+        parts[0] = Value::Bytes(wire::encode(&Value::Map(map)));
+        assert_eq!(
+            decrypt0_with_protected(&encode_envelope(parts), |_| panic!(
+                "invalid protected key lookup"
+            )),
+            Err(Encrypt0Error::Malformed)
+        );
+    }
+}
+
+#[test]
+fn protected_header_authoring_and_opening_share_the_decoder_depth_boundary() {
+    let key = [94; 32];
+    for depth in [
+        cbor::Limits::DEFAULT.max_depth - 1,
+        cbor::Limits::DEFAULT.max_depth,
+    ] {
+        let mut nested = Value::Null;
+        for _ in 0..depth {
+            nested = Value::Array(vec![nested]);
+        }
+        let sealed = encrypt0_with_protected(
+            b"bounded",
+            "recipient",
+            &key,
+            &[95; 12],
+            &[(Value::from("nested"), nested)],
+        );
+        if depth == cbor::Limits::DEFAULT.max_depth {
+            assert_eq!(sealed, Err(Encrypt0Error::Malformed));
+        } else {
+            let opened = decrypt0_with_protected(&sealed.unwrap(), |_| Some(key)).unwrap();
+            assert_eq!(opened.plaintext, b"bounded");
+        }
     }
 }
 
 fn envelope_parts(blob: &[u8]) -> [Value; 3] {
-    let mut value = purrdf_lex::cbor::decode(blob, purrdf_lex::cbor::Limits::DEFAULT).unwrap();
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
     let Value::Tag(16, body) = &mut value else {
         panic!("fixture must be tagged COSE_Encrypt0");
     };

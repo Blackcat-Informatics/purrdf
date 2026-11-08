@@ -391,10 +391,14 @@ impl SegmentedImage {
             header.streams[2],
             header.graphs,
             header.summaries,
+            header.value_ranges,
             header.statistics[0],
             header.statistics[1],
             header.statistics[2],
             header.statistics[3],
+            header.effective_directory,
+            header.source_checkpoints,
+            header.overflow,
         ]
         .iter()
         .try_fold(1_u64, |n, stream| {
@@ -565,22 +569,31 @@ fn encode_dataset(
         )?);
         records.push((map_id(local, limits.first_term_index), key));
     }
-    let dictionary = append_records(
+    let mut overflow_blocks = Vec::new();
+    let (dictionary, overflow_rows) = append_dictionary(
         &mut blocks,
         &records,
-        format::DICTIONARY,
         records_per_block,
         block_bytes,
+        &mut overflow_blocks,
     )?;
     records.sort_by(|a, b| a.1.cmp(&b.1));
-    let reverse = append_records(
+    let reverse = append_fixed(
         &mut blocks,
-        &records,
+        records.chunks((block_bytes - 9) / 8).map(|chunk| {
+            let mut bytes = Vec::with_capacity(chunk.len() * 8);
+            for (id, _) in chunk {
+                format::push_id(&mut bytes, *id);
+            }
+            bytes
+        }),
+        u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
         format::REVERSE,
-        records_per_block,
+        8,
         block_bytes,
     )?;
     let mut summaries = Vec::new();
+    let mut value_ranges = Vec::new();
     let mut streams = [Stream::default(); 3];
     for (table, rows) in [
         dataset.quads().collect::<Vec<_>>(),
@@ -596,8 +609,27 @@ fn encode_dataset(
             .collect();
         rows.sort_by_key(|q| (q.s, q.p, q.o, q.g));
         rows.dedup();
-        streams[table] =
-            append_quads(&mut blocks, &rows, table as u8, block_bytes, &mut summaries)?;
+        streams[table] = append_quads(
+            &mut blocks,
+            &rows,
+            table as u8,
+            block_bytes,
+            &mut summaries,
+            &mut value_ranges,
+            |id| {
+                let index = id
+                    .index()
+                    .checked_sub(limits.first_term_index)
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                let local = TermId::from_index(
+                    u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?,
+                )
+                .map_err(purrdf_lex::allocation::StorageError::from)?;
+                Ok(dataset
+                    .resolve(local)
+                    .map_ids(|id| map_id(id, limits.first_term_index)))
+            },
+        )?;
     }
     let mut graphs: Vec<_> = dataset
         .named_graphs()
@@ -637,7 +669,50 @@ fn encode_dataset(
         format::SUMMARY_BYTES,
         block_bytes,
     )?;
+    let value_range_rows =
+        u64::try_from(value_ranges.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    let value_ranges = append_fixed(
+        &mut blocks,
+        value_ranges
+            .chunks((block_bytes - 9) / format::VALUE_RANGE_BYTES)
+            .map(<[Vec<u8>]>::concat),
+        value_range_rows,
+        format::VALUE_RANGES,
+        format::VALUE_RANGE_BYTES,
+        block_bytes,
+    )?;
     let statistics = append_statistics(dataset, limits.first_term_index, &mut blocks, block_bytes)?;
+    let effective_directory = append_source_directory(
+        dataset.predicate_statistics().effective_source_directory(),
+        format::SOURCE_DIRECTORY,
+        &mut blocks,
+        block_bytes,
+    )?;
+    let directory = dataset.predicate_statistics().effective_source_directory();
+    let checkpoint_count = directory.checkpoint_sums().len();
+    let per = (block_bytes - 9) / 32;
+    let source_checkpoints = append_fixed(
+        &mut blocks,
+        (0..checkpoint_count).step_by(per).map(|start| {
+            directory
+                .checkpoint_sums()
+                .skip(start)
+                .take(per)
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>()
+        }),
+        checkpoint_count as u64,
+        format::SOURCE_CHECKPOINTS,
+        32,
+        block_bytes,
+    )?;
+    let overflow = Stream {
+        first: blocks.len() as u64,
+        blocks: overflow_blocks.len() as u64,
+        rows: overflow_rows,
+    };
+    blocks.extend(overflow_blocks);
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
@@ -657,8 +732,13 @@ fn encode_dataset(
         streams,
         graphs,
         summaries,
+        value_ranges,
         statistics,
+        effective_directory,
+        source_checkpoints,
+        overflow,
         flags,
+        source_union: dataset.predicate_statistics().source_union(),
     };
     let encoded = header.encode();
     blocks[0][..encoded.len()].copy_from_slice(&encoded);
@@ -669,6 +749,39 @@ fn encode_dataset(
     let mut bytes = blocks.concat();
     bytes.extend_from_slice(&make_tree(&bytes, block_bytes, count, leaves)?);
     SegmentedImage::certify(bytes)
+}
+
+fn append_source_directory(
+    directory: &super::super::source_directory::SourceDirectory,
+    kind: u8,
+    blocks: &mut Vec<Vec<u8>>,
+    block_bytes: usize,
+) -> Result<Stream, SegmentedError> {
+    let width = super::super::source_directory::RECORD_BYTES;
+    let per_block = (block_bytes - 9) / width;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut stream = Stream {
+        first: blocks.len() as u64,
+        blocks: 0,
+        rows: directory.len() as u64,
+    };
+    for start in (0..directory.len()).step_by(per_block) {
+        let count = (directory.len() - start).min(per_block);
+        let mut encoded = memory.collect(std::iter::repeat_n(0_u8, count * width))?;
+        directory.encode_records(start, &mut encoded);
+        append_fixed(
+            blocks,
+            std::iter::once(encoded.as_slice()),
+            count as u64,
+            kind,
+            width,
+            block_bytes,
+        )?;
+        memory.release_vec(encoded)?;
+        stream.blocks += 1;
+    }
+    Ok(stream)
 }
 
 fn translated_statistics(
@@ -727,26 +840,43 @@ fn append_statistics(
     Ok(streams)
 }
 
-fn append_records(
+fn append_dictionary(
     blocks: &mut Vec<Vec<u8>>,
     records: &[(GlobalTermId, Vec<u8>)],
-    kind: u8,
     chunk: usize,
     block_bytes: usize,
-) -> Result<Stream, SegmentedError> {
+    overflow: &mut Vec<Vec<u8>>,
+) -> Result<(Stream, u64), SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
     let mut remaining = records;
+    let mut spanned = 0;
     while !remaining.is_empty() {
-        let (block, used) =
-            format::record_block(kind, &remaining[..remaining.len().min(chunk)], block_bytes)?;
+        let offered = &remaining[..remaining.len().min(chunk)];
+        let inline = offered
+            .iter()
+            .position(|(_, key)| key.len().saturating_add(format::RECORD_HEADER + 16) > block_bytes)
+            .unwrap_or(offered.len());
+        let (block, used) = if inline == 0 {
+            spanned += 1;
+            (
+                format::spanned_record(offered[0].0, &offered[0].1, overflow, block_bytes)?,
+                1,
+            )
+        } else {
+            format::record_block(&offered[..inline], block_bytes)?
+        };
         blocks.push(block);
         remaining = &remaining[used..];
     }
-    Ok(Stream {
-        first,
-        blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)? - first,
-        rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-    })
+    Ok((
+        Stream {
+            first,
+            blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?
+                - first,
+            rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
+        },
+        spanned,
+    ))
 }
 fn append_fixed<C: AsRef<[u8]>>(
     blocks: &mut Vec<Vec<u8>>,
@@ -781,12 +911,14 @@ fn append_fixed<C: AsRef<[u8]>>(
         rows,
     })
 }
-fn append_quads(
+fn append_quads<'a>(
     blocks: &mut Vec<Vec<u8>>,
     rows: &[QuadIds<GlobalTermId>],
     table: u8,
     block_bytes: usize,
     summaries: &mut Vec<Vec<u8>>,
+    value_ranges: &mut Vec<Vec<u8>>,
+    resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
     for chunk in rows.chunks((block_bytes - 9) / 32) {
@@ -795,7 +927,8 @@ fn append_quads(
             format::encode_quad(q, &mut bytes);
         }
         let slot = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        summaries.push(summary(chunk, slot, table)?);
+        let (first_range, range_count) = append_value_ranges(value_ranges, chunk, &resolve)?;
+        summaries.push(summary(chunk, slot, table, first_range, range_count)?);
         append_fixed(
             blocks,
             std::iter::once(bytes),
@@ -815,6 +948,8 @@ pub(super) fn summary(
     rows: &[QuadIds<GlobalTermId>],
     slot: u64,
     table: u8,
+    first_range: u64,
+    range_count: u64,
 ) -> Result<Vec<u8>, SegmentedError> {
     let mut bytes = Vec::with_capacity(format::SUMMARY_BYTES);
     bytes.extend_from_slice(&slot.to_le_bytes());
@@ -835,7 +970,30 @@ pub(super) fn summary(
         bytes.extend_from_slice(&values.clone().min().unwrap_or(0).to_le_bytes());
         bytes.extend_from_slice(&values.max().unwrap_or(0).to_le_bytes());
     }
+    bytes.extend_from_slice(&first_range.to_le_bytes());
+    bytes.extend_from_slice(&range_count.to_le_bytes());
     Ok(bytes)
+}
+
+fn append_value_ranges<'a>(
+    output: &mut Vec<Vec<u8>>,
+    rows: &[QuadIds<GlobalTermId>],
+    resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
+) -> Result<(u64, u64), SegmentedError> {
+    let start = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    for interval in crate::annotation_range::seal_intervals_with(rows.iter().copied(), resolve)? {
+        let mut encoded = Vec::with_capacity(format::VALUE_RANGE_BYTES);
+        format::push_id(&mut encoded, interval.predicate);
+        for endpoint in [
+            interval.endpoints.map(|(low, _)| low),
+            interval.endpoints.map(|(_, high)| high),
+        ] {
+            encoded.extend_from_slice(&endpoint.map_or(0, |id| id.index() + 1).to_le_bytes());
+        }
+        output.push(encoded);
+    }
+    let end = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    Ok((start, end - start))
 }
 fn make_tree(
     bytes: &[u8],
@@ -904,12 +1062,26 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     let mut keys = Vec::with_capacity(
         usize::try_from(header.terms).map_err(|_| SegmentedError::AddressExhausted)?,
     );
+    let (mut overflow_blocks, mut overflow_rows) = (0, 0);
     for slot in header.dictionary.first..header.dictionary.first + header.dictionary.blocks {
+        let encoded = block(bytes, header, slot)?;
+        if encoded[0] == format::SPANNED_DICTIONARY {
+            let (_, span) = format::overflow_descriptor(encoded, header.overflow)?;
+            if span.first != overflow_blocks {
+                return Err(SegmentedError::Corrupt("noncontiguous overflow coverage"));
+            }
+            overflow_blocks += span.blocks(header.block_bytes as usize)?;
+            overflow_rows += 1;
+        }
         let records = DecodedRecords::decode(
-            block(bytes, header, slot)?,
-            format::DICTIONARY,
+            encoded,
             header.records_per_block,
-            u64::from(header.block_bytes) * u64::from(header.records_per_block),
+            header.dictionary_decode_bound(encoded[0]),
+            header.overflow,
+            |slot, page| {
+                page.copy_from_slice(block(bytes, header, slot)?);
+                Ok(())
+            },
         )?;
         let remaining = header
             .terms
@@ -934,42 +1106,44 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             keys.push(records.key(index).to_vec());
         }
     }
+    if overflow_blocks != header.overflow.blocks || overflow_rows != header.overflow.rows {
+        return Err(SegmentedError::Corrupt("incomplete overflow coverage"));
+    }
     if u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)? != header.terms {
         return Err(SegmentedError::Corrupt("dictionary cardinality is false"));
     }
     let mut seen = vec![false; keys.len()];
-    let mut previous: Option<Vec<u8>> = None;
+    let mut previous: Option<usize> = None;
     let mut reverse_count = 0_u64;
     for slot in header.reverse.first..header.reverse.first + header.reverse.blocks {
-        let records = DecodedRecords::decode(
-            block(bytes, header, slot)?,
-            format::REVERSE,
-            header.records_per_block,
-            u64::from(header.block_bytes) * u64::from(header.records_per_block),
-        )?;
-        for (index, (id, _)) in records.entries.iter().enumerate() {
-            let key = records.key(index);
-            if previous.as_deref().is_some_and(|previous| previous >= key) {
-                return Err(SegmentedError::Corrupt(
-                    "reverse index is not globally strictly ordered",
-                ));
-            }
+        let records = fixed_records(block(bytes, header, slot)?, format::REVERSE, 8)?;
+        if records.is_empty() {
+            return Err(SegmentedError::Corrupt(
+                "reverse index block packing is false",
+            ));
+        }
+        for record in records.as_chunks::<8>().0 {
+            let id = Reader::at(record, 0).id()?;
             let local = id
                 .index()
                 .checked_sub(header.first_term_index)
                 .and_then(|v| usize::try_from(v).ok())
                 .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
-            if keys
+            let key = keys
                 .get(local)
-                .is_none_or(|forward| forward.as_slice() != key)
-                || seen.get(local).copied().unwrap_or(true)
-            {
+                .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
+            if seen.get(local).copied().unwrap_or(true) {
                 return Err(SegmentedError::Corrupt(
                     "forward/reverse correspondence is false",
                 ));
             }
+            if previous.is_some_and(|previous| keys[previous] >= *key) {
+                return Err(SegmentedError::Corrupt(
+                    "reverse index is not globally strictly ordered",
+                ));
+            }
             seen[local] = true;
-            previous = Some(key.to_vec());
+            previous = Some(local);
             reverse_count += 1;
         }
     }
@@ -1044,6 +1218,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             ))
     };
     let mut expected_summaries = Vec::new();
+    let mut expected_value_ranges = Vec::new();
     let mut referenced_graphs = std::collections::BTreeSet::new();
     for (table, stream) in header.streams.iter().enumerate() {
         let mut previous = None;
@@ -1079,7 +1254,20 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                     _ => builder.push_annotation_in_graph(s, p, o, g),
                 }?;
             }
-            expected_summaries.push(summary(&rows, slot, table as u8)?);
+            let (first_range, range_count) =
+                append_value_ranges(&mut expected_value_ranges, &rows, |id| {
+                    let ordinal = id
+                        .index()
+                        .checked_sub(header.first_term_index)
+                        .ok_or(SegmentedError::AddressExhausted)?;
+                    let index =
+                        usize::try_from(ordinal).map_err(|_| SegmentedError::AddressExhausted)?;
+                    let key = keys.get(index).ok_or(SegmentedError::Corrupt(
+                        "value interval refers outside the dictionary",
+                    ))?;
+                    format::decode_term(key)
+                })?;
+            expected_summaries.push(summary(&rows, slot, table as u8, first_range, range_count)?);
         }
         if count != stream.rows {
             return Err(SegmentedError::Corrupt("quad stream count is false"));
@@ -1173,6 +1361,42 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             "capability claims disagree with RDF streams",
         ));
     }
+    let mut range_index = 0;
+    for slot in header.value_ranges.first..header.value_ranges.first + header.value_ranges.blocks {
+        let records = fixed_records(
+            block(bytes, header, slot)?,
+            format::VALUE_RANGES,
+            format::VALUE_RANGE_BYTES,
+        )?;
+        let remaining = expected_value_ranges
+            .len()
+            .checked_sub(range_index)
+            .ok_or(SegmentedError::Corrupt("extra annotation value intervals"))?;
+        if records.len() / format::VALUE_RANGE_BYTES
+            != remaining.min((header.block_bytes as usize - 9) / format::VALUE_RANGE_BYTES)
+        {
+            return Err(SegmentedError::Corrupt(
+                "annotation value interval packing is false",
+            ));
+        }
+        for encoded in records.as_chunks::<{ format::VALUE_RANGE_BYTES }>().0 {
+            if expected_value_ranges
+                .get(range_index)
+                .is_none_or(|expected| expected.as_slice() != encoded)
+            {
+                return Err(SegmentedError::Corrupt(
+                    "annotation value intervals hide or invent candidates",
+                ));
+            }
+            range_index += 1;
+        }
+    }
+    if range_index != expected_value_ranges.len() || range_index as u64 != header.value_ranges.rows
+    {
+        return Err(SegmentedError::Corrupt(
+            "annotation value interval directory is incomplete",
+        ));
+    }
     if header.max_owned_term_bytes
         != footprints
             .iter()
@@ -1196,6 +1420,11 @@ fn validate_statistics(
     header: &Header,
     dataset: &RdfDataset,
 ) -> Result<(), SegmentedError> {
+    if header.source_union != dataset.predicate_statistics().source_union() {
+        return Err(SegmentedError::Corrupt(
+            "source union disagrees with RDF rows",
+        ));
+    }
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let statistics = translated_statistics(dataset, header.first_term_index, &mut memory)?;
@@ -1235,6 +1464,70 @@ fn validate_statistics(
             ordinal += records.len() / width;
         }
         memory.release_vec(expected)?;
+    }
+    validate_source_directory(
+        bytes,
+        header,
+        dataset.predicate_statistics().effective_source_directory(),
+        header.effective_directory,
+        format::SOURCE_DIRECTORY,
+    )
+}
+
+fn validate_source_directory(
+    bytes: &[u8],
+    header: &Header,
+    directory: &super::super::source_directory::SourceDirectory,
+    stream: Stream,
+    kind: u8,
+) -> Result<(), SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    if stream.rows != directory.len() as u64 {
+        return Err(SegmentedError::Corrupt(
+            "source directory count disagrees with RDF rows",
+        ));
+    }
+    let width = super::super::source_directory::RECORD_BYTES;
+    let per = (header.block_bytes as usize - 9) / width;
+    let mut expected =
+        memory.collect(std::iter::repeat_n(0_u8, directory.len().min(per) * width))?;
+    let mut ordinal = 0;
+    for slot in stream.first..stream.first + stream.blocks {
+        let actual = fixed_records(block(bytes, header, slot)?, kind, width)?;
+        let count = (directory.len() - ordinal).min(per);
+        if actual.len() != count * width {
+            return Err(SegmentedError::Corrupt(
+                "source directory packing disagrees with RDF rows",
+            ));
+        }
+        directory.encode_records(ordinal, &mut expected[..actual.len()]);
+        if actual != &expected[..actual.len()] {
+            return Err(SegmentedError::Corrupt(
+                "source directory contents disagree with RDF rows",
+            ));
+        }
+        ordinal += count;
+    }
+    memory.release_vec(expected)?;
+    let mut sums = directory.checkpoint_sums();
+    let per = (header.block_bytes as usize - 9) / 32;
+    for slot in header.source_checkpoints.first
+        ..header.source_checkpoints.first + header.source_checkpoints.blocks
+    {
+        let actual = fixed_records(block(bytes, header, slot)?, format::SOURCE_CHECKPOINTS, 32)?;
+        if actual.len() / 32 != sums.len().min(per) {
+            return Err(SegmentedError::Corrupt(
+                "source checkpoint packing disagrees with RDF rows",
+            ));
+        }
+        for sum in actual.as_chunks::<32>().0 {
+            if Some(sum) != sums.next() {
+                return Err(SegmentedError::Corrupt(
+                    "source checkpoint contents disagree with RDF rows",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1490,6 +1783,19 @@ mod certification_tests {
             .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
             .unwrap();
         assert_eq!(count.rows.value, 13);
+        let content = DatasetView::source_summary(
+            &source,
+            predicate,
+            GraphMatch::Any,
+            StatisticsStream::Asserted,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(content.statement_count(), 13);
+        assert_eq!(
+            content.literal_rows(),
+            [purrdf_hash::multiset::Multiset256::default(); 2]
+        );
         assert_eq!(count.subjects.unwrap().value, 13);
         assert_eq!(
             source
@@ -1538,59 +1844,294 @@ mod certification_tests {
             }
             assert!(reads > 0);
         });
-        let refused = image
-            .open_session(SegmentedReadLimits::new(
-                8_000_000,
-                2,
-                u32::try_from(opening).unwrap(),
-                100_000_000,
-                8,
-            ))
-            .unwrap();
-        let predicate = refused.attach(source.handle(predicate).unwrap()).unwrap();
-        assert!(
-            refused
-                .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
-                .is_none()
-        );
-        assert_eq!(
-            refused.read_error(),
-            Some(SegmentedError::EvidenceExhausted)
-        );
+        for content in [false, true] {
+            let refused = image
+                .open_session(SegmentedReadLimits::new(
+                    8_000_000,
+                    2,
+                    u32::try_from(opening).unwrap(),
+                    100_000_000,
+                    8,
+                ))
+                .unwrap();
+            let predicate = refused.attach(source.handle(predicate).unwrap()).unwrap();
+            if content {
+                assert_eq!(
+                    DatasetView::source_summary(
+                        &refused,
+                        predicate,
+                        GraphMatch::Any,
+                        StatisticsStream::Asserted,
+                    ),
+                    Err(SegmentedError::EvidenceExhausted)
+                );
+            } else {
+                assert!(
+                    refused
+                        .predicate(predicate, GraphMatch::Any, StatisticsStream::Asserted)
+                        .is_none()
+                );
+            }
+            assert_eq!(
+                refused.read_error(),
+                Some(SegmentedError::EvidenceExhausted)
+            );
+        }
     }
 
     #[test]
     fn recomputed_hashes_cannot_certify_false_statistics() {
         let image = image();
         let header = Header::decode(image.bytes()).unwrap();
-        let mut bytes = image.bytes().to_vec();
         let start =
             usize::try_from(header.statistics[0].first).unwrap() * header.block_bytes as usize + 9;
-        let rows = crate::bytes::read_u64_le(&bytes, start + 4 * 8).unwrap();
-        crate::bytes::put_u64_le(&mut bytes, start + 4 * 8, rows + 1).unwrap();
-        rehash(&mut bytes, image.receipt());
-        assert!(matches!(
-            SegmentedImage::certify(bytes),
-            Err(SegmentedError::Corrupt(
-                "statistical contents disagree with RDF rows"
-            ))
-        ));
+        for word in [4, 17, 18, 22, 26] {
+            let mut bytes = image.bytes().to_vec();
+            bytes[start + word * 8] ^= 1;
+            rehash(&mut bytes, image.receipt());
+            assert!(matches!(
+                SegmentedImage::certify(bytes),
+                Err(SegmentedError::Corrupt(
+                    "statistical contents disagree with RDF rows"
+                ))
+            ));
+        }
     }
 
     #[test]
-    fn recomputed_hashes_cannot_certify_a_false_dictionary_fence() {
+    fn overflow_pages_and_descriptors_require_complete_semantic_certification() {
+        for block_bytes in [512, 4096] {
+            let mut builder = SegmentedBuilder::new(
+                SegmentedBuildLimits::new(16, 100_000, 0, block_bytes, 4).unwrap(),
+            )
+            .unwrap();
+            let values = [
+                TermValue::iri(format!("urn:overflow:{}", "x".repeat(20_000))),
+                TermValue::simple_literal("literal".repeat(2000)),
+            ];
+            builder.intern_batch(&values, |_, _| {}).unwrap();
+            let image = builder.seal().unwrap();
+            let header = Header::decode(image.bytes()).unwrap();
+            assert_eq!(header.block_bytes, block_bytes);
+            assert_eq!(header.overflow.rows, 2);
+            let descriptor = (header.dictionary.first
+                ..header.dictionary.first + header.dictionary.blocks)
+                .find(|&slot| {
+                    block(image.bytes(), &header, slot).unwrap()[0] == format::SPANNED_DICTIONARY
+                })
+                .unwrap();
+            for (slot, offset) in [
+                (descriptor, 5),
+                (descriptor, format::RECORD_HEADER + 8),
+                (header.overflow.first, 1),
+                (header.overflow.first, 5),
+            ] {
+                let mut bytes = image.bytes().to_vec();
+                bytes[slot as usize * block_bytes as usize + offset] ^= 128;
+                rehash(&mut bytes, image.receipt());
+                assert!(
+                    matches!(
+                        SegmentedImage::certify(bytes),
+                        Err(SegmentedError::Corrupt(_))
+                    ),
+                    "a rebuilt hash tree cannot authorize false overflow metadata or values"
+                );
+            }
+            let mut false_header = header;
+            false_header.overflow.rows += 1;
+            let mut bytes = image.bytes().to_vec();
+            bytes[..format::HEADER_BYTES].copy_from_slice(&false_header.encode());
+            rehash(&mut bytes, image.receipt());
+            assert!(matches!(
+                SegmentedImage::certify(bytes),
+                Err(SegmentedError::Corrupt("incomplete overflow coverage"))
+            ));
+        }
+    }
+
+    #[test]
+    fn source_directory_rejects_an_overflowing_physical_population() {
+        let image = image();
+        let mut header = Header::decode(image.bytes()).unwrap();
+        header.streams[0].rows = u64::MAX;
+        header.streams[1].rows = 1;
+        assert_eq!(
+            Header::decode(&header.encode()).unwrap_err(),
+            SegmentedError::AddressExhausted
+        );
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_a_false_source_directory() {
         let image = image();
         let header = Header::decode(image.bytes()).unwrap();
-        let mut bytes = image.bytes().to_vec();
-        let fence = usize::try_from(header.dictionary.first).unwrap()
-            * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
-        bytes[fence + 9] ^= 1;
-        rehash(&mut bytes, &image.receipt);
+        {
+            let stream = header.effective_directory;
+            assert!(stream.rows > 0);
+            let start = stream.first as usize * header.block_bytes as usize + 9;
+            for offset in [0, 32, 36] {
+                let mut bytes = image.bytes().to_vec();
+                bytes[start + offset] ^= 1;
+                rehash(&mut bytes, image.receipt());
+                assert_eq!(
+                    SegmentedImage::certify(bytes).unwrap_err(),
+                    SegmentedError::Corrupt("source directory contents disagree with RDF rows")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_source_prefixes_match_a_full_scan_across_pages_and_checkpoints() {
+        use crate::ir::source_directory::DirectoryRead;
+        use crate::source::SourceDifferenceWork;
+        use purrdf_hash::multiset::Multiset256;
+
+        let image = directory_image(1025);
+        let header = Header::decode(image.bytes()).unwrap();
+        let count = header.effective_directory.rows;
+        let compact = header.effective_directory.blocks + header.source_checkpoints.blocks;
+        let previous = count.div_ceil((u64::from(header.block_bytes) - 9) / 88);
+        assert!(
+            compact * 2 < previous,
+            "directory pages: {compact} vs {previous}"
+        );
+        assert_eq!(image.bytes(), directory_image(1025).bytes());
+        let session = image
+            .open_session(SegmentedReadLimits::new(
+                8_000_000,
+                4,
+                100_000,
+                100_000_000,
+                8,
+            ))
+            .unwrap();
+        let directory = session.source_directory();
+        let mut expected = Multiset256::default();
+        for end in 0..=directory.len().unwrap() {
+            if end != 0 {
+                expected
+                    .insert(directory.record(end - 1).unwrap().digest)
+                    .unwrap();
+            }
+            let mut work = SourceDifferenceWork::default();
+            assert_eq!(
+                directory.prefix(end, &mut work).unwrap(),
+                expected,
+                "prefix {end}"
+            );
+            assert_eq!(work.members, (end % 32) as u64);
+        }
         assert!(matches!(
-            SegmentedImage::certify(bytes),
+            directory.prefix(1026, &mut SourceDifferenceWork::default()),
             Err(SegmentedError::Corrupt(_))
         ));
+    }
+
+    fn directory_image(count: u32) -> SegmentedImage {
+        let mut builder = SegmentedBuilder::new(
+            SegmentedBuildLimits::new(count + 2, 100_000, count, 512, 4).unwrap(),
+        )
+        .unwrap();
+        let values = (0..count + 2)
+            .map(|index| TermValue::iri(format!("urn:directory:{index}")))
+            .collect::<Vec<_>>();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &id in &ids[2..] {
+            builder
+                .push_quad(QuadIds {
+                    s: id,
+                    p: ids[0],
+                    o: ids[1],
+                    g: None,
+                })
+                .unwrap();
+        }
+        builder.seal().unwrap()
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_false_sparse_source_checkpoints() {
+        let image = directory_image(1025);
+        let header = Header::decode(image.bytes()).unwrap();
+        let stream = header.source_checkpoints;
+        assert!(stream.blocks > 1);
+        for slot in stream.first..stream.first + stream.blocks {
+            let mut bytes = image.bytes().to_vec();
+            bytes[slot as usize * header.block_bytes as usize + 9] ^= 1;
+            rehash(&mut bytes, image.receipt());
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt("source checkpoint contents disagree with RDF rows")
+            );
+        }
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_a_false_source_union() {
+        let image = image();
+        assert!(
+            Header::decode(image.bytes())
+                .unwrap()
+                .source_union
+                .population()
+                > 0
+        );
+        for population in [false, true] {
+            let mut bytes = image.bytes().to_vec();
+            if population {
+                bytes[format::HEADER_BYTES - 48..format::HEADER_BYTES - 32].fill(0);
+            } else {
+                bytes[format::HEADER_BYTES - 32] ^= 1;
+            }
+            rehash(&mut bytes, image.receipt());
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt(if population {
+                    "effective source directory packing mismatch"
+                } else {
+                    "source union disagrees with RDF rows"
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn recomputed_hashes_cannot_certify_false_reverse_identifiers() {
+        let image = image();
+        let header = Header::decode(image.bytes()).unwrap();
+        let first = usize::try_from(header.reverse.first).unwrap()
+            * usize::try_from(header.block_bytes).unwrap()
+            + 9;
+        for mutation in 0..4 {
+            let mut bytes = image.bytes().to_vec();
+            let expected = match mutation {
+                0 => {
+                    bytes.copy_within(first + 8..first + 16, first);
+                    "forward/reverse correspondence is false"
+                }
+                1 => {
+                    bytes[first..first + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+                    "reverse index names foreign ID"
+                }
+                2 => {
+                    bytes[first..first + 8].fill(0);
+                    "zero dictionary reference"
+                }
+                _ => {
+                    for offset in 0..8 {
+                        bytes.swap(first + offset, first + 8 + offset);
+                    }
+                    "reverse index is not globally strictly ordered"
+                }
+            };
+            rehash(&mut bytes, &image.receipt);
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt(expected)
+            );
+        }
     }
 
     #[test]
@@ -1600,7 +2141,7 @@ mod certification_tests {
         let mut bytes = image.bytes().to_vec();
         let record = usize::try_from(header.summaries.first).unwrap()
             * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
+            + 9;
         bytes[record + 24..record + 32].copy_from_slice(&999_u64.to_le_bytes());
         bytes[record + 32..record + 40].copy_from_slice(&999_u64.to_le_bytes());
         rehash(&mut bytes, &image.receipt);
@@ -1617,7 +2158,7 @@ mod certification_tests {
         let mut bytes = image.bytes().to_vec();
         let record = usize::try_from(header.streams[0].first).unwrap()
             * usize::try_from(header.block_bytes).unwrap()
-            + format::RECORD_HEADER;
+            + 9;
         bytes[record..record + 8].copy_from_slice(&999_u64.to_le_bytes());
         rehash(&mut bytes, &image.receipt);
         assert!(matches!(

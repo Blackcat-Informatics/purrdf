@@ -167,6 +167,19 @@ impl std::fmt::Debug for Inflater {
 purrdf_hash::default_from_new!(Inflater);
 
 impl Inflater {
+    /// Upper bound on this decoder's live heap storage, including old/new table
+    /// allocations during growth. Input/output buffers and the decoder object
+    /// itself are caller-owned and excluded. The bound is independent of input
+    /// length, chunking and the selected execution backend.
+    #[must_use]
+    pub const fn max_live_heap_bytes() -> usize {
+        BUF_LEN
+            + COPY_SLACK
+            + DecodeTable::max_live_heap_bytes(LITLEN_BITS)
+            + DecodeTable::max_live_heap_bytes(DIST_BITS)
+            + DecodeTable::max_live_heap_bytes(CODE_LENGTH_BITS)
+    }
+
     /// A decoder on the fastest kernel path this processor supports.
     pub fn new() -> Self {
         Self::with_kernels(Backend::selected_kernels())
@@ -862,15 +875,27 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// [`decompress`], refusing output beyond `limit` bytes.
 pub fn decompress_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    decompress_into(data, &mut out, limit)?;
+    Ok(out)
+}
+
+/// Append one complete raw DEFLATE stream to caller-owned output, refusing
+/// decoded bytes beyond `limit`. Reserving `limit` additional bytes beforehand
+/// avoids output-buffer growth. On error, discard any appended partial output.
+/// Trailing bytes are refused as in [`decompress`].
+///
+/// # Errors
+/// Returns the original malformed-stream, truncation, trailing-data or output-limit refusal.
+pub fn decompress_into(data: &[u8], out: &mut Vec<u8>, limit: u64) -> Result<(), Error> {
     let mut inflater = Inflater::new();
     inflater.set_limit(limit);
-    let mut out = Vec::new();
-    let progress = inflater.feed_to_vec(data, &mut out)?;
+    let progress = inflater.feed_to_vec(data, out)?;
     if progress.status != Status::StreamEnd {
         return Err(Error::Truncated);
     }
     if progress.consumed != data.len() || !inflater.trailing_bytes().is_empty() {
         return Err(Error::TrailingData);
     }
-    Ok(out)
+    Ok(())
 }

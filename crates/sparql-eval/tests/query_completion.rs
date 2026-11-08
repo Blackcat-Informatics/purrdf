@@ -565,9 +565,9 @@ fn assert_query_refusal(
     match route {
         QueryRoute::Owned | QueryRoute::Prepared => {
             let result = if matches!(route, QueryRoute::Owned) {
-                engine.query_fallible_view(source, request(query), QueryOptions::EMPTY)
+                engine.query_fallible_view(source, request(query), &QueryOptions::EMPTY)
             } else {
-                engine.query_prepared_fallible_view(source, &prepared, &[], QueryOptions::EMPTY)
+                engine.query_prepared_fallible_view(source, &prepared, &[], &QueryOptions::EMPTY)
             };
             assert_source_refusal(result, source, expected);
         }
@@ -576,28 +576,28 @@ fn assert_query_refusal(
                 QueryRoute::Governed => engine.query_governed_fallible_view(
                     source,
                     request(query),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 ),
                 QueryRoute::PreparedGoverned => engine.query_prepared_governed_fallible_view(
                     source,
                     &prepared,
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 ),
                 QueryRoute::Shared => engine.query_prepared_governed_fallible_in_operation(
                     source,
                     &prepared,
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &state,
                 ),
                 QueryRoute::GovernedSource => engine.query_governed_fallible_with_source_view(
                     source,
                     request(query),
                     &remote,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 ),
                 QueryRoute::PreparedGovernedSource => engine
@@ -606,7 +606,7 @@ fn assert_query_refusal(
                         &prepared,
                         &[],
                         &remote,
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::METERED,
                     ),
                 QueryRoute::SharedSource => engine
@@ -615,7 +615,7 @@ fn assert_query_refusal(
                         &prepared,
                         &[],
                         &remote,
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &state,
                     ),
                 QueryRoute::Owned | QueryRoute::Prepared => unreachable!("governed route"),
@@ -651,7 +651,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
     let source = Source::at(RefusalSite::Never);
     source.refuse();
     assert_source_refusal(
-        engine.query_fallible_view(&source, request("not SPARQL"), QueryOptions::EMPTY),
+        engine.query_fallible_view(&source, request("not SPARQL"), &QueryOptions::EMPTY),
         &source,
         RefusedRead::FinalRead(source.site),
     );
@@ -659,7 +659,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
         .prepare_query("SELECT * WHERE {}", None)
         .expect("prepare empty pattern");
     assert_source_refusal(
-        engine.query_prepared_fallible_view(&source, &empty, &[], QueryOptions::EMPTY),
+        engine.query_prepared_fallible_view(&source, &empty, &[], &QueryOptions::EMPTY),
         &source,
         RefusedRead::FinalRead(source.site),
     );
@@ -667,7 +667,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
         engine.query_governed_fallible_view(
             &source,
             request("not SPARQL"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         ),
         &source,
@@ -678,7 +678,7 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
             &source,
             &empty,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         ),
         &source,
@@ -689,13 +689,13 @@ fn preexisting_source_failure_outranks_parse_and_empty_pattern_success() {
 fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     let engine = NativeSparqlEngine::new();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
         .expect("prepare execution");
     for site in [RefusalSite::Iterator, RefusalSite::Term] {
         let source = Source::at(site);
         let subject = source.resident.quads().next().expect("fixture row").s;
         assert_source_refusal(
-            engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| {
+            engine.execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| {
                 let _read = source.resolve(subject);
                 7
             }),
@@ -705,7 +705,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     }
     let source = Source::at(RefusalSite::Never);
     assert_source_refusal(
-        engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| {
+        engine.execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| {
             source.refuse();
             7
         }),
@@ -714,7 +714,7 @@ fn retained_prepared_visits_remain_inside_the_checked_publication_scope() {
     );
     let source = Source::at(RefusalSite::Never);
     let (value, receipt) = engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| 7)
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| 7)
         .expect("retained workspace answers valid neighbor");
     assert_eq!(value, 7);
     assert_held_receipt(&source, &receipt);
@@ -731,15 +731,15 @@ fn refused_reporting_admission_remains_typed_even_before_sticky_failure() {
     }
     let source = Source::at(RefusalSite::Reporting);
     assert_source_refusal(
-        engine.query_fallible_view(&source, request("not SPARQL"), QueryOptions::EMPTY),
+        engine.query_fallible_view(&source, request("not SPARQL"), &QueryOptions::EMPTY),
         &source,
         RefusedRead::Workspace,
     );
     let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
         .expect("prepare execution");
     assert_source_refusal(
-        engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| 7),
+        engine.execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| 7),
         &source,
         RefusedRead::Workspace,
     );
@@ -798,6 +798,95 @@ fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence
             QUERY,
             RefusedRead::Workspace,
         );
+    }
+    // Retained UDF frames must refuse through the original physical account,
+    // and an in-flight cancellation must unwind those same owners.
+    struct Calls {
+        count: AtomicUsize,
+        cancel: Option<CancellationFlag>,
+    }
+    impl purrdf_sparql_eval::UserFunctionAdmission for Calls {
+        fn admit(
+            &self,
+            _: &purrdf_sparql_eval::UserFunction,
+            _: &purrdf_sparql_algebra::Query,
+        ) -> Result<(), purrdf_sparql_eval::UserFunctionRefusal> {
+            let count = self.count.fetch_add(1, Ordering::Relaxed) + 1;
+            if count == 64
+                && let Some(cancel) = &self.cancel
+            {
+                cancel.cancel();
+            }
+            Ok(())
+        }
+        fn observe_refusal(&self, _: &purrdf_sparql_eval::UserFunctionRefusal) {
+            panic!("an accepting observer cannot produce a function refusal");
+        }
+    }
+    const RECUR: &str = "http://example.org/heap-recursion";
+    for stop in [false, true] {
+        let engine = NativeSparqlEngine::new();
+        let mut source = Source::at(RefusalSite::BoundedHealthy);
+        Arc::get_mut(&mut source.state).unwrap().live_limit =
+            if stop { 64 } else { 16 } * 1024 * 1024;
+        let mut registry = purrdf_sparql_eval::UserFunctionRegistry::default();
+        registry.insert(
+            RECUR,
+            purrdf_sparql_eval::UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: Arc::from(format!("SELECT (<{RECUR}>() AS ?result) WHERE {{}}")),
+                kind: purrdf_sparql_eval::UserFnBody::Select,
+                return_constraint: purrdf_sparql_eval::TypeConstraint::default(),
+            },
+        );
+        let functions = engine
+            .bind_functions(registry, purrdf_sparql_eval::ExtensionEnv::empty())
+            .unwrap();
+        let cancel = CancellationFlag::new();
+        let calls = Arc::new(Calls {
+            count: AtomicUsize::new(0),
+            cancel: stop.then(|| cancel.clone()),
+        });
+        let admission: Arc<dyn purrdf_sparql_eval::UserFunctionAdmission> = calls.clone();
+        let governors = if stop {
+            QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(cancel))
+        } else {
+            QueryGovernors::UNBOUNDED
+        };
+        let query = format!("SELECT (<{RECUR}>() AS ?value) WHERE {{}}");
+        let result = engine.query_governed_fallible_view(
+            &source,
+            request(&query),
+            &QueryOptions::EMPTY
+                .with_functions(&functions)
+                .with_user_function_admission(&admission),
+            &governors,
+        );
+        assert!(
+            calls.count.load(Ordering::Relaxed) > 32,
+            "the explicit removed depth policy reaches the heap refusal"
+        );
+        if stop {
+            let error = result.expect_err("an in-flight cancellation remains typed");
+            assert_eq!(
+                error.tripped(),
+                Some(TrippedGovernor::Stopped {
+                    cause: StopCause::Cancelled
+                })
+            );
+            assert!(error.operational_error().is_none());
+            drop(error);
+        } else {
+            drop(assert_source_refusal(
+                result,
+                &source,
+                RefusedRead::Workspace,
+            ));
+        }
+        drop(functions);
+        drop(engine);
+        source.assert_released();
     }
 }
 /// A graph-name forecast and the actual query must preserve a direct lookup
@@ -875,12 +964,12 @@ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
             _ => RefusedRead::Workspace,
         };
         let mut execution = engine
-            .prepare_execution(query, None, &[], QueryOptions::EMPTY)
+            .prepare_execution(query, None, &[], &QueryOptions::EMPTY)
             .expect("prepare execution");
         let source = Source::at(site);
         let visited = AtomicBool::new(false);
         assert_source_refusal(
-            engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| {
+            engine.execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| {
                 visited.store(true, Ordering::Relaxed);
                 7
             }),
@@ -890,7 +979,7 @@ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
         assert!(!visited.load(Ordering::Relaxed));
         let healthy = Source::at(RefusalSite::Never);
         let (value, receipt) = engine
-            .execute_fallible(&mut execution, &healthy, QueryOptions::EMPTY, |_| {
+            .execute_fallible(&mut execution, &healthy, &QueryOptions::EMPTY, |_| {
                 visited.store(true, Ordering::Relaxed);
                 7
             })
@@ -1026,7 +1115,7 @@ fn materialized_existing_cells_use_actual_payload_admission() {
             .query_governed_fallible_view(
                 &source,
                 request(query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("short cells fit actual admission despite a conservative view certificate");
@@ -1060,7 +1149,7 @@ fn partial_materialized_cells_keep_actual_payload_admission() {
         .query_governed_fallible_view(
             &source,
             request("SELECT ?s ?p ?o WHERE { ?s ?p ?o }"),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_answers(7),
         )
         .expect_err("the answer governor stops a positive query");
@@ -1097,7 +1186,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                 QueryRoute::Owned => assert_complete_query(
                     &source,
                     engine
-                        .query_fallible_view(&source, request(QUERY), QueryOptions::EMPTY)
+                        .query_fallible_view(&source, request(QUERY), &QueryOptions::EMPTY)
                         .expect("healthy owned query"),
                     engine,
                     prepared,
@@ -1106,7 +1195,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                 QueryRoute::Prepared => assert_complete_query(
                     &source,
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("healthy prepared query"),
                     engine,
                     prepared,
@@ -1118,7 +1207,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                         .query_governed_fallible_view(
                             &source,
                             request(QUERY),
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("healthy governed query"),
@@ -1133,7 +1222,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("healthy per-call prepared query"),
@@ -1147,7 +1236,7 @@ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &state,
                         )
                         .expect("healthy shared operation");
@@ -1189,11 +1278,11 @@ fn final_checkpoint_failure_discards_success_and_keeps_workspace_held() {
     }
     let source = Source::at(RefusalSite::Checkpoint);
     let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
         .expect("prepare execution");
     let visited = AtomicBool::new(false);
     assert_source_refusal(
-        engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |_| {
+        engine.execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |_| {
             visited.store(true, Ordering::Relaxed);
             7
         }),
@@ -1226,6 +1315,8 @@ fn destination() -> RdfDatasetBuilder {
 }
 /// Graph failures preserve the destination; successful publication appends only after checking.
 fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
     let engine = NativeSparqlEngine::new();
     let prepared = engine
         .prepare_query(CONSTRUCT, None)
@@ -1247,7 +1338,7 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
                 &source,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &options,
                 &state,
                 &mut destination,
             ),
@@ -1258,6 +1349,17 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
                 RefusedRead::FinalRead(source.site)
             },
         );
+        if matches!(
+            site,
+            RefusalSite::Reporting | RefusalSite::Execution | RefusalSite::ExecutionSticky
+        ) {
+            assert_eq!(
+                error.evidence().coordinates,
+                purrdf_sparql_eval::QueryCoordinates::NotStarted
+            );
+        } else {
+            assert_supplied_coordinates(&error.evidence().coordinates);
+        }
         assert_eq!(error.evidence().governors, state.evidence());
         let actual = destination.freeze().expect("unchanged destination");
         assert_eq!(actual.term_count(), expected.term_count());
@@ -1277,11 +1379,12 @@ fn graph_admission_and_final_checkpoint_failures_leave_destination_unchanged() {
             &source,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &options,
             &state,
             &mut destination,
         )
         .expect("healthy graph publication");
+    assert_supplied_coordinates(&evidence.coordinates);
     assert_eq!(stats.statements, 1);
     assert_eq!(evidence.governors, state.evidence());
     assert_held_receipt(&source, &evidence.view);
@@ -1320,20 +1423,20 @@ fn explain(
             source,
             query,
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         ),
         ExplainRoute::QuietStop => engine.explain_query_with_stop_signal_fallible_view(
             source,
             query,
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             Arc::new(CancellationFlag::new()),
         ),
         ExplainRoute::GovernedRequest => engine
             .explain_governed_fallible_view(
                 source,
                 request(query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .map(|(explanation, evidence)| (explanation, evidence.view))
@@ -1393,7 +1496,7 @@ fn governed_explain_matches_bound_query_receipts_and_original_ownership() {
             let direct = engine.query_governed_fallible_view(
                 &source,
                 request,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             );
             let expected = match &direct {
@@ -1408,7 +1511,7 @@ fn governed_explain_matches_bound_query_receipts_and_original_ownership() {
                 &source,
                 &prepared,
                 &bindings,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             );
             let prepared_evidence = match &prepared_answer {
@@ -1417,7 +1520,7 @@ fn governed_explain_matches_bound_query_receipts_and_original_ownership() {
             };
             assert_eq!(prepared_evidence, &expected, "prepared request: {query}");
             let (explanation, receipt) = engine
-                .explain_governed_fallible_view(&source, request, QueryOptions::EMPTY, &governors)
+                .explain_governed_fallible_view(&source, request, &QueryOptions::EMPTY, &governors)
                 .expect("a healthy measurement retains complete or stopped evidence");
             assert_eq!(receipt.governors, expected, "{query}");
             assert_eq!(explanation.evidence(), &expected);
@@ -1473,9 +1576,10 @@ fn governed_explain_preserves_remote_refusal_and_zero_request_limit() {
         let request =
             request("SELECT ?s WHERE { SERVICE <https://example.org/remote> { ?s ?p ?o } }");
         let direct = engine
-            .query_governed_fallible_view(&source, request, options, &governors)
+            .query_governed_fallible_view(&source, request, &options, &governors)
             .expect_err("a missing provider cannot complete a remote query");
-        let measured = engine.explain_governed_fallible_view(&source, request, options, &governors);
+        let measured =
+            engine.explain_governed_fallible_view(&source, request, &options, &governors);
         match &direct {
             FallibleSparqlError::BudgetExhausted { .. } => {
                 let (explanation, receipt) = measured.expect("a governor stop has a ledger");
@@ -1639,10 +1743,10 @@ fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publicat
         .with_prebinding(ShaclPrebinding::Applied)
         .with_bnode_mint_prefix(Some("configured-mint"));
     let expected = engine
-        .explain_query_with_options(&source.resident, QUERY, None, options)
+        .explain_query_with_options(&source.resident, QUERY, None, &options)
         .expect("resident configured explanation");
     let (actual, receipt) = engine
-        .explain_query_with_options_fallible_view(&source, QUERY, None, options)
+        .explain_query_with_options_fallible_view(&source, QUERY, None, &options)
         .expect("operational configured explanation");
     support::assert_scan_explanation_matches_resident(&actual, &expected.render());
     assert_held_receipt(&source, &receipt);
@@ -1700,7 +1804,7 @@ fn explain_admitted_supplied_inputs_preserve_parse_failure_before_reading() {
     ] {
         let source = Source::at(RefusalSite::BoundedHealthy);
         let error = engine
-            .explain_query_with_options_fallible_view(&source, "not SPARQL", None, options)
+            .explain_query_with_options_fallible_view(&source, "not SPARQL", None, &options)
             .expect_err("native parser refuses malformed query text");
         assert_eq!(
             error
@@ -1745,7 +1849,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
                 &source.resident,
                 QUERY,
                 None,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 Arc::new(stop.clone()),
             )
             .expect("resident cancellation receipt");
@@ -1754,7 +1858,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
                 &source,
                 QUERY,
                 None,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 Arc::new(stop),
             )
             .expect("a stop alone preserves the explanation");
@@ -1788,7 +1892,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
             &source,
             QUERY,
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             Arc::new(stop),
         ),
         &source,
@@ -1801,7 +1905,7 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
             source.as_ref(),
             QUERY,
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             Arc::new(FailureAndStop(Arc::clone(&source))),
         ),
         source.as_ref(),
@@ -1809,6 +1913,30 @@ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_preceden
     );
     assert_eq!(error.evidence().execution_guards, 1);
 }
+const COORDINATE_TIME: &str = "-12345-06-07T08:09:10.123456789123456789123456789+05:30";
+
+fn coordinate_time() -> purrdf_xsd::temporal::DateTime {
+    let purrdf_xsd::XsdValue::DateTime(now) =
+        purrdf_xsd::parse(COORDINATE_TIME, purrdf_xsd::XsdDatatype::DateTime).unwrap()
+    else {
+        panic!("timestamp")
+    };
+    now
+}
+
+fn assert_supplied_coordinates(coordinates: &purrdf_sparql_eval::QueryCoordinates) {
+    let purrdf_sparql_eval::QueryCoordinates::Started(inputs) = coordinates else {
+        panic!("constructed context")
+    };
+    assert!(
+        inputs
+            .now()
+            .unwrap()
+            .same_representation(&coordinate_time())
+    );
+    assert_eq!(inputs.entropy_seed(), Some(0));
+}
+
 /// Select governor ownership while preserving the same plan, source, and publication boundary.
 #[allow(
     clippy::result_large_err,
@@ -1821,23 +1949,19 @@ fn prepared_governed(
     governors: &QueryGovernors,
     shared: bool,
 ) -> FallibleSparqlResult<RefusedRead, GovernedEvidence<Receipt>> {
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
     if shared {
         let state = Arc::new(GovernorState::new(governors));
         engine.query_prepared_governed_fallible_in_operation(
             source,
             prepared,
             &[],
-            QueryOptions::EMPTY,
+            &options,
             &state,
         )
     } else {
-        engine.query_prepared_governed_fallible_view(
-            source,
-            prepared,
-            &[],
-            QueryOptions::EMPTY,
-            governors,
-        )
+        engine.query_prepared_governed_fallible_view(source, prepared, &[], &options, governors)
     }
 }
 
@@ -1858,6 +1982,7 @@ fn prepared_governed_queries_discard_rows_produced_before_an_iterator_failure() 
             &source,
             RefusedRead::FinalRead(RefusalSite::AfterRow),
         );
+        assert_supplied_coordinates(&refusal.evidence().coordinates);
         assert_eq!(source.yielded.load(Ordering::Relaxed), 1);
         let checkpoint = source.checkpoints.load(Ordering::Relaxed);
         assert!(checkpoint >= 2);
@@ -1895,6 +2020,10 @@ fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
             let healthy = Source::at(RefusalSite::Never);
             let healthy_outcome =
                 prepared_governed(&engine, &healthy, &prepared, &governors, shared);
+            match &healthy_outcome {
+                Ok(complete) => assert_supplied_coordinates(&complete.evidence.coordinates),
+                Err(error) => assert_supplied_coordinates(&error.evidence().coordinates),
+            }
             let healthy_governors = match (expected, healthy_outcome) {
                 (ReadyOutcome::Complete, Ok(complete)) => {
                     assert_eq!(
@@ -1955,11 +2084,132 @@ fn the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome() {
                 &source,
                 RefusedRead::FinalRead(RefusalSite::FinalCheckpoint),
             );
+            assert_supplied_coordinates(&refusal.evidence().coordinates);
             assert_eq!(source.checkpoints.load(Ordering::Relaxed), final_checkpoint);
             assert!(refusal.evidence().view.failed);
             assert_eq!(refusal.evidence().view.checkpoints, final_checkpoint);
             assert_eq!(refusal.evidence().governors, healthy_governors);
         }
+    }
+}
+
+/// EXPLAIN captures its actual context even on forecast refusal, and keeps it through read failures.
+fn governed_explain_coordinates_survive_forecast_and_publication_refusals() {
+    let engine = NativeSparqlEngine::new();
+    let now = coordinate_time();
+    let options = QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0);
+    for site in [
+        RefusalSite::Never,
+        RefusalSite::Iterator,
+        RefusalSite::Checkpoint,
+        RefusalSite::Reporting,
+    ] {
+        let source = Source::at(site);
+        let result = engine.explain_governed_fallible_view(
+            &source,
+            request(QUERY),
+            &options,
+            &QueryGovernors::METERED,
+        );
+        if site == RefusalSite::Never {
+            let (_, evidence) = result.expect("healthy measurement");
+            assert_supplied_coordinates(&evidence.coordinates);
+        } else {
+            let expected = if site == RefusalSite::Reporting {
+                RefusedRead::Workspace
+            } else {
+                RefusedRead::FinalRead(site)
+            };
+            let error = assert_source_refusal(result, &source, expected);
+            if site == RefusalSite::Reporting {
+                assert_eq!(
+                    error.evidence().coordinates,
+                    purrdf_sparql_eval::QueryCoordinates::NotStarted
+                );
+            } else {
+                assert_supplied_coordinates(&error.evidence().coordinates);
+            }
+        }
+    }
+    let source = Source::at(RefusalSite::Never);
+    let (_, evidence) = engine
+        .explain_governed_fallible_view(
+            &source,
+            request(QUERY),
+            &options,
+            &QueryGovernors::METERED.with_max_intermediate_cells(0),
+        )
+        .unwrap();
+    assert_supplied_coordinates(&evidence.coordinates);
+    assert!(evidence.governors.tripped.is_some());
+}
+
+/// Real materialized publication retains only its original coordinate owner after results drop.
+fn materialized_coordinate_receipts_balance_with_retained_engine_and_plan() {
+    for prepared_route in [false, true] {
+        let source = Source::at(RefusalSite::BoundedHealthy);
+        let state = source.state.clone();
+        let engine = NativeSparqlEngine::new();
+        let query = "SELECT (1 AS ?value) WHERE {}";
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let run = |options: &QueryOptions<'_, '_>| {
+            if prepared_route {
+                engine.query_prepared_governed_fallible_view(
+                    &source,
+                    &prepared,
+                    &[],
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            } else {
+                engine.query_governed_fallible_view(
+                    &source,
+                    request(query),
+                    options,
+                    &QueryGovernors::METERED,
+                )
+            }
+            .unwrap()
+        };
+        // Warm the existing immutable plan/cache owners, with no supplied coordinate.
+        drop(run(&QueryOptions::EMPTY));
+        let baseline = state.owned_bytes.load(Ordering::Relaxed);
+        let purrdf_xsd::XsdValue::DateTime(now) = purrdf_xsd::parse(
+            &format!("2024-02-29T12:34:56.{}+05:30", "7".repeat(4096)),
+            purrdf_xsd::XsdDatatype::DateTime,
+        )
+        .unwrap() else {
+            panic!("wide timestamp")
+        };
+        let mut retained = None;
+        for iteration in 0..4 {
+            let result = run(&QueryOptions::EMPTY.with_now(&now).with_entropy_seed(0));
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let coordinates = result.evidence.coordinates.clone();
+            let measured = window.close();
+            assert_eq!(measured.allocations, 0);
+            assert_eq!(measured.requested_bytes, 0);
+            drop(result);
+            assert!(state.owned_bytes.load(Ordering::Relaxed) > baseline);
+            let purrdf_sparql_eval::QueryCoordinates::Started(inputs) = &coordinates else {
+                panic!("started materialized query")
+            };
+            assert!(inputs.now().unwrap().same_representation(&now));
+            assert_eq!(inputs.entropy_seed(), Some(0));
+            if iteration == 3 {
+                retained = Some(coordinates);
+            } else {
+                drop(coordinates);
+                assert_eq!(state.owned_bytes.load(Ordering::Relaxed), baseline);
+            }
+        }
+        drop(now);
+        drop(prepared);
+        drop(engine);
+        drop(source);
+        assert!(state.owned_bytes.load(Ordering::Relaxed) > 0);
+        drop(retained);
+        state.assert_released();
     }
 }
 
@@ -2326,7 +2576,7 @@ fn borrowed_producers_keep_frozen_snapshot_and_original_result_owners() {
             .query_governed_fallible_view(
                 &captured,
                 request(STORED_QUERY),
-                QueryOptions::EMPTY.with_env(&environment),
+                &QueryOptions::EMPTY.with_env(&environment),
                 &QueryGovernors::METERED,
             )
             .unwrap();
@@ -2342,7 +2592,7 @@ fn borrowed_producers_keep_frozen_snapshot_and_original_result_owners() {
             .query_governed(
                 &captured.resident,
                 request(STORED_QUERY),
-                QueryOptions::EMPTY.with_env(&environment),
+                &QueryOptions::EMPTY.with_env(&environment),
                 &QueryGovernors::METERED,
             )
             .unwrap()
@@ -2394,9 +2644,9 @@ fn borrowed_cursor_keeps_its_snapshot_after_registry_handles_are_released() {
         )));
         let options = QueryOptions::EMPTY.with_env(&environment);
         let prepared = engine
-            .prepare_query_with_options(STORED_QUERY, None, options)
+            .prepare_query_with_options(STORED_QUERY, None, &options)
             .unwrap();
-        engine.open_call_cursor(&prepared, options).unwrap()
+        engine.open_call_cursor(&prepared, &options).unwrap()
     };
     let row = cursor.next_row(&*source.resident).unwrap().unwrap();
     assert_eq!(
@@ -2439,7 +2689,7 @@ fn borrowed_producers_stop_inside_pulls_and_preserve_storage_failure_precedence(
             let answer = engine.query_governed_fallible_view(
                 &source,
                 request(STORED_QUERY),
-                QueryOptions::EMPTY.with_env(&environment),
+                &QueryOptions::EMPTY.with_env(&environment),
                 &governors,
             );
             let examined = pulls.examined.load(Ordering::Relaxed);
@@ -2505,7 +2755,7 @@ fn borrowed_producers_discard_candidates_when_the_original_source_fails() {
                 engine.query_governed_fallible_view(
                     &source,
                     request(query),
-                    QueryOptions::EMPTY.with_env(&environment),
+                    &QueryOptions::EMPTY.with_env(&environment),
                     &QueryGovernors::METERED,
                 ),
                 &source,
@@ -2538,7 +2788,7 @@ fn borrowed_producers_refuse_unaffordable_rows_and_release_original_admission() 
         let answer = engine.query_governed_fallible_view(
             &source,
             request(STORED_QUERY),
-            QueryOptions::EMPTY.with_env(&environment),
+            &QueryOptions::EMPTY.with_env(&environment),
             &QueryGovernors::METERED,
         );
         let refused_inside_cursor = pulls.admission_failed.load(Ordering::Relaxed);
@@ -2583,7 +2833,7 @@ fn borrowed_producers_keep_partial_rows_after_the_query_scope_ends() {
         .query_governed_fallible_view(
             &source,
             request(STORED_QUERY),
-            QueryOptions::EMPTY.with_env(&environment),
+            &QueryOptions::EMPTY.with_env(&environment),
             &QueryGovernors::METERED.with_max_answers(1),
         )
         .expect_err("answer ceiling preserves a prefix");
@@ -2637,4 +2887,6 @@ purrdf_testkit::harness_main!(
     explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence,
     prepared_governed_queries_discard_rows_produced_before_an_iterator_failure,
     the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome,
+    governed_explain_coordinates_survive_forecast_and_publication_refusals,
+    materialized_coordinate_receipts_balance_with_retained_engine_and_plan,
 );

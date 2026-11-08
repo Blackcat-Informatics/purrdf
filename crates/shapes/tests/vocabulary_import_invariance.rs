@@ -32,7 +32,7 @@
 //! it names normalized ([`normalize_offsets`]): the merge lengthens the prologue before a
 //! SPARQL body, which moves the offset of a syntax error and nothing else.
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 
 use std::fs;
 use std::sync::Arc;
@@ -143,12 +143,12 @@ struct Input {
 /// original text with the vocabulary appended.
 fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let dataset = parse_turtle_to_dataset(text, input.base.as_deref())
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| format!("shapes graph parse error: {errors}"))?;
     // The ORIGINAL document's prefix map, for both runs: appending the vocabulary adds
     // its own `@prefix` directives, and the invariance claim is about the graph it
     // merges, not about the fallback map a different document would declare.
     let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?
+        .map_err(|errors| format!("shapes graph parse error: {errors}"))?
         .prefixes;
     let shapes = from_dataset_with_options(
         &dataset,
@@ -185,7 +185,7 @@ fn inputs() -> Vec<Input> {
             box_role_vocab: Some(first_party_box_role_vocab()),
             shapes_graph: None,
             declared_failure: false,
-            data: parse_ntriples_to_dataset(&data_nt).map_err(|errors| errors.join("; ")),
+            data: parse_ntriples_to_dataset(&data_nt).map_err(|errors| errors.to_string()),
         });
     }
     let w3c = w3c_cases()
@@ -229,7 +229,7 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
         let dataset = match result {
             Ok((dataset, _)) => Arc::clone(dataset),
             Err(_) => parse_turtle_to_dataset(text, input.base.as_deref())
-                .map_err(|errors| errors.join("; "))?,
+                .map_err(|errors| errors.to_string())?,
         };
         __linked_declarations(&dataset)
     };
@@ -304,7 +304,13 @@ fn check(input: &Input, vocabulary: &str) -> Result<bool, String> {
     if let Ok((_, merged_shapes)) = merged {
         let merged_shapes = Arc::new(merged_shapes);
         let bytes = PreparedShapes::new(Arc::clone(&merged_shapes))
-            .to_product(&ShapesProfile::CORE)
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .map_err(|e| format!("the merged shapes graph does not pack: {e}"))?;
         let host = HostBindings::empty();
         let options =

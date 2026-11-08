@@ -36,6 +36,10 @@ path = "src/lib.rs"
 name = "turtle_chains"
 harness = false
 
+[[test]]
+name = "fno_reader"
+harness = false
+
 [[bench]]
 name = "turtle_chains"
 harness = false
@@ -45,6 +49,7 @@ harness = false
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
 # the content store, and the GTS reader path. Non-optional:
 # purrdf always re-exports its shipped modules.
+# Shared native tables retain explicit fixed hashes and store each value once.
 purrdf-core = { workspace = true }
 # The native, zero-dependency XSD value space: non-optional, so purrdf's
 # always-on native codec path can reach W3C-canonical literal canonicalization
@@ -54,17 +59,13 @@ purrdf-xsd = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
-# Store-once interning on the native text-codec hot path (fixed-key hashing with
-# `purrdf-core`'s `FastHasher` + raw hash table indices into the owned term Vec),
-# matching the purrdf-core `ir::builder` pattern.
-hashbrown = { workspace = true }
 purrdf-gts = { workspace = true }
 purrdf-events = { workspace = true }
 # The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
 # the same implementation purrdf-gts signs and verifies with.
 purrdf-ed25519 = { workspace = true }
 # The native SPARQL evaluator — the SOLE SPARQL authority. It is the engine the maintainer-only golden-capture
-# binary (`src/bin/capture_sparql_goldens.rs`) runs to freeze the conformance
+# example (`examples/capture_sparql_goldens.rs`) runs to freeze the conformance
 # goldens (native-vs-native regression gate).
 purrdf-sparql-eval = { workspace = true }
 # The wasm-clean SPARQL front-end: its `lexer` is the proven, UCHAR-decoding
@@ -97,31 +98,34 @@ sha2 = { workspace = true, default-features = true }
 # Lowercase hex rendering of those SHA-256 digests.
 purrdf-hash = { workspace = true }
 
-# Maintainer-only golden-capture binary. Freezes the native
+# Maintainer-only golden-capture example. Freezes the native
 # SPARQL engine over the corpus as committed goldens under
 # crates/sparql-conformance/tests/goldens/.
-[[bin]]
+[[example]]
 name = "capture-sparql-goldens"
-path = "src/bin/capture_sparql_goldens.rs"
+path = "examples/capture_sparql_goldens.rs"
+test = false
 
-# Maintainer-only vector-freezing binary. Regenerates the two dict-compaction
+# Maintainer-only vector-freezing example. Regenerates the two dict-compaction
 # corpus vectors (`vectors/30-dict-rawcontent.gts`, `vectors/31-dict-trained.gts`)
 # from one fixed signed source via `gts_certify::compact_and_certify`. The
 # committed `.gts` bytes are the frozen artifacts; `tests/dict_vectors.rs`
-# is the drift guard, not this binary.
-[[bin]]
+# is the drift guard, not this example.
+[[example]]
 name = "gen-dict-vectors"
-path = "src/bin/gen_dict_vectors.rs"
+path = "examples/gen_dict_vectors.rs"
+test = false
 
-# Maintainer-only vector-freezing binary. Re-freezes the streamable-compaction
+# Maintainer-only vector-freezing example. Re-freezes the streamable-compaction
 # corpus vector (`vectors/25b-streamable-compacted.gts` plus its
 # `.expected.json` fold) from the frozen `vectors/25-streamable-source.gts` via
 # `gts_certify::compact_and_certify`. The committed `.gts`/`.expected.json`
 # bytes are the frozen artifacts; `tests/streamable_vectors.rs` is the drift
-# guard, not this binary.
-[[bin]]
+# guard, not this example.
+[[example]]
 name = "gen-streamable-vectors"
-path = "src/bin/gen_streamable_vectors.rs"
+path = "examples/gen_streamable_vectors.rs"
+test = false
 
 [dev-dependencies]
 # Portable scope fixtures read their expected bags through the results codec.
@@ -165,6 +169,12 @@ harness = false
 # Native RDF text codec hot paths: N-Quads parse into frozen IR and serialize back
 # out through the first-party serializer. Report-only; excluded from check.
 name = "native_codecs"
+harness = false
+
+[[bench]]
+# Current-thread allocation demand over the whole public GTS import. Shares its
+# fixture and measurement with the residency regression; report-only, no timing.
+name = "gts_import_alloc"
 harness = false
 
 [[bench]]

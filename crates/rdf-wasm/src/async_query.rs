@@ -214,6 +214,7 @@
 //! | `NativeSparqlEngine`'s plan cache (`RefCell<PlanCache>`) | No. Every borrow (`prepare_for`, `prepare_request`, `bind_functions`, `prepare_execution`, the stats accessors) is a temporary inside one statement that parses and admits a plan; planning polls no signal and calls no resolver, and the borrow ends before the returned `Arc<PreparedQuery>` is evaluated. The `engine_is_reentrant_from_a_resolver_and_from_a_poll` test below re-enters one engine from inside its own evaluation to prove it. |
 //! | The BGP join-order cache (`Mutex`, `bgp::order_for`) | No. Locked only around the `get` and the `insert`; the cost-based ordering between them runs unlocked and polls nothing. |
 //! | `GovernorState` (`poll_stop`, `trip`) | No. It polls the signal *before* touching its `OnceLock`, never inside the initializer. |
+//! | `ModelOwner`'s admission initializer (`Mutex`, `purrdf-shapes`) | No. Cold initialization scans immutable original declarations and builds dependency metadata. Neither analyzer polls a signal, calls a resolver or suspends, and neither re-enters admission while holding the lock. |
 //! | Lazily built dataset indexes (`OnceLock` permutations, predecessor and value indexes, path-relation adjacency) | No. Their initializers are pure sorts and scans that poll nothing, so no initialization can be suspended half-done. |
 //! | Reasoner state (`purrdf-entail`'s tableau `RefCell`s, the datalog engines) | No sharing: every closure run owns its own. |
 //! | This module's own [`JobSlots`] mutexes | No. Each is locked inside one helper that returns owned values, and none is held when [`suspend`] is called or while an exchange's answer is delivered. |
@@ -258,9 +259,9 @@ use crate::operation::{
 };
 use crate::query::{
     EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
-    QueryResult, UpdateOutcome, entailment_query_outcome_from_native, kind_mismatch,
-    negotiated_outcome_from_value, query_outcome_from_governed, query_result_from_sparql,
-    update_outcome_from_governed,
+    QueryResult, RawQueryResult, UpdateOutcome, entailment_query_outcome_from_native,
+    kind_mismatch, negotiated_outcome_from_value, query_outcome_from_governed,
+    query_result_from_execution, update_outcome_from_governed,
 };
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclImportError, ShaclJobRequest,
@@ -2249,7 +2250,7 @@ pub enum AsyncOperationKind {
     /// shape is known. The asynchronous lane's own: a SPARQL Protocol endpoint's query.
     Negotiated = 7,
     /// `explainQuery`: the rendered charge ledger, taken through
-    /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
+    /// [`AsyncJob::take_raw_result`]. EXPLAIN evaluates the query to measure it, so its
     /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
     Explain = 8,
     /// A SHACL entry that can evaluate SPARQL — validation to SARIF, change validation,
@@ -2293,17 +2294,39 @@ pub(crate) const SHACL_STARTS_ELSEWHERE: &str =
 /// take no ceiling, so neither does this. A stop is the job's error — a validation cut
 /// short has no report, and its partial one is never offered — read back off the state
 /// that latched it rather than out of the error text the stop unwound with.
+#[derive(Debug)]
+struct CanonicalJobStop<'a>(Option<&'a dyn StopSignal>);
+
+impl purrdf_core::StopSignal for CanonicalJobStop<'_> {
+    fn stopped(&self) -> bool {
+        self.0.is_some_and(|stop| stop.poll().is_some())
+    }
+}
+
 fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
     let state = Arc::new(GovernorState::new(&run.governors(QueryGovernors::METERED)));
     let outcome = {
         let _scope =
             purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
-        run.evaluate(|| request.run_job())
+        run.evaluate(|| request.run_job(Some(&CanonicalJobStop(run.stop.as_deref()))))
     };
     run.record_evidence(&state.evidence());
     match state.tripped() {
         Some(tripped @ TrippedGovernor::Stopped { .. }) => {
-            JobOutcome::Failed(JobError::stopped(tripped))
+            let error = match outcome {
+                JobOutcome::Failed(original) => JobError::stopped_preserving(tripped, original),
+                JobOutcome::Refused(refusal) => {
+                    let error = JobError::stopped(tripped);
+                    match refusal.canonicalization_json() {
+                        Some(receipts) => error.with_canonicalization(receipts.to_owned(), None),
+                        None => error,
+                    }
+                }
+                JobOutcome::ShaclEntailment(value) => JobError::stopped(tripped)
+                    .with_canonicalization(value.canonicalization_json(), None),
+                _ => JobError::stopped(tripped),
+            };
+            JobOutcome::Failed(error)
         }
         _ => outcome,
     }
@@ -2446,7 +2469,7 @@ impl JobInner {
         self.state.set(JobState::Running);
         let operation = self.operation.borrow_mut().take();
         let slots = &self.watch.slots;
-        // Only on wasm32 is the job actually running on its region (the linked run
+        // Only on `wasm32` is the job actually running on its region (the linked run
         // wrapper switched the stack pointer to its top); the native build never arms it.
         slots
             .region_armed
@@ -2487,7 +2510,21 @@ impl JobInner {
         // produced by a job whose effects cannot be trusted, and an update is never
         // committed from it.
         let outcome = match slots.fault() {
-            Some(fault) => JobOutcome::Failed(JobError::fault(fault)),
+            Some(fault) => {
+                let error = JobError::fault(fault);
+                let error = match outcome {
+                    JobOutcome::Failed(original) => error.preserving_canonicalization(original),
+                    JobOutcome::Refused(refusal) => match refusal.canonicalization_json() {
+                        Some(receipts) => error.with_canonicalization(receipts.to_owned(), None),
+                        None => error,
+                    },
+                    JobOutcome::ShaclEntailment(value) => {
+                        error.with_canonicalization(value.canonicalization_json(), None)
+                    }
+                    _ => error,
+                };
+                JobOutcome::Failed(error)
+            }
             None => outcome,
         };
         let status = match outcome {
@@ -2496,15 +2533,21 @@ impl JobInner {
                 RunStatus::Error
             }
             JobOutcome::Refused(refusal) => {
-                *self.error.borrow_mut() = Some(JobError::message(
-                    refusal.code(SHACL_REFUSAL_CODE),
-                    refusal.to_js_string(),
-                ));
+                let mut error =
+                    JobError::message(refusal.code(SHACL_REFUSAL_CODE), refusal.to_js_string());
+                if let Some(receipt) = refusal.execution_receipt() {
+                    error = error.with_execution_receipt(receipt.to_owned());
+                }
+                if let Some(receipts) = refusal.canonicalization_json() {
+                    error = error.with_canonicalization(receipts.to_owned(), None);
+                }
+                *self.error.borrow_mut() = Some(error);
                 *self.refusal.borrow_mut() = Some(refusal);
                 RunStatus::Error
             }
-            JobOutcome::Updated(frozen) => {
-                *self.pending_commit.borrow_mut() = Some(frozen);
+            JobOutcome::Updated(frozen, coordinates) => {
+                *self.pending_commit.borrow_mut() = Some(Arc::clone(&frozen));
+                *self.outcome.borrow_mut() = Some(JobOutcome::Updated(frozen, coordinates));
                 RunStatus::Outcome
             }
             JobOutcome::UpdateGoverned { outcome, frozen } => {
@@ -2811,8 +2854,8 @@ impl AsyncJob {
             .and_then(JobError::presentation_json)
     }
 
-    /// A storage failure's original diagnostic JSON, or `undefined` for other
-    /// failures and unfinished or successful jobs. Capacity counts are decimal strings.
+    /// A failure's original diagnostic JSON, or `undefined` for unfinished or
+    /// successful jobs. Capacity counts and line positions are decimal strings.
     #[wasm_bindgen(getter, js_name = errorDiagnosticJson)]
     pub fn error_diagnostic_json(&self) -> Option<String> {
         self.inner
@@ -2820,6 +2863,50 @@ impl AsyncJob {
             .borrow()
             .as_ref()
             .and_then(JobError::diagnostic_json)
+    }
+
+    /// Execution receipt retained by a failed operation.
+    #[wasm_bindgen(getter, js_name = errorExecutionReceiptJson)]
+    pub fn error_execution_receipt_json(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::execution_receipt_json)
+    }
+
+    /// Canonical-search receipts retained by this failed request, including [] before a run.
+    #[wasm_bindgen(getter, js_name = errorCanonicalizationJson)]
+    pub fn error_canonicalization_json(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::canonicalization_json)
+    }
+
+    /// Exact native fields from the original retained refusal.
+    #[wasm_bindgen(getter, js_name = errorNativeCauseJson)]
+    pub fn error_native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .map(JobError::native_cause_json)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// An owned native cause; its admission grant outlives the job handle.
+    #[wasm_bindgen(getter, js_name = errorNativeCause)]
+    pub fn error_native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .map(JobError::native_cause)
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// The effect the job is suspended on, once; `undefined` when there is none.
@@ -3078,7 +3165,7 @@ impl AsyncJob {
                 )));
             }
         };
-        let JobOutcome::Query(result) =
+        let JobOutcome::Query(result, coordinates) =
             self.take("takeQueryResult", &[AsyncOperationKind::Query])?
         else {
             return Err(usage_error(
@@ -3093,25 +3180,38 @@ impl AsyncJob {
                     | ("CONSTRUCT/DESCRIBE graph", SparqlResult::Graph(_))
             );
             if !matches {
-                return Err(kind_mismatch(expected, &result).into());
+                return Err(crate::operation::attach_execution_receipt(
+                    kind_mismatch(expected, &result).into(),
+                    &purrdf_validate::query::execution_receipt_json(&coordinates),
+                ));
             }
         }
-        query_result_from_sparql(result, self.inner.blank_scope)
+        query_result_from_execution(result, coordinates, self.inner.blank_scope)
     }
 
-    /// A raw job's serialized bytes, an explain job's rendered ledger, or a SHACL job's
-    /// SARIF log or entailed N-Triples (UTF-8 text).
-    #[wasm_bindgen(js_name = takeRawBytes)]
-    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsValue> {
+    /// A serialized query or explanation and its actual native execution receipt.
+    #[wasm_bindgen(js_name = takeRawResult)]
+    pub fn take_raw_result(&self) -> Result<RawQueryResult, JsValue> {
         match self.take(
-            "takeRawBytes",
+            "takeRawResult",
             &[
                 AsyncOperationKind::Raw,
                 AsyncOperationKind::RawWithContext,
                 AsyncOperationKind::Explain,
-                AsyncOperationKind::Shacl,
             ],
         )? {
+            JobOutcome::QueryRaw { body, coordinates } => Ok(RawQueryResult { body, coordinates }),
+            _ => Err(usage_error(
+                "takeRawResult: the job holds no serialized query result",
+            )),
+        }
+    }
+
+    /// A SHACL job's
+    /// SARIF log or entailed N-Triples (UTF-8 text).
+    #[wasm_bindgen(js_name = takeRawBytes)]
+    pub fn take_raw_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        match self.take("takeRawBytes", &[AsyncOperationKind::Shacl])? {
             JobOutcome::Raw(text) => Ok(text.into_bytes()),
             _ => Err(usage_error("takeRawBytes: the job holds no raw result")),
         }
@@ -3229,7 +3329,7 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeShaclRefusal)]
     pub fn take_shacl_refusal(&self) -> Option<ShaclProductRefusal> {
         let mut refusal = self.inner.refusal.borrow_mut();
-        match refusal.take() {
+        match refusal.take().map(ShaclRefusal::into_cause) {
             Some(ShaclRefusal::Product(product)) => Some(product),
             other => {
                 *refusal = other;
@@ -3243,7 +3343,7 @@ impl AsyncJob {
     #[wasm_bindgen(js_name = takeShaclImportError)]
     pub fn take_shacl_import_error(&self) -> Option<ShaclImportError> {
         let mut refusal = self.inner.refusal.borrow_mut();
-        match refusal.take() {
+        match refusal.take().map(ShaclRefusal::into_cause) {
             Some(ShaclRefusal::Import(error)) => Some(error),
             other => {
                 *refusal = other;
@@ -3260,6 +3360,17 @@ impl AsyncJob {
             .slots
             .counters
             .snapshot(self.inner.region.bounds().top)
+    }
+
+    /// Take the ordinary UPDATE execution receipt after completion.
+    #[wasm_bindgen(js_name = takeUpdateReceiptJson)]
+    pub fn take_update_receipt_json(&self) -> Result<String, JsValue> {
+        match self.take("takeUpdateReceiptJson", &[AsyncOperationKind::Update])? {
+            JobOutcome::Updated(_, coordinates) => {
+                Ok(purrdf_validate::query::execution_receipt_json(&coordinates))
+            }
+            _ => Err(usage_error("job holds no ordinary UPDATE receipt")),
+        }
     }
 
     /// Apply a finished update's result to `dataset` — refused, with the dataset left
@@ -3362,7 +3473,9 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 24] = [
+const OPTION_SHAPES: [(&str, OptionShape); 29] = [
+    ("now", OptionShape::Text),
+    ("entropySeed", OptionShape::Limit),
     ("base", OptionShape::Text),
     ("xpathRegex", OptionShape::Text),
     ("shaclProfile", OptionShape::Text),
@@ -3380,6 +3493,8 @@ const OPTION_SHAPES: [(&str, OptionShape); 24] = [
     ("maxIntermediateCells", OptionShape::Ceiling),
     ("maxScratchBytes", OptionShape::Ceiling),
     ("maxRemoteRequests", OptionShape::Ceiling),
+    ("maxUdfDepth", OptionShape::Ceiling),
+    ("unlimitedUdfDepth", OptionShape::Boolean),
     ("yieldEveryPolls", OptionShape::Count),
     ("catalog", OptionShape::Catalog),
     ("importIris", OptionShape::TextList),
@@ -3387,6 +3502,7 @@ const OPTION_SHAPES: [(&str, OptionShape); 24] = [
     ("premiseIris", OptionShape::TextList),
     ("maxStoredFacts", OptionShape::Limit),
     ("maxJoinSteps", OptionShape::Limit),
+    ("maxTermArenaBytes", OptionShape::Limit),
 ];
 
 /// The shape of option `key`, or `None` for a key no operation reads.
@@ -3408,18 +3524,20 @@ const HOST_KEYS: [&str; 3] = ["yieldEveryPolls", "catalog", "localServices"];
 const PACKAGE_KEYS: [&str; 3] = ["resolveService", "resolveLoad", "signal"];
 
 /// The governor ceilings, in the order the synchronous governed entries name them.
-const CEILING_KEYS: [&str; 6] = [
+const CEILING_KEYS: [&str; 7] = [
     "fuel",
     "deadlineMs",
     "maxAnswers",
     "maxIntermediateCells",
     "maxScratchBytes",
     "maxRemoteRequests",
+    "maxUdfDepth",
 ];
 
 /// The keys every governed operation accepts.
-const GOVERNED_KEYS: [&str; 10] = [
+const GOVERNED_KEYS: [&str; 12] = [
     "noCeiling",
+    "unlimitedUdfDepth",
     "base",
     "xpathRegex",
     "aggregateNamespace",
@@ -3429,6 +3547,7 @@ const GOVERNED_KEYS: [&str; 10] = [
     "maxIntermediateCells",
     "maxScratchBytes",
     "maxRemoteRequests",
+    "maxUdfDepth",
 ];
 
 /// One operation kind's options: the keys it accepts beside [`HOST_KEYS`], whether it
@@ -3496,12 +3615,15 @@ impl AsyncOperationKind {
                     "maxIntermediateCells",
                     "maxScratchBytes",
                     "maxRemoteRequests",
+                    "maxUdfDepth",
+                    "unlimitedUdfDepth",
                     "program",
                     "importIris",
                     "importDocuments",
                     "premiseIris",
                     "maxStoredFacts",
                     "maxJoinSteps",
+                    "maxTermArenaBytes",
                 ],
                 true,
                 Some("regime"),
@@ -3523,6 +3645,8 @@ impl AsyncOperationKind {
                     "maxIntermediateCells",
                     "maxScratchBytes",
                     "maxRemoteRequests",
+                    "maxUdfDepth",
+                    "unlimitedUdfDepth",
                     "accept",
                 ],
                 true,
@@ -3538,8 +3662,26 @@ impl AsyncOperationKind {
         }
     }
 
+    /// SHACL coordinates are admitted by the actual request variant when its job begins.
+    const fn coordinate_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::Query
+            | Self::Raw
+            | Self::RawWithContext
+            | Self::Governed
+            | Self::EntailmentGoverned
+            | Self::Negotiated
+            | Self::Explain
+            | Self::Update
+            | Self::UpdateGoverned
+            | Self::Shacl => &["now", "entropySeed"],
+        }
+    }
+
     fn accepts(self, key: &str) -> bool {
-        self.spec().keys.contains(&key) || HOST_KEYS.contains(&key)
+        self.spec().keys.contains(&key)
+            || self.coordinate_keys().contains(&key)
+            || HOST_KEYS.contains(&key)
     }
 }
 
@@ -3586,7 +3728,7 @@ impl OptionsError {
         }
     }
 
-    fn to_js(&self) -> JsValue {
+    pub(crate) fn to_js(&self) -> JsValue {
         if self.type_error {
             coded_type_error(&self.message, OPTIONS_CODE)
         } else {
@@ -3614,6 +3756,8 @@ impl fmt::Display for OptionsError {
 #[wasm_bindgen]
 #[derive(Debug, Default, Clone)]
 pub struct AsyncJobOptions {
+    now: Option<String>,
+    entropy_seed: Option<u64>,
     kind: Option<AsyncOperationKind>,
     base: Option<String>,
     format: Option<String>,
@@ -3691,9 +3835,7 @@ fn read_option(
                 "query option {key} must be a boolean when supplied"
             ))
         }),
-        OptionShape::Text => value.as_string().map(OptionValue::Text).ok_or_else(|| {
-            OptionsError::type_error(format!("query option {key} must be a string when supplied"))
-        }),
+        OptionShape::Text => read_text(key, value).map(OptionValue::Text),
         OptionShape::Count => value.as_f64().map(OptionValue::Count).ok_or_else(|| {
             OptionsError::type_error(format!("query option {key} must be a number when supplied"))
         }),
@@ -3796,9 +3938,16 @@ fn read_text_list(key: &str, value: &JsValue) -> Result<Vec<String>, OptionsErro
         .collect()
 }
 
+/// Read a string option without invoking JavaScript coercion.
+pub(crate) fn read_text(key: &str, value: &JsValue) -> Result<String, OptionsError> {
+    value.as_string().ok_or_else(|| {
+        OptionsError::type_error(format!("query option {key} must be a string when supplied"))
+    })
+}
+
 /// Read an evaluation-limit option: a non-negative integer as a `bigint`, or as a `number`
 /// widened exactly.
-fn read_limit(key: &str, value: &JsValue) -> Result<u64, OptionsError> {
+pub(crate) fn read_limit(key: &str, value: &JsValue) -> Result<u64, OptionsError> {
     let refused = || {
         OptionsError::type_error(format!(
             "query option {key} must be a non-negative integer (bigint or number)"
@@ -3894,7 +4043,10 @@ impl AsyncJobOptions {
             let value = reflect_get(options, &key).map_err(|_| {
                 OptionsError::type_error(format!("query option {key} could not be read"))
             })?;
-            if is_unset(&value) && (key != "noCeiling" || value.is_undefined()) {
+            if is_unset(&value)
+                && (!matches!(option_shape(&key), Some(OptionShape::Boolean))
+                    || value.is_undefined())
+            {
                 continue;
             }
             let read = match option_shape(&key) {
@@ -3945,6 +4097,7 @@ impl AsyncJobOptions {
             let accepted: Vec<&str> = spec
                 .keys
                 .iter()
+                .chain(kind.coordinate_keys().iter())
                 .chain(HOST_KEYS.iter())
                 .chain(PACKAGE_KEYS.iter())
                 .copied()
@@ -3979,12 +4132,16 @@ impl AsyncJobOptions {
             None => {}
         }
         let mut no_ceiling = false;
+        let mut unlimited_udf_depth = false;
         let mut ceilings: BTreeMap<&str, i64> = BTreeMap::new();
         let mut counts: BTreeMap<&str, f64> = BTreeMap::new();
         for (key, value) in entries {
             match (key.as_str(), value) {
                 ("noCeiling", OptionValue::Boolean(value)) => no_ceiling = value,
+                ("unlimitedUdfDepth", OptionValue::Boolean(value)) => unlimited_udf_depth = value,
                 ("base", OptionValue::Text(text)) => options.base = Some(text),
+                ("now", OptionValue::Text(text)) => options.now = Some(text),
+                ("entropySeed", OptionValue::Limit(seed)) => options.entropy_seed = Some(seed),
                 ("xpathRegex", OptionValue::Text(name)) => {
                     options.xpath_regex =
                         crate::xpath_regex::parse(Some(&name)).map_err(OptionsError::refused)?;
@@ -4009,6 +4166,9 @@ impl AsyncJobOptions {
                 }
                 ("maxJoinSteps", OptionValue::Limit(limit)) => {
                     options.closure.max_join_steps = Some(limit);
+                }
+                ("maxTermArenaBytes", OptionValue::Limit(limit)) => {
+                    options.closure.max_term_arena_bytes = Some(limit);
                 }
                 ("accept", OptionValue::Text(text)) => options.accept = Some(text),
                 ("provenanceNamespace", OptionValue::Provenance { prefix, iri }) => {
@@ -4052,6 +4212,8 @@ impl AsyncJobOptions {
             ceilings.get("maxIntermediateCells").copied(),
             ceilings.get("maxScratchBytes").copied(),
             ceilings.get("maxRemoteRequests").copied(),
+            ceilings.get("maxUdfDepth").copied(),
+            Some(unlimited_udf_depth),
         )
         .map_err(OptionsError::refused)?
         .with_no_ceiling(no_ceiling);
@@ -4373,6 +4535,11 @@ fn begin_job(
     options
         .require_kind(kind)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let coordinates = purrdf_validate::query::CoordinateInputs::from_time_and_seed(
+        options.now.as_deref(),
+        options.entropy_seed,
+    )
+    .map_err(|error| JobError::message(OPTIONS_CODE, format!("query option now: {error}")))?;
     let provenance = match &options.provenance {
         None => None,
         Some((prefix, iri)) => Some(
@@ -4399,6 +4566,7 @@ fn begin_job(
     let frozen = dataset.view().freeze().map_err(JobError::diagnostic)?;
     let freeze_ms = now_ms() - freeze_started;
     let input = OperationInput {
+        coordinates,
         kind,
         engine: Rc::clone(engine.engine()),
         frozen,
@@ -4510,6 +4678,14 @@ fn begin_shacl_job(
     request.select_xpath_regex(options.xpath_regex.map(|profile| profile.name().to_owned()));
     request
         .select_shacl_profile(options.shacl_profile.clone())
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let coordinates = purrdf_validate::query::CoordinateInputs::from_time_and_seed(
+        options.now.as_deref(),
+        options.entropy_seed,
+    )
+    .map_err(|error| JobError::message(OPTIONS_CODE, format!("query option now: {error}")))?;
+    request
+        .select_coordinates(coordinates)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     register_operation(
         AsyncOperationKind::Shacl,
@@ -4659,7 +4835,7 @@ mod tests {
     const SRJ: &[u8] = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"uri","value":"http://example.org/r"}}]}}"#;
 
     fn seed() -> Dataset {
-        Dataset::parse(SEED_NT, "ntriples", None, None).expect("seed parses")
+        Dataset::parse(SEED_NT, "ntriples", None, None, None).expect("seed parses")
     }
 
     /// An options object as a twin passes it: entries by key, the handlers and the
@@ -4787,7 +4963,11 @@ mod tests {
     }
 
     fn raw_text(job: &AsyncJob) -> String {
-        String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        if job.inner.kind == AsyncOperationKind::Shacl {
+            String::from_utf8(job.take_raw_bytes().expect("raw bytes")).expect("UTF-8")
+        } else {
+            job.take_raw_result().expect("raw query result").body()
+        }
     }
 
     fn slots() -> JobSlots {
@@ -4841,6 +5021,7 @@ mod tests {
                         "maxIntermediateCells",
                         "maxScratchBytes",
                         "maxRemoteRequests",
+                        "maxUdfDepth",
                     ] {
                         assert!(
                             input.clone().ceiling(key, 0).validate(kind).is_err(),
@@ -5051,6 +5232,7 @@ mod tests {
                 )
                 .with("maxStoredFacts", OptionValue::Limit(140_000))
                 .with("maxJoinSteps", OptionValue::Limit(1))
+                .with("maxTermArenaBytes", OptionValue::Limit(17_000_000))
         };
         let with_closure = closure()
             .validate(AsyncOperationKind::EntailmentGoverned)
@@ -5066,6 +5248,7 @@ mod tests {
         );
         assert_eq!(with_closure.closure.max_stored_facts, Some(140_000));
         assert_eq!(with_closure.closure.max_join_steps, Some(1));
+        assert_eq!(with_closure.closure.max_term_arena_bytes, Some(17_000_000));
         assert!(
             options()
                 .with("importIris", OptionValue::TextList(Vec::new()))
@@ -6494,8 +6677,9 @@ mod tests {
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         assert!(job.is_finished());
         let expected = engine
-            .query_raw(&dataset, SELECT, None, None, None, None, None)
-            .expect("sync twin");
+            .query_raw(&dataset, SELECT, None, None, None, None, None, None, None)
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         let evidence = job.take_evidence();
         assert!(
@@ -6507,10 +6691,10 @@ mod tests {
         assert!(evidence.evaluate_ms() >= 0.0 && evidence.serialize_ms() >= 0.0);
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("an outcome is taken once")
                 .rendered(),
-            "takeRawBytes: the outcome was already taken"
+            "takeRawResult: the outcome was already taken"
         );
         assert_eq!(run_job(job.id()), RunStatus::AlreadyStarted);
         assert_eq!(job.finish(), 0);
@@ -6656,8 +6840,9 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .query_raw(&dataset, &silent, None, None, None, None, None)
-            .expect("sync twin");
+            .query_raw(&dataset, &silent, None, None, None, None, None, None, None)
+            .expect("sync twin")
+            .body();
         assert_eq!(
             raw_text(&job),
             expected,
@@ -6674,7 +6859,8 @@ mod tests {
     fn a_local_service_answers_in_process_and_an_unlisted_one_still_fails() {
         let engine = QueryEngine::new();
         let dataset = seed();
-        let remote = Dataset::parse(REMOTE_NT, "ntriples", None, None).expect("remote parses");
+        let remote =
+            Dataset::parse(REMOTE_NT, "ntriples", None, None, None).expect("remote parses");
         let mut local = options();
         local
             .add_local_frozen(ENDPOINT.to_owned(), remote.view().freeze().expect("freeze"))
@@ -6773,8 +6959,9 @@ mod tests {
         );
         assert_eq!(run_job(job.id()), RunStatus::Outcome);
         let expected = engine
-            .explain_query(&dataset, SELECT, None, None)
-            .expect("sync twin");
+            .explain_query(&dataset, SELECT, None, None, None, None)
+            .expect("sync twin")
+            .body();
         assert_eq!(raw_text(&job), expected);
         assert!(
             job.take_evidence().polls() > 0.0,
@@ -6794,7 +6981,8 @@ mod tests {
     fn an_explain_job_measures_a_service_join_the_offline_lane_cannot() {
         let engine = QueryEngine::new();
         let dataset = seed();
-        let remote = Dataset::parse(REMOTE_NT, "ntriples", None, None).expect("remote parses");
+        let remote =
+            Dataset::parse(REMOTE_NT, "ntriples", None, None, None).expect("remote parses");
         let mut local = options();
         local
             .add_local_frozen(ENDPOINT.to_owned(), remote.view().freeze().expect("freeze"))
@@ -6885,10 +7073,10 @@ mod tests {
         assert!(outcome.take_tripped().is_some());
         assert_eq!(
             job.inner
-                .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
+                .take_outcome("takeRawResult", &[AsyncOperationKind::Raw])
                 .expect_err("a take of the wrong kind is refused")
                 .rendered(),
-            "takeRawBytes is not available on a governed job"
+            "takeRawResult is not available on a governed job"
         );
         job.finish();
     }
@@ -7009,7 +7197,7 @@ mod tests {
             .update(
                 &mut dataset,
                 "INSERT DATA { <http://example.org/m> <http://example.org/p> <http://example.org/o> }",
-                None, None,
+                None, None, None, None,
             )
             .expect("a synchronous mutation meanwhile");
         let error = job
@@ -7065,7 +7253,7 @@ mod tests {
                 AsyncOperationKind::Update,
                 AsyncOperationKind::UpdateGoverned,
             ] {
-                let mut dataset = Dataset::parse(trig, "trig", None, remember).expect("TriG");
+                let mut dataset = Dataset::parse(trig, "trig", None, remember, None).expect("TriG");
                 let id = dataset.identity();
                 let job = begin(
                     &engine,
@@ -7214,7 +7402,7 @@ mod tests {
                 .query_governed(
                     &frozen,
                     sparql_request(&query, None),
-                    QueryOptions::new().with_remote(Some(&source)),
+                    &QueryOptions::new().with_remote(Some(&source)),
                     &governors,
                 )
                 .expect("the outer query evaluates");
@@ -7550,6 +7738,7 @@ mod tests {
             None,
             None,
             None,
+            "unlimited".to_owned(),
         )
         .into_request();
         let options_for = |opts: &Opts| {
@@ -7577,6 +7766,7 @@ mod tests {
                 None,
                 None,
                 None,
+                "unlimited".to_owned(),
             )
             .into_request(),
             options(),
@@ -7657,12 +7847,31 @@ mod tests {
         };
         let (s, d, b, i, docs, g, r, t, f, j) = entail();
         let (job, status) = run_shacl(
-            ShaclJobRequest::entail(s, d, b, i, docs, g, r, t, f, j).into_request(),
+            ShaclJobRequest::entail(s, d, b, i, docs, g, r, t, f, j, "unlimited".to_owned())
+                .into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Outcome);
         let (s, d, b, i, docs, g, r, t, f, j) = entail();
-        let entailed = requests::entail(s, d, b, i, docs, g, r, t, f, j, None).expect("sync entry");
+        let entailed = requests::entail(
+            s,
+            d,
+            b,
+            i,
+            docs,
+            g,
+            r,
+            t,
+            f,
+            j,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("sync entry");
         assert!(entailed.ntriples().contains("<http://example.org/adult>"));
         let entailment = job.take_shacl_entailment().expect("an entailment");
         assert_eq!(entailment.ntriples(), entailed.ntriples());
@@ -7694,8 +7903,24 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (d, sh, srl, b, sb, e, i, docs, g, r, t, f, j) = rules_run();
-        let applied = requests::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j, None)
-            .expect("sync entry");
+        let applied = requests::apply_rules(
+            d,
+            sh,
+            srl,
+            b,
+            sb,
+            e,
+            i,
+            docs,
+            g,
+            r,
+            t,
+            f,
+            j,
+            None,
+            purrdf_validate::query::CoordinateInputs::default(),
+        )
+        .expect("sync entry");
         assert!(
             applied
                 .inferred()
@@ -7742,8 +7967,18 @@ mod tests {
         assert_eq!(outcome.diagnostics(), evaluated.diagnostics());
         job.finish();
 
-        let product =
-            crate::shacl::pack_product_impl(&shapes, None, &[], &[], None).expect("packs");
+        let product = crate::shacl::pack_product_impl(
+            &shapes,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("packs");
         for request in [
             ShaclJobRequest::product_validate_to_sarif(product.clone(), PEOPLE_NT.to_owned()),
             ShaclJobRequest::product_validate_to_sarif_rebuild(product, PEOPLE_NT.to_owned()),
@@ -7785,6 +8020,7 @@ mod tests {
         let registry = Dataset::parse(
             "<http://example.org/alice> <http://example.org/status> \"banned\" .\n",
             "ntriples",
+            None,
             None,
             None,
         )
@@ -7842,8 +8078,18 @@ mod tests {
 
     #[test]
     fn a_refused_product_job_keeps_the_refusal_class_and_a_valid_product_answers() {
-        let product =
-            crate::shacl::pack_product_impl(&core_shapes(), None, &[], &[], None).expect("packs");
+        let product = crate::shacl::pack_product_impl(
+            &core_shapes(),
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("packs");
         let mut corrupted = product.clone();
         let middle = corrupted.len() / 2;
         corrupted[middle] ^= 0xff;
@@ -7900,7 +8146,8 @@ mod tests {
         else {
             panic!("the closure's refusal is a shapes error");
         };
-        let expected = ShaclImportError::from(refused.as_imports().expect("an import refusal"));
+        let expected = ShaclImportError::capture(refused.as_imports().expect("an import refusal"))
+            .expect("native capture");
         let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), options());
         assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("error"));
@@ -8078,7 +8325,7 @@ mod tests {
     #[test]
     fn every_sparql_job_evaluates_under_the_selected_law() {
         let engine = QueryEngine::new();
-        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
         for (law, non_capturing, backreference) in LAWS {
             for (query, expected) in [
                 (ASK_NON_CAPTURING, non_capturing),
@@ -8105,9 +8352,12 @@ mod tests {
                             None,
                             None,
                             None,
-                            law.map(str::to_owned)
+                            law.map(str::to_owned),
+                            None,
+                            None
                         )
-                        .expect("sync twin"),
+                        .expect("sync twin")
+                        .body(),
                     "raw {what}"
                 );
                 job.finish();
@@ -8177,7 +8427,8 @@ mod tests {
                 AsyncOperationKind::Update,
                 AsyncOperationKind::UpdateGoverned,
             ] {
-                let mut target = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+                let mut target =
+                    Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
                 let job = law_job(&engine, &target, kind, INSERT_BACKREFERENCE, law);
                 if kind == AsyncOperationKind::UpdateGoverned {
                     assert!(job.take_update_outcome().expect("an outcome").is_applied());
@@ -8199,7 +8450,7 @@ mod tests {
     #[test]
     fn a_native_resource_refusal_fails_the_job() {
         let engine = QueryEngine::new();
-        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
         let ask =
             |bytes: usize| format!("ASK {{ FILTER(REGEX(\"aa\", \"{}\")) }}", "a".repeat(bytes));
         for law in [XPATH_20, XPATH_31] {
@@ -8299,6 +8550,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    "unlimited".to_owned(),
                 ),
                 ShaclJobRequest::apply_rules(
                     data.to_owned(),
@@ -8351,8 +8603,18 @@ mod tests {
                 job.finish();
             }
             let product = |bytes: usize| {
-                crate::shacl::pack_product_impl(&pattern_shapes(bytes), None, &[], &[], None)
-                    .expect("packs")
+                crate::shacl::pack_product_impl(
+                    &pattern_shapes(bytes),
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .expect("packs")
             };
             let (job, status) = run_shacl(
                 ShaclJobRequest::product_validate_to_sarif(product(64 * 1024 + 1), data.to_owned())
@@ -8481,8 +8743,18 @@ ex:PatternShape a sh:NodeShape ;
             .expect("sync entry");
             assert_eq!(change.sarif(), sync.sarif(), "{law:?}");
             job.finish();
-            let product =
-                crate::shacl::pack_product_impl(shapes, None, &[], &[], None).expect("packed");
+            let product = crate::shacl::pack_product_impl(
+                shapes,
+                None,
+                &[],
+                &[],
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("packed");
             let (job, status) = run_shacl(
                 ShaclJobRequest::product_validate_to_sarif(product.clone(), data.to_owned())
                     .into_request(),
@@ -8539,7 +8811,8 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
             };
             let (a, b, c, d, e, f, g, h, i, j) = entail_args();
             let (job, status) = run_shacl(
-                ShaclJobRequest::entail(a, b, c, d, e, f, g, h, i, j).into_request(),
+                ShaclJobRequest::entail(a, b, c, d, e, f, g, h, i, j, "unlimited".to_owned())
+                    .into_request(),
                 &opts,
             );
             assert_eq!(status, RunStatus::Outcome, "{law:?}");
@@ -8549,9 +8822,26 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
                 .ntriples();
             job.finish();
             let (a, b, c, d, e, f, g, h, i, j) = entail_args();
-            let sync = requests::entail(a, b, c, d, e, f, g, h, i, j, law.map(str::to_owned))
-                .expect("sync entry")
-                .ntriples();
+            let sync = requests::entail(
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                g,
+                h,
+                i,
+                j,
+                law.map(str::to_owned),
+                purrdf_validate::query::CoordinateInputs::default(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("sync entry")
+            .ntriples();
             assert_eq!(entailed, sync, "{law:?}");
             assert_eq!(entailed.contains(hit), backreference, "{law:?}");
 
@@ -8595,6 +8885,7 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
                 None,
                 None,
                 law.map(str::to_owned),
+                purrdf_validate::query::CoordinateInputs::default(),
             )
             .expect("sync entry")
             .inferred();

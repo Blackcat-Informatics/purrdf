@@ -1,0 +1,6 @@
+# A mapping key MUST be a string.
+"@context":
+  "@vocab": http://example.com/
+"@id": http://example.org/test#example
+"@type": t1
+1.2345: a float key

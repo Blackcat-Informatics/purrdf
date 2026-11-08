@@ -258,7 +258,13 @@ fn one_index_is_shared_and_holds_the_collected_properties() {
     let indexes: Vec<_> = shapes
         .node_shapes
         .iter()
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .filter_map(|constraint| match constraint {
             Constraint::Closed {
                 mode: ClosedMode::ByTypes(index),

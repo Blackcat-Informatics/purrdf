@@ -328,9 +328,18 @@ fn every_absorbed_witness_shape_decides_consistent() {
         ("R2_170", GENERATED_FIFTY_TRIPLES),
         ("R2_2023", GENERATED_IDENTIFICATIONS),
     ] {
-        let answer =
-            purrdf_validate::regime::consistency_to_string(&document(body), &[], &[], 0, 0)
-                .expect("the ontology reverse-maps");
+        let answer = purrdf_validate::regime::consistency_to_string(
+            &document(body),
+            &[],
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the ontology reverse-maps");
         assert_eq!(answer.answer(), "consistency true\n", "{name}: the verdict");
         assert!(
             answer.certificate().contains("\ncompleteness decided\n"),
@@ -387,9 +396,18 @@ fn every_other_witness_order_loses_one_of_these() {
             28,
         ),
     ] {
-        let answer =
-            purrdf_validate::regime::consistency_to_string(&document(body), &[], &[], 0, 0)
-                .expect("the ontology reverse-maps");
+        let answer = purrdf_validate::regime::consistency_to_string(
+            &document(body),
+            &[],
+            &[],
+            0,
+            0,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("the ontology reverse-maps");
         assert_eq!(answer.answer(), verdict, "{name}: the verdict");
         assert!(
             answer.certificate().contains("\ncompleteness decided\n"),

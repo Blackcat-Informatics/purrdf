@@ -77,7 +77,7 @@ fn tier_token(tier: &SliceTier) -> String {
 // ── ArtifactRecord ─────────────────────────────────────────────────────────────
 
 /// A single packaged artifact within a slice (role + logical path + digests).
-#[pyclass(name = "ArtifactRecord", module = "purrdf_slice", skip_from_py_object)]
+#[pyclass(name = "ArtifactRecord", module = "purrdf_slice")]
 #[derive(Clone, Debug)]
 pub struct PyArtifactRecord {
     inner: ArtifactRecord,
@@ -127,7 +127,7 @@ impl PyArtifactRecord {
 // ── ManifestView ───────────────────────────────────────────────────────────────
 
 /// The validated, typed projection of one slice's `manifest.ttl`.
-#[pyclass(name = "ManifestView", module = "purrdf_slice", skip_from_py_object)]
+#[pyclass(name = "ManifestView", module = "purrdf_slice")]
 #[derive(Clone, Debug)]
 pub struct PyManifestView {
     inner: ManifestView,
@@ -182,7 +182,7 @@ impl PyManifestView {
 // ── SliceRecord ────────────────────────────────────────────────────────────────
 
 /// One discovered slice: its manifest view plus its typed artifact inventory.
-#[pyclass(name = "SliceRecord", module = "purrdf_slice", skip_from_py_object)]
+#[pyclass(name = "SliceRecord", module = "purrdf_slice")]
 #[derive(Clone, Debug)]
 pub struct PySliceRecord {
     manifest: PyManifestView,
@@ -244,6 +244,7 @@ impl PySliceRecord {
 #[derive(Debug)]
 pub struct PySliceCatalog {
     inner: SliceCatalog,
+    canonicalization_json: String,
     /// The caller-supplied slice vocabulary (ontology namespace); captured at
     /// discovery so every downstream consumer (ownership analysis, emitters)
     /// uses the same vocabulary by construction.
@@ -259,18 +260,30 @@ impl PySliceCatalog {
     /// slice vocabulary (`{namespace}sliceDependsOn`, `{namespace}Slice`, …) —
     /// e.g. `"https://blackcatinformatics.ca/gmeow/"`.
     #[staticmethod]
-    fn discover(py: Python<'_>, root: &str, namespace: &str) -> PyResult<Self> {
-        // Manifest discovery (disk walk + Turtle parses) runs detached (GIL released).
-        py.detach(|| {
-            let vocab = SliceVocab::for_namespace(namespace);
-            let catalog = SliceCatalog::discover(Path::new(root), vocab.clone()).map_err(|e| {
-                PyValueError::new_err(format!("slice catalog discovery failed: {e}"))
+    #[pyo3(signature = (root, namespace, *, canonical_search, cancel=None))]
+    fn discover(
+        py: Python<'_>,
+        root: &str,
+        namespace: &str,
+        canonical_search: &str,
+        cancel: Option<&crate::py_store::PyCancellationToken>,
+    ) -> PyResult<Self> {
+        let vocab = SliceVocab::for_namespace(namespace);
+        let (catalog, canonicalization_json) =
+            crate::py_canonical::run(py, canonical_search, cancel, |control| {
+                SliceCatalog::discover(Path::new(root), vocab.clone(), control)
             })?;
-            Ok(Self {
-                inner: catalog,
-                vocab,
-            })
+        Ok(Self {
+            inner: catalog,
+            vocab,
+            canonicalization_json,
         })
+    }
+
+    /// Immutable snapshot of the actual per-artifact canonicalization runs.
+    #[getter]
+    fn canonicalization_json(&self) -> &str {
+        &self.canonicalization_json
     }
 
     /// Every discovered slice record (sorted by IRI).
@@ -315,7 +328,7 @@ impl PySliceCatalog {
 // ── ManifestPatch ──────────────────────────────────────────────────────────────
 
 /// One computed manifest patch: the on-disk path plus original and patched text.
-#[pyclass(name = "ManifestPatch", module = "purrdf_slice", skip_from_py_object)]
+#[pyclass(name = "ManifestPatch", module = "purrdf_slice")]
 #[derive(Clone, Debug)]
 pub struct PyManifestPatch {
     inner: ManifestPatch,
@@ -345,7 +358,7 @@ impl PyManifestPatch {
 // ── DependencyEdge ─────────────────────────────────────────────────────────────
 
 /// One computed cross-slice dependency edge with its reconciliation verdict.
-#[pyclass(name = "DependencyEdge", module = "purrdf_slice", skip_from_py_object)]
+#[pyclass(name = "DependencyEdge", module = "purrdf_slice")]
 #[derive(Clone, Debug)]
 pub struct PyDependencyEdge {
     from_slice: String,

@@ -18,7 +18,7 @@ use purrdf_rdf::RdfDataset;
 use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 use purrdf_shapes::expression::NodeExpr;
 use purrdf_shapes::report::ValidationReport;
-use purrdf_shapes::shapes::{Constraint, Shapes};
+use purrdf_shapes::shapes::{Constraint, PropertyShape, Shape, Shapes};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 /// The shapes graph `prefixes` + `shapes_ttl` reads as, or the load error's text.
@@ -30,6 +30,34 @@ pub fn load(prefixes: &str, shapes_ttl: &str) -> Result<Shapes, String> {
 #[track_caller]
 pub fn loads(prefixes: &str, shapes_ttl: &str) -> Shapes {
     load(prefixes, shapes_ttl).unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
+}
+
+/// Inspect the original property bodies of a fixture, including identity edges.
+/// This asserts the parser's representation without exporting copied definitions.
+pub fn properties<'a>(
+    shapes: &'a Shapes,
+    shape: &'a Shape,
+) -> impl Iterator<Item = &'a PropertyShape> {
+    let definition = match shape.constraints.as_slice() {
+        [Constraint::Reference(id)] => shapes.owner.definition(id).expect("original definition"),
+        _ => shape,
+    };
+    definition
+        .property_shapes
+        .iter()
+        .chain(definition.constraints.iter().filter_map(|constraint| {
+            let Constraint::PropertyReference(edge) = constraint else {
+                return None;
+            };
+            let body = shapes
+                .owner
+                .definition(&edge.target)
+                .expect("original property definition");
+            let [property] = body.property_shapes.as_slice() else {
+                panic!("property edge must name a property definition");
+            };
+            Some(property)
+        }))
 }
 
 /// [`loads`] for the valid neighbour of a refused shapes graph: the loading
@@ -85,7 +113,13 @@ pub fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
     let mut found: Vec<NodeExpr> = shapes
         .node_shapes
         .iter()
-        .flat_map(|shape| &shape.constraints)
+        .flat_map(|shape| {
+            &shapes
+                .owner
+                .definition(&shape.id)
+                .expect("original definition")
+                .constraints
+        })
         .filter_map(|c| match c {
             Constraint::Expression { expr, .. } => Some(expr.clone()),
             _ => None,
@@ -96,7 +130,10 @@ pub fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
         1,
         "the fixture must declare exactly one sh:expression"
     );
-    found.remove(0)
+    NodeExpr::Owned {
+        expr: Box::new(found.remove(0)),
+        owner: Arc::clone(&shapes.owner),
+    }
 }
 
 /// The rendered error the shapes graph `prefixes` + `shapes_ttl` is refused

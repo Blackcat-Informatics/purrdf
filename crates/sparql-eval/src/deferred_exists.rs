@@ -62,7 +62,7 @@
 //! # A nested `LATERAL` right operand is deferred the same way
 //!
 //! A `LATERAL` evaluates its right operand once per left row, substituted
-//! ([`crate::binop::eval_lateral`]), and a `LATERAL` nested in that right operand did the
+//! ([`crate::binop::begin_lateral`]), and a `LATERAL` nested in that right operand did the
 //! same inside every copy: `d` nested levels cost what `d` nested `EXISTS` cost above —
 //! each level copied the whole remaining chain, one more one-row `VALUES` join around
 //! every leaf below it, and every level's copy stayed alive while the innermost ran. Time

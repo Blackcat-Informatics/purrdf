@@ -5,8 +5,8 @@
 //! `Parsed → Stratified → Planned → Executable`.
 //!
 //! The program this pipeline consumes is a [`DlClause`] slice —
-//! the crate's one rule representation. Only its [`Atomic`](crate::clause::HeadForm::Atomic)
-//! head form is a Datalog rule, and [`Parsed::new`] refuses the other four by name.
+//! the crate's one rule representation. Atomic and unquantified conjunctive heads
+//! are Datalog; [`Parsed::new`] refuses forms requiring another calculus by name.
 //!
 //! # Why a type-state pipeline
 //!
@@ -55,17 +55,23 @@
 //! program and, when supplied explicitly, immutable snapshot statistics. The same
 //! rules and statistical inputs compile to the same plan on every target.
 
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::binding_pattern::BindingPattern;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::dictionary::TermIdentity;
-use crate::guard::Negation;
 #[cfg(test)]
 use crate::id::TermId;
 use crate::paths::relax_strata;
-use crate::store::Bound;
+
+mod demand_domains;
+use crate::seminaive::RuleRuntime;
+use crate::store::{Arity, Bound, StoreShape};
+pub(crate) use demand_domains::{
+    Checked as CheckedDemandDomains, Family as PredicateFamily, Key as PredicateKey,
+};
 
 // ── Stratification ──────────────────────────────────────────────────────────────
 
@@ -130,23 +136,39 @@ pub fn predicate_symbol<const N: usize>(atom: &ClauseAtom<N>) -> String {
 /// program order, so the relaxation sequence — and therefore the result — is a pure
 /// function of the rule program.
 pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String, usize>> {
-    let (preds, edges) = dependency_edges(rules);
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    stratify_dependencies(&graph).map(|levels| {
+        levels
+            .into_iter()
+            .map(|(key, level)| (key.label().to_owned(), level))
+            .collect()
+    })
+}
 
-    let mut stratum: BTreeMap<String, usize> = preds.iter().map(|p| (p.clone(), 0usize)).collect();
+fn stratify_dependencies(graph: &DependencyGraph) -> Option<BTreeMap<PredicateKey, usize>> {
+    let mut stratum: BTreeMap<PredicateKey, usize> =
+        graph.keys.iter().map(|p| (p.clone(), 0usize)).collect();
 
     // Still relaxing after n + 1 passes ⇒ a negative edge sits in a cycle.
     let settled = relax_strata(
         &mut stratum,
         || {
-            edges
-                .iter()
-                .map(|(head, body, negative)| (head.clone(), body.clone(), *negative))
+            graph.edges.iter().map(|edge| {
+                (
+                    &graph.keys[edge.head],
+                    &graph.keys[edge.body],
+                    edge.negative,
+                )
+            })
         },
-        |levels, predicate| levels[predicate],
+        |levels, predicate| levels[*predicate],
         |levels, predicate, level| {
-            levels.insert(predicate.clone(), level);
+            *levels
+                .get_mut(*predicate)
+                .expect("an original dependency predicate") = level;
         },
-        Some(preds.len()),
+        Some(graph.predicates.len()),
     );
     settled.then_some(stratum)
 }
@@ -159,87 +181,236 @@ pub fn stratify<const N: usize>(rules: &[DlClause<N>]) -> Option<BTreeMap<String
 /// names, so both are derived from ONE function: a diagnostic that searched a smaller
 /// graph than the decision was taken over could fail to find the cycle it was told exists.
 /// That includes the wildcard coupling edges a variable predicate position adds.
-pub(crate) fn dependency_edges<const N: usize>(
-    rules: &[DlClause<N>],
-) -> (BTreeSet<String>, Vec<(String, String, bool)>) {
-    dependency_edges_with(rules, |_, head, body, negative| (head, body, negative))
-}
-
 /// The original dependency walk, with each authored edge's producing rule.
 /// Wildcard coupling is graph structure rather than an authored rule and has no index.
 pub(crate) fn dependency_edges_with<T, const N: usize>(
     rules: &[DlClause<N>],
     mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
 ) -> (BTreeSet<String>, Vec<T>) {
-    // Every predicate symbol, heads and body atoms alike.
-    let mut preds: BTreeSet<String> = BTreeSet::new();
-    let mut wildcard_head = false;
-    let mut wildcard_body = false;
-    for rule in rules {
-        for head in rule.head_atoms() {
-            let symbol = predicate_symbol(head);
-            wildcard_head |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-        for atom in rule.body() {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // A negated conjunction's atoms are read NEGATIVELY: the group is decided only
-    // once every relation it matches is complete, exactly as a negated atom is.
-    for rule in rules {
-        for atom in rule.negations().iter().flat_map(Negation::atoms) {
-            let symbol = predicate_symbol(atom);
-            wildcard_body |= symbol == ANY_PREDICATE;
-            preds.insert(symbol);
-        }
-    }
-
-    // Edges: (head predicate, body predicate, negative?).
-    let mut edges = Vec::new();
-    for (rule_index, rule) in rules.iter().enumerate() {
-        for head in rule.head_atoms() {
-            let head_symbol = predicate_symbol(head);
-            for atom in rule.body() {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    atom.is_negated(),
-                ));
-            }
-            for atom in rule.negations().iter().flat_map(Negation::atoms) {
-                edges.push(edge(
-                    Some(rule_index),
-                    head_symbol.clone(),
-                    predicate_symbol(atom),
-                    true,
-                ));
-            }
-        }
-    }
-
-    // Couple the wildcard to the concrete symbols, in whichever direction the program
-    // actually uses it. Both directions together intentionally fuse the whole program
-    // into one stratum — see the doc comment.
-    let concrete: Vec<String> = preds
-        .iter()
-        .filter(|symbol| symbol.as_str() != ANY_PREDICATE)
-        .cloned()
+    let graph = DependencyGraph::new_in(rules, &mut Memory::new(&mut Resident))
+        .expect("resident dependency construction requires physical storage");
+    let edges = graph
+        .edges
+        .into_iter()
+        .map(|dependency| {
+            edge(
+                dependency.rule,
+                graph.predicates[dependency.head].clone(),
+                graph.predicates[dependency.body].clone(),
+                dependency.negative,
+            )
+        })
         .collect();
-    for symbol in &concrete {
-        if wildcard_body {
-            edges.push(edge(None, ANY_PREDICATE.to_owned(), symbol.clone(), false));
-        }
-        if wildcard_head {
-            edges.push(edge(None, symbol.clone(), ANY_PREDICATE.to_owned(), false));
-        }
+    (graph.predicates.into_iter().collect(), edges)
+}
+
+/// Original authored dependency coordinates, including explicit wildcard coupling.
+#[derive(Debug)]
+pub(crate) struct DependencyEdge {
+    pub(crate) rule: Option<usize>,
+    pub(crate) head: usize,
+    pub(crate) body: usize,
+    pub(crate) negative: bool,
+}
+
+/// One dependency walk shared by stratification, diagnostics and maintenance.
+#[derive(Debug)]
+pub(crate) struct DependencyGraph {
+    pub(crate) predicates: Vec<String>,
+    pub(crate) keys: Vec<PredicateKey>,
+    pub(crate) edges: Vec<DependencyEdge>,
+}
+
+impl DependencyGraph {
+    pub(crate) fn new_in<A: Admission + ?Sized, const N: usize>(
+        rules: &[DlClause<N>],
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        Self::new_scoped_in(rules, None, memory)
     }
 
-    (preds, edges)
+    pub(crate) fn new_scoped_in<A: Admission + ?Sized, const N: usize>(
+        rules: &[DlClause<N>],
+        scopes: Option<&CheckedDemandDomains<N>>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(|memory| {
+            let mut names = OrderedTable::default();
+            let mut wildcard_heads = [false; 4];
+            let mut wildcard_bodies = [false; 4];
+            let key = |atom: &ClauseAtom<N>,
+                       scoped: Option<&PredicateKey>,
+                       memory: &mut Memory<'_, A>| {
+                let family = scoped.map_or(PredicateFamily::All, |key| key.family);
+                atom.predicate()
+                    .surface_in(memory)
+                    .map(|surface| PredicateKey { family, surface })
+            };
+            let mut retain = |key: PredicateKey, head: bool, memory: &mut Memory<'_, A>| {
+                if key.surface.is_none() {
+                    if head {
+                        wildcard_heads[key.family as usize] = true;
+                    } else {
+                        wildcard_bodies[key.family as usize] = true;
+                    }
+                }
+                if names.get(&key).is_none() {
+                    names.insert(key, (), memory)?;
+                } else if let Some(surface) = key.surface {
+                    memory.release_string(surface)?;
+                }
+                Ok::<_, StorageError>(())
+            };
+            for (ordinal, rule) in rules.iter().enumerate() {
+                for (head, atom) in rule.head_atoms().enumerate() {
+                    retain(
+                        key(atom, scopes.map(|scope| scope.head(ordinal, head)), memory)?,
+                        true,
+                        memory,
+                    )?;
+                }
+                for (body, atom) in rule.body().iter().enumerate() {
+                    retain(
+                        key(atom, scopes.map(|scope| scope.body(ordinal, body)), memory)?,
+                        false,
+                        memory,
+                    )?;
+                }
+                for (group, negative) in rule.negations().iter().enumerate() {
+                    for (member, atom) in negative.atoms().iter().enumerate() {
+                        retain(
+                            key(
+                                atom,
+                                scopes.map(|scope| scope.negative(ordinal, group, member)),
+                                memory,
+                            )?,
+                            false,
+                            memory,
+                        )?;
+                    }
+                }
+            }
+            let mut keys = Vec::new();
+            let mut predicates = Vec::new();
+            memory.reserve(&mut predicates, names.len())?;
+            memory.reserve(&mut keys, names.len())?;
+            while let Some((symbol, ())) = names.pop_first() {
+                let label = symbol.label();
+                let mut stored = String::new();
+                memory.push_str(&mut stored, label)?;
+                predicates.push(stored);
+                keys.push(symbol);
+            }
+            names.release(memory)?;
+            let mut edges = Vec::new();
+            for (rule_index, rule) in rules.iter().enumerate() {
+                for (head_ordinal, atom) in rule.head_atoms().enumerate() {
+                    let symbol = key(
+                        atom,
+                        scopes.map(|scope| scope.head(rule_index, head_ordinal)),
+                        memory,
+                    )?;
+                    let head = keys.binary_search(&symbol).expect("a gathered head key");
+                    if let Some(surface) = symbol.surface {
+                        memory.release_string(surface)?;
+                    }
+                    for (body_ordinal, body) in rule.body().iter().enumerate() {
+                        let symbol = key(
+                            body,
+                            scopes.map(|scope| scope.body(rule_index, body_ordinal)),
+                            memory,
+                        )?;
+                        let body_index = keys.binary_search(&symbol).expect("a gathered body key");
+                        if let Some(surface) = symbol.surface {
+                            memory.release_string(surface)?;
+                        }
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: Some(rule_index),
+                                head,
+                                body: body_index,
+                                negative: body.is_negated(),
+                            },
+                        )?;
+                    }
+                    // A negated conjunction reads every member negatively.
+                    for (group, negative) in rule.negations().iter().enumerate() {
+                        for (member, atom) in negative.atoms().iter().enumerate() {
+                            let symbol = key(
+                                atom,
+                                scopes.map(|scope| scope.negative(rule_index, group, member)),
+                                memory,
+                            )?;
+                            let body = keys
+                                .binary_search(&symbol)
+                                .expect("a gathered negative key");
+                            if let Some(surface) = symbol.surface {
+                                memory.release_string(surface)?;
+                            }
+                            memory.push(
+                                &mut edges,
+                                DependencyEdge {
+                                    rule: Some(rule_index),
+                                    head,
+                                    body,
+                                    negative: true,
+                                },
+                            )?;
+                        }
+                    }
+                }
+            }
+            for family in [
+                PredicateFamily::All,
+                PredicateFamily::Original,
+                PredicateFamily::Shadow,
+                PredicateFamily::Internal,
+            ] {
+                if !wildcard_heads[family as usize] && !wildcard_bodies[family as usize] {
+                    continue;
+                }
+                let wildcard = keys
+                    .binary_search(&PredicateKey {
+                        family,
+                        surface: None,
+                    })
+                    .expect("an authored wildcard was gathered");
+                for (symbol, key) in keys.iter().enumerate() {
+                    if symbol == wildcard || key.family != family {
+                        continue;
+                    }
+                    if wildcard_bodies[family as usize] {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: wildcard,
+                                body: symbol,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                    if wildcard_heads[family as usize] {
+                        memory.push(
+                            &mut edges,
+                            DependencyEdge {
+                                rule: None,
+                                head: symbol,
+                                body: wildcard,
+                                negative: false,
+                            },
+                        )?;
+                    }
+                }
+            }
+            Ok(Self {
+                predicates,
+                keys,
+                edges,
+            })
+        })
+    }
 }
 
 // ── Index selection ─────────────────────────────────────────────────────────────
@@ -396,12 +567,12 @@ fn atom_priority<const N: usize>(
 ///
 /// The priority includes a unique authored coordinate as its last component. Each choice
 /// extends the binding frontier before the next choice; no store history participates.
-fn binding_aware_order<T>(
+fn binding_aware_order<T, P: Ord>(
     mut remaining: Vec<T>,
-    priority: impl Fn(&T, &BTreeSet<String>) -> (bool, usize, usize, usize, u64, usize),
+    mut bound: BTreeSet<String>,
+    priority: impl Fn(&T, &BTreeSet<String>) -> P,
     bind: impl Fn(&T, &mut BTreeSet<String>),
 ) -> Vec<T> {
-    let mut bound = BTreeSet::new();
     let mut order = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
         let slot = remaining
@@ -417,6 +588,28 @@ fn binding_aware_order<T>(
     order
 }
 
+/// Guard-produced variables cannot occur before their producer: scoping would reject
+/// the overwrite. They can therefore be marked known for planning when barriers keep
+/// every atom in its authored stage. Execution still checks the actual bound value.
+fn guard_bound_variables<const N: usize>(rule: &DlClause<N>) -> BTreeSet<String> {
+    if rule.guard_positions().is_some() {
+        rule.guards()
+            .iter()
+            .flat_map(crate::guard::Guard::outputs)
+            .cloned()
+            .collect()
+    } else {
+        BTreeSet::new()
+    }
+}
+
+/// The stage containing an authored atom; multiple guards may separate two atoms.
+fn body_stage<const N: usize>(rule: &DlClause<N>, body_index: usize) -> usize {
+    rule.guard_positions().map_or(0, |positions| {
+        positions.partition_point(|&after| after <= body_index)
+    })
+}
+
 /// Deterministic sideways-information-passing order for an acyclic positive body.
 ///
 /// Connected atoms run first; ties retain the known/constant/repeated-variable preference
@@ -429,10 +622,12 @@ fn sips_order<const N: usize>(
 ) -> Vec<usize> {
     binding_aware_order(
         (0..positive.len()).collect(),
+        guard_bound_variables(rule),
         |&position, bound| {
             let (connected, known, constants, repeated, statistical) =
                 atom_priority(&rule.body()[positive[position]], bound, estimate);
             (
+                std::cmp::Reverse(body_stage(rule, positive[position])),
                 connected,
                 known,
                 constants,
@@ -690,7 +885,7 @@ fn lower_operators<const N: usize>(
     execution_order: &[usize],
     slots: &BTreeMap<String, usize>,
 ) -> Vec<AtomOperator<N>> {
-    let mut bound = BTreeSet::new();
+    let mut bound = guard_bound_variables(rule);
     let mut operators = Vec::with_capacity(execution_order.len());
     for &positive_position in execution_order {
         let body_index = positive[positive_position];
@@ -812,6 +1007,7 @@ fn sips_group_order<const N: usize>(
 ) -> Vec<JoinGroup> {
     binding_aware_order(
         groups,
+        guard_bound_variables(rule),
         |group, bound| {
             let atoms = group.atoms();
             let (connected, known, constants, repeated, statistical) = atoms
@@ -820,6 +1016,7 @@ fn sips_group_order<const N: usize>(
                 .max()
                 .expect("a join group contains at least one atom");
             (
+                std::cmp::Reverse(body_stage(rule, atoms[0].body_index)),
                 connected,
                 known,
                 constants,
@@ -1205,6 +1402,24 @@ impl<const N: usize> RulePlan<N> {
         // graph and planned-atom scratch for the very common 0/1/2-atom rules.
         let cyclic = if positive.len() < 3 {
             Vec::new()
+        } else if let Some(barriers) = rule.guard_positions() {
+            let mut plans = Vec::new();
+            let mut start = 0;
+            for end in barriers
+                .iter()
+                .copied()
+                .chain(std::iter::once(positive.len()))
+            {
+                let mut segment = certified_cyclic_components(rule, &positive[start..end], &slots);
+                for plan in &mut segment {
+                    for atom in &mut plan.atoms {
+                        atom.positive_position += start;
+                    }
+                }
+                plans.extend(segment);
+                start = end;
+            }
+            plans
         } else {
             certified_cyclic_components(rule, &positive, &slots)
         };
@@ -1351,6 +1566,7 @@ impl<const N: usize> RulePlan<N> {
 /// calls without borrowing a caller's scratch buffer.
 #[derive(Debug, Clone)]
 pub struct Parsed<const N: usize = 4> {
+    domains: Option<Arc<CheckedDemandDomains<N>>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1383,16 +1599,14 @@ impl<const N: usize> Parsed<N> {
     /// rather than at the executor, because that is what makes the refusal unbypassable:
     /// an [`Executable`] is reachable only through this constructor, so a value of that
     /// type is a proof that every clause in it is
-    /// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), on top of the
+    /// atomic or conjunctive without existential variables, on top of the
     /// stratification and planning proofs the later stages add.
     ///
     /// # Errors
     ///
     /// [`NonDatalogClause`], naming the first clause in authored order whose head is
-    /// existential, disjunctive, conjunctive or `false`. That is a refusal, not a gap:
-    /// those four forms are outside the class of definite clauses a least-fixpoint
-    /// evaluator computes over, and accepting one as if it were atomic — or dropping
-    /// it — would return an answer that is not the model of the program supplied.
+    /// existential, disjunctive or `false`. Such a clause needs a different calculus;
+    /// accepting or dropping it would not compute the supplied program's model.
     pub fn new(rules: Vec<DlClause<N>>) -> Result<Self, NonDatalogClause> {
         for (index, rule) in rules.iter().enumerate() {
             let form = rule.head_form();
@@ -1401,6 +1615,7 @@ impl<const N: usize> Parsed<N> {
             }
         }
         Ok(Self {
+            domains: None,
             rules: Arc::from(rules),
             admission: None,
         })
@@ -1412,23 +1627,92 @@ impl<const N: usize> Parsed<N> {
     /// cycle. That is a declared gap the caller reports; there is no fallback engine and
     /// no partial answer.
     ///
-    /// A rule belongs to the stratum of its HEAD predicate, and within a stratum the
+    /// A rule runs at its lowest head-predicate stratum; within a stratum the
     /// authored program order is preserved, so rules fire in a stable order.
     pub fn stratify(self) -> Option<Stratified<N>> {
-        let stratum_of = stratify(&self.rules)?;
+        self.try_stratify().ok()
+    }
+
+    pub(crate) fn with_demand_projection(
+        mut self,
+        projection: Arc<crate::demand::projection::Plan>,
+    ) -> Result<Self, crate::seminaive::EvalError> {
+        self.domains = Some(Arc::new(CheckedDemandDomains::new(
+            &self.rules,
+            projection,
+        )?));
+        Ok(self)
+    }
+
+    pub(crate) fn try_stratify(self) -> Result<Stratified<N>, crate::seminaive::EvalError> {
+        let dependencies = Arc::new(
+            DependencyGraph::new_scoped_in(
+                &self.rules,
+                self.domains.as_deref(),
+                &mut Memory::new(&mut Resident),
+            )
+            .expect("resident dependency construction requires physical storage"),
+        );
+        let stratum_of = stratify_dependencies(&dependencies)
+            .ok_or_else(|| crate::seminaive::negative_cycle_graph(&dependencies))?;
+
+        let head_symbol = |rule: usize, head: usize, atom: &ClauseAtom<N>| {
+            self.domains.as_ref().map_or_else(
+                || PredicateKey {
+                    family: PredicateFamily::All,
+                    surface: atom.predicate().surface(),
+                },
+                |scopes| scopes.head(rule, head).clone(),
+            )
+        };
 
         let max_stratum = self
             .rules
             .iter()
-            .map(|r| stratum_of[&predicate_symbol(datalog_head(r))])
+            .enumerate()
+            .flat_map(|(rule, clause)| {
+                clause
+                    .head_atoms()
+                    .enumerate()
+                    .map(move |(head, atom)| (rule, head, atom))
+            })
+            .map(|(rule, head, atom)| stratum_of[&head_symbol(rule, head, atom)])
             .max()
             .unwrap_or(0);
         let mut strata: Vec<Vec<usize>> = vec![Vec::new(); max_stratum + 1];
         for (i, rule) in self.rules.iter().enumerate() {
-            strata[stratum_of[&predicate_symbol(datalog_head(rule))]].push(i);
+            // Every head depends on the same body. The lowest head stratum is
+            // already late enough for all body reads. Higher-stratum heads may
+            // be emitted early, but settle only after all their producers run.
+            let level = rule
+                .head_atoms()
+                .enumerate()
+                .map(|(head, atom)| stratum_of[&head_symbol(i, head, atom)])
+                .min()
+                .expect("admitted Datalog clauses have a nonempty head");
+            strata[level].push(i);
         }
 
-        Some(Stratified {
+        let mut settled_predicates = vec![Vec::new(); max_stratum + 1];
+        let heads: BTreeSet<_> = self
+            .rules
+            .iter()
+            .enumerate()
+            .flat_map(|(rule, clause)| {
+                clause
+                    .head_atoms()
+                    .enumerate()
+                    .map(move |(head, atom)| (rule, head, atom))
+            })
+            .map(|(rule, head, atom)| head_symbol(rule, head, atom))
+            .collect();
+        for predicate in heads {
+            settled_predicates[stratum_of[&predicate]].push(predicate);
+        }
+        Ok(Stratified {
+            domains: self.domains,
+            dependencies,
+            settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata,
@@ -1436,23 +1720,13 @@ impl<const N: usize> Parsed<N> {
     }
 }
 
-/// The single head atom of a clause that has already passed the [`Parsed::new`] gate.
-///
-/// # Panics
-///
-/// Panics on any non-atomic head. Every clause inside the pipeline came through
-/// [`Parsed::new`], which admits only
-/// [`HeadForm::Atomic`](crate::clause::HeadForm::Atomic), so reaching this would be a
-/// contradiction in that gate rather than a caller error.
-pub(crate) fn datalog_head<const N: usize>(rule: &DlClause<N>) -> &ClauseAtom<N> {
-    rule.datalog_head().unwrap_or_else(|| {
-        unreachable!("the plan pipeline admits only atomic-head clauses (Parsed::new)")
-    })
-}
-
 /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
 #[derive(Debug, Clone)]
 pub struct Stratified<const N: usize = 4> {
+    domains: Option<Arc<CheckedDemandDomains<N>>>,
+    dependencies: Arc<DependencyGraph>,
+    /// Predicates complete after each stratum, independent of early head emission.
+    settled_predicates: Vec<Vec<PredicateKey>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1461,6 +1735,9 @@ pub struct Stratified<const N: usize = 4> {
 }
 
 impl<const N: usize> Stratified<N> {
+    pub(crate) fn clauses(&self) -> &[DlClause<N>] {
+        &self.rules
+    }
     /// Precompute one complete store-independent [`RulePlan`] per rule.
     pub fn plan(self) -> Planned<N> {
         self.plan_with_estimates(&|_| None)
@@ -1490,6 +1767,9 @@ impl<const N: usize> Stratified<N> {
             .map(|rule| RulePlan::for_rule_with_estimates(rule, estimate))
             .collect();
         Planned {
+            domains: self.domains,
+            dependencies: self.dependencies,
+            settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata: self.strata,
@@ -1501,6 +1781,10 @@ impl<const N: usize> Stratified<N> {
 /// Stage 3: a stratified program with its per-rule join plans memoized.
 #[derive(Debug, Clone)]
 pub struct Planned<const N: usize = 4> {
+    domains: Option<Arc<CheckedDemandDomains<N>>>,
+    dependencies: Arc<DependencyGraph>,
+    /// Predicates complete after each stratum.
+    settled_predicates: Vec<Vec<PredicateKey>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1511,20 +1795,45 @@ pub struct Planned<const N: usize = 4> {
 }
 
 impl<const N: usize> Planned<N> {
-    /// Seal the plan into the terminal [`Executable`], memoizing the head-predicate set a
-    /// completion frontier reads.
-    pub fn into_executable(self) -> Executable<N> {
+    /// Seal the plan into the terminal [`Executable`], preparing immutable rule shapes
+    /// once and memoizing the head-predicate set a completion frontier reads.
+    pub fn into_executable(self) -> Executable<N>
+    where
+        Arity<N>: StoreShape<N>,
+    {
         let head_predicates: BTreeSet<String> = self
             .rules
             .iter()
-            .map(|r| predicate_symbol(datalog_head(r)))
+            .flat_map(DlClause::head_atoms)
+            .map(predicate_symbol)
             .collect();
+        let runtimes = self
+            .rules
+            .iter()
+            .zip(&self.plans)
+            .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+            .collect::<Arc<[_]>>();
+        let mut rule_levels = vec![0; self.rules.len()];
+        for (level, rules) in self.strata.iter().enumerate() {
+            for &rule in rules {
+                rule_levels[rule] = level;
+            }
+        }
+        let program_hash = crate::cache::canonical_rule_hash(&self.rules);
+        let base_read_rule = self.rules.iter().position(DlClause::reads_base);
         Executable {
+            domains: self.domains,
+            dependencies: self.dependencies,
+            rule_levels: Arc::from(rule_levels),
+            program_hash,
+            base_read_rule,
+            settled_predicates: self.settled_predicates,
             admission: self.admission,
             rules: self.rules,
             strata: self.strata,
             plans: self.plans,
             head_predicates,
+            runtimes,
         }
     }
 }
@@ -1535,7 +1844,19 @@ impl<const N: usize> Planned<N> {
 /// constructor is [`Planned::into_executable`], so a value of this type is a proof that
 /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
 #[derive(Debug, Clone)]
-pub struct Executable<const N: usize = 4> {
+pub struct Executable<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    pub(crate) domains: Option<Arc<CheckedDemandDomains<N>>>,
+    /// Immutable analysis and identity belong to the compiled program, never a
+    /// per-model copy or a supplemental grant adopting existing allocation.
+    pub(crate) dependencies: Arc<DependencyGraph>,
+    pub(crate) rule_levels: Arc<[usize]>,
+    pub(crate) program_hash: [u8; 32],
+    pub(crate) base_read_rule: Option<usize>,
+    /// Predicates complete after each stratum.
+    settled_predicates: Vec<Vec<PredicateKey>>,
     admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause<N>]>,
@@ -1545,9 +1866,20 @@ pub struct Executable<const N: usize = 4> {
     plans: Vec<RulePlan<N>>,
     /// The IDB-derivable (rule-head) predicates, in lexical order.
     head_predicates: BTreeSet<String>,
+    /// Immutable lowered shapes shared by executions and clones of this program.
+    /// Pending round keys may borrow authored constants here for the program's lifetime.
+    runtimes: Arc<[RuleRuntime<N>]>,
 }
 
-impl<const N: usize> Executable<N> {
+impl<const N: usize> Executable<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The same prepared rule metadata for every evaluation of this immutable program.
+    pub(crate) fn runtimes(&self) -> &[RuleRuntime<N>] {
+        &self.runtimes
+    }
+
     /// Every declaration source admitted with this immutable program.
     #[must_use]
     pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
@@ -1567,6 +1899,11 @@ impl<const N: usize> Executable<N> {
     /// instead of discovering the index space by sweeping every stratum.
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    /// The immutable authored program, including its original clause order.
+    pub fn rules(&self) -> &[DlClause<N>] {
+        &self.rules
     }
 
     /// Whether stratum `k` has no rules (a trivially-saturated empty stratum).
@@ -1617,17 +1954,17 @@ impl<const N: usize> Executable<N> {
         (&self.rules[index], &self.plans[index])
     }
 
-    /// The head predicate SYMBOLS of stratum `k`'s rules — recorded into the settled
-    /// frontier when the stratum reaches its natural fixpoint. See
+    /// Head predicate SYMBOLS that become complete at stratum `k`, recorded into
+    /// the settled frontier when it reaches its natural fixpoint. See
     /// [`Self::head_predicates`] for what a variable head predicate contributes.
     ///
     /// # Panics
     ///
     /// Panics if `k` is not a stratum of this program.
     pub fn stratum_head_predicates(&self, k: usize) -> impl Iterator<Item = String> {
-        self.strata[k]
+        self.settled_predicates[k]
             .iter()
-            .map(move |&i| predicate_symbol(datalog_head(&self.rules[i])))
+            .map(|key| key.label().to_owned())
     }
 }
 
@@ -1640,6 +1977,50 @@ mod tests {
     const P: &str = "https://example.org/p";
     const Q: &str = "https://example.org/q";
     const R: &str = "https://example.org/r";
+
+    #[test]
+    fn guard_barriers_constrain_sips_and_bind_later_index_positions() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::Guard;
+        let rule = DlClause::datalog(atom("?X", R, "?V"), Vec::new()).with_ordered_body(vec![
+            Atom(atom("?X", P, "?Y")),
+            Compute(Guard::assign("key", vec!["?Y".into()], "?K")),
+            Atom(atom("?K", Q, "?V")),
+        ]);
+        let plan = RulePlan::for_rule(&rule);
+        assert_eq!(
+            plan.operators()
+                .iter()
+                .map(AtomOperator::body_index)
+                .collect::<Vec<_>>(),
+            [0, 1],
+            "a selective later atom cannot cross its producing guard",
+        );
+        assert!(matches!(
+            plan.operator_at(1).shape().subject(),
+            PositionPlan::Bound(_)
+        ));
+    }
+
+    #[test]
+    fn cycles_are_certified_within_guard_segments_only() {
+        use crate::clause::BodyLiteral::{Atom, Guard as Compute};
+        use crate::guard::Guard;
+        let program = |crosses| {
+            let mut body = vec![Atom(atom("?X", P, "?Y"))];
+            if crosses {
+                body.push(Compute(Guard::filter("test", vec!["?X".into()])));
+            }
+            body.extend([Atom(atom("?Y", Q, "?Z")), Atom(atom("?Z", R, "?X"))]);
+            if !crosses {
+                body.push(Compute(Guard::filter("test", vec!["?X".into()])));
+                body.push(Atom(atom("?X", P, "?W")));
+            }
+            DlClause::datalog(atom("?X", R, "?Z"), Vec::new()).with_ordered_body(body)
+        };
+        assert!(!RulePlan::for_rule(&program(true)).has_cyclic_subplan());
+        assert!(RulePlan::for_rule(&program(false)).has_cyclic_subplan());
+    }
     const S: &str = "https://example.org/s";
 
     fn v(name: &str) -> ClauseTerm {
@@ -1657,7 +2038,6 @@ mod tests {
 
     #[test]
     fn snapshot_statistics_change_connected_order_and_preserve_native_proofs() {
-        use crate::seminaive::evaluate;
         use crate::store::RelationStore;
         use purrdf_core::{DatasetView, GraphMatch, ProbePattern, RdfDatasetBuilder};
 
@@ -1714,14 +2094,50 @@ mod tests {
         assert_eq!(order(&ordinary), [0, 1, 2]);
         // The disconnected one-row atom cannot outrank the connected five-row atom.
         assert_eq!(order(&statistical), [1, 0, 2]);
-        let baseline = evaluate(&ordinary, input.clone()).unwrap();
-        let actual = evaluate(&statistical, input).unwrap();
+        let baseline = crate::seminaive::evaluate_guarded(
+            &ordinary,
+            input.clone(),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
+        let actual = crate::seminaive::evaluate_guarded(
+            &statistical,
+            input,
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .unwrap();
         assert_eq!(actual.facts().row_count(), baseline.facts().row_count());
         assert_eq!(actual.facts().row_count(), 8);
-        assert_eq!(actual.derivations().len(), 1);
-        let proof = &actual.derivations()[0];
-        assert_eq!(proof.fact(), baseline.derivations()[0].fact());
-        assert_eq!(proof.sources(), baseline.derivations()[0].sources());
+        assert_eq!(
+            actual
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
+        let proof = &actual
+            .derivations()
+            .expect("derivation recording was requested")[0];
+        assert_eq!(
+            proof.fact(),
+            baseline
+                .derivations()
+                .expect("derivation recording was requested")[0]
+                .fact()
+        );
+        assert_eq!(
+            proof.sources(),
+            baseline
+                .derivations()
+                .expect("derivation recording was requested")[0]
+                .sources()
+        );
         assert_eq!(
             proof
                 .sources()
@@ -1760,7 +2176,7 @@ mod tests {
         assert_eq!(plan.negated(), [1]);
         assert!(!plan.has_cyclic_subplan());
         assert_eq!(rule.body()[1].subject().variable(), Some("?Y"));
-        assert!(!datalog_head(&rule).is_negated());
+        assert!(!rule.datalog_head().unwrap().is_negated());
     }
 
     /// Variable slots are authored first-occurrence order across the body, then the head
@@ -2443,7 +2859,7 @@ mod tests {
             "stratum 1 derives exactly r"
         );
         let (rule, plan) = exe.rule_entry(1);
-        assert_eq!(datalog_head(rule).predicate_iri(), Some(R));
+        assert_eq!(rule.datalog_head().unwrap().predicate_iri(), Some(R));
         assert_eq!(rule.body().len(), 2);
         assert!(rule.body()[1].is_negated());
         assert_eq!(rule.body()[1].object(), &v("?Y"));
@@ -2492,8 +2908,8 @@ mod tests {
         assert_eq!(exe.stratum_rule_indices(0), [0, 1, 2, 3, 4]);
     }
 
-    /// The pipeline's entrance is the head-form gate: an existential, a disjunctive, a
-    /// conjunctive and an empty head are each refused by name, so a non-Datalog clause can
+    /// The pipeline's entrance is the head-form gate: an existential, a disjunctive and
+    /// an empty head are each refused by name, so a non-Datalog clause can
     /// never reach an [`Executable`] — and therefore never reach the evaluator.
     #[test]
     fn pipeline_refuses_every_non_datalog_head_form() {
@@ -2513,17 +2929,6 @@ mod tests {
                         HeadDisjunct::atom(atom("?X", Q, "?Y")),
                         HeadDisjunct::atom(atom("?X", R, "?Y")),
                     ],
-                    Vec::new(),
-                    vec![atom("?X", P, "?Y")],
-                ),
-            ),
-            (
-                HeadForm::Conjunctive,
-                DlClause::new(
-                    vec![HeadDisjunct::new(vec![
-                        atom("?X", Q, "?Y"),
-                        atom("?X", R, "?Y"),
-                    ])],
                     Vec::new(),
                     vec![atom("?X", P, "?Y")],
                 ),

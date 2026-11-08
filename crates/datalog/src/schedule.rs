@@ -52,9 +52,9 @@
 //! layer, and withdrawn at its end unless some rule of the layer derived them too — SHACL's
 //! expected derived triples. The hook then names further facts to retract with them
 //! ([`LayerHooks::retract`]; a derived triple's reifiers), and one more hook runs after the
-//! last layer ([`LayerHooks::finish`]; SHACL's temporary triples). Retraction rebuilds the
-//! store from the surviving rows in their original row order, so the relative order every
-//! observable is derived from is unchanged.
+//! last layer ([`LayerHooks::finish`]; SHACL's temporary triples). Retraction vacates
+//! the indexed native rows, preserving the original dictionary, surviving handles
+//! and immutable base. Removed rows' own derivations are dropped.
 //!
 //! # Termination
 //!
@@ -74,7 +74,7 @@ use crate::guard::{GuardEvaluator, Negation};
 use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
 use crate::seminaive::{
-    Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundExecution,
+    Delta, EvalError, EvalOptions, Evaluation, FixpointState, JoinStrategy, RoundControl,
     RoundSnapshot, RuleEntry, RuleRuntime, check_budget, check_range_restricted, evaluate_round,
 };
 use crate::stop::{StopSignal, is_stopped};
@@ -402,18 +402,38 @@ where
         return Err(EvalError::MissingBase { rule });
     }
     let mut state = FixpointState::seeded(edb, *options);
-    check_budget(&state)?;
+    check_running(&state, stop)?;
     for (layer_index, layer) in program.schedule.layers.iter().enumerate() {
         run_layer(program, layer_index, layer, &mut state, guards, hooks, stop)?;
     }
+    check_running(&state, stop)?;
     let finished = hooks.finish(&state.rel).map_err(|error| {
         error.into_eval_error(|message| EvalError::LayerHook {
             layer: None,
             message,
         })
     })?;
+    check_running(&state, stop)?;
     retract(&mut state, &finished)?;
+    check_running(&state, stop)?;
     Ok(state.finish())
+}
+
+/// Admission and actual resource refusal precede cooperative cancellation.
+fn check_running<const N: usize>(
+    state: &FixpointState<TermInterner, N>,
+    stop: Option<&dyn StopSignal>,
+) -> Result<(), EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    check_budget(state)?;
+    if is_stopped(stop) {
+        return Err(EvalError::Stopped {
+            report: state.report(),
+        });
+    }
+    Ok(())
 }
 
 /// Run one layer into `state`.
@@ -435,19 +455,28 @@ where
             message,
         })
     };
+    check_running(state, stop)?;
     // The layer's assumptions become rows like any other, flagged so a rule that derives
     // one again is recorded as having done so.
     let assumptions = hooks.assume(layer_index, &state.rel).map_err(hook_error)?;
-    let mut assumed = vec![false; state.rel.row_count()];
+    check_running(state, stop)?;
+    let mut assumed = purrdf_core::FastSet::default();
+    assumed
+        .try_reserve(assumptions.len())
+        .map_err(|_| EvalError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed))?;
     for fact in &assumptions {
+        if !state.rel.contains_row(Arity::<N>::fact_terms(fact)) {
+            state
+                .report()
+                .admit_fact()
+                .map_err(|report| EvalError::BudgetExhausted {
+                    resource: crate::seminaive::BudgetResource::StoredFacts,
+                    report,
+                })?;
+        }
         if let Some((_, _, row)) = state.rel.insert_row(Arity::<N>::fact_terms(fact))? {
-            state.depth.push(0);
-            assumed.push(true);
-            debug_assert_eq!(
-                row.resident_index() + 1,
-                assumed.len(),
-                "assumed tracks store rows"
-            );
+            state.seed_height(row);
+            assumed.insert(row);
         }
     }
     check_budget(state)?;
@@ -472,7 +501,7 @@ where
     // Iterating groups: pass after pass until a whole pass commits nothing. `seen[r]` is
     // the row count rule `r` last ran against, so its next run's delta is exactly what
     // was committed since — the per-rule semi-naive delta.
-    let mut seen: Vec<Option<usize>> = vec![None; program.rules.len()];
+    let mut seen: Vec<Option<u64>> = vec![None; program.rules.len()];
     loop {
         let mut progressed = false;
         for group in &layer.iterating {
@@ -499,17 +528,16 @@ where
     let rows = state.rel.facts_in_row_order();
     let withdrawn: Vec<ShapeFact<N>> = rows
         .iter()
-        .filter(|(row, fact)| {
-            assumed.get(row.resident_index()).copied().unwrap_or(false)
-                && !confirmed.contains_key(fact)
-        })
+        .filter(|(row, fact)| assumed.contains(row) && !confirmed.contains_key(fact))
         .map(|(_, fact)| fact.clone())
         .collect();
-    state.derivations.extend(
-        confirmed
-            .into_values()
-            .map(crate::seminaive::Confirmation::into_derivation),
-    );
+    if state.derivation_mode == crate::seminaive::DerivationMode::Record {
+        state.derivations.extend(
+            confirmed
+                .into_values()
+                .map(crate::seminaive::Confirmation::into_derivation),
+        );
+    }
     let mut retracted = hooks
         .retract(layer_index, &state.rel, &withdrawn)
         .map_err(hook_error)?;
@@ -528,12 +556,12 @@ where
     /// The caller's stop signal.
     stop: Option<&'g dyn StopSignal>,
     /// Per-row assumed flags.
-    assumed: &'a mut Vec<bool>,
+    assumed: &'a mut purrdf_core::FastSet<crate::id::RowId>,
     /// The canonical derivation of each assumed fact a rule derived again.
     confirmed: &'a mut BTreeMap<ShapeFact<N>, crate::seminaive::Confirmation<N>>,
     /// For an iterating group, the row count each rule last ran against; `None` for a
     /// run-once group, whose rules run once against everything.
-    seen: Option<&'a mut Vec<Option<usize>>>,
+    seen: Option<&'a mut Vec<Option<u64>>>,
 }
 
 /// Evaluate one group as one round and commit it. Returns whether it committed anything.
@@ -551,7 +579,7 @@ where
             report: state.report(),
         });
     }
-    let hi = state.rel.row_count();
+    let hi = state.rel.row_slots();
     let mut entries: Vec<RuleEntry<'_, N>> = Vec::with_capacity(group.len());
     let mut seen = run.seen;
     for &index in group {
@@ -593,14 +621,19 @@ where
     let round = evaluate_round(
         &entries,
         RoundSnapshot {
+            probe: None,
             rel: &state.rel,
-            depth: &state.depth,
+            depth: state.depths(),
             assumed: run.assumed,
+            delta_indexes: None,
         },
-        RoundExecution::Parallel,
+        state.execution,
         JoinStrategy::Planned,
         state.allowance(),
-        run.guards,
+        RoundControl {
+            guards: run.guards,
+            stop: run.stop,
+        },
     )?;
     for proof in round.confirmed() {
         match run.confirmed.get_mut(proof.fact()) {
@@ -612,12 +645,10 @@ where
     }
     let committed = !round.is_empty();
     state.absorb(round)?;
-    run.assumed.resize(state.rel.row_count(), false);
     Ok(committed)
 }
 
-/// Retract `facts` from `state`, rebuilding the store from the surviving rows in their
-/// original row order and dropping the derivations of the retracted facts.
+/// Retract indexed native rows and drop their own derivations without copying survivors.
 fn retract<const N: usize>(
     state: &mut FixpointState<TermInterner, N>,
     facts: &[ShapeFact<N>],
@@ -628,23 +659,23 @@ where
     if facts.is_empty() {
         return Ok(());
     }
-    let doomed: BTreeSet<&ShapeFact<N>> = facts.iter().collect();
-    let mut rebuilt =
-        RelationStore::<TermInterner, N>::with_dictionary(state.rel.retraction_dictionary()?);
-    let mut depth = Vec::with_capacity(state.depth.len());
-    for (row, fact) in state.rel.facts_in_row_order() {
-        if doomed.contains(&fact) {
-            continue;
-        }
-        rebuilt.insert_row(Arity::<N>::fact_terms(&fact))?;
-        depth.push(state.depth[row.resident_index()]);
+    // Admit the optional proof-filter index before changing any membership. A
+    // model-only retraction needs no new storage, regardless of model size.
+    let mut doomed = Vec::new();
+    if !state.derivations.is_empty() {
+        doomed
+            .try_reserve_exact(facts.len())
+            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+        doomed.extend(facts);
+        doomed.sort_unstable();
+        doomed.dedup();
     }
-    state.rel.transfer_base(&mut rebuilt);
-    state.rel = rebuilt;
-    state.depth = depth;
+    for fact in facts {
+        state.rel.remove_row(Arity::<N>::fact_terms(fact));
+    }
     state
         .derivations
-        .retain(|derivation| !doomed.contains(derivation.fact()));
+        .retain(|derivation| doomed.binary_search(&derivation.fact()).is_err());
     Ok(())
 }
 
@@ -996,61 +1027,66 @@ mod tests {
         fn evaluate(
             &self,
             call: &GuardCall<'_>,
-        ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-            let name = call.guard.name();
-            if let Some(bound) = name.strip_prefix("gt:") {
-                let bound: i64 = bound.parse().map_err(|_| "bad bound".to_owned())?;
-                let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                return Ok(if value > bound {
-                    vec![Vec::new()]
-                } else {
-                    Vec::new()
-                });
-            }
-            if let Some(fork) = name.strip_prefix("fork") {
-                let inner = call.inputs[0].trim_matches('"');
-                if let Some(limit) = fork.strip_prefix("-below:") {
-                    let limit: usize = limit.parse().map_err(|_| "bad limit".to_owned())?;
-                    if inner.len() >= limit {
-                        return Ok(Vec::new());
+        ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+            call.evaluate_lexical(|inputs| {
+                let name = call.guard.name();
+                if let Some(bound) = name.strip_prefix("gt:") {
+                    let bound: i64 = bound.parse().map_err(|_| "bad bound".to_owned())?;
+                    let value = int_of(inputs[0]).ok_or("not an integer")?;
+                    return Ok(if value > bound {
+                        vec![Vec::new()]
+                    } else {
+                        Vec::new()
+                    });
+                }
+                if let Some(fork) = name.strip_prefix("fork") {
+                    let inner = inputs[0].trim_matches('"');
+                    if let Some(limit) = fork.strip_prefix("-below:") {
+                        let limit: usize = limit.parse().map_err(|_| "bad limit".to_owned())?;
+                        if inner.len() >= limit {
+                            return Ok(Vec::new());
+                        }
                     }
+                    return Ok(vec![
+                        vec![format!("\"{inner}a\"").into()],
+                        vec![format!("\"{inner}b\"").into()],
+                    ]);
                 }
-                return Ok(vec![
-                    vec![format!("\"{inner}a\"")],
-                    vec![format!("\"{inner}b\"")],
-                ]);
-            }
-            if let Some(limit) = name.strip_prefix("succ-below:") {
-                let limit: i64 = limit.parse().map_err(|_| "bad limit".to_owned())?;
-                let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                return Ok(if value + 1 < limit {
-                    vec![vec![format!("\"{}\"", value + 1)]]
-                } else {
-                    Vec::new()
-                });
-            }
-            match name {
-                "succ" => {
-                    let value = int_of(call.inputs[0]).ok_or("not an integer")?;
-                    Ok(vec![vec![format!("\"{}\"", value + 1)]])
+                if let Some(limit) = name.strip_prefix("succ-below:") {
+                    let limit: i64 = limit.parse().map_err(|_| "bad limit".to_owned())?;
+                    let value = int_of(inputs[0]).ok_or("not an integer")?;
+                    return Ok(if value + 1 < limit {
+                        vec![vec![format!("\"{}\"", value + 1).into()]]
+                    } else {
+                        Vec::new()
+                    });
                 }
-                "cat" => {
-                    let inner = call.inputs[0].trim_matches('"');
-                    Ok(vec![vec![format!("\"{inner}x\"")]])
+                match name {
+                    "succ" => {
+                        let value = int_of(inputs[0]).ok_or("not an integer")?;
+                        Ok(vec![vec![format!("\"{}\"", value + 1).into()]])
+                    }
+                    "cat" => {
+                        let inner = inputs[0].trim_matches('"');
+                        Ok(vec![vec![format!("\"{inner}x\"").into()]])
+                    }
+                    "fresh" => {
+                        self.minted.set(self.minted.get() + 1);
+                        Ok(vec![vec![format!("_:m{}", self.minted.get()).into()]])
+                    }
+                    "fail" => Err("the guard could not decide".into()),
+                    "count-p" => {
+                        let count = call
+                            .model
+                            .len_for(&surface("p"), RelationStore::DEFAULT_GRAPH);
+                        Ok(vec![vec![
+                            surface("a").into(),
+                            format!("\"{count}\"").into(),
+                        ]])
+                    }
+                    other => Err(format!("unknown guard {other}").into()),
                 }
-                "fresh" => {
-                    self.minted.set(self.minted.get() + 1);
-                    Ok(vec![vec![format!("_:m{}", self.minted.get())]])
-                }
-                "fail" => Err("the guard could not decide".into()),
-                "count-p" => {
-                    let count = call
-                        .model
-                        .len_for(&surface("p"), RelationStore::DEFAULT_GRAPH);
-                    Ok(vec![vec![surface("a"), format!("\"{count}\"")]])
-                }
-                other => Err(format!("unknown guard {other}").into()),
-            }
+            })
         }
     }
 
@@ -1061,7 +1097,7 @@ mod tests {
             edb,
             &Guards::default(),
             &mut NoHooks,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect("evaluates")
@@ -1081,14 +1117,26 @@ mod tests {
         ]);
         let exe = compile(vec![rule]).expect("pure guards stratify");
         let edb = store(&[("a", "value", "\"1\""), ("b", "value", "\"5\"")]);
-        let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
-            .expect("evaluates");
+        let model = evaluate_guarded(
+            &exe,
+            edb,
+            &Guards::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("evaluates");
         assert!(has(model.facts(), "b", "next", "\"6\""));
         assert!(
             !has(model.facts(), "a", "next", "\"2\""),
             "the filter dropped a"
         );
-        assert_eq!(model.derivations().len(), 1);
+        assert_eq!(
+            model
+                .derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            1
+        );
     }
 
     /// Reordering ordinary and hybrid joins preserves guard-stage barriers and caller
@@ -1103,15 +1151,17 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-                assert_eq!(std::thread::current().id(), self.caller);
-                assert_eq!(call.rule, 0);
-                self.calls.borrow_mut().push((
-                    call.site,
-                    call.inputs[0].to_owned(),
-                    call.inputs[1].to_owned(),
-                ));
-                Ok(vec![Vec::new()])
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                call.evaluate_lexical(|inputs| {
+                    assert_eq!(std::thread::current().id(), self.caller);
+                    assert_eq!(call.rule, 0);
+                    self.calls.borrow_mut().push((
+                        call.site,
+                        inputs[0].to_owned(),
+                        inputs[1].to_owned(),
+                    ));
+                    Ok(vec![Vec::new()])
+                })
             }
         }
 
@@ -1155,7 +1205,8 @@ mod tests {
                     ("mb", "cycle-b", &surface("nb")),
                     ("nb", "cycle-c", &surface("sb")),
                 ]);
-                let options = EvalOptions::default();
+                let options = EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record);
                 let evaluation = if scheduled {
                     let program = compile_scheduled(
                         vec![rule.clone()],
@@ -1169,7 +1220,13 @@ mod tests {
                     evaluate_guarded(&program, edb, &trace, &options, None)
                 }
                 .expect("the connected guarded fixture evaluates");
-                assert_eq!(evaluation.derivations().len(), 2);
+                assert_eq!(
+                    evaluation
+                        .derivations()
+                        .expect("derivation recording was requested")
+                        .len(),
+                    2
+                );
                 assert!(has(evaluation.facts(), "va", "next", &surface("sa")));
                 assert!(has(evaluation.facts(), "vb", "next", &surface("sb")));
                 let calls = trace.calls.borrow();
@@ -1214,7 +1271,7 @@ mod tests {
             &exe,
             store(&[("a", "p", "\"1\"")]),
             &Guards::default(),
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect_err("the guard fails");
@@ -1247,8 +1304,14 @@ mod tests {
             ("v1", "severity", "\"9\""),
             ("v2", "severity", "\"3\""),
         ]);
-        let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
-            .expect("evaluates");
+        let model = evaluate_guarded(
+            &exe,
+            edb,
+            &Guards::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("evaluates");
         let yes = surface("yes");
         assert!(
             !has(model.facts(), "a", "safe", &yes),
@@ -1313,7 +1376,7 @@ mod tests {
             &counter(),
             seed(),
             &Guards::default(),
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect("the 10,000-step counter terminates under the default limits");
@@ -1325,7 +1388,9 @@ mod tests {
             DEFAULT_MAX_TERM_GENERATING_ROUNDS
         );
 
-        let limited = EvalOptions::default().with_max_term_generating_rounds(500);
+        let limited = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            .with_max_term_generating_rounds(500);
         let error = evaluate_guarded(&counter(), seed(), &Guards::default(), &limited, None)
             .expect_err("the same counter is refused under a limit of 500");
         let rendered = error.to_string();
@@ -1338,7 +1403,7 @@ mod tests {
             panic!("expected a term-limit refusal, got {error}");
         };
         assert_eq!(resource, BudgetResource::TermGeneratingRounds);
-        assert_eq!(rules, [0]);
+        assert_eq!(rules.as_ref(), &[0]);
         assert_eq!(report.term_generating_round_limit(), 500);
         assert_eq!(report.term_generating_rounds(), 501);
         assert!(
@@ -1354,7 +1419,9 @@ mod tests {
             rendered.contains("EvalOptions::with_max_term_generating_rounds"),
             "{rendered}"
         );
-        let fits = EvalOptions::default().with_max_term_generating_rounds(10_000);
+        let fits = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            .with_max_term_generating_rounds(10_000);
         evaluate_guarded(&counter(), seed(), &Guards::default(), &fits, None)
             .expect("a limit the counter fits in admits it");
     }
@@ -1391,8 +1458,14 @@ mod tests {
             RelationStore::DEFAULT_GRAPH,
         )
         .unwrap();
-        let model = evaluate_guarded(&exe, edb, &Guards::default(), &EvalOptions::default(), None)
-            .expect("a data-bounded counter completes under the default limits");
+        let model = evaluate_guarded(
+            &exe,
+            edb,
+            &Guards::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("a data-bounded counter completes under the default limits");
         assert!(has(
             model.facts(),
             &format!("n{LENGTH}"),
@@ -1418,7 +1491,7 @@ mod tests {
             &exe,
             store(&[("a", "name", "\"0\"")]),
             &Guards::default(),
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect_err("an unbounded counter passes the round limit");
@@ -1432,7 +1505,7 @@ mod tests {
             panic!("a term-limit refusal: {error}");
         };
         assert_eq!(resource, BudgetResource::TermGeneratingRounds);
-        assert_eq!(rules, [0]);
+        assert_eq!(rules.as_ref(), &[0]);
         assert_eq!(
             report.term_generating_rounds(),
             DEFAULT_MAX_TERM_GENERATING_ROUNDS + 1
@@ -1461,7 +1534,7 @@ mod tests {
             &forking("fork"),
             seed(),
             &Guards::default(),
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect_err("a doubling generator passes the budget");
@@ -1497,13 +1570,15 @@ mod tests {
             &forking("fork-below:10"),
             seed(),
             &Guards::default(),
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect("a bounded fork completes under the default budget");
         assert!(has(bounded.facts(), "a", "name", "\"ababababab\""));
         assert_eq!(bounded.budget().generated_terms(), 2_046);
-        let tight = EvalOptions::default().with_max_generated_terms(1_000);
+        let tight = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            .with_max_generated_terms(1_000);
         let error = evaluate_guarded(
             &forking("fork-below:10"),
             seed(),
@@ -1539,7 +1614,9 @@ mod tests {
             cache::contract_hash(std::slice::from_ref(&plain)),
             cache::contract_hash(std::slice::from_ref(&guarded))
         );
-        let options = EvalOptions::default().with_max_term_generating_rounds(7);
+        let options = EvalOptions::default()
+            .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            .with_max_term_generating_rounds(7);
         assert_eq!(
             cache::contract_hash_with(std::slice::from_ref(&plain), &options),
             cache::contract_hash(std::slice::from_ref(&plain)),
@@ -1551,7 +1628,15 @@ mod tests {
             "a guarded program's contract names the round limit in force"
         );
         let exe = compile(vec![plain]).expect("compiles");
-        let model = crate::seminaive::evaluate(&exe, store(&[("a", "p", "\"1\"")])).expect("runs");
+        let model = evaluate_guarded(
+            &exe,
+            store(&[("a", "p", "\"1\"")]),
+            &crate::guard::NoGuards,
+            &crate::seminaive::EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record),
+            None,
+        )
+        .expect("runs");
         assert_eq!(model.budget().term_generating_rounds(), 0);
     }
 
@@ -1627,7 +1712,14 @@ mod tests {
                 Schedule::new(vec![layer]),
                 edb(),
             );
-            assert_eq!(model.derivations().len(), 2, "one solution, two conjuncts");
+            assert_eq!(
+                model
+                    .derivations()
+                    .expect("derivation recording was requested")
+                    .len(),
+                2,
+                "one solution, two conjuncts"
+            );
             assert!(
                 model
                     .facts()
@@ -1645,7 +1737,12 @@ mod tests {
             Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
             edb(),
         );
-        assert_eq!(once.derivations().len(), 2);
+        assert_eq!(
+            once.derivations()
+                .expect("derivation recording was requested")
+                .len(),
+            2
+        );
         let program = compile_scheduled(
             vec![rule(GuardReads::Model)],
             Schedule::new(vec![Layer::new(Vec::new(), vec![vec![0]])]),
@@ -1656,7 +1753,7 @@ mod tests {
             edb(),
             &Guards::default(),
             &mut NoHooks,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect_err("never converges");
@@ -1667,7 +1764,7 @@ mod tests {
                     resource: BudgetResource::TermGeneratingRounds,
                     ref rules,
                     ..
-                } if rules == &[0]
+                } if rules.as_ref() == [0]
             ),
             "{error}"
         );
@@ -1676,7 +1773,9 @@ mod tests {
             edb(),
             &Guards::default(),
             &mut NoHooks,
-            &EvalOptions::default().with_max_term_generating_rounds(100),
+            &EvalOptions::default()
+                .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+                .with_max_term_generating_rounds(100),
             None,
         )
         .expect_err("never converges");
@@ -1754,7 +1853,7 @@ mod tests {
             edb,
             &Guards::default(),
             &mut Hooks,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect("evaluates");
@@ -1775,6 +1874,7 @@ mod tests {
         assert!(!has(model.facts(), "b", "temp", "\"t\""), "finish hook");
         let kept = model
             .derivations()
+            .expect("derivation recording was requested")
             .iter()
             .find(|d| d.fact().subject == surface("b") && d.fact().predicate == surface("area"))
             .expect("the confirming derivation is recorded");
@@ -1882,13 +1982,15 @@ mod tests {
                     edb,
                     &Guards::default(),
                     &mut Assumptions(assumed.clone()),
-                    &EvalOptions::default(),
+                    &EvalOptions::default()
+                        .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                     None,
                 )
                 .expect("evaluates");
                 for (fact, expected_rule) in assumed.iter().zip(expected_rules) {
                     let proof = evaluation
                         .derivations()
+                        .expect("derivation recording was requested")
                         .iter()
                         .find(|proof| proof.fact() == fact)
                         .expect("confirmed proof survives retraction");
@@ -1965,7 +2067,8 @@ mod tests {
                 store(&[("a", "p", &surface("x"))]),
                 &crate::guard::NoGuards,
                 &mut hooks,
-                &EvalOptions::default(),
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 None,
             )
             .expect_err("actual term mint capacity refusal");
@@ -1996,22 +2099,24 @@ mod tests {
             fn evaluate(
                 &self,
                 call: &GuardCall<'_>,
-            ) -> Result<Vec<Vec<String>>, crate::guard::CallbackError> {
-                if call.guard.name() == "first" && call.inputs[0] == surface("b") {
-                    if self.storage {
-                        crate::id::TermId::from_index(u64::MAX)
-                            .map_err(purrdf_lex::allocation::StorageError::from)?;
+            ) -> Result<crate::guard::GuardRows, crate::guard::CallbackError> {
+                call.evaluate_lexical(|inputs| {
+                    if call.guard.name() == "first" && inputs[0] == surface("b") {
+                        if self.storage {
+                            crate::id::TermId::from_index(u64::MAX)
+                                .map_err(purrdf_lex::allocation::StorageError::from)?;
+                        }
+                        return if self.malformed {
+                            Ok(vec![vec!["unexpected".into()]])
+                        } else {
+                            Err("first-later-row".into())
+                        };
                     }
-                    return if self.malformed {
-                        Ok(vec![vec!["unexpected".to_owned()]])
-                    } else {
-                        Err("first-later-row".into())
-                    };
-                }
-                if call.guard.name() == "second" {
-                    return Err("second-earlier-row".into());
-                }
-                Ok(vec![Vec::new()])
+                    if call.guard.name() == "second" {
+                        return Err("second-earlier-row".into());
+                    }
+                    Ok(vec![Vec::new()])
+                })
             }
         }
         let rule = DlClause::datalog(
@@ -2033,7 +2138,8 @@ mod tests {
                 store(&[("a", "p", &surface("x")), ("b", "p", &surface("x"))]),
                 &Errors { malformed, storage },
                 &mut NoHooks,
-                &EvalOptions::default(),
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record),
                 None,
             )
             .expect_err("first-stage refusal");
@@ -2123,7 +2229,7 @@ mod tests {
             ]),
             &Guards::default(),
             &mut Hooks,
-            &EvalOptions::default(),
+            &EvalOptions::default().with_derivation_mode(crate::seminaive::DerivationMode::Record),
             None,
         )
         .expect("evaluates");
@@ -2132,6 +2238,7 @@ mod tests {
         {
             let proof = evaluation
                 .derivations()
+                .expect("derivation recording was requested")
                 .iter()
                 .find(|proof| proof.fact().predicate == surface(predicate))
                 .expect("proof recorded");
@@ -2181,8 +2288,14 @@ mod tests {
         )
         .expect("compiles");
         assert_ne!(
-            program.contract_hash(&EvalOptions::default()),
-            other.contract_hash(&EvalOptions::default()),
+            program.contract_hash(
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            ),
+            other.contract_hash(
+                &EvalOptions::default()
+                    .with_derivation_mode(crate::seminaive::DerivationMode::Record)
+            ),
             "the schedule is hashed"
         );
     }

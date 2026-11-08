@@ -55,6 +55,9 @@
 //! literal subject or a non-IRI predicate produces no triple for that combination, and
 //! a SPARQL rule's CONSTRUCT already omits them by SPARQL's own CONSTRUCT semantics.
 
+mod admission;
+pub use admission::RuleAdmissionError;
+
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -67,9 +70,11 @@ use crate::data_view::ShaclRead as _;
 use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
 use crate::model::{rdf, sh};
-use crate::shapes::{Path, PropertyShape, Shape, Shapes, Target};
+use crate::shapes::{Path, Shape, Shapes, Target};
 use crate::srl::reads::{Anchor, ReadPattern};
 use crate::srl::{self, Inference};
+
+pub use crate::sparql::coordinates::RuleCoordinates;
 use crate::term::canonical_cmp;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
@@ -309,7 +314,7 @@ impl RuleOptions {
     }
 
     /// Select a reproducible sequence of seeds for the rule execution's queries.
-    /// Each SPARQL execution takes one draw from the shared SplitMix64 law;
+    /// Each SPARQL execution takes one draw from the shared `SplitMix64` law;
     /// preparing a query consumes none. A new inference starts the sequence again.
     #[must_use]
     pub const fn with_entropy_seed(mut self, seed: u64) -> Self {
@@ -397,12 +402,9 @@ impl RuleOptions {
     /// rule set's data, and every triple inferred — and refuse one more with a
     /// [`RuleLimitExceeded`] naming the limit.
     ///
-    /// The DEFAULT is sized for the target
-    /// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS)):
-    /// 4,194,304 facts natively, and 131,072 on `wasm32`, where the store lives in one
-    /// linear memory. A rule set whose inferences are large but finite states what it
-    /// needs here; the limit can only refuse, so a run it admits infers exactly what it
-    /// would under any larger limit.
+    /// Unstated, this capacity setting imposes no logical ceiling on any target.
+    /// Physical storage admission still applies. A limit can only refuse; an
+    /// admitted run infers the same complete result under any larger ceiling.
     #[must_use]
     pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
         self.max_stored_facts = Some(facts);
@@ -412,14 +414,9 @@ impl RuleOptions {
     /// Permit exactly `steps` JOIN STEPS — candidate solutions the rule bodies enumerate —
     /// and refuse one more with a [`RuleLimitExceeded`] naming the limit.
     ///
-    /// The DEFAULT is sized for the target
-    /// ([`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)):
-    /// 1,048,576 on every target — it is what refuses a rule that keeps minting new terms
-    /// promptly; see [`NATIVE_DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS).
-    /// A rule set that needs more work, such as the non-linear transitive closure of a
-    /// thousand-node chain, states it here. It also bounds a rule body that
-    /// enumerates far more candidates than it infers triples — an accidental cross
-    /// product — which the stored-fact limit alone would not see.
+    /// Unstated, this capacity setting imposes no logical ceiling on any target.
+    /// A finite setting also bounds a body that enumerates far more candidates
+    /// than it infers triples. Counter overflow remains a typed refusal.
     #[must_use]
     pub fn with_max_join_steps(mut self, steps: u64) -> Self {
         self.max_join_steps = Some(steps);
@@ -565,6 +562,15 @@ pub enum RuleLimit {
     JoinSteps,
 }
 
+impl purrdf_hash::error::StructuredError for RuleLimit {
+    purrdf_hash::error_visit! {
+        TermGeneratingRounds => "rule-limit-term-generating-rounds" {},
+        GeneratedTerms => "rule-limit-generated-terms" {},
+        StoredFacts => "rule-limit-stored-facts" {},
+        JoinSteps => "rule-limit-join-steps" {},
+    }
+}
+
 /// A rule set refused for passing a rule-evaluation limit ([`RuleOptions`]).
 ///
 /// It states the limit, how far past it the run went, the knob that raises it and — for
@@ -573,6 +579,8 @@ pub enum RuleLimit {
 /// undecidable, and a rule set that needs more states it with the knob this names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleLimitExceeded {
+    /// The original complete resource report of the refused evaluation.
+    usage: purrdf_datalog::seminaive::BudgetReport,
     limit: RuleLimit,
     observed: u64,
     permitted: u64,
@@ -586,7 +594,27 @@ pub struct RuleLimitExceeded {
     knob: String,
 }
 
+impl purrdf_hash::error::StructuredError for RuleLimitExceeded {
+    purrdf_hash::error_visit! {
+        @record self { usage, limit, observed, permitted, stated, input_terms, rules, indices, knob }
+        => "shacl-rule-limit-exceeded" {
+            "usage" => Record(&self.usage), "limit" => Record(&self.limit),
+            "observed" => Unsigned(u128::from(self.observed)), "permitted" => Unsigned(u128::from(self.permitted)),
+            "stated" => Boolean(self.stated), "input_terms" => Unsigned(u128::from(self.input_terms)),
+            "rules" => List(self.rules.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))),
+            "indices" => List(self.indices.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))),
+            "knob" => Text(&self.knob),
+        }
+    }
+}
+
 impl RuleLimitExceeded {
+    /// Every measured resource and effective limit at the refusal.
+    #[must_use]
+    pub fn usage(&self) -> &purrdf_datalog::seminaive::BudgetReport {
+        &self.usage
+    }
+
     /// Rename the rules by their index into the evaluated rule set.
     pub(crate) fn rename(&mut self, name: impl Fn(usize) -> Option<String>) {
         for (slot, &index) in self.rules.iter_mut().zip(&self.indices) {
@@ -715,22 +743,102 @@ const fn capacity_origin(stated: bool) -> &'static str {
     if stated {
         "the caller's limit"
     } else {
-        "the default for this target"
+        "the unlimited setting"
     }
 }
 
 impl std::error::Error for RuleLimitExceeded {}
 
+/// A failed rule execution with its original typed cause and observed contexts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleExecutionError {
+    /// Original failure; cancellation and resource reports are not rendered away.
+    pub cause: Box<RulesError>,
+    /// Supplied coordinates and all contexts captured before the failure.
+    pub coordinates: RuleCoordinates,
+}
+
+impl purrdf_hash::error::StructuredError for RuleExecutionError {
+    purrdf_hash::error_visit! {
+        @record self { cause, coordinates } => "shacl-rule-execution" {
+            "cause" => Cause(self.cause.as_ref()), "coordinates" => Record(&self.coordinates),
+        }
+    }
+}
+impl RuleExecutionError {
+    /// Recover the original typed cause after retaining this execution's receipt.
+    #[must_use]
+    pub fn into_cause(self) -> RulesError {
+        match *self.cause {
+            RulesError::Execution(error) => error.into_cause(),
+            cause => cause,
+        }
+    }
+    /// The original typed shapes cause through any nested rule invocation.
+    #[must_use]
+    pub const fn original_shapes(&self) -> Option<&crate::error::ShapesError> {
+        match &*self.cause {
+            RulesError::Shapes(error) => Some(error),
+            RulesError::Execution(error) => error.original_shapes(),
+            _ => None,
+        }
+    }
+    /// Preserve whether the original failure was operational or an input refusal.
+    #[must_use]
+    pub const fn failure_class(&self) -> crate::error::FailureClass {
+        match &*self.cause {
+            RulesError::Shapes(error) => error.failure_class(),
+            RulesError::Execution(error) => error.failure_class(),
+            RulesError::LimitExceeded(_) | RulesError::Stopped { .. } => {
+                crate::error::FailureClass::Processor
+            }
+            RulesError::Failed(_) | RulesError::WellFormedness(_) => {
+                crate::error::FailureClass::Evaluation
+            }
+        }
+    }
+}
+impl std::fmt::Display for RuleExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+impl std::error::Error for RuleExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
 /// Why [`crate::srl::evaluate`] refused: a passed rule-evaluation limit, or any other
 /// failure, as the engine's diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesError {
+    /// Original violated rule condition and native operands.
+    WellFormedness(srl::ir::WellFormednessError),
+    /// Executed contexts retained beside the original failure.
+    Execution(Box<RuleExecutionError>),
     /// A typed shapes or data materialization refusal.
     Shapes(crate::error::ShapesError),
     /// The rule set passed a rule-evaluation limit ([`RuleOptions`]).
-    LimitExceeded(RuleLimitExceeded),
+    LimitExceeded(Box<RuleLimitExceeded>),
+    /// Cooperative cancellation retains the original native stopped cause.
+    Stopped {
+        /// The Datalog stopped error, including its original usage report.
+        cause: Box<purrdf_datalog::seminaive::EvalError>,
+    },
     /// Any other failure.
     Failed(String),
+}
+
+impl purrdf_hash::error::StructuredError for RulesError {
+    purrdf_hash::error_visit! {
+        Execution(cause) => "shacl-rules-execution" { "cause" => Cause(cause.as_ref()) },
+        Shapes(cause) => "shacl-rules-shapes" { "cause" => Cause(cause) },
+        LimitExceeded(cause) => "shacl-rules-limit-exceeded" { "cause" => Cause(cause.as_ref()) },
+        Stopped { cause } => "shacl-rules-stopped" { "cause" => Cause(cause.as_ref()) },
+        WellFormedness(cause) => "shacl-rules-well-formedness" { "cause" => Cause(cause) },
+        Failed(message) => "shacl-rules-failed" { "message" => Text(message) },
+    }
 }
 
 impl RulesError {
@@ -756,7 +864,7 @@ impl RulesError {
                 knobs.generated_terms(),
             ),
             RuleLimit::StoredFacts => (
-                u64::try_from(report.stored_facts()).unwrap_or(u64::MAX),
+                u64::try_from(report.observed_stored_facts()).unwrap_or(u64::MAX),
                 report.stored_fact_limit(),
                 report.stored_fact_limit_stated(),
                 knobs.stored_facts(),
@@ -768,7 +876,8 @@ impl RulesError {
                 knobs.join_steps(),
             ),
         };
-        Self::LimitExceeded(RuleLimitExceeded {
+        Self::LimitExceeded(Box::new(RuleLimitExceeded {
+            usage: report,
             limit,
             observed,
             permitted,
@@ -777,15 +886,18 @@ impl RulesError {
             rules,
             indices,
             knob: knob.to_owned(),
-        })
+        }))
     }
 }
 
 impl std::fmt::Display for RulesError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Execution(error) => error.fmt(f),
             Self::Shapes(error) => error.fmt(f),
             Self::LimitExceeded(limit) => write!(f, "SHACL rules did not complete: {limit}"),
+            Self::Stopped { cause } => cause.fmt(f),
+            Self::WellFormedness(error) => error.fmt(f),
             Self::Failed(message) => f.write_str(message),
         }
     }
@@ -794,8 +906,11 @@ impl std::fmt::Display for RulesError {
 impl std::error::Error for RulesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Execution(error) => Some(error.as_ref()),
             Self::Shapes(error) => Some(error),
-            Self::LimitExceeded(error) => Some(error),
+            Self::LimitExceeded(error) => Some(error.as_ref()),
+            Self::Stopped { cause } => Some(cause.as_ref()),
+            Self::WellFormedness(error) => Some(error),
             Self::Failed(_) => None,
         }
     }
@@ -841,8 +956,7 @@ pub fn apply_rules(
 /// registered, on a rule or on any rule set; a requested rule set the shapes graph does
 /// not declare; a rule or expression that fails during execution; a rule set that keeps
 /// inferring new terms past a rule-evaluation limit, or that holds or enumerates more than
-/// the stored-fact or join-step limit permits ([`RuleLimitExceeded`]); and a rule set that
-/// passes the engine's fixed term-arena ceiling.
+/// the selected stored-fact or join-step limit permits ([`RuleLimitExceeded`]).
 pub fn infer(
     data: &ShaclData,
     shapes: &Shapes,
@@ -950,7 +1064,7 @@ pub enum RuleSource<'a> {
 /// through `purrdf_validate::apply_rules_to_ntriples`, and the entailment service), so a
 /// rules run of the same rule set over the same data is the same [`Inference`] whichever
 /// host asks. A SHACL shapes graph's data is projected into the SHACL evaluation view
-/// first; a SPARQL 1.2 RL rule set reads `data` as given.
+/// first; a SPARQL 1.2 RL rule set uses its existing inference projection.
 ///
 /// # Errors
 ///
@@ -962,17 +1076,38 @@ pub fn run_rules(
     limits: &RuleLimits,
     knobs: LimitKnobs,
 ) -> Result<Inference, crate::error::ShapesError> {
+    run_rules_with_options(source, data, &limits.rule_options(knobs))
+}
+
+/// Run either rule source with the caller's native execution options.
+///
+/// This is the shared dispatch used by [`run_rules`], retaining its projection,
+/// static checks and refusal behavior while honoring supplied time and entropy.
+/// Existing program identities and proof text do not become execution identities.
+///
+/// # Errors
+/// The errors of [`run_rules`], under the limits and knob names in `options`.
+pub fn run_rules_with_options(
+    source: RuleSource<'_>,
+    data: &RdfDataset,
+    options: &RuleOptions,
+) -> Result<Inference, crate::error::ShapesError> {
     match source {
         RuleSource::Shapes(shapes) => {
             let projected = crate::engine::project_dataset(data)?;
             let holder = ShaclData::new(Arc::clone(&projected), projected, None);
-            infer(&holder, shapes, &limits.rule_options(knobs))
+            infer(&holder, shapes, options)
         }
-        RuleSource::Srl(document) => srl::infer(document, data, &limits.infer_options(knobs))
-            .map_err(|error| match error {
-                srl::SrlError::Shapes(error) => error,
-                error => crate::error::ShapesError::Invalid(error.to_string()),
-            }),
+        RuleSource::Srl(document) => srl::infer(
+            document,
+            data,
+            &srl::InferOptions::from_rules(options.clone()),
+        )
+        .map_err(|error| match error {
+            srl::SrlError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
+            srl::SrlError::Shapes(error) => error,
+            error => crate::error::ShapesError::Srl(Box::new(error)),
+        }),
     }
 }
 
@@ -986,13 +1121,19 @@ pub(crate) fn infer_with(
     // Declared SHACL-AF functions, and any caller-injected custom aggregates, are in
     // scope for node expressions and CONSTRUCT bodies for the whole run; the guards
     // restore the previous tables on drop.
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let rule_set = shacl_rule_set(shapes, options)?;
-    srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution).map_err(|error| {
+    srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution, None).map_err(|error| {
         match error {
+            RulesError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
             RulesError::Shapes(error) => error,
+            RulesError::WellFormedness(error) => {
+                crate::error::ShapesError::RuleWellFormedness(error)
+            }
             error => crate::error::ShapesError::Invalid(error.to_string()),
         }
     })
@@ -1035,16 +1176,14 @@ pub fn entail_dataset(
 pub fn shacl_rule_set<'a>(
     shapes: &'a Shapes,
     options: &RuleOptions,
-) -> Result<srl::ir::RuleSet<'a>, String> {
+) -> Result<srl::ir::RuleSet<'a>, RuleAdmissionError> {
     for set in &shapes.rules.rule_sets {
         for value in &set.processors {
             if options.rule_processor(value).is_none() {
-                return Err(format!(
-                    "rule set {} declares sh:ruleProcessor {value}, which this rules engine \
-                     has not been given a processor for; SHACL 1.2 Inference Rules: \"A rules \
-                     engine that encounters rules or rule sets with a value for \
-                     sh:ruleProcessor that they are unable to handle MUST report a failure\"",
-                    Term::NamedNode(set.id.clone())
+                return Err(RuleAdmissionError::processor(
+                    Term::NamedNode(set.id.clone()),
+                    value.clone(),
+                    true,
                 ));
             }
         }
@@ -1104,15 +1243,13 @@ pub fn shacl_rule_set<'a>(
 }
 
 /// Refuse a rule whose `sh:ruleProcessor` the host has not registered.
-fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), String> {
+fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), RuleAdmissionError> {
     for value in &rule.processors {
         if options.rule_processor(value).is_none() {
-            return Err(format!(
-                "rule {} declares sh:ruleProcessor {value}, which this rules engine has not \
-                 been given a processor for; SHACL 1.2 Inference Rules: \"A rules engine that \
-                 encounters rules or rule sets with a value for sh:ruleProcessor that they are \
-                 unable to handle MUST report a failure\"",
-                rule.id
+            return Err(RuleAdmissionError::processor(
+                rule.id.clone(),
+                value.clone(),
+                false,
             ));
         }
     }
@@ -1160,7 +1297,10 @@ fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
 /// # Errors
 ///
 /// When an IRI, or a rule set it includes, is not a declared rule set.
-fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<Vec<Term>, String> {
+fn rule_set_members(
+    sets: &[RuleSetDeclaration],
+    iris: &[NamedNode],
+) -> Result<Vec<Term>, RuleAdmissionError> {
     let mut members: Vec<Term> = Vec::new();
     let mut pending = iris.to_vec();
     let mut seen: Vec<NamedNode> = Vec::new();
@@ -1169,10 +1309,7 @@ fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<V
             continue;
         }
         let Some(set) = sets.iter().find(|set| set.id == next) else {
-            return Err(format!(
-                "rule set {} is not declared in the shapes graph (no sh:RuleSet of that IRI)",
-                Term::NamedNode(next)
-            ));
+            return Err(RuleAdmissionError::missing_set(next));
         };
         members.extend(set.rules.iter().cloned());
         pending.extend(set.includes.iter().cloned());
@@ -1298,11 +1435,12 @@ fn discover(
     rule: &Rule,
     shape: &Shape,
     gained: &[[Term; 3]],
-) -> Option<Vec<Term>> {
+) -> Result<Option<Vec<Term>>, crate::error::ShapesError> {
     // Which focus nodes a node-expression `sh:deactivated` leaves is decided over the
     // graph as it stands, not from the triples gained.
-    if !rule.conditions.is_empty() || !shape.deactivated_when.is_empty() {
-        return None;
+    let definition = shape.resolved_in(shape.owner.as_deref())?;
+    if !rule.conditions.is_empty() || !definition.deactivated_when.is_empty() {
+        return Ok(None);
     }
     let mut classes: Vec<&str> = Vec::new();
     for target in &shape.targets {
@@ -1311,7 +1449,7 @@ fn discover(
                 classes.push(class.as_str());
             }
             Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) => {}
-            _ => return None,
+            _ => return Ok(None),
         }
     }
     let is = |term: &Term, iri: &str| matches!(term, Term::NamedNode(node) if node.as_str() == iri);
@@ -1319,7 +1457,7 @@ fn discover(
     let mut found = Vec::new();
     for [subject, predicate, object] in gained {
         if is(predicate, crate::model::rdfs::SUB_CLASS_OF) || is(predicate, sh::SHAPE) {
-            return None;
+            return Ok(None);
         }
         for target in &shape.targets {
             match target {
@@ -1341,7 +1479,7 @@ fn discover(
             }
         }
     }
-    Some(found)
+    Ok(Some(found))
 }
 
 impl FocusRecord {
@@ -1360,8 +1498,9 @@ fn eligible_focus_nodes(
     data: &ShaclData,
     rule: &Rule,
     shape: &Shape,
+    request: &crate::engine::ValidationRequest,
 ) -> Result<Vec<Term>, crate::error::ShapesError> {
-    let plan = RulePlan::of(data, shape, &rule.conditions);
+    let plan = RulePlan::of(data, shape, &rule.conditions, request)?;
     // Read once per resolution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between the
     // condition checks of successive focus nodes; the ungoverned path pays one branch.
@@ -1405,6 +1544,7 @@ pub(crate) fn execute_rule(
     data: &ShaclData,
     rule: &Rule,
     shapes: &[&Shape],
+    request: &crate::engine::ValidationRequest,
     shapes_graph_iri: Option<&str>,
     mint: &mut dyn FnMut() -> u64,
     mut selection: FocusSelection<'_>,
@@ -1418,6 +1558,7 @@ pub(crate) fn execute_rule(
                 object,
             } => global_triple_rule(
                 data,
+                request,
                 subject.as_ref(),
                 predicate.as_ref(),
                 object.as_ref(),
@@ -1465,13 +1606,13 @@ pub(crate) fn execute_rule(
     for (index, shape) in shapes.iter().enumerate() {
         let (focus_nodes, run, eligible) = match &mut selection {
             FocusSelection::Every => {
-                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                 let run = vec![true; focus_nodes.len()];
                 let eligible = focus_nodes.len();
                 (focus_nodes, run, eligible)
             }
             FocusSelection::Changed(record) => {
-                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                 *record.slot(index) = focus_nodes.iter().cloned().collect();
                 let run = vec![true; focus_nodes.len()];
                 let eligible = focus_nodes.len();
@@ -1479,7 +1620,7 @@ pub(crate) fn execute_rule(
             }
             FocusSelection::Incremental { record, gained, .. } => {
                 let executed = record.slot(index);
-                match discover(data, rule, shape, gained) {
+                match discover(data, rule, shape, gained)? {
                     Some(found) => {
                         let mut focus_nodes: Vec<Term> = found
                             .into_iter()
@@ -1497,7 +1638,7 @@ pub(crate) fn execute_rule(
                         (focus_nodes, run, executed.len())
                     }
                     None => {
-                        let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                        let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                         let run: Vec<bool> = focus_nodes
                             .iter()
                             .map(|focus| !executed.contains(focus) || affected.contains(focus))
@@ -1525,7 +1666,13 @@ pub(crate) fn execute_rule(
                     .filter(|(_, run)| **run)
                     .map(|(focus, _)| focus.clone())
                     .collect();
-                triple_rule_execution(data, [subject, predicate, object], &executed, &mut out)?;
+                triple_rule_execution(
+                    data,
+                    request,
+                    [subject, predicate, object],
+                    &executed,
+                    &mut out,
+                )?;
             }
             RuleBody::Sparql {
                 construct,
@@ -1559,6 +1706,7 @@ fn well_formed(subject: &Term, predicate: &Term) -> bool {
 /// A shape rule's `sh:TripleRule` execution over its focus nodes.
 fn triple_rule_execution(
     data: &ShaclData,
+    request: &crate::engine::ValidationRequest,
     expressions: [&Option<NodeExpr>; 3],
     focus_nodes: &[Term],
     out: &mut Vec<[Term; 3]>,
@@ -1567,8 +1715,12 @@ fn triple_rule_execution(
     // execution rather than once per focus node.
     let plans: Vec<Option<ExprPlan<'_>>> = expressions
         .iter()
-        .map(|expr| expr.as_ref().map(|expr| ExprPlan::of(data, expr)))
-        .collect();
+        .map(|expr| {
+            expr.as_ref()
+                .map(|expr| ExprPlan::of(data, expr, request))
+                .transpose()
+        })
+        .collect::<Result<_, crate::error::ShapesError>>()?;
     // Read once per execution, polled per focus node: a governed rule application stops
     // (and a host slicing its signal into yields gets the event loop back) between focus
     // nodes of a rule that runs no SPARQL; the ungoverned path pays one branch.
@@ -1602,6 +1754,7 @@ fn triple_rule_execution(
 /// expression yields exactly its value.
 fn global_triple_rule(
     data: &ShaclData,
+    request: &crate::engine::ValidationRequest,
     subject: Option<&NodeExpr>,
     predicate: Option<&NodeExpr>,
     object: Option<&NodeExpr>,
@@ -1615,7 +1768,7 @@ fn global_triple_rule(
     let mut guard = RecursionGuard::default();
     let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
     for expr in [subject, predicate, object] {
-        let mut values = ExprPlan::of(data, expr).eval(data, &absent, &mut guard)?;
+        let mut values = ExprPlan::of(data, expr, request)?.eval(data, &absent, &mut guard)?;
         values.retain(|value| *value != absent);
         sets.push(values);
     }
@@ -1779,8 +1932,9 @@ fn read_constructed(graph: &RdfDataset, out: &mut Vec<[Term; 3]>) {
 /// Whether property shape `ps` computes derived value nodes for one of
 /// `expected`: it is not deactivated, its path is one of those predicates, and it
 /// declares `sh:values` or `sh:defaultValue`.
-fn derives_expected(ps: &PropertyShape, expected: &FastSet<&str>) -> bool {
-    !ps.deactivated
+fn derives_expected(view: crate::shapes::PropertyView<'_>, expected: &FastSet<&str>) -> bool {
+    let ps = view.property;
+    !view.deactivated()
         && (ps.values.is_some() || ps.default_value.is_some())
         && matches!(&ps.path, Path::Predicate(p) if expected.contains(p.as_str()))
 }
@@ -1813,21 +1967,46 @@ pub(crate) fn expected_derived_triples(
 ) -> Result<Vec<[Term; 3]>, crate::error::ShapesError> {
     let mut out: Vec<[Term; 3]> = Vec::new();
     for shape in &shapes.node_shapes {
-        if shape.deactivated
-            || !shape
-                .property_shapes
-                .iter()
-                .any(|ps| derives_expected(ps, expected))
-        {
+        if shape.deactivated {
             continue;
         }
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape));
+        let model = shape.owner.as_ref().unwrap_or(&shapes.owner);
+        let definition = shape.resolved_in(Some(model))?;
+        if definition.deactivated {
+            continue;
+        }
+        let mut derives = false;
+        for view in definition.properties_in(Some(model)) {
+            if derives_expected(view?, expected) {
+                derives = true;
+                break;
+            }
+        }
+        if !derives {
+            continue;
+        }
+        let lowered = crate::plan::lower_shapes_in_model(std::iter::once(definition), Some(model))?;
         let binding = lowered.bind(data.core_view(), lowered.classes());
-        let focus_nodes =
-            resolve_focus_nodes(data, &shape.id, &shape.targets, &binding, lowered.classes())?;
-        let plan = lowered.untargeted_plan(shape, 0, &binding)?;
-        for (ps, property_plan) in plan.properties()? {
-            if !derives_expected(ps, expected) {
+        let focus_nodes = resolve_focus_nodes(
+            data,
+            &shape.id,
+            &shape.targets,
+            lowered.target_binding(&binding, lowered.classes(), Some(model)),
+        )?;
+        let plan = lowered.untargeted_plan(definition, 0, &binding)?;
+        for property in plan
+            .properties()?
+            .map(Ok)
+            .chain(plan.referenced_properties()?)
+        {
+            let (ps, property_plan) = property?;
+            if !derives_expected(
+                crate::shapes::PropertyView {
+                    property: ps,
+                    edge: property_plan.edge(),
+                },
+                expected,
+            ) {
                 continue;
             }
             let Path::Predicate(predicate) = &ps.path else {
@@ -1850,11 +2029,18 @@ pub(crate) fn expected_derived_triples(
                     plan.deactivated_when()?,
                 )? || crate::constraints::deactivated_at(
                     data,
-                    plan,
+                    property_plan.parent(),
                     0,
                     &focus_node,
                     &ps.id,
                     property_plan.deactivated_when(ps)?,
+                )? || crate::constraints::deactivated_at(
+                    data,
+                    property_plan.parent(),
+                    0,
+                    &focus_node,
+                    &ps.id,
+                    property_plan.edge_deactivation(),
                 )? {
                     continue;
                 }
@@ -1887,15 +2073,21 @@ impl<'a> RulePlan<'a> {
     /// Lower the rule's shape TOGETHER WITH its conditions and bind the lot to `data`,
     /// once per execution. One lowering rather than several is what fixes the plan
     /// positions the rest of this type relies on.
-    fn of(data: &ShaclData, shape: &'a Shape, conditions: &'a [Shape]) -> Self {
-        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions));
-        let binding = lowered.bind(data.core_view(), lowered.classes());
-        Self {
+    fn of(
+        data: &ShaclData,
+        shape: &'a Shape,
+        conditions: &'a [Shape],
+        request: &crate::engine::ValidationRequest,
+    ) -> Result<Self, crate::error::ShapesError> {
+        let lowered = crate::plan::lower_shapes(std::iter::once(shape).chain(conditions))?;
+        let mut binding = lowered.bind(data.core_view(), lowered.classes());
+        binding.set_validation_request(request);
+        Ok(Self {
             lowered,
             binding,
             shape,
             conditions,
-        }
+        })
     }
 
     /// Resolve the focus nodes of the rule's shape against the current dataset.
@@ -1904,8 +2096,11 @@ impl<'a> RulePlan<'a> {
             data,
             &self.shape.id,
             &self.shape.targets,
-            &self.binding,
-            self.lowered.classes(),
+            self.lowered.target_binding(
+                &self.binding,
+                self.lowered.classes(),
+                self.shape.owner.as_ref(),
+            ),
         )
         .map(|nodes| {
             // The rules engine drives the owned-term SHACL-AF surfaces, so this is one of
@@ -1928,7 +2123,7 @@ impl<'a> RulePlan<'a> {
 
     /// The plan of the rule's own shape.
     fn shape_plan(&self) -> Result<crate::plan::ShapePlan<'_>, crate::error::ShapesError> {
-        self.plan_at(self.shape, 0)
+        self.plan_at(self.shape, 0)?.definition()
     }
 
     /// The plan of the `position`-th `sh:condition` shape.
@@ -1949,14 +2144,19 @@ struct ExprPlan<'a> {
 
 impl<'a> ExprPlan<'a> {
     /// Lower `expr` standalone and resolve every identity it names against `data`.
-    fn of(data: &ShaclData, expr: &'a NodeExpr) -> Self {
-        let lowering = crate::plan::lower_standalone_expression(expr);
-        let binding = lowering.bind(data.core_view());
-        Self {
+    fn of(
+        data: &ShaclData,
+        expr: &'a NodeExpr,
+        request: &crate::engine::ValidationRequest,
+    ) -> Result<Self, crate::error::ShapesError> {
+        let lowering = crate::plan::lower_standalone_expression(expr, None)?;
+        let mut binding = lowering.bind(data.core_view());
+        binding.set_validation_request(request);
+        Ok(Self {
             expr,
             lowering,
             binding,
-        }
+        })
     }
 
     /// Evaluate the expression at `focus`. `guard` is supplied rather than created here
@@ -2430,11 +2630,46 @@ mod tests {
         triples(ds).contains(&(ex(s), ex(p), ex(o)))
     }
 
-    fn canon(ds: &RdfDataset) -> String {
-        ::purrdf_rdf::canonicalize(ds).nquads
+    fn canon(ds: &RdfDataset) -> purrdf_core::Canonicalized {
+        ::purrdf_rdf::try_canonicalize(
+            ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn derived_values_use_the_graph_owner_for_bare_shape_targets() {
+        let mut shapes = parse_shapes(
+            "ex:Selection sh:node ex:Named .
+             ex:Named sh:nodeKind sh:IRI .
+             ex:S a sh:NodeShape; sh:targetWhere ex:Selection;
+               sh:property [ sh:path ex:derived; sh:values ex:value ] .",
+        );
+        let root = shapes
+            .node_shapes
+            .iter_mut()
+            .find(|shape| shape.id.to_string() == ex("S"))
+            .unwrap();
+        *root = shapes.owner.definition(&root.id).unwrap().clone();
+        assert!(root.owner.is_none());
+        let dataset = crate::text_ingest::parse_turtle_to_dataset(
+            &format!("{PREFIXES}ex:a ex:source 1 ."),
+            None,
+        )
+        .unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let expected = FastSet::from_iter(["http://example.org/ns#derived"]);
+        let triples = expected_derived_triples(&data, &shapes, &expected).unwrap();
+        assert!(triples.iter().any(|[s, p, o]| s.to_string() == ex("a")
+            && p.to_string() == ex("derived")
+            && o.to_string() == ex("value")));
+    }
 
     #[test]
     fn parses_triple_rule() {
@@ -2548,12 +2783,17 @@ mod tests {
         assert!((rule.order.expect("order").value() - 3.0).abs() < f64::EPSILON);
         assert!(rule.deactivated);
         assert_eq!(rule.conditions.len(), 1);
-        // The condition is a RESOLVED shape, not the node term it was written as:
-        // it carries the property shape `ex:HasName` declares, so the rule holds
-        // everything it needs to evaluate the condition without a later lookup.
+        // The condition retains its original catalog identity and property edge.
         assert_eq!(rule.conditions[0].id.to_string(), ex("HasName"));
         assert_eq!(
-            rule.conditions[0].property_shapes.len(),
+            shapes
+                .owner
+                .definition(&rule.conditions[0].id)
+                .unwrap()
+                .properties_in(Some(&shapes.owner))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("original property definitions")
+                .len(),
             1,
             "the referenced shape's sh:property was parsed into the condition"
         );
@@ -3379,7 +3619,7 @@ mod tests {
         );
         assert!(has_iri(&forward, "alice", "a", "x"));
         assert!(has_iri(&forward, "alice", "b", "y"));
-        assert_eq!(canon(&forward), canon(&swapped));
+        assert_eq!(canon(&forward).nquads(), canon(&swapped).nquads());
     }
 
     // ── Ordered execution (SHACL 1.2 Inference Rules) ────────────────────────────
@@ -3461,8 +3701,8 @@ mod tests {
             triple_set(&negative_zero)
         );
         assert_eq!(
-            canon(&plain),
-            canon(&negative_zero),
+            canon(&plain).nquads(),
+            canon(&negative_zero).nquads(),
             "sh:order -0.0 and sh:order 0 must produce the identical closure"
         );
     }
@@ -3544,8 +3784,8 @@ mod tests {
         let swapped = entail(LAYERED_GATING_DATA, &layered_gating_shapes(1, 0));
 
         assert_ne!(
-            canon(&forward),
-            canon(&swapped),
+            canon(&forward).nquads(),
+            canon(&swapped).nquads(),
             "swapping sh:order over a condition-gated rule must change the closure"
         );
         // And concretely: the gated head appears only when its rule runs FIRST.
@@ -3773,7 +4013,12 @@ mod tests {
                 panic!("expected a sh:TripleRule head for {position}");
             };
             assert!(
-                matches!(subject, Some(NodeExpr::Empty)) || matches!(object, Some(NodeExpr::Empty)),
+                subject
+                    .as_ref()
+                    .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty))
+                    || object
+                        .as_ref()
+                        .is_some_and(|expr| matches!(expr.in_model().0, NodeExpr::Empty)),
                 "a bare blank head position is an empty expression for {position}"
             );
             let out = entail("ex:alice a ex:Person .", &body);
@@ -3941,7 +4186,10 @@ mod tests {
         let shapes = r"
             ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
               sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .";
-        assert_eq!(canon(&entail(data, shapes)), canon(&entail(data, shapes)));
+        assert_eq!(
+            canon(&entail(data, shapes)).nquads(),
+            canon(&entail(data, shapes)).nquads()
+        );
     }
 
     #[test]
@@ -3953,7 +4201,7 @@ mod tests {
                 "CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis } WHERE { $this a ex:Person }" ] ."#;
         let first = entail(data, shapes);
         let second = entail(data, shapes);
-        assert_eq!(canon(&first), canon(&second));
+        assert_eq!(canon(&first).nquads(), canon(&second).nquads());
         // Distinct focus nodes get distinct minted blanks (two ex:addr edges to two
         // different blank subjects of ex:city).
         let addr_objects: Vec<String> = triples(&first)
@@ -3994,8 +4242,8 @@ mod tests {
         let first = entail(data, shapes);
         let second = entail(data, shapes);
         assert_eq!(
-            canon(&first),
-            canon(&second),
+            canon(&first).nquads(),
+            canon(&second).nquads(),
             "blank-focus blank-minting must be byte-identical across runs"
         );
 
@@ -4083,8 +4331,8 @@ mod tests {
         let a = entail("_:x a ex:Person .", shapes);
         let b = entail("_:y a ex:Person .", shapes);
         assert_eq!(
-            canon(&a),
-            canon(&b),
+            canon(&a).nquads(),
+            canon(&b).nquads(),
             "isomorphic inputs (blank relabeled) must entail identically"
         );
     }
@@ -4218,11 +4466,12 @@ mod tests {
         // entailment is byte-stable.
         let first = entail(data, shapes);
         let second = entail(data, shapes);
-        assert_eq!(canon(&first), canon(&second));
+        assert_eq!(canon(&first).nquads(), canon(&second).nquads());
 
         // RDFC canonical labels: the blank in the base ex:has triple and in the
         // derived ex:copied triple must canonicalize to the SAME label.
-        let nq = canon(&first);
+        let nq_owner = canon(&first);
+        let nq = nq_owner.nquads();
         let object_of = |predicate: &str| -> String {
             nq.lines()
                 .find(|line| line.contains(predicate))
@@ -4245,7 +4494,7 @@ mod tests {
         // already co-refers with the base blank, so the closure is stable.
         let shapes_parsed = parse_shapes(shapes);
         let again = entail_dataset(first.as_ref(), &shapes_parsed).expect("re-entailment");
-        assert_eq!(canon(&first), canon(&again));
+        assert_eq!(canon(&first).nquads(), canon(&again).nquads());
     }
 
     /// The same co-reference guarantee for a data blank whose label is DOTTED.
@@ -4266,7 +4515,8 @@ mod tests {
                 "CONSTRUCT { $this ex:copied ?b } WHERE { $this ex:has ?b }" ] ."#;
 
         let entailed = entail(data, shapes);
-        let nq = canon(&entailed);
+        let nq_owner = canon(&entailed);
+        let nq = nq_owner.nquads();
         let object_of = |predicate: &str| -> String {
             nq.lines()
                 .find(|line| line.contains(predicate))
@@ -4405,8 +4655,8 @@ mod tests {
             let reparsed = ::purrdf_rdf::parse_dataset(&bytes, media, None)
                 .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
             assert_eq!(
-                canon(entailed),
-                canon(reparsed.as_ref()),
+                canon(entailed).nquads(),
+                canon(reparsed.as_ref()).nquads(),
                 "{media} round-trip must be isomorphic to the entailed dataset"
             );
         }

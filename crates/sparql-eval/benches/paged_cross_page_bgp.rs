@@ -265,10 +265,10 @@ fn bench_cross_page_bgp(c: &mut Bench) {
     // silently benchmark a no-op). `age > 30` keeps roughly (60 - 13) / 60 of the
     // ring, so this is comfortably non-empty for `ENTITIES = 200`.
     let single_rows = engine
-        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
         .expect("single query");
     let paged_rows = engine
-        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
         .expect("paged query");
     assert!(
         row_count(&single_rows) > 0,
@@ -288,7 +288,7 @@ fn bench_cross_page_bgp(c: &mut Bench) {
                     std::hint::black_box(&single),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("single query");
             std::hint::black_box(result);
@@ -301,7 +301,7 @@ fn bench_cross_page_bgp(c: &mut Bench) {
                     std::hint::black_box(&paged),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("paged query");
             std::hint::black_box(result);
@@ -410,10 +410,10 @@ fn bench_graph_selective_bgp(c: &mut Bench) {
     // Sanity pass: both backends must do real work scoped to the one named graph (a
     // broken fixture would silently benchmark a no-op).
     let single_rows = engine
-        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
         .expect("single graph query");
     let paged_rows = engine
-        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
         .expect("paged graph query");
     assert!(
         row_count(&single_rows) > 0,
@@ -433,7 +433,7 @@ fn bench_graph_selective_bgp(c: &mut Bench) {
                     std::hint::black_box(&single),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("single graph query");
             std::hint::black_box(result);
@@ -446,7 +446,7 @@ fn bench_graph_selective_bgp(c: &mut Bench) {
                     std::hint::black_box(&paged),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("paged graph query");
             std::hint::black_box(result);
@@ -522,10 +522,10 @@ fn bench_graph_var_bgp(c: &mut Bench) {
     // Sanity pass: both backends must do real per-graph work (a broken fixture would
     // silently benchmark a no-op).
     let single_rows = engine
-        .query_prepared(&single, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&single, &prepared, &[], &QueryOptions::EMPTY)
         .expect("single graph-var query");
     let paged_rows = engine
-        .query_prepared_view(&paged, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_view(&paged, &prepared, &[], &QueryOptions::EMPTY)
         .expect("paged graph-var query");
     assert!(
         row_count(&single_rows) > 0,
@@ -545,7 +545,7 @@ fn bench_graph_var_bgp(c: &mut Bench) {
                     std::hint::black_box(&single),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("single graph-var query");
             std::hint::black_box(result);
@@ -558,7 +558,7 @@ fn bench_graph_var_bgp(c: &mut Bench) {
                     std::hint::black_box(&paged),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("paged graph-var query");
             std::hint::black_box(result);
@@ -580,7 +580,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
         .prepare_query(QUERY, None)
         .expect("prepare selective join");
     let expected = engine
-        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
         .expect("resident selective join");
     assert_eq!(row_count(&expected), 1);
     let request = SparqlRequest {
@@ -590,7 +590,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     };
     let cold = open(&image, CEILING);
     let cold_answer = engine
-        .query_prepared_fallible_view(&cold, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&cold, &prepared, &[], &QueryOptions::EMPTY)
         .expect("cold persistent selective join");
     assert_eq!(
         cold_answer
@@ -604,7 +604,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     assert!(cold_answer.evidence.evictions() > 0);
     let hot = open_with_cache(&image, CEILING, 256);
     let hot_answer = engine
-        .query_prepared_fallible_view(&hot, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&hot, &prepared, &[], &QueryOptions::EMPTY)
         .expect("warm persistent selective join");
     assert_eq!(
         hot_answer.result.solutions().expect("SELECT shape").1.len(),
@@ -612,7 +612,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     );
     let warm_requests = hot.evidence().request_count();
     let cached = engine
-        .query_fallible_view(&hot, request, QueryOptions::EMPTY)
+        .query_fallible_view(&hot, request, &QueryOptions::EMPTY)
         .expect("cached selective join");
     assert_eq!(
         cached.result.solutions().expect("SELECT shape").1.len(),
@@ -621,17 +621,17 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     assert_eq!(hot.evidence().request_count(), warm_requests);
     let governors = QueryGovernors::METERED;
     let governed = engine
-        .query_governed_fallible_view(&hot, request, QueryOptions::EMPTY, &governors)
+        .query_governed_fallible_view(&hot, request, &QueryOptions::EMPTY, &governors)
         .expect("metered persistent selective join");
     assert_eq!(
         governed.result.solutions().expect("SELECT shape").1.len(),
         row_count(&expected)
     );
     let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
         .expect("prepare scoped selective join");
     let scoped_rows = engine
-        .execute_fallible(&mut execution, &hot, QueryOptions::EMPTY, |outcome| {
+        .execute_fallible(&mut execution, &hot, &QueryOptions::EMPTY, |outcome| {
             let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
                 panic!("SELECT returns rows")
             };
@@ -649,7 +649,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                     std::hint::black_box(&resident),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("resident selective join")
         });
@@ -663,7 +663,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                         std::hint::black_box(source),
                         std::hint::black_box(&prepared),
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                     )
                     .expect("cold persistent selective join")
             },
@@ -677,7 +677,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                     std::hint::black_box(&hot),
                     std::hint::black_box(&prepared),
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("hot persistent selective join")
         });
@@ -688,7 +688,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                 .query_fallible_view(
                     std::hint::black_box(&hot),
                     std::hint::black_box(request),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect("cached persistent selective join")
         });
@@ -699,7 +699,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                 .query_governed_fallible_view(
                     std::hint::black_box(&hot),
                     std::hint::black_box(request),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &governors,
                 )
                 .expect("metered persistent selective join")
@@ -711,7 +711,7 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
                 .execute_fallible(
                     std::hint::black_box(&mut execution),
                     std::hint::black_box(&hot),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     |outcome| {
                         let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
                             panic!("SELECT returns rows")

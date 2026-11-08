@@ -4,7 +4,9 @@
 use crate::RdfLocation;
 use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
 
+mod literal_error;
 mod traits;
+pub use literal_error::LiteralComponentError;
 
 /// RDF term category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,50 +72,60 @@ impl RdfLiteral {
         datatype: &str,
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
-    ) -> Result<(), &'static str> {
-        Self::diagnose_components(datatype, language, direction).map_err(|(_code, message)| message)
+    ) -> Result<(), LiteralComponentError> {
+        match Self::diagnose_components_with_memory(
+            datatype,
+            language,
+            direction,
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        ) {
+            Ok(()) => Ok(()),
+            Err(purrdf_lex::control::ControlledError::Native(cause)) => Err(cause),
+            Err(purrdf_lex::control::ControlledError::Control(_)) => {
+                // This borrowed grammar scan allocates nothing, and Resident
+                // disables the only possible control source: progress callbacks.
+                unreachable!("resident language diagnosis has no callback")
+            }
+        }
     }
 
-    /// [`validate_components`](Self::validate_components) with the refusal's
-    /// stable diagnostic code attached.
-    ///
-    /// The single implementation; `validate_components` is the `&'static str`
-    /// door onto it and keeps the published signature. Splitting the pair out
-    /// here is what lets `crate::ir::validate` report a malformed language tag
-    /// under the grammar's OWN code rather than collapsing every literal refusal
-    /// into one.
-    pub(crate) fn diagnose_components(
+    pub(crate) fn diagnose_components_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         datatype: &str,
         language: Option<&str>,
         direction: Option<RdfTextDirection>,
-    ) -> Result<(), (&'static str, &'static str)> {
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<
+        (),
+        purrdf_lex::control::ControlledError<
+            LiteralComponentError,
+            purrdf_lex::allocation::StorageError,
+        >,
+    > {
         if let Some(language) = language {
             // The grammar first: a datatype/direction mismatch on a tag that is
             // not a language tag at all would report the downstream symptom.
-            if let Err(error) = purrdf_iri::langtag::parse_with(
+            if let Err(error) = purrdf_iri::langtag::parse_with_memory(
                 language,
                 purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
+                memory,
             ) {
-                return Err((error.diagnostic_code(), error.message()));
+                let error = match error {
+                    purrdf_lex::control::ControlledError::Control(cause) => {
+                        return Err(purrdf_lex::control::ControlledError::Control(cause));
+                    }
+                    purrdf_lex::control::ControlledError::Native(cause) => cause,
+                };
+                return Err(LiteralComponentError::LanguageTag(error).into());
             }
             if datatype != Self::language_datatype_iri(direction) {
-                return Err((
-                    LITERAL_SHAPE_CODE,
-                    "literal datatype does not match its language and base direction",
-                ));
+                return Err(LiteralComponentError::DatatypeMismatch.into());
             }
         } else {
             if direction.is_some() {
-                return Err((
-                    LITERAL_SHAPE_CODE,
-                    "a base direction requires a language tag",
-                ));
+                return Err(LiteralComponentError::DirectionWithoutLanguage.into());
             }
             if matches!(datatype, RDF_LANG_STRING | RDF_DIR_LANG_STRING) {
-                return Err((
-                    LITERAL_SHAPE_CODE,
-                    "a language-string datatype requires a language tag",
-                ));
+                return Err(LiteralComponentError::LanguageDatatypeWithoutLanguage.into());
             }
         }
         Ok(())
@@ -135,7 +147,21 @@ impl RdfLiteral {
     /// This borrows the existing IRI or a constant and does not allocate.
     #[must_use]
     pub fn datatype_iri(&self) -> &str {
-        match (&self.language, self.direction, &self.datatype) {
+        Self::datatype_iri_from_parts(
+            self.datatype.as_deref(),
+            self.language.as_deref(),
+            self.direction,
+        )
+    }
+
+    /// The same expanded datatype over a borrowed native literal's fields.
+    #[must_use]
+    pub fn datatype_iri_from_parts<'a>(
+        datatype: Option<&'a str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> &'a str {
+        match (language, direction, datatype) {
             (Some(_), direction, _) => Self::language_datatype_iri(direction),
             (None, _, Some(datatype)) => datatype,
             (None, _, None) => XSD_STRING,
@@ -510,17 +536,31 @@ mod tests {
     #[test]
     fn malformed_language_tags_are_refused_with_the_grammars_own_code() {
         for tag in ["1", "9-9", "123-456", "en-", "-", "en us", "!!!", ""] {
-            let (code, message) = RdfLiteral::diagnose_components(RDF_LANG_STRING, Some(tag), None)
+            let cause = RdfLiteral::validate_components(RDF_LANG_STRING, Some(tag), None)
                 .expect_err("a malformed language tag must not construct");
+            let code = cause.diagnostic_code();
+            let message = cause.message();
             assert!(
                 code.starts_with("langtag-"),
                 "{tag:?} reported {code:?}, not a grammar code"
             );
             assert!(!message.is_empty(), "{tag:?} reported an empty reason");
-            // The `&'static str` door onto the same judgement agrees.
+            let original = purrdf_iri::langtag::parse_with(
+                tag,
+                purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
+            )
+            .expect_err("same grammar");
+            assert_eq!(cause, LiteralComponentError::LanguageTag(original));
             assert_eq!(
-                RdfLiteral::validate_components(RDF_LANG_STRING, Some(tag), None),
-                Err(message)
+                std::error::Error::source(&cause)
+                    .unwrap()
+                    .downcast_ref::<purrdf_iri::langtag::LanguageTagError>(),
+                Some(&original)
+            );
+            // Grammar still precedes a simultaneous datatype disagreement.
+            assert_eq!(
+                RdfLiteral::validate_components(XSD_STRING, Some(tag), None),
+                Err(cause)
             );
         }
     }
@@ -529,15 +569,36 @@ mod tests {
     /// keeps its own code, so the two stay distinguishable downstream.
     #[test]
     fn shape_failures_keep_the_literal_shape_code() {
-        for (datatype, language, direction) in [
-            (RDF_LANG_STRING, Some("en"), Some(RdfTextDirection::Ltr)),
-            (XSD_STRING, None, Some(RdfTextDirection::Rtl)),
-            (RDF_LANG_STRING, None, None),
-            (RDF_DIR_LANG_STRING, None, None),
+        for (datatype, language, direction, expected) in [
+            (
+                RDF_LANG_STRING,
+                Some("en"),
+                Some(RdfTextDirection::Ltr),
+                LiteralComponentError::DatatypeMismatch,
+            ),
+            (
+                XSD_STRING,
+                None,
+                Some(RdfTextDirection::Rtl),
+                LiteralComponentError::DirectionWithoutLanguage,
+            ),
+            (
+                RDF_LANG_STRING,
+                None,
+                None,
+                LiteralComponentError::LanguageDatatypeWithoutLanguage,
+            ),
+            (
+                RDF_DIR_LANG_STRING,
+                None,
+                None,
+                LiteralComponentError::LanguageDatatypeWithoutLanguage,
+            ),
         ] {
-            let (code, _) = RdfLiteral::diagnose_components(datatype, language, direction)
+            let cause = RdfLiteral::validate_components(datatype, language, direction)
                 .expect_err("mismatched components must not construct");
-            assert_eq!(code, LITERAL_SHAPE_CODE);
+            assert_eq!(cause.diagnostic_code(), LITERAL_SHAPE_CODE);
+            assert_eq!(cause, expected);
         }
     }
 

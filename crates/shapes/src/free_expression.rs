@@ -14,6 +14,11 @@
 //! graph declares `sh:shapesGraph`. The shapes graph's declared SHACL-AF functions and
 //! aggregates are in scope for the whole call.
 
+mod selector_error;
+pub use selector_error::ExprSelectorError;
+mod term_error;
+pub use term_error::TermParseError;
+
 use std::sync::Arc;
 
 use ::purrdf_rdf::RdfDataset;
@@ -153,10 +158,13 @@ pub(crate) fn evaluate_parsed(
 ) -> Result<NodeExprEvaluation, ShapesError> {
     let projected = crate::engine::project_dataset(request.data)?;
     let data = crate::engine::build_projected_data(projected, shapes, None)?;
-    let _function_scope =
-        crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
+    let data = crate::engine::with_shapes_graph_subclasses(&data, shapes)?.unwrap_or(data);
+    let _function_scope = crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(
+        shapes,
+        data.shapes_graph_iri(),
+    )?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-    let mut guard = RecursionGuard::default();
+    let mut guard = RecursionGuard::default().with_request(&shapes.validation_options);
     let outputs = eval_bound(
         &data,
         request.focus,
@@ -198,20 +206,21 @@ fn eval_bound(
 /// # Errors
 ///
 /// Text that is neither: not an absolute IRI, and not one well-formed N-Triples term.
-pub fn parse_term(text: &str) -> Result<Term, String> {
+pub fn parse_term(text: &str) -> Result<Term, TermParseError> {
     let trimmed = text.trim();
     let spelled =
         if trimmed.starts_with('<') || trimmed.starts_with('"') || trimmed.starts_with("_:") {
             trimmed.to_owned()
         } else {
-            let absolute = purrdf_iri::is_absolute(trimmed).map_err(|e| {
-                format!("`{text}` is neither an N-Triples term nor an absolute IRI: {e}")
-            })?;
+            let absolute =
+                purrdf_iri::is_absolute(trimmed).map_err(|cause| TermParseError::Iri {
+                    input: text.to_owned(),
+                    cause,
+                })?;
             if !absolute {
-                return Err(format!(
-                    "`{text}` is a relative IRI reference; write the absolute IRI, or an \
-                 N-Triples term"
-                ));
+                return Err(TermParseError::RelativeIri {
+                    input: text.to_owned(),
+                });
             }
             format!("<{trimmed}>")
         };
@@ -219,11 +228,21 @@ pub fn parse_term(text: &str) -> Result<Term, String> {
     // not a second one. `rdf:value` is RDF's own predicate for "the value of".
     let document =
         format!("_:purrdf-term <http://www.w3.org/1999/02/22-rdf-syntax-ns#value> {spelled} .\n");
-    let dataset = crate::text_ingest::parse_ntriples_to_dataset(&document)
-        .map_err(|errors| format!("`{text}` is not one N-Triples term: {}", errors.join("; ")))?;
+    let dataset =
+        crate::text_ingest::parse_ntriples_to_dataset(&document).map_err(|diagnostics| {
+            TermParseError::Text {
+                input: text.to_owned(),
+                term_offset: document.len() - spelled.len() - 3,
+                carrier: document,
+                diagnostics,
+            }
+        })?;
     let quads = native_quads(dataset.as_ref(), None, None, None, GraphFilter::AnyGraph);
     match quads.as_slice() {
         [(_, _, object)] => Ok(object.clone()),
-        _ => Err(format!("`{text}` is not one N-Triples term")),
+        _ => Err(TermParseError::NotOneTerm {
+            input: text.to_owned(),
+            statements: quads.len(),
+        }),
     }
 }

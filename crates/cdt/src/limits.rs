@@ -72,7 +72,7 @@ use crate::error::CdtError;
 #[cfg(test)]
 use crate::memory::Resident;
 use crate::memory::{Memory, StorageError};
-use crate::render::{key_lexical_len, try_term_lexical_len};
+use crate::render::{try_key_lexical_len, try_term_lexical_len};
 use crate::term::{CdtKey, CdtTerm};
 
 /// Maximum number of elements (list items plus map entries, at every level) in one
@@ -147,6 +147,7 @@ pub(crate) fn try_term_elements(
     let mut work = Vec::new();
     memory.push(&mut work, term)?;
     while let Some(current) = work.pop() {
+        memory.admission_mut().checkpoint(1)?;
         match current {
             CdtTerm::Composite(inner) => {
                 elements = elements.saturating_add(inner.extent().elements);
@@ -177,6 +178,7 @@ pub(crate) fn try_list_extent<'a>(
     let mut elements = 0usize;
     let mut bytes = 0usize;
     for term in items {
+        memory.admission_mut().checkpoint(1)?;
         count = count.saturating_add(1);
         elements = elements.saturating_add(try_term_elements(term, memory)?);
         bytes = bytes.saturating_add(try_term_lexical_len(term, memory)?);
@@ -205,11 +207,12 @@ pub(crate) fn try_map_extent<'a>(
     let mut elements = 0usize;
     let mut bytes = 0usize;
     for (key, value) in pairs {
+        memory.admission_mut().checkpoint(1)?;
         count = count.saturating_add(1);
         elements = elements.saturating_add(try_term_elements(value, memory)?);
         // `key` `:` `value`.
         bytes = bytes
-            .saturating_add(key_lexical_len(key))
+            .saturating_add(try_key_lexical_len(key, memory)?)
             .saturating_add(1)
             .saturating_add(try_term_lexical_len(value, memory)?);
     }

@@ -70,7 +70,7 @@ pub(super) fn five_thousand_term_index() -> (Arc<RdfDataset>, Arc<TextIndex>, St
     // Frozen by the unchanged Python reference's unbounded score function.
     assert_eq!(expected, [1_926_031_222_170_000, 527_772_927_557_500]);
     let partition = PartitionKey::new(None, None);
-    let rows = rank_partition(&index, &partition, &terms, None).expect("complete needle ranks");
+    let rows = rank_partition(&*index, &partition, &terms, None).expect("complete needle ranks");
     assert_eq!(rows.len(), 2);
     assert_eq!(
         rows.iter()
@@ -86,7 +86,7 @@ pub(super) fn five_thousand_term_index() -> (Arc<RdfDataset>, Arc<TextIndex>, St
         assert!(row.score <= row.score_bound.maximum());
     }
     assert_eq!(
-        rank_partition(&index, &partition, &terms, Some(1)).expect("heap"),
+        rank_partition(&*index, &partition, &terms, Some(1)).expect("heap"),
         rows[..1]
     );
     let explained = explain(&index, 0, &terms).expect("all terms explained");

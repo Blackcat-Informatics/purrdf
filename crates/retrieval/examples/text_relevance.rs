@@ -3,7 +3,7 @@
 //! Host-only judged relevance measurement; production scores remain exact integers.
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_text::{
-    Analyzer, AnalyzerProfile, Fixed, GraphSelector, HanCharacterIndex, PartitionKey, TextIndex,
+    Analyzer, AnalyzerProfile, GraphSelector, HanCharacterIndex, PartitionKey, TextIndex,
     TextIndexConfig, rank_partition,
 };
 use std::{
@@ -195,16 +195,30 @@ fn rank(
     .collect())
 }
 fn fused(left: &[String], right: &[String]) -> Result<Vec<String>, Box<dyn Error>> {
-    let mut totals: BTreeMap<String, Fixed> = BTreeMap::new();
+    let precision = purrdf_retrieval::Precision::new(18)?;
+    let mut totals: BTreeMap<String, purrdf_retrieval::Score> = BTreeMap::new();
     for ranking in [left, right] {
         for (at, id) in ranking.iter().enumerate() {
-            let score = purrdf_retrieval::contribution(Fixed::ONE, at as u64 + 1, 60)?;
-            let prior = totals.get(id).copied().unwrap_or(Fixed::ZERO);
+            let score = purrdf_retrieval::contribution(
+                precision.score(precision.scale()),
+                at as u64 + 1,
+                60,
+            )?;
+            let prior = totals
+                .get(id)
+                .copied()
+                .unwrap_or_else(|| precision.score(0));
             totals.insert(id.clone(), prior.checked_add(score)?);
         }
     }
     let mut sorted = totals.into_iter().collect::<Vec<_>>();
-    sorted.sort_unstable_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    sorted.sort_unstable_by(|left, right| {
+        right
+            .1
+            .into_raw()
+            .cmp(&left.1.into_raw())
+            .then_with(|| left.0.cmp(&right.0))
+    });
     Ok(sorted.into_iter().map(|(id, _)| id).collect())
 }
 // Host evaluation ratios and logarithmic discounts are not retrieval scores.

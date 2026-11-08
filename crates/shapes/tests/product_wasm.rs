@@ -113,10 +113,10 @@ mod shacl12_subset {
     use std::sync::Arc;
 
     use purrdf_rdf::RdfDataset;
+    use purrdf_shacl_conformance::named as iri;
     use purrdf_shapes::data::{GraphFilter, native_quads};
     use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
     use purrdf_shapes::free_expression::{FreeExpression, evaluate};
-    use purrdf_shapes::shacl_corpora::named as iri;
     use purrdf_shapes::shapes::from_dataset_with_config_and_graph;
     use purrdf_shapes::srl::{self, InferOptions};
     use purrdf_shapes::term::Term;

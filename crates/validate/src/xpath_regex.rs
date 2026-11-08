@@ -159,6 +159,10 @@ pub fn diagnostic_refusal_code(code: &str) -> Option<&'static str> {
 /// every other failure.
 #[must_use]
 pub fn validation_refusal_code(error: &XPathValidationError) -> Option<&'static str> {
+    let mut error = error;
+    while let XPathValidationError::RuleExecution { cause, .. } = error {
+        error = cause;
+    }
     match error {
         XPathValidationError::Pattern(error) => refusal_code(error),
         XPathValidationError::Query(diagnostic) => diagnostic_refusal_code(&diagnostic.code),

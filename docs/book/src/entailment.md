@@ -250,9 +250,8 @@ report carries identifies the clauses that actually ran.
 The `RDF`, `RDFS`, `OWL-RL` and `D` lanes run under `purrdf-datalog`'s
 [evaluation limits](datalog.md#limits-refuse-they-never-truncate): the facts
 each graph's store may hold and the candidate solutions its rules may
-enumerate. The defaults are 4,194,304 facts and 1,048,576 join steps
-natively, and 131,072 and 1,048,576 in WebAssembly. A caller that needs other
-limits states them — `materialize_with(ds, plan, &options, stop)` in Rust,
+enumerate. Unstated fact, join and term-arena settings impose no logical
+ceiling on any target. A caller that needs finite limits states them — `materialize_with(ds, plan, &options, stop)` in Rust,
 `--max-stored-facts` and `--max-join-steps` on `purrdf reason` and `purrdf
 convert --entailment`, `max_stored_facts=` and `max_join_steps=` on Python's
 `materialize` and `materialize_nt`, `maxStoredFacts` and `maxJoinSteps` on

@@ -69,9 +69,9 @@ use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
-use crate::argv_documents::{ImportRole, parse_import_pairs};
 use crate::error::{CliError, argv_iri_refusal};
-use crate::{format, source};
+use crate::rdf_imports::RdfImportPlan;
+use crate::source;
 
 /// A shapes document READ but not yet parsed into `Shapes`: the frozen graph plus the
 /// prefix map its syntax declared.
@@ -116,15 +116,28 @@ pub(crate) fn read_shapes_document(
     format: SourceFormat,
     base: Option<&str>,
     what: &str,
+    input_options: Option<&[u8]>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesDocument, CliError> {
+    if input_options.is_some() && format != SourceFormat::Native(NativeRdfFormat::YamlLd) {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let native = match format {
         SourceFormat::Native(native) => native,
         SourceFormat::Pack | SourceFormat::Gts => {
             return Ok(ShapesDocument {
-                dataset: source::load_dataset(path, format, base)?,
+                dataset: source::load_dataset(path, format, base, None, canonical)?,
                 prefixes: Vec::new(),
                 loaded: base.into_iter().map(str::to_owned).collect(),
             });
+        }
+        _ => {
+            return Err(crate::format::unsupported_format(
+                format,
+                "the shapes input",
+            ));
         }
     };
     let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
@@ -137,10 +150,10 @@ pub(crate) fn read_shapes_document(
             base: document_base,
             prefixes,
         } = purrdf::shapes::text_ingest::parse_turtle_document(&text, base)
-            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
+            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {errors}")))?;
         (dataset, document_base, prefixes)
     } else {
-        let outcome = source::load_native_document(path, native, base)?;
+        let outcome = source::load_native_document(path, native, base, input_options)?;
         let document_base = outcome.document_base_iri().map(str::to_owned);
         (outcome.dataset, document_base, outcome.document_prefixes)
     };
@@ -159,10 +172,10 @@ pub(crate) fn read_shapes_document(
 
 /// Build the shapes graph's `owl:imports` table from the `--import IRI=FILE` pairs.
 ///
-/// `imports` is the raw `--import IRI=FILE` table exactly as the operator wrote it — this
+/// `imports` is the prepared import plan, with each configuration already decoded — this
 /// function is agnostic to which command line it came from, which is what lets
 /// `validate --shapes`, `shacl pack`, `shacl rules`, `shacl node-expr` and `shapes lint`
-/// share it. Every pair is decided before any file is opened, then each document is read
+/// share it. Every pair was decided before RDF acquisition, then each document is read
 /// under its ontology IRI as its base (the per-document base an `owl:imports` names), with
 /// its own prefix map. The IRIs the shapes document itself was read under (`root.loaded`)
 /// and those an imported document's `@base` declares are declared loaded.
@@ -173,19 +186,21 @@ pub(crate) fn read_shapes_document(
 /// [`shapes_error`] renders its refusal in command-line terms.
 pub(crate) fn shapes_imports(
     root: &ShapesDocument,
-    imports: &[String],
+    imports: &RdfImportPlan<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesImports, CliError> {
-    let pairs = resolve_shapes_import_pairs(imports)?;
     let mut table = ShapesImports::new();
     for iri in &root.loaded {
         table.declare_loaded(iri.clone());
     }
-    for pair in &pairs {
+    for pair in imports.pairs() {
         let document = read_shapes_document(
             pair.path,
             pair.format,
             Some(pair.iri),
             &format!("--import {}", pair.iri),
+            pair.input_options.as_deref(),
+            canonical,
         )?;
         for loaded in &document.loaded {
             if loaded != pair.iri {
@@ -215,7 +230,37 @@ pub(crate) fn shapes_error(
     base_flag: &str,
 ) -> CliError {
     let error = match error {
+        ShapesError::ScopeBinding(error) => {
+            return CliError::Runtime(format!("{context}: {error}"));
+        }
+        ShapesError::ImportArrays(error) => {
+            return CliError::Runtime(format!("{context}: {error}"));
+        }
+        ShapesError::Canonical(cause) => {
+            return CliError::Canonical {
+                message: format!("{context}: {cause}"),
+                cause: Box::new(cause),
+            };
+        }
+        ShapesError::RuleExecution(error) => {
+            eprintln!(
+                "purrdf-execution {}",
+                purrdf_validate::query::rule_execution_receipt_json(&error.coordinates)
+            );
+            return match error.into_cause() {
+                purrdf::shapes::rules::RulesError::Shapes(cause) => {
+                    shapes_error(cause, context, root, base_flag)
+                }
+                cause => CliError::Runtime(format!("{context}: {cause}")),
+            };
+        }
         ShapesError::Imports(error) => error,
+        ShapesError::Recursion(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
+        ShapesError::Preparation(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
         ShapesError::Storage(error) => return CliError::Runtime(format!("{context}: {error}")),
         ShapesError::Invalid(message) => return CliError::Runtime(format!("{context}: {message}")),
         ShapesError::Processor(failure) => {
@@ -236,6 +281,7 @@ pub(crate) fn shapes_error(
         ShapesError::SparqlTargetDisagreement(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
         }
+        other => return CliError::Runtime(format!("{context}: {other}")),
     };
     match error {
         ShapesImportError::Unresolved { iris } => {
@@ -332,36 +378,8 @@ pub(crate) fn shapes_error(
         error @ (ShapesImportError::UnheldLink { .. }
         | ShapesImportError::InvalidLink { .. }
         | ShapesImportError::IncompatibleVersions { .. }) => CliError::Runtime(error.to_string()),
+        other => CliError::Runtime(other.to_string()),
     }
-}
-
-/// One `--import IRI=FILE` argument for the SHACL lane, fully DECIDED but not yet read.
-struct ShapesImportPair<'a> {
-    /// The pair exactly as the operator wrote it, so a diagnostic can quote it back.
-    spec: &'a str,
-    /// The ontology-IRI half, checked absolute.
-    iri: &'a str,
-    /// The document-path half.
-    path: &'a str,
-    /// The syntax that path's own extension classifies it as.
-    format: SourceFormat,
-}
-
-/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all: the shared
-/// [`parse_import_pairs`] rules, so the FIRST malformed pair is reported before the FIRST file
-/// is opened, then the syntax each path's own extension classifies it as.
-fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<'_>>, CliError> {
-    parse_import_pairs(specs, ImportRole::SHAPES_GRAPH)?
-        .into_iter()
-        .map(|pair| {
-            Ok(ShapesImportPair {
-                spec: pair.spec,
-                iri: pair.iri,
-                path: pair.path,
-                format: format::resolve(None, pair.path)?,
-            })
-        })
-        .collect()
 }
 
 /// Resolve a `--shapes-graph` value against the shapes document's base.

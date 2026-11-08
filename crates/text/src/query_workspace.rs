@@ -26,7 +26,7 @@ pub enum CapacityFailure {
 impl CapacityFailure {
     /// `charge`, `resize`, and native reserve helpers return only these classes.
     /// Adding another workspace failure requires extending this explicit mapping.
-    fn from_workspace(error: &EvalError) -> Self {
+    pub(crate) fn from_workspace(error: &EvalError) -> Self {
         match error {
             EvalError::WorkspaceStopped => Self::Stopped,
             EvalError::WorkspaceBoundOverflow => Self::LayoutOverflow,
@@ -49,6 +49,19 @@ impl CapacityFailure {
 impl core::fmt::Display for CapacityFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         core::fmt::Display::fmt(&self.into_eval(), f)
+    }
+}
+
+impl std::error::Error for CapacityFailure {}
+
+impl purrdf_hash::error::StructuredError for CapacityFailure {
+    purrdf_hash::error_visit! {
+        Stopped => "text-capacity-stopped" {},
+        LayoutOverflow => "text-capacity-layout-overflow" {},
+        Allocator { construct } => "text-capacity-allocator" {
+            "construct" => Text(construct),
+        },
+        UnstableDiagnostic => "text-capacity-unstable-diagnostic" {},
     }
 }
 
@@ -123,9 +136,6 @@ pub(crate) fn query_error(
     if !workspace.is_bounded() {
         return Ok(match kind {
             purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::data(message.to_string()),
-            purrdf_sparql_eval::NativeDiagnosticKind::Config => {
-                TextError::config(message.to_string())
-            }
             _ => TextError::Diagnostic(admitted(purrdf_sparql_eval::NativeDiagnostic::render(
                 kind, message, workspace,
             ))?),
@@ -152,26 +162,48 @@ pub(crate) fn data_error(
 }
 
 pub(crate) fn arithmetic_error(
-    domain: bool,
-    message: impl core::fmt::Display,
+    cause: crate::arithmetic::ArithmeticRefusal,
     workspace: Option<&WorkspaceCapability>,
 ) -> TextError {
-    let Some(workspace) = workspace else {
-        return if domain {
-            TextError::domain(message.to_string())
-        } else {
-            TextError::overflow(message.to_string())
-        };
-    };
-    let label = if domain {
-        "fixed-point domain error"
-    } else {
-        "fixed-point overflow"
-    };
-    query_error(
-        workspace,
+    let domain = cause.is_domain();
+    let diagnostic = matches!(
+        cause,
+        crate::arithmetic::ArithmeticRefusal::PartitionRank { .. }
+    ) || workspace.is_some();
+    let resident = WorkspaceCapability::resident();
+    match purrdf_sparql_eval::RetainedNativeFailure::error(
         purrdf_sparql_eval::NativeDiagnosticKind::Function,
-        format_args!("{label}: {message}"),
-    )
-    .unwrap_or_else(|failure| failure)
+        cause,
+        workspace.unwrap_or(&resident),
+    ) {
+        EvalError::RetainedNativeFailure(failure) => {
+            if diagnostic {
+                TextError::RetainedDiagnostic(failure)
+            } else if domain {
+                TextError::Domain(failure)
+            } else {
+                TextError::Overflow(failure)
+            }
+        }
+        error => TextError::Capacity(CapacityFailure::from_workspace(&error)),
+    }
+}
+
+/// Capture the source's original value under the construction API's resident owner.
+pub(crate) fn source_error(cause: impl purrdf_hash::error::NativeError + 'static) -> TextError {
+    source_error_with(cause, &WorkspaceCapability::resident())
+}
+
+pub(crate) fn source_error_with(
+    cause: impl purrdf_hash::error::NativeError + 'static,
+    workspace: &WorkspaceCapability,
+) -> TextError {
+    match purrdf_sparql_eval::RetainedNativeFailure::error(
+        purrdf_sparql_eval::NativeDiagnosticKind::SourceRead,
+        cause,
+        workspace,
+    ) {
+        EvalError::RetainedNativeFailure(failure) => TextError::SourceRead(failure),
+        error => TextError::Capacity(CapacityFailure::from_workspace(&error)),
+    }
 }

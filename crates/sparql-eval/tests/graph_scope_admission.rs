@@ -46,7 +46,7 @@ fn admitted_rows(dataset: &Arc<RdfDataset>, graph: &str) -> Option<usize> {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(10),
         )
         .expect("the query returns an outcome");

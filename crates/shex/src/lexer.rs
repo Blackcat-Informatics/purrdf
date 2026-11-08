@@ -24,7 +24,7 @@
 //!   because the code block is raw text up to an unescaped `%}`.
 //!
 //! Every token carries its source byte span so the parser can report
-//! [`ShexError::Syntax`] at a precise offset. The lexer never panics: all
+//! [`ShexError::Grammar`] at a precise offset. The lexer never panics: all
 //! malformed input is a typed [`ShexError::Lex`].
 //!
 //! # Where the character classes come from
@@ -45,7 +45,7 @@
 
 use purrdf_iri::{langtag, terminals};
 
-use crate::error::{Result, ShexError};
+use crate::error::{LexicalContext, LexicalReason, RepeatOperation, Result, ShexError};
 
 /// A lexical token. Payload-bearing variants keep the *lexical* form where the
 /// grammar cares about it (numeric literals in value sets keep their spelling);
@@ -314,11 +314,9 @@ impl<'a> Lexer<'a> {
             // `<<` opens no ShExC token: an IRIREF body cannot contain `<`, so the
             // only thing this can be is RDF 1.2 triple-term / reifier syntax,
             // which ShExC (ShEx 2.x) has no value form for.
-            '<' if self.peek(1) == Some('<') => Err(ShexError::lex(
-                "a ShExC schema has no triple-term value: `<<( s p o )>>` / `<< s p o >>` \
-                 cannot appear in a value set or node constraint",
-                start,
-            )),
+            '<' if self.peek(1) == Some('<') => {
+                Err(ShexError::lex(LexicalReason::TripleTerm, start))
+            }
             '<' => self.lex_iriref(start),
             '"' | '\'' => self.lex_string(c, start),
             '@' => Ok(self.lex_at(start)?),
@@ -360,7 +358,10 @@ impl<'a> Lexer<'a> {
             '$' => self.single(Token::Dollar),
             '&' => self.single(Token::Amp),
             _ if terminals::is_pn_chars_base(c) => Ok(self.lex_word_or_pname()),
-            _ => Err(ShexError::lex(format!("unexpected character {c:?}"), start)),
+            _ => Err(ShexError::lex(
+                LexicalReason::UnexpectedCharacter { scalar: c },
+                start,
+            )),
         }
     }
 
@@ -386,7 +387,12 @@ impl<'a> Lexer<'a> {
         let mut content = String::new();
         loop {
             let Some(c) = self.cur() else {
-                return Err(ShexError::lex("unterminated IRI reference", start));
+                return Err(ShexError::lex(
+                    LexicalReason::Unterminated {
+                        context: LexicalContext::Iri,
+                    },
+                    start,
+                ));
             };
             match c {
                 '>' => {
@@ -394,7 +400,7 @@ impl<'a> Lexer<'a> {
                     return Ok(Token::Iri(content));
                 }
                 '\\' => {
-                    let decoded = self.read_uchar(start)?;
+                    let decoded = self.read_uchar(start, LexicalContext::Iri)?;
                     content.push(decoded);
                 }
                 // Everything `[^#x00-#x20<>"{}|^`\]` excludes. The `'>'` and
@@ -403,7 +409,7 @@ impl<'a> Lexer<'a> {
                 // reaching this arm means the body cannot continue.
                 _ if terminals::is_iriref_forbidden(c) => {
                     return Err(ShexError::lex(
-                        format!("character {c:?} is not allowed in an IRI reference"),
+                        LexicalReason::ForbiddenIriCharacter { scalar: c },
                         self.byte_at(self.pos),
                     ));
                 }
@@ -422,20 +428,16 @@ impl<'a> Lexer<'a> {
     /// The decoding itself is [`terminals::decode_uchar_at`]; this method only
     /// positions the three defects, which is the one thing the two scanners do
     /// differently.
-    fn read_uchar(&mut self, err_at: usize) -> Result<char> {
+    fn read_uchar(&mut self, err_at: usize, context: LexicalContext) -> Result<char> {
         let (decoded, consumed) =
             terminals::decode_uchar_at(|ahead| self.peek(ahead).map(uchar_byte)).map_err(
-                |defect| match defect {
-                    terminals::UcharError::NotAnEscape => ShexError::lex(
-                        "backslash must start a \\u/\\U escape here",
-                        self.byte_at(self.pos),
-                    ),
-                    terminals::UcharError::BadHex => {
-                        ShexError::lex("bad \\u/\\U escape (expected hex digits)", err_at)
-                    }
-                    terminals::UcharError::NotAScalar => {
-                        ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at)
-                    }
+                |cause| {
+                    let at = if cause == terminals::UcharError::NotAnEscape {
+                        self.byte_at(self.pos)
+                    } else {
+                        err_at
+                    };
+                    ShexError::lex(LexicalReason::UnicodeEscape { context, cause }, at)
                 },
             )?;
         self.pos += consumed;
@@ -448,7 +450,12 @@ impl<'a> Lexer<'a> {
         let mut value = String::new();
         loop {
             let Some(c) = self.cur() else {
-                return Err(ShexError::lex("unterminated string literal", start));
+                return Err(ShexError::lex(
+                    LexicalReason::Unterminated {
+                        context: LexicalContext::String,
+                    },
+                    start,
+                ));
             };
             if c == '\\' {
                 if let Some(decoded) = self
@@ -462,16 +469,16 @@ impl<'a> Lexer<'a> {
                 }
                 match self.peek(1) {
                     Some('u' | 'U') => {
-                        let decoded = self.read_uchar(start)?;
+                        let decoded = self.read_uchar(start, LexicalContext::String)?;
                         value.push(decoded);
                         continue;
                     }
                     other => {
                         return Err(ShexError::lex(
-                            format!(
-                                "bad string escape \\{}",
-                                other.map_or_else(String::new, String::from)
-                            ),
+                            LexicalReason::BadEscape {
+                                context: LexicalContext::String,
+                                following: other,
+                            },
                             self.byte_at(self.pos),
                         ));
                     }
@@ -491,7 +498,10 @@ impl<'a> Lexer<'a> {
                 return Ok(Token::StringLit(value));
             }
             if !long && matches!(c, '\n' | '\r') {
-                return Err(ShexError::lex("raw newline in short string literal", start));
+                return Err(ShexError::lex(
+                    LexicalReason::StringNewline { scalar: c },
+                    start,
+                ));
             }
             value.push(c);
             self.pos += 1;
@@ -520,10 +530,10 @@ impl<'a> Lexer<'a> {
         }
         if let Err(error) = langtag::parse_with(&body, LANGTAG_PROFILE) {
             return Err(ShexError::lex(
-                format!(
-                    "malformed language tag @{body}: {error} [{code}]",
-                    code = error.diagnostic_code()
-                ),
+                LexicalReason::LanguageTag {
+                    language: body,
+                    cause: error,
+                },
                 start,
             ));
         }
@@ -538,7 +548,12 @@ impl<'a> Lexer<'a> {
             .cur()
             .filter(|&c| terminals::is_pn_chars_u(c) || c.is_ascii_digit());
         let Some(first) = first else {
-            return Err(ShexError::lex("malformed blank node label", start));
+            return Err(ShexError::lex(
+                LexicalReason::BlankNodeLabel {
+                    following: self.cur(),
+                },
+                start,
+            ));
         };
         let mut label = String::new();
         label.push(first);
@@ -587,17 +602,32 @@ impl<'a> Lexer<'a> {
                     }
                     Some('0'..='9') => self.lex_repeat_int(start)?,
                     _ => {
-                        return Err(ShexError::lex("malformed repeat range", start));
+                        return Err(ShexError::lex(
+                            LexicalReason::MalformedRepeat {
+                                following: self.cur(),
+                            },
+                            start,
+                        ));
                     }
                 };
                 if self.cur() == Some('}') {
                     self.pos += 1;
                     Ok(Token::Repeat { min, max })
                 } else {
-                    Err(ShexError::lex("unterminated repeat range", start))
+                    Err(ShexError::lex(
+                        LexicalReason::UnterminatedRepeat {
+                            following: self.cur(),
+                        },
+                        start,
+                    ))
                 }
             }
-            _ => Err(ShexError::lex("malformed repeat range", start)),
+            _ => Err(ShexError::lex(
+                LexicalReason::MalformedRepeat {
+                    following: self.cur(),
+                },
+                start,
+            )),
         }
     }
 
@@ -606,17 +636,38 @@ impl<'a> Lexer<'a> {
         let mut any = false;
         while let Some(c) = self.cur() {
             let Some(d) = c.to_digit(10) else { break };
-            value = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(i64::from(d)))
-                .ok_or_else(|| ShexError::lex("repeat range bound overflows", start))?;
+            let scaled = value.checked_mul(10).ok_or_else(|| {
+                ShexError::lex(
+                    LexicalReason::RepeatOverflow {
+                        operation: RepeatOperation::Multiply,
+                        left: value,
+                        right: 10,
+                    },
+                    start,
+                )
+            })?;
+            value = scaled.checked_add(i64::from(d)).ok_or_else(|| {
+                ShexError::lex(
+                    LexicalReason::RepeatOverflow {
+                        operation: RepeatOperation::Add,
+                        left: scaled,
+                        right: i64::from(d),
+                    },
+                    start,
+                )
+            })?;
             any = true;
             self.pos += 1;
         }
         if any {
             Ok(value)
         } else {
-            Err(ShexError::lex("expected integer in repeat range", start))
+            Err(ShexError::lex(
+                LexicalReason::ExpectedRepeatInteger {
+                    following: self.cur(),
+                },
+                start,
+            ))
         }
     }
 
@@ -637,12 +688,25 @@ impl<'a> Lexer<'a> {
             }
             Some(c) if terminals::is_pn_chars_base(c) => match self.lex_word_or_pname() {
                 Token::PName(p, l) => CodeName::PName(p, l),
+                Token::Word(word) => {
+                    return Err(ShexError::lex(LexicalReason::ActionName { word }, start));
+                }
                 _ => {
-                    return Err(ShexError::lex("expected IRI after '%'", start));
+                    return Err(ShexError::lex(
+                        LexicalReason::ExpectedActionIri {
+                            following: self.cur(),
+                        },
+                        start,
+                    ));
                 }
             },
             _ => {
-                return Err(ShexError::lex("expected IRI after '%'", start));
+                return Err(ShexError::lex(
+                    LexicalReason::ExpectedActionIri {
+                        following: self.cur(),
+                    },
+                    start,
+                ));
             }
         };
         self.skip_trivia();
@@ -660,7 +724,9 @@ impl<'a> Lexer<'a> {
                 })
             }
             _ => Err(ShexError::lex(
-                "expected '{' or '%' after semantic action name",
+                LexicalReason::ExpectedActionBody {
+                    following: self.cur(),
+                },
                 start,
             )),
         }
@@ -672,7 +738,12 @@ impl<'a> Lexer<'a> {
         let mut code = String::new();
         loop {
             let Some(c) = self.cur() else {
-                return Err(ShexError::lex("unterminated semantic action code", start));
+                return Err(ShexError::lex(
+                    LexicalReason::Unterminated {
+                        context: LexicalContext::Code,
+                    },
+                    start,
+                ));
             };
             match c {
                 '%' => {
@@ -681,7 +752,9 @@ impl<'a> Lexer<'a> {
                         return Ok(code);
                     }
                     return Err(ShexError::lex(
-                        "'%' in semantic action code must be escaped as \\% or close the block",
+                        LexicalReason::UnescapedActionPercent {
+                            following: self.peek(1),
+                        },
                         self.byte_at(self.pos),
                     ));
                 }
@@ -695,12 +768,15 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                     }
                     Some('u' | 'U') => {
-                        let decoded = self.read_uchar(start)?;
+                        let decoded = self.read_uchar(start, LexicalContext::Code)?;
                         code.push(decoded);
                     }
                     _ => {
                         return Err(ShexError::lex(
-                            "bad escape in semantic action code",
+                            LexicalReason::BadEscape {
+                                context: LexicalContext::Code,
+                                following: self.peek(1),
+                            },
                             self.byte_at(self.pos),
                         ));
                     }
@@ -723,7 +799,12 @@ impl<'a> Lexer<'a> {
         let mut pattern = String::new();
         loop {
             let Some(c) = self.cur() else {
-                return Err(ShexError::lex("unterminated regex", start));
+                return Err(ShexError::lex(
+                    LexicalReason::Unterminated {
+                        context: LexicalContext::Regex,
+                    },
+                    start,
+                ));
             };
             match c {
                 '/' => {
@@ -731,7 +812,10 @@ impl<'a> Lexer<'a> {
                     break;
                 }
                 '\n' | '\r' => {
-                    return Err(ShexError::lex("raw newline in regex", start));
+                    return Err(ShexError::lex(
+                        LexicalReason::RegexNewline { scalar: c },
+                        start,
+                    ));
                 }
                 '\\' => match self.peek(1) {
                     // `\/` denotes a literal `/`; every other permitted escape
@@ -749,15 +833,15 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                     }
                     Some('u' | 'U') => {
-                        let decoded = self.read_uchar(start)?;
+                        let decoded = self.read_uchar(start, LexicalContext::Regex)?;
                         pattern.push(decoded);
                     }
                     other => {
                         return Err(ShexError::lex(
-                            format!(
-                                "bad regex escape \\{}",
-                                other.map_or_else(String::new, String::from)
-                            ),
+                            LexicalReason::BadEscape {
+                                context: LexicalContext::Regex,
+                                following: other,
+                            },
                             self.byte_at(self.pos),
                         ));
                     }
@@ -769,7 +853,7 @@ impl<'a> Lexer<'a> {
             }
         }
         if pattern.is_empty() {
-            return Err(ShexError::lex("empty regex", start));
+            return Err(ShexError::lex(LexicalReason::EmptyRegex, start));
         }
         let mut flags = String::new();
         while let Some(c @ ('s' | 'm' | 'i' | 'x')) = self.cur() {
@@ -936,6 +1020,59 @@ impl<'a> Lexer<'a> {
             self.pos -= trailing_dots;
         }
         out
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Token {
+    purrdf_hash::error_visit! {
+        Iri(value) => "shexc-token-iri" { "value" => Text(value),  },
+        PName(prefix, local) => "shexc-token-p-name" { "prefix" => Text(prefix), "local" => Text(local),  },
+        BNode(value) => "shexc-token-b-node" { "value" => Text(value),  },
+        LangTag(value) => "shexc-token-lang-tag" { "value" => Text(value),  },
+        StringLit(value) => "shexc-token-string-lit" { "value" => Text(value),  },
+        Integer(value) => "shexc-token-integer" { "value" => Text(value),  },
+        Decimal(value) => "shexc-token-decimal" { "value" => Text(value),  },
+        Double(value) => "shexc-token-double" { "value" => Text(value),  },
+        Regex { pattern, flags } => "shexc-token-regex" { "pattern" => Text(pattern), "flags" => Text(flags),  },
+        Code { name, code } => "shexc-token-code" { "name" => Record(name), "code" => Value(code.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),  },
+        Repeat { min, max } => "shexc-token-repeat" { "min" => Signed(i128::from(*min)), "max" => Signed(i128::from(*max)),  },
+        Word(value) => "shexc-token-word" { "value" => Text(value),  },
+        At => "shexc-token-at" {  },
+        Eq => "shexc-token-eq" {  },
+        LBrace => "shexc-token-l-brace" {  },
+        RBrace => "shexc-token-r-brace" {  },
+        LParen => "shexc-token-l-paren" {  },
+        RParen => "shexc-token-r-paren" {  },
+        LBracket => "shexc-token-l-bracket" {  },
+        RBracket => "shexc-token-r-bracket" {  },
+        Dot => "shexc-token-dot" {  },
+        Semi => "shexc-token-semi" {  },
+        Pipe => "shexc-token-pipe" {  },
+        Star => "shexc-token-star" {  },
+        Plus => "shexc-token-plus" {  },
+        Question => "shexc-token-question" {  },
+        Caret => "shexc-token-caret" {  },
+        HatHat => "shexc-token-hat-hat" {  },
+        Tilde => "shexc-token-tilde" {  },
+        Minus => "shexc-token-minus" {  },
+        Dollar => "shexc-token-dollar" {  },
+        Amp => "shexc-token-amp" {  },
+        AnnotMarker => "shexc-token-annot-marker" {  },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for CodeName {
+    purrdf_hash::error_visit! {
+        Iri(value) => "shexc-code-iri" { "value" => Text(value) },
+        PName(prefix, local) => "shexc-code-pname" { "prefix" => Text(prefix), "local" => Text(local) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Spanned {
+    purrdf_hash::error_visit! {
+        @record self { token, start, end } => "shexc-spanned-token" {
+            "token" => Record(&self.token), "start" => ByteCount(self.start as u128), "end" => ByteCount(self.end as u128)
+        }
     }
 }
 

@@ -85,7 +85,7 @@ fn query_with_entailment_governed_(
             substitutions: &[],
         },
         entailment,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ClosureRelations::NONE,
         governors,
     )
@@ -219,7 +219,7 @@ fn an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does() {
             substitutions: &[],
         },
         QueryEntailment::Rdfs,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ClosureRelations::NONE,
     )
     .expect("the ungoverned lane answers");
@@ -271,7 +271,7 @@ fn the_ungoverned_lane_is_byte_for_byte_unchanged() {
                 substitutions: &[],
             },
             mode,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect("the ungoverned lane answers");
@@ -342,7 +342,7 @@ fn a_custom_aggregate_registry_reaches_the_governed_entailed_closure() {
             substitutions: &[],
         },
         QueryEntailment::Rdfs,
-        QueryOptions::new().with_env(
+        &QueryOptions::new().with_env(
             &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry.clone())
                 .expect("the fixture declarations read cleanly"),
         ),
@@ -546,7 +546,7 @@ fn a_signal_that_never_fires_changes_no_closure() {
                 substitutions: &[],
             },
             mode,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &ClosureRelations::NONE,
         )
         .expect("the ungoverned lane answers");
@@ -852,7 +852,7 @@ fn over_imports(
             substitutions: &[],
         },
         &purrdf::EntailmentClosure::new(QueryEntailment::Rdfs, imports),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &ClosureRelations::NONE,
         &QueryGovernors::UNBOUNDED,
     )

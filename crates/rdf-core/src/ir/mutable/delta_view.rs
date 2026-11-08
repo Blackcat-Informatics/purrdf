@@ -24,6 +24,13 @@ pub enum DeltaViewId {
     Delta(TermId),
 }
 
+impl purrdf_hash::error::StructuredError for DeltaViewId {
+    purrdf_hash::error_visit! {
+        Base(id) => "delta-view-base-id" { "index" => Unsigned(id.index() as u128) },
+        Delta(id) => "delta-view-added-id" { "index" => Unsigned(id.index() as u128) },
+    }
+}
+
 impl ViewTermId for DeltaViewId {
     type JoinKeyAtom = u64;
 
@@ -56,6 +63,7 @@ impl ViewTermId for DeltaViewId {
 /// with a generic RDF importer does not transfer those sidecars automatically.
 #[derive(Debug, Clone)]
 pub struct DeltaDatasetView {
+    snapshot_identity: purrdf_hash::hex::Digest32,
     base: DatasetHandle,
     delta: Arc<RdfDataset>,
     suppressed: Arc<FastSet<(RecordKind, QuadIds)>>,
@@ -76,6 +84,50 @@ pub struct DeltaDatasetView {
 }
 
 impl DeltaDatasetView {
+    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        self.snapshot_identity
+    }
+
+    fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
+        const SNAPSHOT: purrdf_hash::Domain =
+            purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(SNAPSHOT.as_bytes());
+        hash.update(self.base.frozen_snapshot_identity().as_bytes());
+        hash.update(self.delta.frozen_snapshot_identity().as_bytes());
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        for records in [&self.suppressed, &self.converted] {
+            let mut sum = purrdf_hash::multiset::Multiset256::default();
+            for (kind, row) in records.iter() {
+                let mut record = purrdf_hash::blake3::Hasher::new();
+                record.update(&[match kind {
+                    RecordKind::Ordinary => 0,
+                    RecordKind::Reifier => 1,
+                    RecordKind::Annotation => 2,
+                }]);
+                for id in [row.s, row.p, row.o] {
+                    record.update(&self.base.term_fingerprint(id, &mut memory)?);
+                }
+                record.update(&[u8::from(row.g.is_some())]);
+                if let Some(graph) = row.g {
+                    record.update(&self.base.term_fingerprint(graph, &mut memory)?);
+                }
+                sum.insert(*record.finalize().as_bytes())
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            hash.update(&sum.fingerprint(SNAPSHOT));
+        }
+        let mut graphs = purrdf_hash::multiset::Multiset256::default();
+        for &graph in self.withdrawn_graphs.iter() {
+            graphs
+                .insert(self.base.term_fingerprint(graph, &mut memory)?)
+                .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        }
+        hash.update(&graphs.fingerprint(SNAPSHOT));
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+
     /// The construction charge of one term of the frozen delta: its slot in the
     /// delta id table plus the hash entries that map it to a base id, at four times
     /// their payload for table slack.
@@ -133,6 +185,7 @@ impl DeltaDatasetView {
             }
         }
         let mut view = Self {
+            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
             base,
             delta,
             suppressed: Arc::new(suppressed),
@@ -192,6 +245,7 @@ impl DeltaDatasetView {
                 * size_of::<(RecordKind, QuadIds)>(),
             ..Default::default()
         });
+        view.snapshot_identity = view.seal_content_identity()?;
         Ok(view)
     }
 
@@ -349,7 +403,10 @@ impl DeltaDatasetView {
             )
     }
 
-    pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
+    /// Look up a borrowed IRI in the shared base and committed delta without
+    /// allocating an owned term. Base identities remain canonical on a match.
+    #[must_use]
+    pub fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
         self.base
             .term_id_by_iri(iri)
             .map(DeltaViewId::Base)
@@ -590,6 +647,9 @@ struct Pattern {
 }
 
 impl DatasetView for DeltaDatasetView {
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        Some(self.stats())
+    }
     type Id = DeltaViewId;
     type ReadError = std::convert::Infallible;
     type TermGuard<'a>
@@ -597,6 +657,17 @@ impl DatasetView for DeltaDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
+
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
+        Ok(Some(self.snapshot_identity))
+    }
+
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        Some(Ok(crate::NoopReservation::owned()))
+    }
 
     /// The wider bound of the base and the delta.
     fn triple_term_nesting_bound(&self) -> Option<usize> {

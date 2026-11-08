@@ -70,6 +70,9 @@
 mod report;
 
 use report::report_nt;
+#[path = "support/turtle.rs"]
+mod turtle;
+
 use std::sync::Arc;
 
 use purrdf_rdf::RdfDataset;
@@ -130,7 +133,13 @@ ex:n3 ex:locatedIn ex:city .
 fn product_bytes() -> Vec<u8> {
     let shapes = parse_shapes(SHAPES, None).expect("the fixture shapes parse");
     PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable as a product")
 }
 
@@ -168,7 +177,11 @@ fn pattern_cells(
 > {
     let mut cells = Vec::new();
     for shape in &shapes.node_shapes {
-        for property in &shape.property_shapes {
+        let shape = shapes
+            .owner
+            .definition(&shape.id)
+            .expect("original definition");
+        for property in turtle::properties(shapes, shape) {
             for constraint in &property.constraints {
                 if let Constraint::Pattern { compiled, .. } = constraint {
                     cells.push(compiled);

@@ -89,7 +89,11 @@ fn a_pack_view_enumerates_iri_and_blank_named_declared_empty_graphs() {
         "fixture premise"
     );
 
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     let view = PackView::from_bytes(&bytes).expect("opens");
     assert_eq!(
         graph_values(&view),
@@ -118,7 +122,11 @@ fn a_pack_view_enumerates_iri_and_blank_named_declared_empty_graphs() {
 #[test]
 fn every_reconstruction_of_a_pack_keeps_its_declared_graphs() {
     let dataset = declared_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let restored = restore_pack(&bytes).expect("restores");
     assert_eq!(graph_values(&*restored), expected_graphs(), "restore_pack");
@@ -133,7 +141,14 @@ fn every_reconstruction_of_a_pack_keeps_its_declared_graphs() {
 
     // The round trip is a fixed point: re-packing what came out writes the same bytes.
     assert_eq!(
-        PackBuilder::build_bytes(&rebuilt).expect("rebuilds"),
+        PackBuilder::build_bytes(
+            &rebuilt,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("rebuilds"),
         bytes,
         "pack -> dataset -> pack must reproduce the pack"
     );
@@ -141,8 +156,16 @@ fn every_reconstruction_of_a_pack_keeps_its_declared_graphs() {
 
 #[test]
 fn declarations_change_the_pack_bytes_but_not_its_canonical_digest() {
-    let declared = PackBuilder::build_bytes(&declared_fixture()).expect("builds");
-    let plain = PackBuilder::build_bytes(&undeclared_twin()).expect("builds");
+    let declared = PackBuilder::build_bytes(
+        &declared_fixture(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
+    let plain = PackBuilder::build_bytes(
+        &undeclared_twin(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     assert!(
         declared != plain,
         "a declaration is content the pack carries, so the bytes differ"
@@ -154,14 +177,32 @@ fn declarations_change_the_pack_bytes_but_not_its_canonical_digest() {
     let plain_view = PackView::from_bytes(&plain).expect("opens");
     assert_eq!(declared_view.rdfc_digest(), plain_view.rdfc_digest());
     assert_eq!(
-        verify_pack(&declared).expect("certifies"),
-        verify_pack(&plain).expect("certifies")
+        verify_pack(
+            &declared,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("certifies"),
+        verify_pack(
+            &plain,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("certifies")
     );
 }
 
 #[test]
 fn a_declaration_pack_keeps_the_v1_frame() {
-    let bytes = PackBuilder::build_bytes(&declared_fixture()).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &declared_fixture(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     assert_eq!(&bytes[0..8], b"PURRPCK1");
     assert_eq!(
         u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
@@ -272,7 +313,16 @@ fn packs_without_declaration_only_graphs_are_byte_identical_to_the_previous_writ
     ];
     let mut failures = Vec::new();
     for (name, dataset, expected) in cases {
-        let actual = sha256_hex(&PackBuilder::build_bytes(&dataset).expect("builds"));
+        let actual = sha256_hex(
+            &PackBuilder::build_bytes(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("builds"),
+        );
         if actual != expected {
             failures.push(format!("{name}: expected {expected}, got {actual}"));
         }
@@ -288,7 +338,14 @@ fn the_committed_golden_pack_reads_and_rewrites_unchanged() {
     let restored = restore_pack(&golden).expect("restores");
     assert_eq!(graph_values(&*restored), vec![iri("g1")]);
     assert_eq!(
-        PackBuilder::build_bytes(&restored).expect("rebuilds"),
+        PackBuilder::build_bytes(
+            &restored,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("rebuilds"),
         golden,
         "re-packing an existing pack's content must reproduce it byte for byte"
     );
@@ -299,7 +356,11 @@ fn the_committed_golden_pack_reads_and_rewrites_unchanged() {
 #[test]
 fn a_pack_view_enumerates_graphs_that_own_only_statement_layer_rows() {
     let dataset = side_only_graphs_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     let view = PackView::from_bytes(&bytes).expect("opens");
     let mut expected = vec![iri("g-reifier"), blank("ga")];
     expected.sort();
@@ -330,7 +391,11 @@ fn a_pack_view_merges_every_graph_source_once_in_ascending_order() {
         }
     }
     let dataset = b.freeze().expect("freezes");
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     let view = PackView::from_bytes(&bytes).expect("opens");
     let ids: Vec<_> = view.named_graphs().collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "strictly ascending");

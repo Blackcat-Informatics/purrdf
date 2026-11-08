@@ -92,6 +92,7 @@ fn declaration() -> RankedDeclaration {
             position: 2,
             datatype: EX_DEPTH_TYPE.to_owned(),
         }),
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 0,
         duplicates: DuplicatePolicy::Unique,
         // The reference declaration promises a complete, order-faithful search,
@@ -232,6 +233,7 @@ fn both_registration_paths_raise_the_identical_duplicate_message() {
 fn a_candidate_position_outside_the_arity_is_refused() {
     let mut registry = PropertyFunctionRegistry::new();
     let decl = RankedDeclaration {
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 9,
         ..declaration()
     };
@@ -291,6 +293,7 @@ fn a_depth_that_collides_with_a_placement_is_refused() {
 fn a_candidate_that_collides_with_a_placement_is_refused() {
     let mut registry = PropertyFunctionRegistry::new();
     let decl = RankedDeclaration {
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 1,
         ..declaration()
     };
@@ -305,6 +308,7 @@ fn a_candidate_that_collides_with_a_placement_is_refused() {
 fn a_candidate_that_collides_with_the_depth_is_refused() {
     let mut registry = PropertyFunctionRegistry::new();
     let decl = RankedDeclaration {
+        rank_source: purrdf_sparql_eval::RankSource::Ordinal,
         candidate_position: 2,
         accepted_terms: vec![AcceptedTerm {
             pattern: english_literal(),
@@ -701,6 +705,7 @@ fn a_failed_validation_leaves_the_registry_untouched() {
                 EX_REL,
                 relation(),
                 RankedDeclaration {
+                    rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                     candidate_position: 9,
                     ..declaration()
                 },
@@ -743,6 +748,7 @@ fn a_declaration_whose_positions_are_all_in_range_and_distinct_registers() {
                 placements: vec![placement(RequestFacet::Value, 4)],
             }],
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 0,
             exclusion: ExclusionBasis::Unavailable,
             mandatory: false,
@@ -760,6 +766,7 @@ fn a_declaration_whose_positions_are_all_in_range_and_distinct_registers() {
         RankedDeclaration {
             accepted_terms: Vec::new(),
             depth_placement: None,
+            rank_source: purrdf_sparql_eval::RankSource::Ordinal,
             candidate_position: 4,
             ..declaration()
         },
@@ -803,6 +810,7 @@ fn canonical_description_is_injective_over_every_field() {
         (
             "candidate_position",
             RankedDeclaration {
+                rank_source: purrdf_sparql_eval::RankSource::Ordinal,
                 candidate_position: 3,
                 ..base.clone()
             },

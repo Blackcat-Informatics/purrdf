@@ -44,7 +44,12 @@ fn source_triple_origins_preserve_order_and_original_expression_nodes() {
     }
     // Retaining source provenance changes neither the decision nor the certificate.
     let plain = Reasoner::new(&input).unwrap().consistency();
-    let recorded = Reasoner::with_proofs(&input).unwrap().consistency();
+    let recorded = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .consistency();
     assert_eq!(plain.answer(), recorded.answer());
     assert_eq!(plain.certificate(), recorded.certificate());
 }

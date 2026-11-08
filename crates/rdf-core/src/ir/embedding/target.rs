@@ -75,7 +75,7 @@ impl TryFrom<u32> for TargetKind {
     }
 }
 
-/// Canonical target plus optional retained identity bytes and pack-local ordinal.
+/// Canonical target plus optional retained identity bytes and source-local ordinal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EmbeddingTarget {
     /// Stable target identity.
@@ -472,7 +472,7 @@ impl RdfTermTargetRef<'_> {
                     validate_language_tag(language)?;
                 }
                 crate::RdfLiteral::validate_components(datatype, language, direction)
-                    .map_err(EmbeddingError::Malformed)?;
+                    .map_err(EmbeddingError::LiteralComponents)?;
                 u32_field(&mut block, 1, 3)?;
                 utf8_field(&mut block, 2, lexical)?;
                 utf8_field(&mut block, 3, datatype)?;
@@ -1104,7 +1104,7 @@ fn validate_rdf_term_identity(bytes: &[u8]) -> Result<(), EmbeddingError> {
                 .transpose()
                 .map_err(|_| EmbeddingError::InvalidUtf8("language tag"))?;
             crate::RdfLiteral::validate_components(datatype, language, direction)
-                .map_err(EmbeddingError::Malformed)?;
+                .map_err(EmbeddingError::LiteralComponents)?;
         }
         4 => validate_target_schema(
             bytes,
@@ -1175,11 +1175,6 @@ fn validate_ordinal(kind: TargetKind, ordinal: Option<u64>) -> Result<(), Embedd
             "u64::MAX is reserved for an absent source ordinal",
         ));
     }
-    if kind == TargetKind::RdfTerm && ordinal == Some(0) {
-        return Err(EmbeddingError::Malformed(
-            "RDF term source ordinals are one-based",
-        ));
-    }
     Ok(())
 }
 
@@ -1213,8 +1208,9 @@ fn four_digest_block(
 /// refuses a tag that is not already at that fixed point, so `zh-Hant` is
 /// exactly what must not reach this artifact.
 fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
-    purrdf_iri::langtag::parse(language)
-        .map_err(|error| EmbeddingError::Malformed(error.message()))?;
+    purrdf_iri::langtag::parse(language).map_err(|error| {
+        EmbeddingError::LiteralComponents(crate::LiteralComponentError::LanguageTag(error))
+    })?;
     if !purrdf_iri::langtag::is_identity_folded(language) {
         return Err(EmbeddingError::Malformed(
             "language tag is well-formed but not lowercase",
@@ -1398,13 +1394,19 @@ mod tests {
     }
 
     #[test]
-    fn rdf_term_ordinals_are_one_based() {
-        let error = EmbeddingTarget::from_digest(
+    fn source_free_ordinals_allow_zero_and_preserve_the_absent_sentinel() {
+        EmbeddingTarget::from_digest(
             TargetKind::RdfTerm,
             TargetIdentityDigest::from_raw([4; 32]),
             Some(0),
         )
-        .expect_err("zero is not a unified PackId");
+        .expect("Columnar dictionary rows are zero-based");
+        let error = EmbeddingTarget::from_digest(
+            TargetKind::RdfTerm,
+            TargetIdentityDigest::from_raw([4; 32]),
+            Some(u64::MAX),
+        )
+        .expect_err("the absence sentinel is never a present ordinal");
         assert!(matches!(error, EmbeddingError::Malformed(_)));
 
         EmbeddingTarget::from_digest(
@@ -1487,8 +1489,18 @@ mod tests {
         ] {
             let error = validate_language_tag(malformed).expect_err("malformed");
             assert!(
-                matches!(error, EmbeddingError::Malformed(message) if message == reason.message()),
+                matches!(error, EmbeddingError::LiteralComponents(crate::LiteralComponentError::LanguageTag(actual)) if actual == reason),
                 "{malformed:?} reported {error:?}"
+            );
+            let inspected = purrdf_testkit::error_capture::Capture::read(&error);
+            assert_eq!(inspected.code, "purremb-malformed");
+            assert_eq!(
+                inspected.child("cause").child("cause").code,
+                reason.diagnostic_code()
+            );
+            assert_eq!(
+                error.to_string(),
+                format!("malformed PURREMB artifact: {}", reason.message())
             );
         }
 

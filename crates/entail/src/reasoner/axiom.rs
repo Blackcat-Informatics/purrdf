@@ -130,9 +130,10 @@ pub enum DlAxiom {
 /// until no blank node already interned begins with it, which terminates because labels
 /// are finite and each round adds a character. A colliding label would alias a refutation
 /// witness with a blank node the data already constrains, and that is an unsoundness
-/// rather than an inconvenience — so it is decided against the actual term table.
+/// rather than an inconvenience — so each mint also checks the current term table,
+/// including caller terms interned after the generator was constructed.
 pub(crate) struct FreshSymbols {
-    /// A label prefix no interned blank node begins with.
+    /// A label prefix no interned blank node began with at construction.
     prefix: String,
     /// The next ordinal, so successive symbols are distinct from each other too.
     next: u64,

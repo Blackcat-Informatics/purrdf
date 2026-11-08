@@ -2078,7 +2078,7 @@ mod tests {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    crate::QueryOptions {
+                    &crate::QueryOptions {
                         env: &env,
                         ..crate::QueryOptions::EMPTY
                     },

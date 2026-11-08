@@ -47,6 +47,33 @@ pub(super) fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// Check the native receipt separately from byte-deterministic diagnostics.
+pub(super) fn execution_diagnostics(out: &Output, state: &str) -> String {
+    let mut diagnostics = String::new();
+    let mut receipt = None;
+    for line in stderr(out).split_inclusive('\n') {
+        if let Some(json) = line.strip_prefix("purrdf-execution ") {
+            assert!(receipt.is_none(), "one execution receipt per invocation");
+            receipt = Some(purrdf_lex::json::read(json).expect("native receipt JSON"));
+        } else {
+            diagnostics.push_str(line);
+        }
+    }
+    let receipt = receipt.expect("native execution receipt");
+    assert_eq!(receipt["state"].as_str(), Some(state));
+    if state == "started" {
+        assert_ne!(receipt["now"].as_str().unwrap(), "");
+        assert!(
+            receipt["entropySeed"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .is_ok()
+        );
+    }
+    diagnostics
+}
+
 /// The exit code of an [`Output`].
 pub(super) fn code(out: &Output) -> i32 {
     out.status.code().expect("the process exited normally")
@@ -98,3 +125,28 @@ pub(super) fn run_with_stdin(command: &mut Command, bytes: &[u8]) -> Output {
     }
     output
 }
+
+/// The second document adds a property constraint and imports its final declared base.
+/// The ontology header has a distinct identity, so loaded-base metadata resolves the import.
+pub(super) const YAML_SHAPES_DOCUMENTS: &str = r"
+'@id': https://example.org/Shape
+'@type': http://www.w3.org/ns/shacl#NodeShape
+http://www.w3.org/ns/shacl#targetNode:
+  '@id': https://example.org/alice
+---
+'@context':
+  '@base': https://example.org/final-base
+'@graph':
+  - '@id': https://example.org/header
+    '@type': http://www.w3.org/2002/07/owl#Ontology
+    http://www.w3.org/2002/07/owl#imports:
+      '@id': https://example.org/final-base
+  - '@id': https://example.org/Shape
+    http://www.w3.org/ns/shacl#property:
+      '@id': https://example.org/Property
+  - '@id': https://example.org/Property
+    '@type': http://www.w3.org/ns/shacl#PropertyShape
+    http://www.w3.org/ns/shacl#path:
+      '@id': https://example.org/required
+    http://www.w3.org/ns/shacl#minCount: 1
+";

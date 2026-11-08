@@ -6,7 +6,7 @@ name = "purrdf-core"
 description = "PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion"
 version.workspace = true
 edition.workspace = true
-license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0 AND (MIT OR Apache-2.0)"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-core"
@@ -67,10 +67,6 @@ purrdf-hash = { workspace = true }
 # encoder's loop. A leaf over `purrdf-hash` only, with no edge back to the
 # core, and wasm-clean.
 purrdf-deflate = { workspace = true }
-# Raw `HashTable` for the store-once builder interner/dedup: each term/
-# row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
-# introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
-hashbrown = { workspace = true }
 # Content-addressed blob digest for the content store. Same version as the
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
@@ -84,10 +80,11 @@ regex = { workspace = true }
 # Normalized regex IR for faithful Unicode ECMA-262 pattern emission.
 regex-syntax = { workspace = true }
 
-[dev-dependencies]
-# Runs the deep-structure tests on a stack of a stated size: a fresh thread
-# natively, the running stack under a fresh floor on wasm32.
+# Admits each nested arbitrary-backend checked-read scope against the current
+# native or wasm shadow-stack floor; never starts a new thread for a read.
 purrdf-stack = { workspace = true }
+
+[dev-dependencies]
 # The workspace's shared counting allocator, for `tests/ir_zero_alloc.rs`. Path-
 # only and unpublished, so it is stripped from the packaged manifest; std-only
 # and dependency-free, so it needs no target gate.
@@ -104,6 +101,10 @@ harness = false
 
 [[test]]
 name = "structured_inspection"
+harness = false
+
+[[test]]
+name = "loss_profiles"
 harness = false
 
 [[test]]
@@ -206,20 +207,7 @@ harness = false
 name = "pack_index_compare"
 harness = false
 
-[[bench]]
-# Deterministic `.purremb` substantial-fixture harness: full validation and
-# resident reopen, target/relation and prefix access, exact/coarse+rerank
-# retrieval, bounded-memory streaming output, f64 access, and a one-million-
-# chunk catalog. Report-only — no latency or recall threshold is asserted.
-name = "purremb"
-harness = false
 
-[[bench]]
-# One-shot allocation/count/high-water probes over the same deterministic
-# `.purremb` fixtures. Kept in a separate process so allocator atomics cannot
-# distort the timings above.
-name = "purremb_alloc"
-harness = false
 
 [[bench]]
 # One-shot allocation/count/high-water probes over the pack RESTORE path

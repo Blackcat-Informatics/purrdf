@@ -154,7 +154,11 @@ pub fn expected_source_correspondence(
 ///
 /// # Errors
 /// Returns a typed kernel refusal or full graph mismatch.
-pub fn compare_graphs(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), GradeError> {
+pub fn compare_graphs(
+    expected: &RdfDataset,
+    actual: &RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), GradeError> {
     let encode = |dataset| {
         let mut builder = RdfDatasetBuilder::new();
         encode_dataset(
@@ -168,16 +172,21 @@ pub fn compare_graphs(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), 
     };
     let expected = encode(expected)?;
     let actual = encode(actual)?;
-    canonical_equality(&expected, &actual)
+    canonical_equality(&expected, &actual, control)
 }
 
-fn canonical_equality(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), GradeError> {
+fn canonical_equality(
+    expected: &RdfDataset,
+    actual: &RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), GradeError> {
     let expected =
-        purrdf_core::try_canonicalize_flat_view(expected, purrdf_core::CanonHash::Sha256)
+        purrdf_core::try_canonicalize_flat_view(expected, purrdf_core::CanonHash::Sha256, control)
             .map_err(GradeError::from)?;
-    let actual = purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256)
-        .map_err(GradeError::from)?;
-    if expected.nquads == actual.nquads {
+    let actual =
+        purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256, control)
+            .map_err(GradeError::from)?;
+    if expected.nquads() == actual.nquads() {
         Ok(())
     } else {
         Err(GradeError::Mismatch(
@@ -201,10 +210,11 @@ fn canonical_equality(expected: &RdfDataset, actual: &RdfDataset) -> Result<(), 
 pub fn compare_contextual(
     expected: ReportContext<'_>,
     actual: ReportContext<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
     let expected = encode_context(expected)?;
     let actual = encode_context(actual)?;
-    canonical_equality(&expected, &actual)
+    canonical_equality(&expected, &actual, control)
 }
 
 fn blank_identities(dataset: &RdfDataset) -> BTreeSet<BlankIdentity> {

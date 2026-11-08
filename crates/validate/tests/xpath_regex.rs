@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Every `*_with_xpath_regex` entry point of the shared host boundary: `None` is its
-//! compatibility twin's exact answer, each dated law shows a behaviour only it has, and a
+//! compatibility twin's exact RDF, proof and diagnostic answer (sampled receipts belong
+//! to each request), each dated law shows a behaviour only it has, and a
 //! resource the law withholds refuses the request beside the admitted neighbour at the
 //! bound.
 
@@ -194,7 +195,16 @@ fn a_validation_resource_refusal_writes_no_log_and_the_neighbour_does() {
 #[test]
 fn product_validation_follows_the_selected_law() {
     for (pattern, value, xpath20, xpath31) in CASES {
-        let product = pack_shapes_product(&pattern_shapes(pattern), None, &[]).unwrap();
+        let product = pack_shapes_product(
+            &pattern_shapes(pattern),
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         for (law, expected) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
             for log in [
                 validate_with_shapes_product_with_xpath_regex(
@@ -218,7 +228,13 @@ fn product_validation_follows_the_selected_law() {
             }
         }
     }
-    let product = pack_shapes_product(&pattern_shapes(BACKREFERENCE), None, &[]).unwrap();
+    let product = pack_shapes_product(
+        &pattern_shapes(BACKREFERENCE),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         validate_with_shapes_product_with_xpath_regex(
             &product,
@@ -248,8 +264,20 @@ fn product_validation_follows_the_selected_law() {
 fn a_product_refusal_keeps_its_dimension_and_a_law_refusal_is_its_own() {
     // One byte over the 64 KiB production source bound, and exactly the bound.
     let (over, at) = ("a".repeat(64 * 1024 + 1), "a".repeat(64 * 1024));
-    let product = pack_shapes_product(&pattern_shapes(&over), None, &[]).unwrap();
-    let neighbour = pack_shapes_product(&pattern_shapes(&at), None, &[]).unwrap();
+    let product = pack_shapes_product(
+        &pattern_shapes(&over),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let neighbour = pack_shapes_product(
+        &pattern_shapes(&at),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let wrong = [0_u8; 32];
     for law in Profile::ALL {
         assert!(matches!(
@@ -306,7 +334,7 @@ fn entail(
     pattern: &str,
     value: &str,
     law: Option<Profile>,
-) -> Result<String, XPathValidationError> {
+) -> Result<purrdf_core::Canonicalized, XPathValidationError> {
     let shapes = rule_shapes(pattern);
     let data = data(value);
     let request = EntailRequest {
@@ -321,9 +349,24 @@ fn entail(
         max_join_steps: None,
         host: purrdf_validate::RulesHost::Rust,
     };
-    let selected = entail_to_ntriples_with_xpath_regex(&request, law)?;
+    let selected = entail_to_ntriples_with_xpath_regex(
+        &request,
+        law,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )?;
     if law.is_none() {
-        assert_eq!(selected, entail_to_ntriples(&request).unwrap());
+        let compatibility = entail_to_ntriples(
+            &request,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            (selected.ntriples.nquads(), &selected.diagnostics),
+            (compatibility.ntriples.nquads(), &compatibility.diagnostics),
+        );
     }
     Ok(selected.ntriples)
 }
@@ -346,7 +389,19 @@ fn rules(
     };
     let selected = apply_rules_to_ntriples_with_xpath_regex(&request, law)?;
     if law.is_none() {
-        assert_eq!(selected, apply_rules_to_ntriples(&request).unwrap());
+        let compatibility = apply_rules_to_ntriples(&request).unwrap();
+        assert_eq!(
+            (
+                &selected.inferred_ntriples,
+                &selected.proof,
+                &selected.diagnostics
+            ),
+            (
+                &compatibility.inferred_ntriples,
+                &compatibility.proof,
+                &compatibility.diagnostics,
+            ),
+        );
     }
     Ok(selected.inferred_ntriples)
 }
@@ -381,7 +436,10 @@ fn rules_entailment_and_node_expressions_follow_the_selected_law() {
         for (law, expected) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
             let name = law.name();
             assert_eq!(
-                entail(pattern, value, Some(law)).unwrap().contains(hit),
+                entail(pattern, value, Some(law))
+                    .unwrap()
+                    .nquads()
+                    .contains(hit),
                 expected,
                 "entail {pattern} under {name}"
             );
@@ -404,7 +462,12 @@ fn rules_entailment_and_node_expressions_follow_the_selected_law() {
         }
     }
     // Unselected is the compatibility answer, which refuses the backreference.
-    assert!(!entail(BACKREFERENCE, "aa", None).unwrap().contains(hit));
+    assert!(
+        !entail(BACKREFERENCE, "aa", None)
+            .unwrap()
+            .nquads()
+            .contains(hit)
+    );
     assert_eq!(rules(BACKREFERENCE, "aa", false, None).unwrap(), "");
     assert_eq!(rules(BACKREFERENCE, "aa", true, None).unwrap(), "");
     assert_eq!(
@@ -423,18 +486,27 @@ fn a_rules_or_expression_resource_refusal_answers_nothing_and_the_neighbour_answ
             rules(&over, "a", false, Some(law)).map(|_| ()),
             rules(&over, "a", true, Some(law)).map(|_| ()),
         ] {
-            assert!(matches!(
-                refused,
-                Err(XPathValidationError::Query(diagnostic))
-                    if diagnostic.code == Resource::PatternBytes.code()
-            ));
+            assert!(
+                matches!(&refused,
+                    Err(XPathValidationError::RuleExecution { cause, coordinates })
+                        if matches!(cause.as_ref(), XPathValidationError::Query(diagnostic)
+                            if diagnostic.code == Resource::PatternBytes.code())
+                            && coordinates.program_identity().is_some()
+                            && coordinates.snapshot_identity().is_some()),
+                "{refused:?}"
+            );
         }
         assert!(matches!(
             node_expr(&over, "a", Some(law)),
             Err(XPathValidationError::Pattern(Error::Resource(refusal)))
                 if refusal.resource == Resource::PatternBytes
         ));
-        assert!(!entail(&at, "a", Some(law)).unwrap().contains("hit"));
+        assert!(
+            !entail(&at, "a", Some(law))
+                .unwrap()
+                .nquads()
+                .contains("hit")
+        );
         assert_eq!(rules(&at, "a", false, Some(law)).unwrap(), "");
         assert_eq!(rules(&at, "a", true, Some(law)).unwrap(), "");
         assert_eq!(
@@ -471,4 +543,88 @@ fn only_an_exact_name_selects_a_law() {
         parse_profile(Some("xpath-2.0-2010-12-14")),
         Ok(Some(Profile::Xpath20))
     );
+}
+
+/// Owned host coordinates survive configured entailment and both rule-source
+/// routes, without weakening the request's limits or sampling host defaults.
+#[test]
+fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
+    use purrdf_testkit::harness::without_host_clock_or_entropy;
+    use purrdf_validate::query::CoordinateInputs;
+    use purrdf_validate::{
+        RulesHost, apply_rules_to_ntriples_with_coordinates, entail_to_ntriples_with_coordinates,
+    };
+
+    const NOW: &str = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
+    const SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:s ; sh:rule [
+          a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
+          CONSTRUCT { <http://example.org/s> <http://example.org/time> ?time }
+          WHERE { BIND(NOW() AS ?time) FILTER(REGEX("ok", "^ok$")) } """ ] ."#;
+    const SRL: &str = "PREFIX : <http://example.org/> RULE { :s :time ?time } \
+        WHERE { SET(?time := NOW()) FILTER(REGEX(\"ok\", \"^ok$\")) }";
+    let coordinates = || CoordinateInputs::from_time_and_seed(Some(NOW), Some(0)).unwrap();
+    for profile in [None, Some(Profile::Xpath31)] {
+        for shapes in [true, false] {
+            let mut request = RulesRequest {
+                shapes_ttl: shapes.then_some(SHAPES),
+                srl: (!shapes).then_some(SRL),
+                explain: true,
+                host: RulesHost::Python,
+                ..RulesRequest::default()
+            };
+            let outcome = without_host_clock_or_entropy(|| {
+                apply_rules_to_ntriples_with_coordinates(&request, profile, coordinates())
+            })
+            .unwrap();
+            assert!(outcome.inferred_ntriples.contains(NOW));
+            assert!(outcome.proof.unwrap().contains("derived"));
+            request.max_stored_facts = Some(0);
+            let error = apply_rules_to_ntriples_with_coordinates(&request, profile, coordinates())
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("apply_rules(max_stored_facts=...)")
+            );
+        }
+        let mut request = EntailRequest {
+            shapes_ttl: SHAPES,
+            shapes_base: None,
+            shapes_graph: None,
+            data_nt: "",
+            imports: &[],
+            max_term_generating_rounds: None,
+            max_generated_terms: None,
+            max_stored_facts: None,
+            max_join_steps: None,
+            host: RulesHost::Python,
+        };
+        let outcome = without_host_clock_or_entropy(|| {
+            entail_to_ntriples_with_coordinates(
+                &request,
+                profile,
+                coordinates(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+        })
+        .unwrap();
+        assert!(outcome.ntriples.nquads().contains(NOW));
+        request.max_stored_facts = Some(0);
+        let error = entail_to_ntriples_with_coordinates(
+            &request,
+            profile,
+            coordinates(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("entail(max_stored_facts=...)"));
+    }
 }

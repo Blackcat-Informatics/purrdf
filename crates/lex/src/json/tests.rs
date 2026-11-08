@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use super::{
-    Error, ErrorKind, Event, Format, Kind, Limits, Number, Object, Reader, Value, occurrences,
-    read, read_slice, read_with, write, write_compact, write_pretty,
+    Error, ErrorKind, Event, Format, Kind, Limits, Number, Object, Reader, Value, WriteError,
+    occurrences, read, read_slice, read_with, write, write_bounded_with_memory, write_compact,
+    write_pretty,
 };
 use crate::json_escape::{JsonEscapeErrorKind, JsonEscapes};
 use purrdf_testkit::rng::SplitMix64;
@@ -753,6 +754,27 @@ fn compact_and_pretty_layouts_match_serde_json() {
     assert_eq!(write_pretty(&Value::from(3_u8)), "3");
     assert_eq!(format!("{value:#}"), write_pretty(&value));
     assert_eq!(value.to_string(), write_compact(&value));
+    // A logical output ceiling counts escaped UTF-8 bytes independently of an
+    // ample physical writer account, in both existing layout modes.
+    let boundary = read(r#"{"s":"é\n\"😀"}"#).unwrap();
+    for (layout, expected) in [
+        (Format::COMPACT, "{\"s\":\"é\\n\\\"😀\"}"),
+        (Format::PRETTY, "{\n  \"s\": \"é\\n\\\"😀\"\n}"),
+    ] {
+        let exact = u64::try_from(expected.len()).unwrap();
+        let mut allowance = crate::allocation::Ceiling(1 << 20);
+        let mut memory = crate::allocation::Memory::new(&mut allowance);
+        assert_eq!(
+            write_bounded_with_memory(&boundary, layout, exact, &mut memory).unwrap(),
+            expected
+        );
+        let mut allowance = crate::allocation::Ceiling(1 << 20);
+        let mut memory = crate::allocation::Memory::new(&mut allowance);
+        assert_eq!(
+            write_bounded_with_memory(&boundary, layout, exact - 1, &mut memory).unwrap_err(),
+            WriteError::Bytes { limit: exact - 1 }
+        );
+    }
 }
 
 #[test]

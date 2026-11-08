@@ -122,10 +122,9 @@ use purrdf_core::{
     dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
-    NativeRdfFormat, ParseOptions, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
-    decode_transport, detect_transport, import_gts_events, parse_dataset,
-    parse_dataset_from_reader, parse_dataset_with, serialize_dataset_to_format, sniff_transport,
-    transport_reader,
+    NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
+    decode_transport, detect_transport, import_gts_events, parse_dataset_from_reader,
+    serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -159,17 +158,18 @@ pub(crate) trait ViewOp {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError>;
 }
 
 /// Read every byte of a path, or of stdin when `path` is `-`, WITHOUT decoding.
-fn read_raw_bytes(path: &str) -> Result<Vec<u8>, CliError> {
+pub(crate) fn read_raw_bytes(path: &str) -> std::io::Result<Vec<u8>> {
     if path == "-" {
         let mut buffer = Vec::new();
         std::io::stdin().read_to_end(&mut buffer)?;
         Ok(buffer)
     } else {
-        Ok(std::fs::read(path)?)
+        std::fs::read(path)
     }
 }
 
@@ -229,11 +229,78 @@ fn display_path(path: &str) -> &str {
 /// `Box<dyn Read>` because the two arms are different types and the parser only needs
 /// `Read`; the one virtual call per 64 KiB refill is not a measurable cost against
 /// tokenizing the bytes it returns.
-fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
+fn open_raw_stream(path: &str) -> std::io::Result<Box<dyn Read>> {
     if path == "-" {
         Ok(Box::new(std::io::stdin().lock()))
     } else {
         Ok(Box::new(std::fs::File::open(path)?))
+    }
+}
+
+/// Original raw acquisition refusal, before transport decoding or parsing.
+#[derive(Debug)]
+pub enum RawReadError {
+    /// Original file or standard-input failure.
+    Io(std::io::Error),
+    /// Original physical buffer admission/allocation refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// Input contained more bytes than the caller admitted.
+    Limit {
+        /// Maximum source bytes, independent of buffer capacity.
+        maximum: usize,
+    },
+}
+impl std::fmt::Display for RawReadError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(cause) => cause.fmt(out),
+            Self::Storage(cause) => cause.fmt(out),
+            Self::Limit { maximum } => write!(out, "raw input exceeds {maximum} bytes"),
+        }
+    }
+}
+impl std::error::Error for RawReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(cause) => Some(cause),
+            Self::Storage(cause) => Some(cause),
+            Self::Limit { .. } => None,
+        }
+    }
+}
+impl purrdf_hash::error::StructuredError for RawReadError {
+    purrdf_hash::error_visit! {
+        Io(cause) => "raw-input-io" { "cause" => Cause(cause) },
+        Storage(cause) => "raw-input-storage" { "cause" => Cause(cause) },
+        Limit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+    }
+}
+
+/// Acquire at most `maximum` raw bytes, probing one further byte without retaining it.
+/// The content limit is separate from Vec capacity and other phase accounts.
+pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u8>, RawReadError> {
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut input = open_raw_stream(path).map_err(RawReadError::Io)?;
+    let mut bytes = Vec::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let remaining = maximum - bytes.len();
+        let requested = remaining.saturating_add(1).min(chunk.len());
+        let read = match input.read(&mut chunk[..requested]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.map_err(RawReadError::Io)?,
+        };
+        if read == 0 {
+            return Ok(bytes);
+        }
+        if read > remaining {
+            return Err(RawReadError::Limit { maximum });
+        }
+        memory
+            .extend(&mut bytes, chunk[..read].iter().copied())
+            .map_err(RawReadError::Storage)?;
     }
 }
 
@@ -254,29 +321,25 @@ fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
 /// the working directory or on `..` segments in the argument. A path that cannot be
 /// expressed as a `file://` IRI is a hard error, never a silent fall back to "no base".
 pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
-    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
-        .map(|base| base.as_str().to_owned())
-        .map_err(|error| {
-            CliError::Runtime(format!(
-                "{}: {error}; pass --base explicitly",
-                display_path(path)
-            ))
-        })
+    file_retrieval_iri(path).map_err(|error| {
+        CliError::Runtime(format!(
+            "{}: {error}; pass --base explicitly",
+            display_path(path)
+        ))
+    })
 }
 
-/// The crate-internal `retrieval_base_iri`, for a consumer outside this crate — the
-/// integration tests, which assert against the pipeline's OWN derivation rather than a
-/// second transcription of it.
+/// Derive the same file retrieval IRI the CLI uses, retaining the native path refusal.
 ///
-/// A second implementation in the test harness is exactly how a platform divergence hides:
-/// the tests agreed with themselves while the binary emitted something else. The error is
-/// flattened to a `String` because `CliError` is crate-internal.
+/// The shared slice derivation owns the original path and filesystem or IRI cause.
+/// The CLI adds its path display and `--base` hint only when presenting the refusal.
 ///
 /// # Errors
 ///
 /// When `path` does not canonicalize, is not UTF-8, or has no usable `file://` IRI.
-pub fn file_retrieval_iri(path: &str) -> Result<String, String> {
-    retrieval_base_iri(path).map_err(|error| error.to_string())
+pub fn file_retrieval_iri(path: &str) -> Result<String, purrdf::slice::SliceError> {
+    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
+        .map(|base| base.as_str().to_owned())
 }
 
 /// The RFC-8089 `file://` IRI of an ALREADY-ABSOLUTE platform path, touching no filesystem.
@@ -325,22 +388,29 @@ pub(crate) fn effective_base(
 /// surfaces as a read failure part-way through and fails the whole parse: there is no
 /// partial success, and nothing is written, exactly as on the buffered lane.
 ///
-/// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
+/// The buffered arm is unchanged — [`read_bytes_with_transport`] then the shared RDF input boundary —
 /// and is what every non-line-oriented syntax takes.
 ///
 /// The base the document parses under is [`effective_base`]'s answer, so an explicit
 /// `--base` and the derived retrieval IRI are decided in one place rather than per lane.
-fn load_native(
+pub(crate) fn load_native(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
 ) -> Result<Arc<RdfDataset>, CliError> {
+    if input_options.is_some() && format != NativeRdfFormat::YamlLd {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let base = effective_base(path, format, base)?;
     let base = base.as_deref();
     if !format.is_line_oriented() {
         let bytes = read_bytes_with_transport(path, policy)?;
-        return parse_dataset(&bytes, format.media_type(), base)
+        return purrdf_validate::rdf_input::parse(&bytes, format.media_type(), base, input_options)
+            .map(|outcome| outcome.dataset)
             .map_err(|error| with_cli_base_hint(&error, base));
     }
 
@@ -365,7 +435,7 @@ fn load_native(
 
 /// Read an RDF text source at `path` WHOLE and report everything its one parse learned:
 /// the dataset, the base the document ended under, and the prefix map its syntax declared
-/// (`purrdf_rdf::parse_dataset_with`).
+/// (`purrdf_validate::rdf_input::parse`).
 ///
 /// [`load_native`] is the lane for data, which streams a line-oriented syntax and needs
 /// neither; this is the lane for a document whose DECLARATIONS are part of what it means —
@@ -377,11 +447,17 @@ pub(crate) fn load_native_document(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
 ) -> Result<ParseOutcome, CliError> {
+    if input_options.is_some() && format != NativeRdfFormat::YamlLd {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let base = effective_base(path, format, base)?;
     let base = base.as_deref();
     let bytes = read_bytes_with_transport(path, TransportPolicy::Detect)?;
-    parse_dataset_with(&bytes, format.media_type(), base, &ParseOptions::default())
+    purrdf_validate::rdf_input::parse(&bytes, format.media_type(), base, input_options)
         .map_err(|error| with_cli_base_hint(&error, base))
 }
 
@@ -475,10 +551,13 @@ fn acquire_sealed_input(path: &str, what: &str) -> Result<ImmutableInput, CliErr
 /// callers keep the [`ImmutableInput`] in scope for the whole operation. This is the
 /// single acquisition seam the pipeline arms below and `convert`'s pack→pack byte
 /// passthrough route through.
-pub(crate) fn verified_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+pub(crate) fn verified_pack_input(
+    path: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<ImmutableInput, CliError> {
     let input = acquire_pack_input(path)?;
     // Unconditional canonical integrity, once, over the stable bytes.
-    verify_pack(input.as_bytes())?;
+    verify_pack(input.as_bytes(), canonical.control()?)?;
     Ok(input)
 }
 
@@ -605,9 +684,19 @@ pub(crate) fn run_over_input<Op: ViewOp>(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     op: Op,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
-    run_over_input_with_transport(path, format, base, TransportPolicy::Detect, op)
+    run_over_input_with_transport(
+        path,
+        format,
+        base,
+        TransportPolicy::Detect,
+        input_options,
+        op,
+        canonical,
+    )
 }
 
 /// [`run_over_input`] under an explicit [`TransportPolicy`].
@@ -621,22 +710,29 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
     op: Op,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
+    refuse_container_input_options(format, input_options)?;
     match format {
         SourceFormat::Native(rdf_format) => {
-            let dataset = load_native(path, rdf_format, base, policy)?;
-            op.run(&*dataset)
+            let dataset = load_native(path, rdf_format, base, policy, input_options)?;
+            op.run(&*dataset, canonical)
         }
         SourceFormat::Pack => {
-            let input = verified_pack_input(path)?;
+            let input = verified_pack_input(path, canonical)?;
             let view = PackView::from_bytes(input.as_bytes())?;
-            op.run(&view)
+            op.run(&view, canonical)
         }
         SourceFormat::Gts => {
             let (dataset, _envelope_ledger) = load_gts(path, policy)?;
-            op.run(&*dataset)
+            op.run(&*dataset, canonical)
         }
+        _ => Err(crate::format::unsupported_format(
+            format,
+            "the input source",
+        )),
     }
 }
 
@@ -656,8 +752,18 @@ pub(crate) fn load_dataset(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
-    load_dataset_reporting(path, format, base, TransportPolicy::Detect).map(|(dataset, _)| dataset)
+    load_dataset_reporting(
+        path,
+        format,
+        base,
+        TransportPolicy::Detect,
+        input_options,
+        canonical,
+    )
+    .map(|(dataset, _)| dataset)
 }
 
 /// [`load_dataset`] plus the ledger of what reading this source dropped.
@@ -669,19 +775,62 @@ pub(crate) fn load_dataset_reporting(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
+    refuse_container_input_options(format, input_options)?;
     match format {
         SourceFormat::Native(rdf_format) => Ok((
-            load_native(path, rdf_format, base, policy)?,
+            load_native(path, rdf_format, base, policy, input_options)?,
             LossLedger::new(),
         )),
         SourceFormat::Pack => {
-            let input = verified_pack_input(path)?;
+            let input = verified_pack_input(path, canonical)?;
             let view = PackView::from_bytes(input.as_bytes())?;
             Ok((dataset_from_view(&view)?, LossLedger::new()))
         }
         SourceFormat::Gts => load_gts(path, policy),
+        _ => Err(crate::format::unsupported_format(
+            format,
+            "the input source",
+        )),
     }
+}
+
+/// Reject native text controls before a pack or GTS container is acquired.
+fn refuse_container_input_options(
+    format: SourceFormat,
+    input_options: Option<&[u8]>,
+) -> Result<(), CliError> {
+    if input_options.is_some() && !matches!(format, SourceFormat::Native(_)) {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Admit formats and read one bounded, named YAML-LD options file before data I/O.
+pub(crate) fn read_yamlld_input_options(
+    path: &std::path::Path,
+    formats: &[SourceFormat],
+) -> Result<Vec<u8>, CliError> {
+    if formats
+        .iter()
+        .any(|format| *format != SourceFormat::Native(NativeRdfFormat::YamlLd))
+    {
+        return Err(CliError::Usage(
+            "--yamlld-input-options requires every input to be YAML-LD".into(),
+        ));
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+    purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
+    Ok(bytes)
 }
 
 /// Serialize the input at `path` (text, pack, or GTS) to N-Quads over its view.
@@ -693,6 +842,8 @@ pub(crate) fn serialize_input_to_nquads(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<SerializeOutcome, CliError> {
     struct NQuadsOp;
 
@@ -702,6 +853,7 @@ pub(crate) fn serialize_input_to_nquads(
         fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
             self,
             view: &D,
+            _canonical: &mut crate::canonical::Request,
         ) -> Result<Self::Output, CliError> {
             // No EGRESS base, and `None` is the right value rather than an omission:
             // `base` is the INGRESS base, which `run_over_input` has already applied
@@ -717,5 +869,39 @@ pub(crate) fn serialize_input_to_nquads(
         }
     }
 
-    run_over_input(path, format, base, NQuadsOp)
+    run_over_input(path, format, base, input_options, NQuadsOp, canonical)
+}
+
+#[cfg(test)]
+mod retrieval_tests {
+    use super::{display_path, file_retrieval_iri, retrieval_base_iri};
+
+    #[test]
+    fn retrieval_refusal_retains_the_path_and_native_io_cause_before_cli_presentation() {
+        let missing = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("Cargo.toml")
+            .join("missing.ttl");
+        let path = missing.to_str().expect("manifest path is UTF-8");
+        let expected = std::fs::canonicalize(&missing)
+            .expect_err("a regular manifest file cannot contain a child path");
+        let error = file_retrieval_iri(path).expect_err("missing file cannot supply a base");
+        let purrdf::slice::SliceError::InvalidPath(
+            purrdf::slice::error::PathRefusal::Canonicalize {
+                path: offered,
+                cause,
+            },
+        ) = &error
+        else {
+            panic!("expected original path refusal, got {error:?}");
+        };
+        assert_eq!(offered, &missing);
+        assert_eq!(cause.original().kind(), expected.kind());
+        assert_eq!(cause.original().raw_os_error(), expected.raw_os_error());
+        assert_eq!(
+            retrieval_base_iri(path)
+                .expect_err("CLI must refuse the same missing file")
+                .to_string(),
+            format!("{}: {error}; pass --base explicitly", display_path(path))
+        );
+    }
 }

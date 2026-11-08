@@ -15,9 +15,10 @@
 //! * `owned` — the pre-delegation shape a caller without a borrowed entry point
 //!   had to assemble by hand: [`flat_rdf_quads_from_dataset`] walks a dataset ONCE
 //!   into an owned `Vec<RdfQuad>`, [`flat_dataset_from_quads`] re-freezes that
-//!   vector into a SECOND `RdfDataset`, and [`canonicalize_with`] runs over the
+//!   vector into a SECOND `RdfDataset`, and [`try_canonicalize_with`] runs over the
 //!   frozen result.
-//! * `borrowed` — [`try_canonicalize_flat_view`] over the SAME view directly. Its
+//! * `borrowed` — [`try_canonicalize_flat_view`] over a view with owned workspace
+//!   admission directly. Its
 //!   own RDFC-1.0 n-degree search runs as usual, and the
 //!   [`checkpointed_drain`](purrdf_core::checkpointed_drain) completeness law
 //!   drains a [`FallibleDatasetView`] more than once internally, but no second
@@ -47,9 +48,12 @@
 //!   `InMemoryPageProvider`, read through a fresh `PagedQueryView` per call (a
 //!   paged query view is an operation-scoped read, so reusing one across calls
 //!   would let a later call ride an earlier call's page cache). Same extra `owned`
-//!   freeze as `composite` and `delta`, plus the multi-page drain itself.
+//!   freeze as `composite` and `delta`, plus the multi-page drain itself. Its
+//!   scoped read cannot publish owned canonical output directly, so the
+//!   `materialized` comparison explicitly pays for a dataset freeze before the
+//!   borrowed canonicalizer, including that materialization in the timed call.
 //!
-//! Every shape's `owned` and `borrowed` bytes are asserted equal exactly once,
+//! Every shape's compared output bytes are asserted equal exactly once,
 //! before anything is timed — a correctness check on the fixtures, not a
 //! benchmark result.
 
@@ -62,8 +66,8 @@ use purrdf_rdf::{
     BlankScope, CanonHash, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView,
     DeltaDatasetView, FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits,
     QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits,
-    canonicalize_with, dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
-    try_canonicalize_flat_view,
+    dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    try_canonicalize_flat_view, try_canonicalize_with,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
@@ -185,7 +189,12 @@ fn delta_view(base: &Arc<RdfDataset>) -> DeltaDatasetView {
 fn owned_route(dataset: &RdfDataset, hash: CanonHash) -> Canonicalized {
     let quads = flat_rdf_quads_from_dataset(dataset);
     let refrozen = flat_dataset_from_quads(&quads).expect("the flattened quads refreeze");
-    canonicalize_with(&refrozen, hash)
+    try_canonicalize_with(
+        &refrozen,
+        hash,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }
 
 /// The owned route over a view that is not already a concrete `RdfDataset`: an
@@ -200,7 +209,12 @@ fn owned_route_over_view<D: DatasetView>(view: &D, hash: CanonHash) -> Canonical
 /// The borrowed route: [`try_canonicalize_flat_view`] straight over `view`, no
 /// freeze, whatever `D` happens to be.
 fn borrowed_route<D: FallibleDatasetView>(view: &D, hash: CanonHash) -> Canonicalized<D::Id> {
-    try_canonicalize_flat_view(view, hash).expect("the view admits under the flat presentation")
+    try_canonicalize_flat_view(
+        view,
+        hash,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the view admits under the flat presentation")
 }
 
 /// Register every owned-vs-borrowed comparison group. Each shape's pair is
@@ -234,23 +248,31 @@ fn benches(c: &mut Bench) {
     // PARITY, not speed: `owned` and `borrowed` must land on the SAME flat bytes
     // for the SAME content, asserted once per shape, before anything is timed. If
     // they disagreed, the pairs below would be timing two different answers.
-    let plain_owned = owned_route(&plain, hash).nquads;
-    let plain_borrowed = borrowed_route(&*plain, hash).nquads;
+    let plain_owned_owner = owned_route(&plain, hash);
+    let plain_owned = plain_owned_owner.nquads();
+    let plain_borrowed_owner = borrowed_route(&*plain, hash);
+    let plain_borrowed = plain_borrowed_owner.nquads();
     assert_eq!(
         plain_owned, plain_borrowed,
         "plain: owned and borrowed routes must agree"
     );
     assert!(!plain_owned.is_empty(), "plain: the fixture must emit rows");
 
-    let statements_owned = owned_route(&statements, hash).nquads;
-    let statements_borrowed = borrowed_route(&*statements, hash).nquads;
+    let statements_owned_owner = owned_route(&statements, hash);
+
+    let statements_owned = statements_owned_owner.nquads();
+    let statements_borrowed_owner = borrowed_route(&*statements, hash);
+    let statements_borrowed = statements_borrowed_owner.nquads();
     assert_eq!(
         statements_owned, statements_borrowed,
         "statements: owned and borrowed routes must agree"
     );
 
-    let composite_owned = owned_route_over_view(&composite, hash).nquads;
-    let composite_borrowed = borrowed_route(&composite, hash).nquads;
+    let composite_owned_owner = owned_route_over_view(&composite, hash);
+
+    let composite_owned = composite_owned_owner.nquads();
+    let composite_borrowed_owner = borrowed_route(&composite, hash);
+    let composite_borrowed = composite_borrowed_owner.nquads();
     assert_eq!(
         composite_owned, composite_borrowed,
         "composite: owned and borrowed routes must agree"
@@ -260,8 +282,11 @@ fn benches(c: &mut Bench) {
         "composite wraps the statements dataset's content unchanged"
     );
 
-    let delta_owned = owned_route_over_view(&delta, hash).nquads;
-    let delta_borrowed = borrowed_route(&delta, hash).nquads;
+    let delta_owned_owner = owned_route_over_view(&delta, hash);
+
+    let delta_owned = delta_owned_owner.nquads();
+    let delta_borrowed_owner = borrowed_route(&delta, hash);
+    let delta_borrowed = delta_borrowed_owner.nquads();
     assert_eq!(
         delta_owned, delta_borrowed,
         "delta: owned and borrowed routes must agree"
@@ -272,11 +297,15 @@ fn benches(c: &mut Bench) {
     );
 
     let paged_probe = paged_dataset.query_view(PagedQueryLimits::UNBOUNDED);
-    let paged_owned = owned_route_over_view(&paged_probe, hash).nquads;
-    let paged_borrowed = borrowed_route(&paged_probe, hash).nquads;
+    let paged_owned_owner = owned_route_over_view(&paged_probe, hash);
+    let paged_owned = paged_owned_owner.nquads();
+    let paged_materialized =
+        dataset_from_view(&paged_probe).expect("checked paged materialization");
+    let paged_materialized_owner = borrowed_route(&*paged_materialized, hash);
+    let paged_materialized_bytes = paged_materialized_owner.nquads();
     assert_eq!(
-        paged_owned, paged_borrowed,
-        "paged: owned and borrowed routes must agree"
+        paged_owned, paged_materialized_bytes,
+        "paged: owned and materialized routes must agree"
     );
     assert_eq!(
         paged_owned, statements_owned,
@@ -327,10 +356,11 @@ fn benches(c: &mut Bench) {
             black_box(owned_route_over_view(&view, hash))
         });
     });
-    group.bench_function(BenchmarkId::new("borrowed", "paged"), |b| {
+    group.bench_function(BenchmarkId::new("materialized", "paged"), |b| {
         b.iter(|| {
             let view = paged_dataset.query_view(PagedQueryLimits::UNBOUNDED);
-            black_box(borrowed_route(&view, hash))
+            let materialized = dataset_from_view(&view).expect("checked paged materialization");
+            black_box(borrowed_route(&*materialized, hash))
         });
     });
 

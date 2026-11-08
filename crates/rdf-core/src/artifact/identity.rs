@@ -309,13 +309,22 @@ impl Identity {
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        for component in &self.components {
-            write_varint(&mut out, component.label.len() as u64);
-            out.extend_from_slice(component.label.as_bytes());
-            write_varint(&mut out, component.value.len() as u64);
-            out.extend_from_slice(&component.value);
-        }
+        self.visit_encoding(|part| out.extend_from_slice(part));
         out
+    }
+
+    /// Stream the one canonical framing to either a byte buffer or its digest.
+    /// Lengths occupy at most ten bytes; hashing never copies component payloads.
+    fn visit_encoding(&self, mut write: impl FnMut(&[u8])) {
+        let mut length = crate::SmallVec::<[u8; 10]>::new();
+        for component in &self.components {
+            for part in [component.label.as_bytes(), component.value.as_slice()] {
+                length.clear();
+                write_varint(&mut length, part.len() as u64);
+                write(&length);
+                write(part);
+            }
+        }
     }
 
     /// Decode [`to_bytes`](Self::to_bytes)'s output, fail-closed.
@@ -417,7 +426,9 @@ impl Identity {
     /// identity sealed into every artifact header, so a domain cannot be added
     /// without breaking every artifact already written.
     fn refresh(&mut self) {
-        self.digest = Sha256::digest(self.to_bytes()).into();
+        let mut digest = Sha256::new();
+        self.visit_encoding(|part| digest.update(part));
+        self.digest = digest.finalize().into();
     }
 }
 
@@ -458,6 +469,9 @@ mod tests {
     fn identity_components_decode_to_what_was_encoded() {
         let identity = sample();
         let bytes = identity.to_bytes();
+        let frozen = b"\x04base\x1ahttps://example.org/shapes\x0bshapes-rdfc\x04\xde\xad\xbe\xef\x05empty\x00";
+        assert_eq!(bytes, frozen);
+        assert_eq!(*identity.digest(), <[u8; 32]>::from(Sha256::digest(frozen)));
         let decoded = Identity::from_bytes(&bytes).expect("canonical identity decodes");
 
         assert_eq!(decoded, identity);

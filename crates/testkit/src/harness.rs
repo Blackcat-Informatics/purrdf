@@ -522,21 +522,44 @@ impl Conclusion {
 /// a run unless every requested filter executes one case. The focused WASM lane
 /// sets this after its runner preflight. Unset or `0` keeps libtest's defaults.
 pub fn main(trials: impl IntoIterator<Item = Trial>) -> ExitCode {
-    let status = main_status(trials);
+    finish_main(trials, false)
+}
+
+/// Run cases and reporting synchronously on the calling thread.
+///
+/// Whole-process allocation measurements require the runner to stay outside
+/// each case's measurement window. Requests for multiple test threads, through
+/// either the command line or `RUST_TEST_THREADS`, are refused. Threads spawned
+/// by the case itself, including Rayon workers, remain available.
+pub fn serial_main(trials: impl IntoIterator<Item = Trial>) -> ExitCode {
+    finish_main(trials, true)
+}
+
+fn finish_main(trials: impl IntoIterator<Item = Trial>, serial: bool) -> ExitCode {
+    let status = main_status(trials, serial);
     platform::report_exit(status);
     ExitCode::from(status)
 }
 
 /// [`main`]'s status as a number, so that it can be reported before it
 /// becomes an opaque [`ExitCode`].
-fn main_status(trials: impl IntoIterator<Item = Trial>) -> u8 {
-    let arguments = match Arguments::from_env() {
+fn main_status(trials: impl IntoIterator<Item = Trial>, serial: bool) -> u8 {
+    let mut arguments = match Arguments::from_env() {
         Ok(arguments) => arguments,
         Err(error) => {
             platform::print_error(&format!("error: {error}\n"));
             return ERROR_EXIT_CODE;
         }
     };
+    if serial && arguments.action == Action::Run {
+        if arguments.test_threads.is_some_and(|threads| threads > 1) {
+            platform::print_error(
+                "error: whole-process measurements require --test-threads=1; concurrent test execution would contaminate the measurement (also check RUST_TEST_THREADS)\n",
+            );
+            return ERROR_EXIT_CODE;
+        }
+        arguments.test_threads = Some(1);
+    }
     let expected = match platform::env_var("PURRDF_TEST_REQUIRE_EXACT").as_deref() {
         None | Some("0") => None,
         Some("1")

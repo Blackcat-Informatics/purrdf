@@ -43,7 +43,7 @@ fn positional_alignment_narrows_universal_gram_membership() {
     let report = index.substring_report("abcd").unwrap();
     assert_eq!(report.matches.len(), 1);
     assert_eq!(report.matches[0].term.text(), "abcd");
-    assert_eq!(report.matches[0].term.documents(), [2]);
+    assert_eq!(report.matches[0].term.documents().collect::<Vec<_>>(), [2]);
     assert_eq!(report.counters.posting_operations, 6);
     assert_eq!(report.counters.candidate_spans, 1);
     assert_eq!(report.counters.verification_bytes, 4);
@@ -183,11 +183,23 @@ fn emoji_endpoints_are_filtered_before_selectivity() {
         SubstringRefusalReason::NonSelective
     );
     let index = index(&["👩‍💻", "👩", "🇺🇸", "👍🏽", "1️⃣", "other"]);
-    assert_eq!(index.substring("👩").unwrap()[0].term.documents(), [1]);
+    assert_eq!(
+        index.substring("👩").unwrap()[0]
+            .term
+            .documents()
+            .collect::<Vec<_>>(),
+        [1]
+    );
     for probe in ["💻", "🇺", "🇸", "👍", "🏽", "1"] {
         assert_eq!(index.substring(probe).unwrap().len(), 0, "{probe}");
     }
-    assert_eq!(index.substring("👍🏽").unwrap()[0].term.documents(), [3]);
+    assert_eq!(
+        index.substring("👍🏽").unwrap()[0]
+            .term
+            .documents()
+            .collect::<Vec<_>>(),
+        [3]
+    );
 }
 
 fn retained_controls_remain_searchable_and_do_not_form_false_adjacencies() {
@@ -196,7 +208,10 @@ fn retained_controls_remain_searchable_and_do_not_form_false_adjacencies() {
     for (document, probe) in ["\u{ad}", "\u{200c}", "\u{fe0f}"].into_iter().enumerate() {
         let matches = index.substring(probe).unwrap();
         assert_eq!(matches.len(), 1, "{probe:?}");
-        assert_eq!(matches[0].term.documents(), [document as u32]);
+        assert_eq!(
+            matches[0].term.documents().collect::<Vec<_>>(),
+            [document as u32]
+        );
     }
 }
 
@@ -341,7 +356,6 @@ fn every_small_scalar_query_matches_an_independent_exhaustive_oracle() {
     for query in &universe {
         let expected: Vec<_> = index
             .spans()
-            .iter()
             .filter_map(|term| {
                 let ranges: Vec<_> = term
                     .text()

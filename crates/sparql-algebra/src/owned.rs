@@ -196,10 +196,8 @@ impl DropVisit {
             *slot = Some(DropOwner(DropKind::Pending));
             self.result = Some(wrap(node));
             true
-        } else if child.is_taken() {
-            self.slot(child.dismantle_continuation())
         } else {
-            false
+            child.is_taken() && self.slot(child.dismantle_continuation())
         }
     }
 

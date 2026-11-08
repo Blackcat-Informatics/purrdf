@@ -167,7 +167,7 @@ use std::collections::BTreeSet;
 
 use purrdf::shex::{
     ExactSchema, ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr,
-    TripleExprGroup, ValidationOptions, XPathValidationError, check_structure, parse_shape_map,
+    TripleExprGroup, ValidationError, ValidationOptions, check_structure, parse_shape_map,
     validate_shape_map_exact, validate_shape_map_exact_with_xpath,
 };
 use purrdf_core::xsd_regex::xpath::{Limits, Profile};
@@ -188,6 +188,8 @@ pub(crate) struct ShexOptions<'a> {
     pub(crate) imports: &'a [String],
     /// `--data`: the data graph, or `-`.
     pub(crate) data: &'a str,
+    /// YAML-LD Basic options for the data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base relative IRIs in the DATA graph and the shape map resolve against.
@@ -199,6 +201,8 @@ pub(crate) struct ShexOptions<'a> {
     /// is decided under. `None` keeps the compatibility pattern engine, exactly as before
     /// this flag existed.
     pub(crate) xpath_regex: Option<Profile>,
+    /// Maximum states admitted per ambiguous assignment search.
+    pub(crate) matcher_maximum_states: u64,
     /// The query shape map, verbatim from the command line.
     pub(crate) map: &'a str,
     /// The result-shape-map path `OUT`, or `-`.
@@ -208,7 +212,11 @@ pub(crate) struct ShexOptions<'a> {
 }
 
 /// Run the `shex` subcommand.
-pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Result<(), CliError> {
+pub(crate) fn run(
+    options: &ShexOptions<'_>,
+    ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     // Refuse the two global document flags, which name outputs this command does not produce.
     //
     // `--loss-ledger` records what a CONVERSION dropped, and this command converts nothing: the
@@ -236,9 +244,19 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     check_map_syntax(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     // No `--base` refusal here, unlike every other subcommand: see the module documentation
     // for why this run's base can never be inert.
-    let data = source::load_dataset(options.data, data_format, options.base)?;
+    let data = source::load_dataset(
+        options.data,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
 
     let schema_base = schema_base(options.schema)?;
     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
@@ -262,10 +280,15 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     })?;
     refuse_unavailable_semantics(schema, options.schema)?;
 
-    let validation = ValidationOptions::default();
+    let validation = ValidationOptions::default().with_matcher_limits(
+        purrdf::shex::MatcherLimits::new(options.matcher_maximum_states),
+    );
     let result = match options.xpath_regex {
         None => validate_shape_map_exact(&exact, &data, options.map, options.base, &validation)
-            .map_err(|error| map_error(error, options)),
+            .map_err(|error| match error {
+                ValidationError::ShapeMap(error) => map_error(error, options),
+                other => CliError::Runtime(other.to_string()),
+            }),
         // Under the production bounds, `Limits::new`. A pattern the selected law does not
         // define stays a facet finding inside the result shape map; only an operational
         // refusal — a source, compiler, storage or matching resource the law withheld —
@@ -281,12 +304,12 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
             Limits::new(),
         )
         .map_err(|error| match error {
-            XPathValidationError::ShapeMap(error) => map_error(error, options),
-            XPathValidationError::Regex(error) => CliError::Runtime(format!(
+            ValidationError::ShapeMap(error) => map_error(error, options),
+            ValidationError::Regex(error) => CliError::Runtime(format!(
                 "--xpath-regex {}: the native pattern law refused this shape map: {error}",
                 profile.name()
             )),
-            // `XPathValidationError` is `#[non_exhaustive]`: a cause added in its own crate
+            // `ValidationError` is `#[non_exhaustive]`: a cause added in its own crate
             // is reported with its own message rather than swallowed.
             other => CliError::Runtime(format!("--xpath-regex {}: {other}", profile.name())),
         }),
@@ -294,7 +317,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
 
     let mut json = result.to_result_json();
     json.push('\n');
-    sink::write_out(options.output, json.as_bytes())?;
+    sink::write_out_with_request(options.output, json.as_bytes(), canonical)?;
     surface_verdict(&result);
     Ok(())
 }

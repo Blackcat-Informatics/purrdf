@@ -159,14 +159,14 @@ impl Workload {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         governors,
                     )
                     .expect("original public governed numeric query"),
             ),
             (Some(prepared), None) => Product::Plain(
                 self.engine
-                    .query_prepared(&self.dataset, prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(&self.dataset, prepared, &[], &QueryOptions::EMPTY)
                     .expect("original public prepared row query"),
             ),
             (Some(prepared), Some(governors)) => Product::Governed(
@@ -175,7 +175,7 @@ impl Workload {
                         &*self.dataset,
                         prepared,
                         &[] as &[(String, TermValue)],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         governors,
                     )
                     .expect("original public governed prepared row query"),

@@ -29,6 +29,7 @@ path = "src/lib.rs"
 # purrdf terms directly and emits a derived dataset — no external reasoner, no
 # string round-trip. purrdf-core is wasm32-unknown-unknown-clean, keeping this
 # crate wasm-clean (MAXIMAL PORTABILITY).
+# Shared native tables retain explicit fixed hashes and store each value once.
 purrdf-core = { workspace = true }
 # The lexical layer: the workspace's one XML reader (RIF-in-XML) and the canonical term
 # syntax the store surface is spelled in.
@@ -57,9 +58,6 @@ purrdf-iri = { workspace = true }
 # N-Quads of the axiom set, which is version-stable across releases and across targets in a
 # way a table hasher is not. The native digest leaf is shared with purrdf-datalog.
 purrdf-hash = { workspace = true }
-# Fixed-key store-once interners and RIF posting-list indexes: raw tables keyed by
-# `purrdf-core`'s `FastHasher`.
-hashbrown = { workspace = true }
 
 [dev-dependencies]
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread

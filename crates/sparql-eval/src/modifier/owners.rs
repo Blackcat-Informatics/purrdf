@@ -6,8 +6,8 @@
 use crate::solution::RetainedRow;
 use crate::workspace::AdmittedVec;
 use crate::{DetHasher, EvalError, WorkspaceAllocation, WorkspaceCapability};
-use hashbrown::HashTable;
 use purrdf_core::ViewTermId;
+use purrdf_core::hash::table::HashTable;
 use std::cmp::Ordering;
 use std::hash::BuildHasher as _;
 

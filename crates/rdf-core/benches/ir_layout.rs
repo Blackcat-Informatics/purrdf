@@ -37,6 +37,8 @@
 
 #[path = "../tests/support/borrowed.rs"]
 mod borrowed;
+#[path = "../tests/support/segmented_text.rs"]
+mod segmented_text;
 use borrowed::term_ref_len;
 use std::sync::Arc;
 
@@ -607,6 +609,93 @@ fn bench_resolve(c: &mut Bench) {
 /// The resident and provider-backed forward lookup inspect the same fixed IRIs.
 /// The cold case opens outside the timed region and forces sparse-cache eviction;
 /// the hot case warms every dictionary/reverse block before sampling.
+fn bench_segmented_text(c: &mut Bench) {
+    use purrdf_core::{
+        SegmentedBuildLimits, SegmentedBuilder, SegmentedImage, SegmentedReadLimits,
+        SegmentedSession,
+    };
+    use purrdf_testkit::bench::BatchSize;
+
+    for kind in ["short", "repeated", "low_redundancy"] {
+        let values: Vec<_> = (0_u64..64)
+            .map(|index| {
+                let text = match kind {
+                    "short" => format!("{index:04}"),
+                    "repeated" => format!("{index:04} {}", segmented_text::ARCHIVE_TEXT.repeat(12)),
+                    _ => purrdf_testkit::rng::splitmix64_bytes(1812, 0x6360 + index)
+                        .into_iter()
+                        .map(|byte| char::from(b'a' + byte % 26))
+                        .collect(),
+                };
+                TermValue::simple_literal(text)
+            })
+            .collect();
+        let build = || {
+            let mut builder = SegmentedBuilder::new(
+                SegmentedBuildLimits::new(128, 1_000_000, 128, 4096, 64).unwrap(),
+            )
+            .unwrap();
+            let mut ids = Vec::new();
+            builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+            (builder.seal().unwrap(), ids)
+        };
+        let window = CurrentThreadWindow::open();
+        let (image, ids) = build();
+        report(&format!("segmented_{kind}_build"), window.close());
+        let bytes = image.bytes().to_vec();
+        let window = CurrentThreadWindow::open();
+        let certified = SegmentedImage::certify(bytes).unwrap();
+        report(&format!("segmented_{kind}_certify"), window.close());
+        assert_eq!(certified.receipt(), image.receipt());
+        let provider = Arc::new(certified.provider());
+        let open = || {
+            SegmentedSession::open(
+                provider.clone(),
+                certified.receipt(),
+                // Literal ownership also resolves its datatype under the parent guard.
+                SegmentedReadLimits::new(16_777_216, 128, 20_000, 100_000_000, 8),
+            )
+            .unwrap()
+        };
+        let warm = open();
+        let window = CurrentThreadWindow::open();
+        for (&id, value) in ids.iter().zip(&values) {
+            assert_eq!(warm.term_value(id).unwrap(), *value);
+            assert_eq!(warm.term_id_by_value(value).unwrap(), Some(id));
+        }
+        report(&format!("segmented_{kind}_cold_read"), window.close());
+        let reads = warm.evidence().request_count();
+        println!(
+            "[ir_layout] segmented_text kind={kind} image_bytes={} provider_requests={reads} admitted_peak_bytes={}",
+            image.bytes().len(),
+            warm.evidence().peak_bytes()
+        );
+        let mut group = c.benchmark_group(format!("ir_segmented_text/{kind}"));
+        group.bench_function("build", |b| b.iter(|| std::hint::black_box(build())));
+        group.bench_function("cold_forward", |b| {
+            b.iter_batched_ref(
+                open,
+                |read| {
+                    read.resolve_batch(&ids, |_, term| {
+                        std::hint::black_box(term);
+                    })
+                    .unwrap();
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function("warm_reverse", |b| {
+            b.iter(|| {
+                for value in &values {
+                    std::hint::black_box(warm.term_id_by_value(value).unwrap());
+                }
+            });
+        });
+        group.finish();
+        assert_eq!(warm.evidence().request_count(), reads);
+    }
+}
+
 fn bench_segmented_dictionary(c: &mut Bench) {
     use purrdf_core::{
         SegmentedBuildLimits, SegmentedBuilder, SegmentedReadLimits, SegmentedSession,
@@ -1108,14 +1197,115 @@ fn bench_canonicalize(c: &mut Bench) {
 
     let mut group = c.benchmark_group("ir_canonicalize");
     group.bench_function("blank_chains_and_ring", |b| {
-        b.iter(|| std::hint::black_box(purrdf_core::canonicalize(&ds).nquads.len()));
+        b.iter(|| {
+            std::hint::black_box(
+                purrdf_core::try_canonicalize(
+                    &ds,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads()
+                .len(),
+            )
+        });
     });
+    group.finish();
+}
+
+fn bench_word_prefixes(c: &mut Bench) {
+    use purrdf_core::{
+        content_alias::{AliasScope, ScopeId},
+        content_prefix::{Length, PrefixPlan},
+    };
+    use purrdf_hash::{blake3, hex::Digest32};
+    use purrdf_lex::allocation::Resident;
+    let mut group = c.benchmark_group("word_prefix_plan");
+    group
+        .sample_size(20)
+        .warm_up_time(std::time::Duration::from_millis(100))
+        .measurement_time(std::time::Duration::from_millis(300));
+    for count in [128_u64, 4096] {
+        let values: Vec<_> = (0..count)
+            .map(|index| Digest32::new(*blake3::hash(&index.to_le_bytes()).as_bytes()))
+            .collect();
+        let scope = ScopeId::new(Digest32::new([23; 32]));
+        let mut aliases = AliasScope::new(scope, Resident).unwrap();
+        aliases.extend(scope, &values).unwrap();
+        let binding = aliases.presentation(scope).unwrap();
+        let mut sorted = values.clone();
+        sorted.sort_unstable();
+        let window = CurrentThreadWindow::open();
+        let mut plan = PrefixPlan::from_digests(binding, &values, Resident).unwrap();
+        let measurement = window.close();
+        report(&format!("word_prefix/{count}"), measurement);
+        eprintln!(
+            "[word_prefix] count={count} uniform_payload_words={} lengths={:?}",
+            plan.summary().uniform_payload_words,
+            plan.summary().per_entry_lengths
+        );
+        let references: Vec<_> = values
+            .iter()
+            .map(|&digest| plan.shorten(binding, digest, Length::PerEntry).unwrap())
+            .collect();
+        let window = CurrentThreadWindow::open();
+        for &reference in &references {
+            std::hint::black_box(plan.resolve(reference).unwrap());
+        }
+        let measurement = window.close();
+        report(&format!("word_resolve/{count}"), measurement);
+        group.throughput(purrdf_testkit::bench::Throughput::Elements(count));
+        group.bench_function(format!("build/{count}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(PrefixPlan::from_digests(binding, &values, Resident).unwrap());
+            });
+        });
+        group.bench_function(format!("build_sorted/{count}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    PrefixPlan::from_sorted_source(
+                        binding,
+                        sorted
+                            .iter()
+                            .copied()
+                            .map(Ok::<_, std::convert::Infallible>),
+                        Resident,
+                    )
+                    .unwrap(),
+                );
+            });
+        });
+        group.bench_function(format!("resolve/{count}"), |b| {
+            b.iter(|| {
+                for &reference in &references {
+                    std::hint::black_box(plan.resolve(reference).unwrap());
+                }
+            });
+        });
+        if count == 4096 {
+            let mut pressure = vec![0_u8; 16 * 1024 * 1024];
+            group.bench_function("pressure_and_resolve/4096", |b| {
+                b.iter(|| {
+                    for byte in pressure.iter_mut().step_by(64) {
+                        *byte = byte.wrapping_add(1);
+                    }
+                    std::hint::black_box(&pressure);
+                    for &reference in &references {
+                        std::hint::black_box(plan.resolve(reference).unwrap());
+                    }
+                });
+            });
+        }
+    }
     group.finish();
 }
 
 bench_group!(
     benches,
     bench_metrics,
+    bench_word_prefixes,
     bench_build,
     bench_triple_carrier,
     bench_literal_intern,
@@ -1124,6 +1314,7 @@ bench_group!(
     bench_resolve,
     bench_value_lookup,
     bench_segmented_dictionary,
+    bench_segmented_text,
     bench_pattern_warm,
     bench_reifier_lookup,
     bench_pattern_cold,

@@ -9,13 +9,14 @@
 // uses every helper; an unused-here helper is used there.
 #![allow(dead_code, unreachable_pub)]
 
+use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DuplicatePolicy, ExclusionBasis, Fixed, FusionProfile,
-    FusionResult, Iri, RankFidelity, StreamContract, Term,
+    CandidateDomains, DecayRule, DuplicatePolicy, ExclusionBasis, FusionProfile, FusionResult, Iri,
+    RankFidelity, Score, StreamContract, Term,
 };
 
 /// Poll a future the fixture streams drive exactly once.
@@ -45,12 +46,12 @@ pub fn stratum(suffix: &str) -> Iri {
 ///
 /// There is no contribution-maximum argument to pass: the profile derives it
 /// from `weights`, because a candidate may surface at most once per stratum.
-pub fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
-    let map: BTreeMap<Iri, Fixed> = weights
+pub fn profile(weights: &[(&str, Score)], k: u32) -> FusionProfile {
+    let map: BTreeMap<Iri, Score> = weights
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
         .collect();
-    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k })
+    FusionProfile::with_decay(map, DecayRule::ReciprocalRank { k }, PRECISION_12)
         .expect("fixture profile is valid")
 }
 
@@ -62,6 +63,7 @@ pub fn profile(weights: &[(&str, Fixed)], k: u32) -> FusionProfile {
 /// rather than declared.
 pub fn unique_items() -> StreamContract {
     StreamContract::new(
+        purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
         RankFidelity::EXACT,
         CandidateDomains::Unrestricted,

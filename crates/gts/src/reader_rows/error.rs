@@ -9,6 +9,10 @@ use purrdf_hash::error::ErrorValue;
 
 #[derive(Debug)]
 pub(crate) enum RowError {
+    TermIdBaseOverflow {
+        value: usize,
+        base: usize,
+    },
     Width {
         context: &'static str,
         actual: usize,
@@ -55,6 +59,12 @@ pub(crate) enum RowError {
 impl fmt::Display for RowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TermIdBaseOverflow { value, base } => {
+                write!(
+                    f,
+                    "term id {value} overflows the outer id space at base {base}"
+                )
+            }
             Self::Width {
                 context,
                 minimum,
@@ -99,6 +109,9 @@ impl std::error::Error for RowError {}
 
 impl purrdf_hash::error::StructuredError for RowError {
     purrdf_hash::error_visit! {
+        TermIdBaseOverflow { value, base } => "gts-term-id-base-overflow" {
+            "value" => Unsigned(*value as u128), "base" => Unsigned(*base as u128)
+        },
         Width { context, actual, minimum, maximum } => "gts-row-width" {
             "context" => Code(context), "actual" => Unsigned(*actual as u128), "minimum" => Unsigned(*minimum as u128), "maximum" => Unsigned(*maximum as u128)
         },
