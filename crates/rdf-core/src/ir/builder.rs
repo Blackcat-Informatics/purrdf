@@ -110,14 +110,22 @@ fn hash_stored_value_with_memory<S: Admission + ?Sized>(
     hash_lookup_value_with_memory(&lookup, memory)
 }
 
-/// Production is zero-sized; reduced limits exercise the same public ingress
-/// without allocating multi-billion-entry dictionaries or row tables.
+/// Dictionary bounds share the native insertion checks; reduced test limits
+/// also exercise row ceilings without allocating multi-billion-entry tables.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) enum LocalCapacity {
     #[default]
     Native,
+    Bounded {
+        terms: u32,
+        text: u32,
+    },
     #[cfg(test)]
-    Reduced { terms: u32, text: u32, rows: u32 },
+    Reduced {
+        terms: u32,
+        text: u32,
+        rows: u32,
+    },
 }
 
 enum ImportBinding {
@@ -127,20 +135,23 @@ enum ImportBinding {
 
 impl LocalCapacity {
     fn limit(self, space: CapacitySpace) -> u128 {
-        match (self, space) {
-            (Self::Native, _) => u128::from(u32::MAX),
+        let (terms, text, rows) = match self {
+            Self::Native => return u128::from(u32::MAX),
+            Self::Bounded { terms, text } => (terms, text, u32::MAX),
             #[cfg(test)]
-            (Self::Reduced { terms, text, rows }, space) => u128::from(match space {
-                CapacitySpace::LocalTerms | CapacitySpace::DeltaTerms => terms,
-                CapacitySpace::LocalTermBytes => text,
-                CapacitySpace::Quads
-                | CapacitySpace::Triples
-                | CapacitySpace::Reifiers
-                | CapacitySpace::Annotations
-                | CapacitySpace::Permutation => rows,
-                _ => unreachable!("local builder capacity space"),
-            }),
-        }
+            Self::Reduced { terms, text, rows } => (terms, text, rows),
+        };
+        // Every caller selects a local dictionary, row or permutation space.
+        u128::from(match space {
+            CapacitySpace::LocalTerms | CapacitySpace::DeltaTerms => terms,
+            CapacitySpace::LocalTermBytes => text,
+            CapacitySpace::Quads
+            | CapacitySpace::Triples
+            | CapacitySpace::Reifiers
+            | CapacitySpace::Annotations
+            | CapacitySpace::Permutation => rows,
+            _ => unreachable!("local builder capacity space"),
+        })
     }
 
     pub(super) fn required(
@@ -1109,6 +1120,18 @@ impl RdfDatasetBuilder {
         crate::term_fixture::intern_value_with_memory(self, value, memory)
     }
 
+    /// Admit one constructor value as a unit, preserving IDs if a later child is refused.
+    pub(super) fn intern_value_atomically(
+        &mut self,
+        value: &super::term::TermValue,
+    ) -> Result<TermId, StorageError> {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.transaction_buffer_bytes()?);
+        self.transaction_with_memory(&mut memory, |builder, memory| {
+            crate::term_fixture::intern_value_with_memory(builder, value, memory)
+        })
+    }
+
     /// Native borrowed IRI ingress.
     ///
     /// # Errors
@@ -1342,6 +1365,14 @@ impl RdfDatasetBuilder {
             derivation_predicate: None,
             reifies_predicate: None,
         }
+    }
+
+    /// Select inclusive dictionary bounds at the native store-once boundary.
+    #[must_use]
+    pub(super) fn with_dictionary_limits(terms: u32, text: u32) -> Self {
+        let mut builder = Self::new();
+        builder.interner.capacity = LocalCapacity::Bounded { terms, text };
+        builder
     }
 
     /// A fresh builder configured for content addressing: `scheme` marks which
