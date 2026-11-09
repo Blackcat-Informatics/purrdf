@@ -12,9 +12,9 @@
 //! * syntax tests → parse success/failure matches the kind.
 //!
 //! Ground solutions use admitted structural row keys after both complete inputs
-//! pass native RDF validation. Results containing blanks use the shared kit's
-//! single global identity map and RDFC-1.0 carrier, including blanks inside CDT
-//! literals and triple terms. Numeric literals compare by canonical lexical
+//! pass native RDF validation. Results containing blanks retain the runner's
+//! compact RDFC-1.0 carrier and share the kit's global identity map for bare,
+//! triple and CDT blank references. Numeric literals compare by canonical lexical
 //! identity under their original datatype; other lexical forms remain exact.
 //! The separate [`canonical_solutions`] trace encoder retains its frozen bytes.
 
@@ -671,10 +671,11 @@ fn encode_comparison_set(
 /// or be forged from, result data.
 const CONFORMANCE_NS: &str = "urn:purrdf:conformance:";
 
-/// The scope every value blank node is interned under, so a blank node shared
-/// across rows keeps ONE [`TermId`] and its global coreference survives into
-/// the canonical form. Distinct from [`SOLUTION_SCOPE`] so a value blank can
-/// never accidentally alias a synthetic solution blank.
+/// The value-blank scope of the historical trace and differential carrier.
+/// A blank shared across rows keeps one [`TermId`], preserving its global
+/// coreference. Production comparison uses the shared identity map's default
+/// scope instead. Both scopes are distinct from [`SOLUTION_SCOPE`], so value
+/// blanks cannot alias synthetic solution blanks.
 const VALUE_SCOPE: BlankScope = BlankScope(1);
 
 /// The scope the per-row synthetic *solution* blank nodes are interned under.
