@@ -486,6 +486,20 @@ impl Reasoner {
         ))
     }
 
+    /// Prepare the native engine and admit its schema for retained positive updates.
+    pub(crate) fn build_positive_prepared<D: DatasetView>(
+        ds: &D,
+        input: Option<[u8; 32]>,
+        preparation: SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+    ) -> Result<(Self, parser::Ingress), EntailError<D::ReadError>> {
+        let (reasoner, ingress) = Self::build_prepared(ds, input, preparation, stop)?;
+        ingress
+            .require_unambiguous(&reasoner.kb.interner)
+            .map_err(EntailError::with_read_error)?;
+        Ok((reasoner, ingress))
+    }
+
     pub(crate) fn bind_positive(&mut self, term: TermValue) -> Result<u32, EntailError> {
         Ok(self.kb.source_terms.intern(&mut self.kb.interner, term)?)
     }

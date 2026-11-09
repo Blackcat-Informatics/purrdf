@@ -1394,16 +1394,16 @@ mod tests {
     }
 
     #[test]
-    fn second_traversal_failure_retains_the_original_cause_without_a_partial_reasoner() {
+    fn completed_source_failure_retains_the_original_cause_without_a_partial_reasoner() {
         let data = dataset(&[(X, RDF_TYPE, A)]);
         for fail_term in [false, true] {
-            let source = FailingSource::new(Arc::clone(&data), fail_term, 2);
+            let source = FailingSource::new(Arc::clone(&data), fail_term, 1);
             let cause = Arc::clone(&source.cause);
-            let error = Reasoner::new(&source).expect_err("the second source pass must fail");
-            assert_eq!(source.passes.get(), 2);
+            let error = Reasoner::new(&source).expect_err("the completed source read must fail");
+            assert_eq!(source.passes.get(), 1);
             drop(source);
             let EntailError::SourceRead(native) = &error else {
-                panic!("expected the native second-pass cause, got {error:?}");
+                panic!("expected the native completed-read cause, got {error:?}");
             };
             assert!(Arc::ptr_eq(native, &cause));
             let chained = std::error::Error::source(&error)
@@ -1414,7 +1414,7 @@ mod tests {
         }
         let source = FailingSource::new(data, false, usize::MAX);
         let reasoner = Reasoner::new(&source).expect("the neighboring complete source is valid");
-        assert_eq!(source.passes.get(), 2);
+        assert_eq!(source.passes.get(), 1);
         assert!(!reasoner.records_proofs());
     }
 

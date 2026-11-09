@@ -635,8 +635,8 @@ fn query_nominal_promoted_only_in_named_graph_does_not_contaminate_the_abox() {
     assert_eq!(*world.consistency().unwrap().answer(), Verdict::True);
 }
 
-/// Coordinate ordering must not choose a different functional expression
-/// operand; legal multiple named inverse-property axioms remain admitted.
+/// Positive admission requires an unambiguous functional expression in either
+/// source order; legal multiple named inverse-property axioms remain admitted.
 #[test]
 fn ambiguous_functional_expression_refuses_both_source_orders() {
     for (first, second) in [(iri("B"), iri("C")), (iri("C"), iri("B"))] {
@@ -646,18 +646,33 @@ fn ambiguous_functional_expression_refuses_both_source_orders() {
                 TermValue::iri(rdfs::SUB_CLASS_OF),
                 iri("expression"),
             ),
-            (iri("expression"), TermValue::iri(owl::COMPLEMENT_OF), first),
             (
                 iri("expression"),
                 TermValue::iri(owl::COMPLEMENT_OF),
-                second,
+                first.clone(),
+            ),
+            (
+                iri("expression"),
+                TermValue::iri(owl::COMPLEMENT_OF),
+                second.clone(),
             ),
         ];
-        assert!(matches!(
-            Reasoner::new(&build_page(&rows).unwrap()),
-            Err(purrdf_entail::EntailError::OwlSyntax(error))
-                if matches!(*error, purrdf_entail::OwlSyntaxError::AmbiguousOperand { .. })
-        ));
+        let error = PositiveWorld::new(build_page(&rows).unwrap(), limits())
+            .expect_err("a retained positive schema must have stable operands");
+        let PositiveWorldError::Entail(purrdf_entail::EntailError::OwlSyntax(error)) = error else {
+            panic!("expected the original native ambiguity cause");
+        };
+        let purrdf_entail::OwlSyntaxError::AmbiguousOperand {
+            node,
+            predicate,
+            operands,
+        } = *error
+        else {
+            panic!("expected both original competing operands");
+        };
+        assert_eq!(node, iri("expression"));
+        assert_eq!(predicate, TermValue::iri(owl::COMPLEMENT_OF));
+        assert!(operands.contains(&first) && operands.contains(&second));
     }
     let legal = build_page(&[
         (iri("p"), TermValue::iri(owl::INVERSE_OF), iri("q")),
@@ -665,7 +680,11 @@ fn ambiguous_functional_expression_refuses_both_source_orders() {
     ])
     .unwrap();
     assert_eq!(
-        *Reasoner::new(&legal).unwrap().consistency().answer(),
+        *PositiveWorld::new(legal, limits())
+            .unwrap()
+            .consistency()
+            .unwrap()
+            .answer(),
         Verdict::True
     );
 }

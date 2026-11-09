@@ -566,22 +566,7 @@ impl<'a> CeExtractor<'a> {
         if let Some(original) = self.syntax.borrow().refusal {
             return Err(EntailError::Storage(original));
         }
-        poll(self.stop)?;
-        if let Some((node, predicate, first, second)) = self.ambiguous_operand.get() {
-            return Err(OwlSyntaxError::AmbiguousOperand {
-                node: self.interner.value(node).clone(),
-                predicate: self.interner.value(predicate).clone(),
-                operands: purrdf_lex::allocation::Memory::new(
-                    &mut purrdf_lex::allocation::Resident,
-                )
-                .boxed([
-                    self.interner.value(first).clone(),
-                    self.interner.value(second).clone(),
-                ])?,
-            }
-            .into());
-        }
-        Ok(())
+        poll(self.stop)
     }
 
     pub(crate) fn into_syntax(self) -> Result<Syntax, EntailError> {
@@ -1315,7 +1300,7 @@ impl<'a> CeExtractor<'a> {
         ids.into_iter().map(|n| self.expr(n)).collect()
     }
 
-    /// A functional source operand; ambiguity is refused at the next native boundary.
+    /// The first operand and the ambiguity evidence needed for positive admission.
     fn sole_operand(&self, s: u32, p: u32) -> Option<u32> {
         let objects = self.index.get(&s)?.get(&p)?;
         let first = *objects.first()?;
@@ -1389,8 +1374,30 @@ pub(crate) struct Ingress {
     pub(crate) index: TripleIndex,
     pub(crate) initial_order: Vec<(u32, u32, u32)>,
     pub(crate) source_term_reads: u64,
+    ambiguous_operand: Option<(u32, u32, u32, u32)>,
     expressions: BTreeMap<u32, Concept>,
     literals: LiteralIngress,
+}
+
+impl Ingress {
+    /// Admit only stable functional operands for a retained positive schema.
+    pub(crate) fn require_unambiguous(&self, interner: &Interner) -> Result<(), EntailError> {
+        if let Some((node, predicate, first, second)) = self.ambiguous_operand {
+            return Err(OwlSyntaxError::AmbiguousOperand {
+                node: interner.value(node).clone(),
+                predicate: interner.value(predicate).clone(),
+                operands: purrdf_lex::allocation::Memory::new(
+                    &mut purrdf_lex::allocation::Resident,
+                )
+                .boxed([
+                    interner.value(first).clone(),
+                    interner.value(second).clone(),
+                ])?,
+            }
+            .into());
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn build_prepared<D: DatasetView>(
@@ -1494,6 +1501,7 @@ pub(crate) fn build_prepared<D: DatasetView>(
         let mut ranges = DataRangeTable::default();
         let syntax;
         let expressions;
+        let ambiguous_operand;
         let property_kinds;
         {
             let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
@@ -1586,6 +1594,7 @@ pub(crate) fn build_prepared<D: DatasetView>(
                 }
             }
             property_kinds = ce.property_kinds.take();
+            ambiguous_operand = ce.ambiguous_operand.get();
             (syntax, expressions) = ce.into_prepared().map_err(EntailError::with_read_error)?;
         }
 
@@ -1739,6 +1748,7 @@ pub(crate) fn build_prepared<D: DatasetView>(
                 index,
                 initial_order: triples,
                 source_term_reads,
+                ambiguous_operand,
                 expressions,
                 literals,
             },
@@ -1805,8 +1815,10 @@ pub(crate) fn append_positive(
         }
         acc.boundaries.extend(ce.boundaries().iter().copied());
         kb.property_kinds = ce.property_kinds.take();
+        ingress.ambiguous_operand = ce.ambiguous_operand.get();
         (kb.syntax, ingress.expressions) = ce.into_prepared()?;
     }
+    ingress.require_unambiguous(&kb.interner)?;
     let authored_types = acc.abox_types.len();
     let mut storage = purrdf_lex::allocation::Resident;
     let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);

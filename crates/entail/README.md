@@ -79,8 +79,9 @@ budget, stop signal and canonicalization control. It validates the complete
 state and exact source coverage before replaying source and syntactic
 preparation through the native owners. The current question is prepared once,
 after the prior history. A preparation step supplies no clauses, assumptions,
-decisions or native budgets. Ambiguous functional OWL operands are refused by
-the shared parser. Native slots and the final clause contract must agree.
+decisions or native budgets. Positive construction and replay admission refuse
+ambiguous functional OWL operands using the shared parser's original source
+witness. Native slots and the final clause contract must agree.
 Completed-read checkpoints and cancellation must succeed before a verified
 context stamp is published.
 

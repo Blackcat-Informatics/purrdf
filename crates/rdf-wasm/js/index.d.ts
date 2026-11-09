@@ -1186,7 +1186,7 @@ export class PositiveReasoner {
   classSatisfiability(class_: string, canonicalSearch: string): ReasoningAnswer;
   entails(axiom: string, canonicalSearch: string): ReasoningAnswer;
   instances(class_: string, canonicalSearch: string): ReasoningAnswer;
-  checkPositiveProof(service: ProofService | string, argument: string, answer: string, certificate: string, proof: string, canonicalSearch: string): CanonicalResult;
+  checkPositiveProof(service: ProofService | string, argument: string, answer: string, certificate: string, proof: string, canonicalSearch: string): CanonicalResult<string>;
   work(): PositiveUpdateWork;
   free(): void;
 }

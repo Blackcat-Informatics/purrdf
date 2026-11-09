@@ -218,16 +218,31 @@ fn positive_transport_checks_complete_operands_and_retains_revision_caps() {
     let (producer, _) = producer.advance(field("latest"), &mut control()).unwrap();
     let after = producer.consistency().unwrap();
     for certificate in [before.certificate(), after.certificate()] {
-        assert!(certificate.contains("\nbudget 7\n"), "{certificate}");
-        assert!(certificate.contains("\nwork-budget 11\n"), "{certificate}");
+        assert!(
+            certificate.contains("\nbudget 7\n"),
+            "decision cap changed across revisions"
+        );
+        assert!(
+            certificate.contains("\nwork-budget 11\n"),
+            "decision work cap changed across revisions"
+        );
     }
     let producer = open(field("initial"), 0, 0);
     let (producer, _) = producer.class_satisfiability("<urn:query>").unwrap();
     let (producer, _) = producer.advance(field("latest"), &mut control()).unwrap();
     let (_, produced) = producer.entails(field("axiom")).unwrap();
-    assert_eq!(produced.answer(), field("answer"));
-    assert_eq!(produced.certificate(), field("certificate"));
-    assert_eq!(produced.proof_document(), field("proof"));
+    assert!(
+        produced.answer() == field("answer"),
+        "frozen answer bytes changed"
+    );
+    assert!(
+        produced.certificate() == field("certificate"),
+        "frozen certificate bytes changed"
+    );
+    assert!(
+        produced.proof_document() == field("proof"),
+        "frozen proof bytes changed"
+    );
     assert!(decode_dl_proof(field("proof")).is_err());
     let consumer = open(field("latest"), 0, 0);
     let check = |answer, certificate, proof| {
@@ -243,11 +258,14 @@ fn positive_transport_checks_complete_operands_and_retains_revision_caps() {
     assert!(check("entails false\n", field("certificate"), field("proof")).is_err());
     assert!(check(field("answer"), "invalid certificate", field("proof")).is_err());
     let forged = field("proof").replacen("input ", "input 0", 1);
-    assert_ne!(forged, field("proof"));
+    assert!(
+        forged != field("proof"),
+        "the forged identity probe must change the frozen proof"
+    );
     assert!(check(field("answer"), field("certificate"), &forged).is_err());
-    assert_eq!(
-        check(field("answer"), field("certificate"), field("proof")).unwrap(),
-        field("report")
+    assert!(
+        check(field("answer"), field("certificate"), field("proof")).unwrap() == field("report"),
+        "frozen independent check report bytes changed"
     );
     consumer.consistency().unwrap();
 }

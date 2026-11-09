@@ -860,7 +860,7 @@ impl PreparationLayout {
                                 PositiveWorldError::Entail(EntailError::Canonicalization(error))
                             })?;
                         if *initial {
-                            let (native, mut parsed) = Reasoner::build_prepared(
+                            let (native, mut parsed) = Reasoner::build_positive_prepared(
                                 &revision,
                                 Some(input),
                                 schema,

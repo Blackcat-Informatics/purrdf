@@ -198,6 +198,8 @@ pub struct PositiveUpdateWork {
 /// Advancing consumes this owner. A failed read, allocation, cancellation, schema
 /// change or inference returns its original typed error and no usable partial
 /// world. The caller may retain its own snapshot handles independently.
+/// Positive admission rejects competing functional syntax operands with their
+/// original source values before retaining a schema.
 ///
 /// Native term IDs are rebound through exact borrowed source lookups on each
 /// advance; sources need not preserve their local IDs between snapshots. Old
@@ -313,7 +315,8 @@ impl<D: FallibleDatasetView> PositiveWorld<D> {
         limits: PositiveWorldLimits,
     ) -> Result<Self, PositiveWorldError<D::Error, D::Evidence>> {
         let (reasoner, ingress, frontier, work) = checkpointed_drain(&source, |source| {
-            let (mut reasoner, ingress) = Reasoner::build_prepared(source, input, budget, stop)?;
+            let (mut reasoner, ingress) =
+                Reasoner::build_positive_prepared(source, input, budget, stop)?;
             let mut frontier = Frontier::new(limits);
             let mut work = PositiveUpdateWork::default();
             source
@@ -429,7 +432,7 @@ impl<D: FallibleDatasetView> PositiveWorld<D> {
 
     fn certify<T>(&self, mut answer: Certified<T>) -> Result<Certified<T>, EntailError> {
         if let Some(layout) = &self.layout {
-            answer.attach_positive_layout(layout.copy(self.limits, self.frontier.live)?)?;
+            answer.attach_positive_layout(|| layout.copy(self.limits, self.frontier.live))?;
         }
         Ok(answer)
     }

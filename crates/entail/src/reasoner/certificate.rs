@@ -617,15 +617,23 @@ impl purrdf_hash::error::StructuredError for OwnedDirectnessRefusal {
 }
 
 impl<T> Certified<T> {
+    /// Attach a supplement only to an existing proof, preserving a physical refusal intact.
     pub(crate) fn attach_positive_layout(
         &mut self,
-        layout: crate::owl_dl::proof::layout::PreparationLayout,
+        layout: impl FnOnce() -> Result<
+            crate::owl_dl::proof::layout::PreparationLayout,
+            crate::EntailError,
+        >,
     ) -> Result<(), crate::EntailError> {
-        self.proof
-            .as_mut()
-            .ok_or(crate::EntailError::ProofsNotRecorded)?
-            .attach_positive_layout(layout);
-        Ok(())
+        match self.proof.as_mut() {
+            Some(proof) => {
+                proof.attach_positive_layout(layout()?);
+                Ok(())
+            }
+            // Physical refusal retains its certified cause without supplementary allocation.
+            None if self.certificate.storage_refusal().is_some() => Ok(()),
+            None => Err(crate::EntailError::ProofsNotRecorded),
+        }
     }
     /// Pair an answer with its certificate and, when one was recorded, its proof term.
     pub(crate) const fn new(
@@ -1116,5 +1124,45 @@ mod tests {
         let budget = Budget::for_kb(&kb);
         let mut session = Session::new(&kb, budget, None);
         assert_eq!(session.refutes(&Assumptions::of_kb()), Verdict::Unknown);
+    }
+
+    /// Positive attachment preserves a recorded decision's original physical refusal,
+    /// without trying to allocate a supplement for the deliberately withheld proof.
+    #[test]
+    fn positive_layout_preserves_physical_refusal_without_supplementary_allocation() {
+        let mut kb = Kb::empty();
+        kb.finalize().unwrap();
+        let budget = Budget::for_kb(&kb);
+        let mut session = Session::new(&kb, budget, Some([0; 32]));
+        assert!(session.records());
+        let original = purrdf_lex::allocation::StorageError::AllocationFailed;
+        // Inject the native refusal at the recording-session boundary.
+        session.storage_refusal = Some(original);
+        let certificate = session.certificate(&BTreeSet::new());
+        let proof = session.proof(&certificate, || {
+            panic!("a physically refused decision cannot bind a proof");
+        });
+        let mut answer = Certified::new(Verdict::Unknown, certificate, proof);
+        answer
+            .attach_positive_layout(|| {
+                panic!("a withheld proof cannot allocate a positive supplement");
+            })
+            .unwrap();
+        assert_eq!(*answer.answer(), Verdict::Unknown);
+        assert_eq!(
+            answer.certificate().completeness(),
+            DlCompleteness::StorageRefused
+        );
+        assert_eq!(answer.certificate().storage_refusal(), Some(original));
+        assert!(answer.proof().is_none());
+
+        let certificate = Session::new(&kb, budget, None).certificate(&BTreeSet::new());
+        let mut unrecorded = Certified::new(Verdict::True, certificate, None);
+        assert!(matches!(
+            unrecorded.attach_positive_layout(|| {
+                panic!("an unrecorded answer cannot allocate a positive supplement");
+            }),
+            Err(crate::EntailError::ProofsNotRecorded)
+        ));
     }
 }
