@@ -19,6 +19,62 @@ fn stream_limits() -> StreamLimits {
 }
 
 #[test]
+fn unquoted_scalar_boms_refuse_at_original_positions_without_rejecting_valid_content() {
+    for (source, line, column) in [
+        ("key: ab\u{feff}cd\n", 1, 8),
+        ("key\u{feff}: value\n", 1, 4),
+        ("key: first\r\n  α\u{feff}b\r\n", 2, 4),
+        ("value: [a\u{feff}b]", 1, 10),
+        ("value: [a\r\n  α\u{feff}b]\r\n", 2, 4),
+        ("value: |\r\n  α\u{feff}b\r\n", 2, 4),
+        ("value: >-\n  \u{feff}tail", 2, 3),
+        ("value: |-\n  \u{feff}tail", 2, 3),
+    ] {
+        let error = read(source).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            &ErrorKind::Syntax("an unquoted non-break character")
+        );
+        assert_eq!(
+            (error.offset(), error.line(), error.column()),
+            (source.find('\u{feff}').unwrap(), line, column)
+        );
+        let lexical =
+            purrdf_lex::yaml::read_syntax(source, purrdf_lex::yaml::SyntaxLimits::DEFAULT)
+                .unwrap_err();
+        assert_eq!(lexical, error);
+    }
+    for source in [
+        "value: 'a\u{feff}b'",
+        "value: \"a\u{feff}b\"",
+        "value: \"a\\uFEFFb\"",
+        "\u{feff}value: 'a\u{feff}b'",
+    ] {
+        assert_eq!(read(source).unwrap()["value"], "a\u{feff}b");
+    }
+    // These characters remain non-break content under YAML 1.2.
+    for character in ['\u{85}', '\u{2028}', '\u{2029}', '\u{fefe}'] {
+        let value = format!("a{character}b");
+        for source in [format!("value: {value}"), format!("value: |-\n  {value}")] {
+            assert_eq!(read(&source).unwrap()["value"], value.as_str());
+        }
+    }
+    let source = "value: 'a\u{feff}b'\n...\n\u{feff}---\nvalue: a\u{feff}b";
+    let error = read_stream(source, stream_limits()).unwrap_err();
+    assert_eq!(
+        (error.offset(), error.line(), error.column()),
+        (source.rfind('\u{feff}').unwrap(), 4, 9)
+    );
+    // An earlier native refusal still owns the failure, before later content.
+    assert!(matches!(
+        read("value: *missing\nlater: a\u{feff}b")
+            .unwrap_err()
+            .kind(),
+        ErrorKind::UnknownAlias { .. }
+    ));
+}
+
+#[test]
 fn yaml_stream_boundaries_distinguish_absence_from_empty_documents() {
     for (source, expected) in [
         ("", "[]"),

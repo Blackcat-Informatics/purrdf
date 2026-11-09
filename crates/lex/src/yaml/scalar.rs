@@ -36,6 +36,11 @@ pub(super) const fn printable(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | ' '..='~' | '\u{85}' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }
 
+/// YAML 1.2.2 §5.4 [27] `nb-char`: printable minus line breaks and the BOM.
+pub(super) const fn non_break(c: char) -> bool {
+    printable(c) && !matches!(c, '\n' | '\r' | '\u{feff}')
+}
+
 const SHORT_ESCAPES: &[(u8, char)] = &[
     (b'0', '\0'),
     (b'a', '\u{7}'),
