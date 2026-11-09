@@ -821,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_graphs_keep_flat_storage_canonical_bytes_and_original_reader_refusals() {
+    fn shared_graphs_keep_flat_storage_canonical_bytes_and_native_reader_admission() {
         use crate::{ColumnarOrdinal, ColumnarOrdinalValue, read_with_ordinals};
 
         let blobs = ContentStore::new();
@@ -888,7 +888,7 @@ mod tests {
                     decoding.peak_working_bytes <= (terms * 4096 + 262_144) as i64,
                     "{decoding:?}"
                 );
-                if !diamond && depth <= 16 {
+                if !diamond {
                     let read = read.unwrap();
                     assert!(matches!(
                         read.get(ColumnarOrdinal::Quad(0)),
