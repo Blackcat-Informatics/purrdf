@@ -911,6 +911,11 @@ Its mapped sites identify the shared canonical CBOR and hashing code exercised;
 the probe makes no SIMD throughput claim. Input construction and output verification
 remain outside its measured allocation window.
 
+`freeze` times complete public freeze and validated materialization, including
+source statistics and directories. Its mapped site identifies the shared
+single-block hashing used by source identities. Fixture construction, validation
+for the materialization case, and output destruction remain outside timing.
+
 <!-- simd-asm:benches:begin -->
 | bench | sites |
 |---|---|
@@ -958,6 +963,7 @@ remain outside its measured allocation window.
 | `crates/rdf-core/benches/csv.rs` | core.csv-field |
 | `crates/rdf-core/benches/dataset_state_digest.rs` | blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf-core/benches/distance.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
+| `crates/rdf-core/benches/freeze.rs` | blake3.single-block |
 | `crates/rdf-core/benches/intern_absoluteness.rs` | core.intern, iri.delimiter-scan |
 | `crates/rdf-core/benches/intern_content_id.rs` | core.intern, hash.hex-decode, hash.hex-lower, hash.fixed-terminal |
 | `crates/rdf-core/benches/ir_layout.rs` | core.dataset-scan-filter, core.intern |
