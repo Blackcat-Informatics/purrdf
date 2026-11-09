@@ -533,7 +533,7 @@ fn actual_ground_runner_allocations_and_work_scale_without_rdf_carriers() {
         .work;
         assert_eq!(work.row_keys, 2 * count);
         assert_eq!(work.key_parts, 2 * count);
-        assert!(work.row_comparisons < 32 * count as u64 * (count.ilog2() as u64 + 1));
+        assert!(work.row_comparisons < 32 * count as u64 * (u64::from(count.ilog2()) + 1));
         assert!(ground.allocations < carrier.allocations);
         assert!(ground.requested_bytes < carrier.requested_bytes);
         assert!(ground.peak_working_bytes < carrier.peak_working_bytes);
