@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1244-gts-expose-strict-lossless-tar",
+  "branch": "paudley/1244-gts-expose-strict-lossless-tar",
+  "base_ref": "58c0f65b608d486cdbc5faaac3693fb96b1d7184",
+  "head": "f25fe8215104e76a963ac3920984c23a8bdb05af",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1244-gts-expose-strict-lossless-tar/.stage/gts-expose-strict-lossless-tar/sync/20261109T054639-241aab8422e846a098e4dd4ebb7b7c2a",
+  "conflicts": [],
+  "status": "completed",
+  "base": "58c0f65b608d486cdbc5faaac3693fb96b1d7184",
+  "merge_bases": [
+    "54c29a8eb9334cadf78de7120ff81ec21303d560"
+  ],
+  "merge_index": "31b9d21a7aed97037494314289531d2fa99f142849f9b86607da756581a9800f",
+  "candidate_tree": "ec5c19c9fee0d8b5f39020613c88b07e0387d600",
+  "candidate_patch": "candidate-79c99cfb0b724eab907eb576d5956406.patch",
+  "validation_records": [
+    "validation-runs/20261109T025846-20712dbd7a/result.json",
+    "validation-runs/20261109T030107-5ac04ff4f1/result.json",
+    "validation-runs/20261109T030238-c2ff28ffa2/result.json",
+    "validation-runs/20261109T030455-ee9d0368c1/result.json",
+    "validation-runs/20261109T030744-4d6cd53c19/result.json",
+    "validation-runs/20261109T031031-ce34794c95/result.json"
+  ],
+  "commit": "b105b68ee96dd3ef8f3a4e930d13e55ff82fb912",
+  "tree": "ec5c19c9fee0d8b5f39020613c88b07e0387d600"
+}
