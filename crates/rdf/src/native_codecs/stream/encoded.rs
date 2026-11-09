@@ -67,14 +67,19 @@ impl<R: Read> Input<R> {
         progress: &mut C,
     ) -> Result<Option<u8>, EncodedReadError<C::Error, O>> {
         if self.used == self.available && !self.eof {
-            progress.charge(0).map_err(EncodedReadError::Control)?;
-            self.available =
-                self.reader
-                    .read(&mut self.bytes)
-                    .map_err(|cause| EncodedReadError::Read {
-                        cause,
-                        offset: self.totals.input_bytes,
-                    })?;
+            self.available = loop {
+                progress.charge(0).map_err(EncodedReadError::Control)?;
+                match self.reader.read(&mut self.bytes) {
+                    Ok(available) => break available,
+                    Err(cause) if cause.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(cause) => {
+                        return Err(EncodedReadError::Read {
+                            cause,
+                            offset: self.totals.input_bytes,
+                        });
+                    }
+                }
+            };
             if self.available > self.bytes.len() {
                 return Err(EncodedReadError::ReadCount {
                     actual: self.available,
@@ -384,79 +389,90 @@ pub fn parse_dataset_from_encoded_reader<
         eof: false,
         finished: false,
     };
-    let result = (|| {
-        let dataset = if format.is_line_oriented() {
-            let base = super::super::parse::base_scope_for(base_iri).map_err(|diagnostic| {
-                EncodedReadError::Parse {
-                    diagnostic,
-                    source: None,
-                }
-            })?;
-            match format {
-                super::NativeRdfFormat::HexTuples => {
-                    let mut parser = HexTuplesStreamParser::new(base);
-                    while next_line(
-                        &mut input,
-                        &mut workspace,
-                        LineEnd::Ndjson,
-                        options,
-                        memory,
-                        progress,
-                        &mut contribution,
-                    )? {
-                        parser
-                            .push_line(&workspace.text)
-                            .map_err(|diagnostic| workspace.diagnostic(diagnostic, Some(1)))?;
+    // Keep conversion ownership outside the guard so an unwind is diagnosed
+    // through the native codec boundary before both buffers are refunded.
+    let result = super::super::parse::catch_codec_panic(format, || {
+        Ok((|| {
+            let dataset = if format.is_line_oriented() {
+                let base = super::super::parse::base_scope_for(base_iri).map_err(|diagnostic| {
+                    EncodedReadError::Parse {
+                        diagnostic,
+                        source: None,
                     }
-                    parser
-                        .finish()
-                        .map_err(|diagnostic| EncodedReadError::Parse {
-                            diagnostic,
-                            source: None,
-                        })?
-                }
-                other => {
-                    let mut parser = LineStreamParser::new(other, base).map_err(|diagnostic| {
-                        EncodedReadError::Parse {
-                            diagnostic,
-                            source: None,
+                })?;
+                match format {
+                    super::NativeRdfFormat::HexTuples => {
+                        let mut parser = HexTuplesStreamParser::new(base);
+                        while next_line(
+                            &mut input,
+                            &mut workspace,
+                            LineEnd::Ndjson,
+                            options,
+                            memory,
+                            progress,
+                            &mut contribution,
+                        )? {
+                            parser
+                                .push_line(&workspace.text)
+                                .map_err(|diagnostic| workspace.diagnostic(diagnostic, Some(1)))?;
                         }
-                    })?;
-                    while next_line(
-                        &mut input,
-                        &mut workspace,
-                        LineEnd::RdfEol,
-                        options,
-                        memory,
-                        progress,
-                        &mut contribution,
-                    )? {
                         parser
-                            .push_line(&workspace.text)
-                            .map_err(|diagnostic| workspace.diagnostic(diagnostic, Some(1)))?;
+                            .finish()
+                            .map_err(|diagnostic| EncodedReadError::Parse {
+                                diagnostic,
+                                source: None,
+                            })?
                     }
-                    super::super::parse::dataset_from_text_ser_graph(&parser.finish()).map_err(
-                        |diagnostic| EncodedReadError::Parse {
-                            diagnostic,
-                            source: None,
-                        },
-                    )?
+                    other => {
+                        let mut parser =
+                            LineStreamParser::new(other, base).map_err(|diagnostic| {
+                                EncodedReadError::Parse {
+                                    diagnostic,
+                                    source: None,
+                                }
+                            })?;
+                        while next_line(
+                            &mut input,
+                            &mut workspace,
+                            LineEnd::RdfEol,
+                            options,
+                            memory,
+                            progress,
+                            &mut contribution,
+                        )? {
+                            parser
+                                .push_line(&workspace.text)
+                                .map_err(|diagnostic| workspace.diagnostic(diagnostic, Some(1)))?;
+                        }
+                        super::super::parse::dataset_from_text_ser_graph(&parser.finish()).map_err(
+                            |diagnostic| EncodedReadError::Parse {
+                                diagnostic,
+                                source: None,
+                            },
+                        )?
+                    }
                 }
-            }
-        } else {
-            while let Some(scalar) = input.next(progress, &mut contribution)? {
-                workspace.append(scalar, false, options, memory, progress)?;
-            }
-            super::super::parse_dataset(workspace.text.as_bytes(), media_type, base_iri)
-                .map_err(|diagnostic| workspace.diagnostic(diagnostic, None))?
-        };
-        progress.charge(0).map_err(EncodedReadError::Control)?;
-        Ok(EncodedReadOutcome {
-            dataset,
-            totals: input.totals,
-            profile: options.profile,
+            } else {
+                while let Some(scalar) = input.next(progress, &mut contribution)? {
+                    workspace.append(scalar, false, options, memory, progress)?;
+                }
+                super::super::parse_dataset(workspace.text.as_bytes(), media_type, base_iri)
+                    .map_err(|diagnostic| workspace.diagnostic(diagnostic, None))?
+            };
+            progress.charge(0).map_err(EncodedReadError::Control)?;
+            Ok(EncodedReadOutcome {
+                dataset,
+                totals: input.totals,
+                profile: options.profile,
+            })
+        })())
+    })
+    .unwrap_or_else(|diagnostic| {
+        Err(EncodedReadError::Parse {
+            diagnostic,
+            source: None,
         })
-    })();
+    });
     let release = workspace.release(memory).map_err(EncodedReadError::Storage);
     match result {
         Err(error) => Err(error),

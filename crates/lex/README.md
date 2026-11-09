@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-lex.svg)](https://crates.io/crates/purrdf-lex)
 [![docs.rs](https://docs.rs/purrdf-lex/badge.svg)](https://docs.rs/purrdf-lex)
-[![License](https://img.shields.io/badge/license-(MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0)%20AND%20Unicode--3.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
+[![License](https://img.shields.io/badge/license-(MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0)%20AND%20MIT%20AND%20Unicode--3.0%20AND%20BSD--3--Clause%20AND%20Unicode--DFS--2016%20AND%20ICU-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-lex` is the lexical layer every grammar in the PurRDF toolkit shares:

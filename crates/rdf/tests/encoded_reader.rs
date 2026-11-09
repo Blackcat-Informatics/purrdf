@@ -250,10 +250,93 @@ impl Read for FailedRead {
     }
 }
 
+struct InterruptedRead<R> {
+    reader: R,
+    remaining: usize,
+    attempts: std::rc::Rc<std::cell::Cell<usize>>,
+}
+impl<R: Read> Read for InterruptedRead<R> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        self.attempts.set(self.attempts.get() + 1);
+        if self.remaining > 0 {
+            self.remaining -= 1;
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        self.reader.read(bytes)
+    }
+}
+
 #[test]
 fn actual_reader_preserves_original_codec_control_output_io_and_admission_causes() {
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let parsed = parse_dataset_from_encoded_reader(
+        InterruptedRead {
+            reader: b"<https://example.org/s> <https://example.org/p> <https://example.org/o> ."
+                .as_slice(),
+            remaining: 2,
+            attempts: attempts.clone(),
+        },
+        "application/n-triples",
+        None,
+        options(PROFILE),
+        &mut memory,
+        &mut Unmetered,
+        |_| Ok::<_, Infallible>(()),
+    )
+    .expect("interrupted reads retry before valid RDF");
+    assert_eq!(parsed.totals.input_bytes, 73);
+    assert_eq!(attempts.get(), 4);
+    assert_eq!(memory.admitted_bytes(), 0);
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let token = std::sync::Arc::new(());
+    let error = parse_dataset_from_encoded_reader(
+        InterruptedRead {
+            reader: b"#".as_slice(),
+            remaining: usize::MAX,
+            attempts: attempts.clone(),
+        },
+        "application/n-triples",
+        None,
+        options(PROFILE),
+        &mut memory,
+        &mut |units| {
+            assert_eq!(units, 0);
+            if attempts.get() == 2 {
+                Err(token.clone())
+            } else {
+                Ok(())
+            }
+        },
+        |_| Ok::<_, Infallible>(()),
+    )
+    .expect_err("cancellation polled before each read retry");
+    let EncodedReadError::Control(original) = error else {
+        panic!("unchanged retry cancellation");
+    };
+    assert!(std::sync::Arc::ptr_eq(&original, &token));
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(memory.admitted_bytes(), 0);
+    let error = parse_dataset_from_encoded_reader(
+        b"#a".as_slice(),
+        "application/n-triples",
+        None,
+        options(PROFILE),
+        &mut memory,
+        &mut Unmetered,
+        |item| {
+            assert_ne!(item.scalar, 'a', "unwind with conversion buffers live");
+            Ok::<_, Infallible>(())
+        },
+    )
+    .expect_err("native boundary catches an unwind before refunding workspace");
+    let EncodedReadError::Parse { diagnostic, source } = error else {
+        panic!("native unwind diagnostic");
+    };
+    assert_eq!(diagnostic.code, "native-codec-panic");
+    assert!(source.is_none());
+    assert_eq!(memory.admitted_bytes(), 0);
     let error = parse_dataset_from_encoded_reader(
         &[b'#', 0x81, 0x30][..],
         "application/n-triples",

@@ -584,7 +584,7 @@ LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
     "MIT": (r"\bMIT\b",),
     "Unicode-3.0": (r"Unicode-3\.0", r"Unicode\s+License\s+v3"),
     "Unicode-DFS-2016": (r"\bUnicode-DFS-2016\b",),
-    "ICU": (r"\bICU\b",),
+    "ICU": (r"`ICU`|\bICU[- ]License\b",),
     "BSD-3-Clause": (r"BSD-3-Clause",),
     "CC-BY-4.0": (r"CC-BY-4\.0", r"Creative\s+Commons\s+Attribution\s+4\.0"),
     "Apache-2.0": (
