@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/603-positive-world",
+  "branch": "delivery/603-positive-world",
+  "base_ref": "origin/paudley/1220-segmentedbuilder-constructionlimit",
+  "head": "493a2c08dc3c3eca7a21a0a44b71091df68c698f",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/603-positive-world/.stage/positive-world/sync/20261109T053644-55d11e25066b485c86d65220202b694a",
+  "conflicts": [],
+  "status": "completed",
+  "base": "58c0f65b608d486cdbc5faaac3693fb96b1d7184",
+  "merge_bases": [
+    "54c29a8eb9334cadf78de7120ff81ec21303d560"
+  ],
+  "merge_index": "f8ef1c4c66527896fee547fc74ecbcaf59a13a8e87692c06179041315ae6b83d",
+  "candidate_tree": "519aaf0e19d6105703e2a191c79a7014085d9302",
+  "candidate_patch": "candidate-fce9cdd88bd54c818c6d0d584de18fd4.patch",
+  "validation_records": [
+    "validation-runs/20261109T014955-48ca480eed/result.json"
+  ],
+  "commit": "ba8acf14519a33eb670490cf69b5598064ba4d5f",
+  "tree": "519aaf0e19d6105703e2a191c79a7014085d9302"
+}

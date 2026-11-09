@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/603-positive-world",
+  "branch": "delivery/603-positive-world",
+  "base_ref": "origin/main",
+  "head": "c9c5ff31b6bfb0ba6789a94fe38366536749b4af",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/603-positive-world/.stage/positive-world/sync/20261108T235417-1bc7926757ce4d608035c8c7dcc3b044",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "54c29a8eb9334cadf78de7120ff81ec21303d560",
+  "merge_bases": [
+    "ed982c4a2f35e3f43e2fb24d453b92eb78ed917b"
+  ],
+  "merge_index": "f451ccfc1505813c5594fcca202104b0cd84cb82683a73b47742d4c3c49ea9a2",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "f2f4ddf7cf9df4e2bcd11997d4be612734cfd5ab",
+  "candidate_patch": "candidate-8d1ccbde599540cbb5173efdb7cf9146.patch",
+  "validation_records": [],
+  "commit": "174803bb83c037ab2685bdd3a6f74643f40f9956",
+  "tree": "f2f4ddf7cf9df4e2bcd11997d4be612734cfd5ab"
+}
