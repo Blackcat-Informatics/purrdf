@@ -212,6 +212,8 @@ pub struct PositiveWorld<D: FallibleDatasetView> {
     work: PositiveUpdateWork,
     limits: PositiveWorldLimits,
     layout: Option<PreparationLayout>,
+    step_cap: Option<u64>,
+    work_cap: Option<u64>,
 }
 
 impl<D: FallibleDatasetView> std::fmt::Debug for PositiveWorld<D> {
@@ -335,6 +337,8 @@ impl<D: FallibleDatasetView> PositiveWorld<D> {
             work,
             limits,
             layout: state.map(PreparationLayout::new),
+            step_cap: None,
+            work_cap: None,
         };
         let lowering = std::mem::take(&mut world.ingress.initial_order);
         world
@@ -348,6 +352,22 @@ impl<D: FallibleDatasetView> PositiveWorld<D> {
     /// The latest retained caller source, with all statement families and declarations.
     pub const fn source(&self) -> &D {
         &self.source
+    }
+
+    /// Narrow the native decision step ceiling for this and every later revision.
+    #[must_use]
+    pub fn with_step_cap(mut self, cap: u64) -> Self {
+        self.step_cap = Some(self.step_cap.map_or(cap, |held| held.min(cap)));
+        self.reasoner = self.reasoner.with_step_cap(cap);
+        self
+    }
+
+    /// Narrow the native decision work ceiling for this and every later revision.
+    #[must_use]
+    pub fn with_work_cap(mut self, cap: u64) -> Self {
+        self.work_cap = Some(self.work_cap.map_or(cap, |held| held.min(cap)));
+        self.reasoner = self.reasoner.with_work_cap(cap);
+        self
     }
     /// Check consistency through the original native service.
     pub fn consistency(&self) -> Result<Certified<Verdict>, EntailError> {
@@ -499,6 +519,12 @@ impl<D: FallibleDatasetView> PositiveWorld<D> {
         checkpointed_drain(&source, |source| self.advance_inner(source, control))
             .map_err(PositiveWorldError::Drain)??;
         self.source = source;
+        if let Some(cap) = self.step_cap {
+            self.reasoner = self.reasoner.with_step_cap(cap);
+        }
+        if let Some(cap) = self.work_cap {
+            self.reasoner = self.reasoner.with_work_cap(cap);
+        }
         Ok(self)
     }
 

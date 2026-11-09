@@ -1158,6 +1158,39 @@ export class ReasoningAnswer {
   free(): void;
 }
 
+/** Actual native source work, transported without narrowing its counters. */
+export class PositiveUpdateWork {
+  private constructor();
+  readonly borrowedTermLookups: bigint;
+  readonly retainedRowProbes: bigint;
+  readonly scannedRows: bigint;
+  readonly copiedTerms: bigint;
+  readonly newRows: bigint;
+  readonly newGraphs: bigint;
+  readonly interpretedDefaultRows: bigint;
+  readonly identityRecomputed: boolean;
+  readonly canonicalizationJson: string;
+  free(): void;
+}
+
+/** A recorded positive world opened by Reasoner.withPositiveProofs.
+ * Mutating failures consume this owner, including malformed policies and inputs.
+ * Consistency and independent proof checking are read-only. The opening token
+ * governs the complete lifetime; freeing that token wrapper does not cancel it. */
+export class PositiveReasoner {
+  private constructor();
+  readonly canonicalizationJson: string;
+  advance(document: string, canonicalSearch: string): PositiveUpdateWork;
+  /** A stopped search returns the native unknown answer and budget-exhausted certificate. */
+  consistency(canonicalSearch: string): ReasoningAnswer;
+  classSatisfiability(class_: string, canonicalSearch: string): ReasoningAnswer;
+  entails(axiom: string, canonicalSearch: string): ReasoningAnswer;
+  instances(class_: string, canonicalSearch: string): ReasoningAnswer;
+  checkPositiveProof(service: ProofService | string, argument: string, answer: string, certificate: string, proof: string, canonicalSearch: string): CanonicalResult;
+  work(): PositiveUpdateWork;
+  free(): void;
+}
+
 /**
  * A reasoning session over one ontology.
  *
@@ -1196,6 +1229,12 @@ export class Reasoner {
    * service decides: every `.answer` and `.certificate` is byte-identical.
    */
   static withProofs(document: string, stepCap: number, workCap: number): Reasoner;
+  /** Open a recorded positive world. The required JSON fields historySteps,
+   * sourceTerms, sourceRows, questionBytes, metadataBytes and metadataWork are
+   * canonical decimal strings, with checked conversion to this target's width.
+   * The optional token is transferred into the session and governs its complete
+   * lifetime. Pass token.share() to retain a caller handle to the same bit. */
+  static withPositiveProofs(document: string, limits: string, stepCap: number, workCap: number, canonicalSearch: string, cancel?: CancellationToken): PositiveReasoner;
   /** Whether this session records proof terms — true only for `withProofs`. */
   recordsProofs(): boolean;
   /**

@@ -134,6 +134,8 @@ pub enum RequestError {
     },
     /// The retained explanation state cannot be accessed after a panic.
     ExplanationLock,
+    /// A consuming positive-world operation failed and released its owner.
+    ConsumedPositiveSession,
 }
 
 impl fmt::Display for RequestError {
@@ -189,6 +191,9 @@ impl fmt::Display for RequestError {
             Self::ExplanationLock => {
                 f.write_str("explain-conclusion: active explanation session lock is poisoned")
             }
+            Self::ConsumedPositiveSession => {
+                f.write_str("the positive reasoning session was consumed")
+            }
         }
     }
 }
@@ -209,6 +214,7 @@ impl StructuredError for RequestError {
         VariableMarker { pattern, marker } => "reasoning-variable-marker" { "pattern" => Text(pattern), "marker" => Character(*marker) },
         VariableDatatype { pattern, variable, lexical_form, datatype } => "reasoning-variable-datatype" { "pattern" => Text(pattern), "variable" => Text(variable), "lexical_form" => Text(lexical_form), "datatype" => Iri(datatype) },
         ExplanationLock => "reasoning-explanation-lock" {},
+        ConsumedPositiveSession => "reasoning-positive-consumed" {},
     }
 }
 
@@ -421,6 +427,15 @@ impl StructuredError for EntailContext {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ReasoningError {
+    /// Original positive-world retention, source, preparation or proof failure.
+    PositiveWorld(Box<purrdf_entail::reasoner::PositiveWorldError<std::convert::Infallible, ()>>),
+    /// Original explicit positive limits and their strict record refusal.
+    PositiveLimits {
+        /// Complete original supplied JSON record.
+        offered: String,
+        /// Original field, lexical or capacity failure.
+        cause: Box<purrdf_lex::json::record::DecodeError>,
+    },
     /// Original shared import-array boundary failure.
     ImportArrays(purrdf_core::imports::ImportArrayError),
     /// Original certificate text and typed field-decoding refusal.
@@ -477,6 +492,8 @@ pub enum ReasoningError {
 impl fmt::Display for ReasoningError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::PositiveWorld(cause) => fmt::Display::fmt(cause, f),
+            Self::PositiveLimits { cause, .. } => fmt::Display::fmt(cause, f),
             Self::ImportArrays(cause) => fmt::Display::fmt(cause, f),
             Self::Certificate { cause, .. } => fmt::Display::fmt(cause, f),
             Self::Fixture(error) => fmt::Display::fmt(error, f),
@@ -535,6 +552,8 @@ impl fmt::Display for ReasoningError {
 impl std::error::Error for ReasoningError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match self {
+            Self::PositiveWorld(cause) => cause.as_ref(),
+            Self::PositiveLimits { cause, .. } => cause.as_ref(),
             Self::ImportArrays(cause) => cause,
             Self::Certificate { cause, .. } => cause.as_ref(),
             Self::Fixture(cause) => cause.as_ref(),
@@ -554,6 +573,8 @@ impl std::error::Error for ReasoningError {
 
 impl StructuredError for ReasoningError {
     purrdf_hash::error_visit! {
+        PositiveWorld(cause) => "reasoning-positive-world" { "cause" => Cause(cause.as_ref()) },
+        PositiveLimits { offered, cause } => "reasoning-positive-limits" { "offered" => Text(offered), "cause" => Cause(cause.as_ref()) },
         ImportArrays(cause) => "reasoning-import-arrays" { "cause" => Cause(cause) },
         Certificate { offered, cause } => "reasoning-certificate" { "offered" => Text(offered), "cause" => Cause(cause.as_ref()) },
         Fixture(cause) => "reasoning-fixture" { "cause" => Cause(cause.as_ref()) },
@@ -574,6 +595,9 @@ impl StructuredError for ReasoningError {
 
 purrdf_lex::variant_from!(ReasoningError { Fixture(super::FixtureError) via Box::new });
 purrdf_lex::variant_from!(ReasoningError { Input(InputError) via Box::new });
+purrdf_lex::variant_from!(ReasoningError {
+    PositiveWorld(purrdf_entail::reasoner::PositiveWorldError<std::convert::Infallible, ()>) via Box::new
+});
 
 purrdf_lex::variant_from!(ReasoningError {
     ImportArrays(purrdf_core::imports::ImportArrayError),

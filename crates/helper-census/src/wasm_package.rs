@@ -9,6 +9,10 @@ use purrdf_lex::xml::Document;
 
 const CASES: &[(&str, &[&str])] = &[
     (
+        "reasoning-positive-host.test.mjs",
+        &["positive world proofs preserve frozen native bytes and retained cause handles"],
+    ),
+    (
         "reasoning-host-error.test.mjs",
         &["reasoning errors retain native handles across direct and query exports"],
     ),

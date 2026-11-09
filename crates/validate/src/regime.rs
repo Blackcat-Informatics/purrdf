@@ -88,8 +88,13 @@ mod fixture_error;
 pub use fixture_error::{FixtureError, FixtureGrammarError, FixtureInvariant, FixtureKind};
 mod certificate_error;
 pub use certificate_error::CertificateError;
+mod positive;
 mod schema_vectors;
 use core::fmt::Write as _;
+pub use positive::{
+    PositiveReasonerSession, PositiveUpdateWork, PositiveWorldLimits, decode_positive_dl_proof,
+    positive_limits_from_json,
+};
 use purrdf_core::TermBox;
 
 use purrdf_core::{TermValue, write_term_value};
@@ -2331,6 +2336,13 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
 /// A document that is not this grammar, an unrecorded one, a body that is not lowercase hex,
 /// bytes that are not a [`ServiceProof`], or a header that does not match its own body.
 pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, ReasoningError> {
+    decode_proof_document(document, ServiceProof::decode)
+}
+
+fn decode_proof_document(
+    document: &str,
+    decode: impl FnOnce(&[u8]) -> Result<ServiceProof, purrdf_entail::DlProofError>,
+) -> Result<ServiceProof, ReasoningError> {
     let mut lines = document.lines();
     let first = lines.next();
     if first != Some(DL_PROOF_BANNER) {
@@ -2351,7 +2363,7 @@ pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, ReasoningError> {
     if bytes.is_empty() {
         return Err(ProofDocumentError::MissingBody.into());
     }
-    let proof = ServiceProof::decode(&bytes)
+    let proof = decode(&bytes)
         .map_err(|cause| ReasoningError::proof("the proof body is not a proof term", cause))?;
     let rendered = render_dl_proof(&proof);
     if rendered != document {
@@ -5300,6 +5312,32 @@ fn check_dl_proof_from_source(
     let context = reasoner.borrowed_proof_context().map_err(|cause| {
         ReasoningError::entail(EntailContext::Prefix("checking context"), cause)
     })?;
+    check_prepared_proof(
+        &term,
+        asked,
+        argument,
+        answer,
+        certificate,
+        &question,
+        &context,
+        control,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one checker preserves the original source question, answer, certificate and prepared context"
+)]
+fn check_prepared_proof(
+    term: &ServiceProof,
+    asked: Service,
+    argument: &str,
+    answer: &str,
+    certificate: &str,
+    question: &Question,
+    context: &purrdf_entail::DlProofContext<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, ReasoningError> {
     let read = if asked == Service::ModuleExtraction {
         // Locality extraction opens no tableau, so it issues no DL certificate at all — its
         // `purrdf-module-extraction 1` block is a different document with no search counters
@@ -5319,7 +5357,7 @@ fn check_dl_proof_from_source(
         Some(parse_dl_certificate(certificate)?)
     };
     let replay = term
-        .verify_prepared(&question, read.as_ref(), &context)
+        .verify_prepared(question, read.as_ref(), context)
         .map_err(|cause| ReasoningError::proof("the proof does not check", cause))?;
     let bound = if answer.trim().is_empty() {
         None
