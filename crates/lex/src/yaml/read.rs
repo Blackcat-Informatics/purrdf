@@ -1159,10 +1159,25 @@ impl<'a, B: Builder> Parser<'a, B> {
 
     // ── scalars ───────────────────────────────────────────────────────────
 
+    fn take_unquoted_character(&mut self) -> Result<(), Error> {
+        let character = self.text[self.pos..]
+            .chars()
+            .next()
+            .filter(|&character| super::scalar::non_break(character))
+            .ok_or_else(|| {
+                self.error(
+                    ErrorKind::Syntax("an unquoted non-break character"),
+                    self.pos,
+                )
+            })?;
+        self.pos += character.len_utf8();
+        Ok(())
+    }
+
     /// One line of a plain scalar in block context: its text without trailing
     /// white space. It stops at a line break, at a comment, and at `:` followed
     /// by a blank; the cursor is left after the text.
-    fn plain_line(&mut self) -> &'a str {
+    fn plain_line(&mut self) -> Result<&'a str, Error> {
         let start = self.pos;
         let mut end = self.pos;
         loop {
@@ -1172,16 +1187,13 @@ impl<'a, B: Builder> Parser<'a, B> {
             match self.peek() {
                 Some(b' ' | b'\t') => self.pos += 1,
                 _ => {
-                    self.pos += self.text[self.pos..]
-                        .chars()
-                        .next()
-                        .map_or(1, char::len_utf8);
+                    self.take_unquoted_character()?;
                     end = self.pos;
                 }
             }
         }
         self.pos = end;
-        &self.text[start..end]
+        Ok(&self.text[start..end])
     }
 
     /// Continue a block plain scalar over the lines indented more than
@@ -1240,14 +1252,14 @@ impl<'a, B: Builder> Parser<'a, B> {
 
     fn owned_plain_line(&mut self) -> Result<String, Error> {
         let start = self.pos;
-        let line = self.plain_line();
+        let line = self.plain_line()?;
         self.last_scalar_end = start + line.len();
         Ok(admit!(self, self.builder.allocations().string(line)))
     }
 
     /// One line of a plain scalar in flow context, stopping also at the flow
     /// indicators and at `:` followed by one.
-    fn plain_flow_line(&mut self) -> (usize, usize) {
+    fn plain_flow_line(&mut self) -> Result<(usize, usize), Error> {
         let start = self.pos;
         let mut end = self.pos;
         loop {
@@ -1257,22 +1269,19 @@ impl<'a, B: Builder> Parser<'a, B> {
             match self.peek() {
                 Some(b' ' | b'\t') => self.pos += 1,
                 _ => {
-                    self.pos += self.text[self.pos..]
-                        .chars()
-                        .next()
-                        .map_or(1, char::len_utf8);
+                    self.take_unquoted_character()?;
                     end = self.pos;
                 }
             }
         }
         self.pos = end;
         self.last_scalar_end = end;
-        (start, end)
+        Ok((start, end))
     }
 
     /// A plain scalar in flow context, possibly over several lines.
     fn plain_flow(&mut self, owner: isize) -> Result<String, Error> {
-        let (start, end) = self.plain_flow_line();
+        let (start, end) = self.plain_flow_line()?;
         let mut text = admit!(
             self,
             self.builder.allocations().string(&self.text[start..end])
@@ -1297,7 +1306,7 @@ impl<'a, B: Builder> Parser<'a, B> {
                 return Ok(text);
             }
             self.check_flow_line(self.pos, owner)?;
-            let (start, end) = self.plain_flow_line();
+            let (start, end) = self.plain_flow_line()?;
             if breaks == 1 {
                 admit!(self, self.builder.allocations().push_char(&mut text, ' '));
             } else {
@@ -1616,7 +1625,9 @@ impl<'a, B: Builder> Parser<'a, B> {
             trailing_breaks.clear();
             leading_blank = trailing_blank;
             let start = self.pos;
-            self.skip_to_line_end();
+            while !matches!(self.peek(), None | Some(b'\n' | b'\r')) {
+                self.take_unquoted_character()?;
+            }
             admit!(
                 self,
                 self.builder
