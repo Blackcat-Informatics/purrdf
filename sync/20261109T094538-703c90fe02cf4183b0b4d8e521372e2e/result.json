@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1188-compare-ground-sparql-result-bags",
+  "branch": "paudley/1188-compare-ground-sparql-result-bags",
+  "base_ref": "origin/main",
+  "head": "d2c36cfba04ce3201d41fb283551feb9902d88e1",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1188-compare-ground-sparql-result-bags/.stage/compare-ground-sparql-result-bags/sync/20261109T094538-703c90fe02cf4183b0b4d8e521372e2e",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "c7682aac299ad36f0929bf467af9b9b9848795a9",
+  "merge_bases": [
+    "54c29a8eb9334cadf78de7120ff81ec21303d560"
+  ],
+  "merge_index": "0c9eff9bf5a360a6c73b5b4ad217137fa13977cdc76fb6083e7ef61e540ea522",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "12bc55c28bd6de75959d17db08c7de1c17b44b58",
+  "candidate_patch": "candidate-699db99c417d451e81621b42dc0cc45a.patch",
+  "validation_records": [],
+  "commit": "bbd1edd986b61a30f2b5a9b41662befec68ed0b7",
+  "tree": "12bc55c28bd6de75959d17db08c7de1c17b44b58"
+}
