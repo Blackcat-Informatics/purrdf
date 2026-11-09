@@ -35,7 +35,7 @@ use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
 
 #[derive(Clone, Copy)]
-enum Kind {
+pub(crate) enum Kind {
     Iri,
     Blank,
     Literal,
@@ -56,45 +56,11 @@ fn interned_kind(term: &InternedTerm) -> Kind {
 pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(), RdfDiagnostic> {
     use super::term::TermValue;
     let value = |term: &TermValue| {
-        term.try_fold(
-            |leaf| {
-                let kind = match leaf {
-                    TermValue::Iri(iri) => {
-                        super::absolute::check_absolute(iri)
-                            .map_err(|error| diag(error.diagnostic_code(), error.to_string()))?;
-                        Kind::Iri
-                    }
-                    TermValue::Blank { .. } => Kind::Blank,
-                    TermValue::Literal {
-                        lexical_form,
-                        datatype,
-                        language,
-                        direction,
-                        ..
-                    } => {
-                        resident_validation(validate_literal_with_memory(
-                            lexical_form,
-                            datatype,
-                            language.as_deref(),
-                            *direction,
-                            &mut Memory::new(&mut Resident),
-                        ))?;
-                        Kind::Literal
-                    }
-                    TermValue::Triple { .. } => unreachable!("triple components are folded"),
-                };
-                Ok::<_, RdfDiagnostic>(kind)
-            },
-            |subject, predicate, _object| {
-                require_subject_kind(
-                    subject,
-                    || "triple term subject".to_owned(),
-                    TRIPLE_COMPONENT_SUBJECT,
-                )?;
-                require_predicate_kind(predicate, || "triple term predicate".to_owned())?;
-                Ok(Kind::Triple)
-            },
-        )
+        resident_validation(validate_value_with_memory(
+            term,
+            &mut Memory::new(&mut Resident),
+            &mut |_, _| Ok(()),
+        ))
     };
     let q = &record.quad;
     let s = value(&q.s)?;
@@ -123,16 +89,70 @@ pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(
     Ok(())
 }
 
-/// The shared borrowed literal boundary, with original physical ownership for
-/// every diagnostic and composite-datatype parser/scanner allocation.
-pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
-    lexical_form: &str,
-    datatype: &str,
-    language: Option<&str>,
-    direction: Option<crate::RdfTextDirection>,
+/// One borrowed-value fold for record and comparison admission.
+pub(crate) fn validate_value_with_memory<'a, S: Admission + ?Sized>(
+    term: &'a super::term::TermValue,
+    memory: &mut Memory<'_, S>,
+    visit: &mut impl FnMut(
+        &'a super::term::TermValue,
+        &mut Memory<'_, S>,
+    ) -> Result<(), NativeBuildError>,
+) -> Result<Kind, NativeBuildError> {
+    use super::term::TermValue;
+    crate::ir::try_fold_nested_with_memory(
+        term,
+        visit,
+        |visit, term, memory| {
+            memory.admission_mut().checkpoint(1)?;
+            let kind = match term {
+                TermValue::Iri(iri) => {
+                    validate_absolute_with_memory(iri, memory)?;
+                    Kind::Iri
+                }
+                TermValue::Blank { .. } => Kind::Blank,
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    validate_literal_with_memory(
+                        lexical_form,
+                        datatype,
+                        language.as_deref(),
+                        *direction,
+                        memory,
+                    )?;
+                    Kind::Literal
+                }
+                TermValue::Triple { s, p, o } => {
+                    return Ok(crate::Nested::Triple(&**s, &**p, &**o));
+                }
+            };
+            visit(term, memory)?;
+            Ok(crate::Nested::Leaf(kind))
+        },
+        |_, _, subject, predicate, _, memory| {
+            require_subject_kind_with_memory(
+                subject,
+                &"triple term subject",
+                TRIPLE_COMPONENT_SUBJECT,
+                memory,
+            )?;
+            require_predicate_kind_with_memory(predicate, &"triple term predicate", memory)?;
+            Ok(Kind::Triple)
+        },
+        |_, _, _| {},
+        |cause, _| NativeBuildError::Storage(cause),
+        memory,
+    )
+}
+
+fn validate_absolute_with_memory<S: Admission + ?Sized>(
+    iri: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
-    if let Err(cause) = super::absolute::check_absolute_with_memory(datatype, memory) {
+    if let Err(cause) = super::absolute::check_absolute_with_memory(iri, memory) {
         let cause = match cause {
             purrdf_iri::IriReadError::Storage(cause) => return Err(cause.into()),
             purrdf_iri::IriReadError::Lexical(cause) => cause,
@@ -145,6 +165,19 @@ pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
         cleanup?;
         return Err(diagnostic.into());
     }
+    Ok(())
+}
+
+/// The shared borrowed literal boundary, with original physical ownership for
+/// every diagnostic and composite-datatype parser/scanner allocation.
+pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<crate::RdfTextDirection>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    validate_absolute_with_memory(datatype, memory)?;
     if let Err(cause) =
         crate::RdfLiteral::diagnose_components_with_memory(datatype, language, direction, memory)
     {

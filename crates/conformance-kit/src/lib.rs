@@ -46,6 +46,19 @@ pub enum GradeError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for GradeError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "grading-storage" { "cause" => Cause(cause) },
+        Malformed(message) => "grading-malformed" { "message" => Text(message) },
+        Mismatch(message) => "grading-mismatch" { "message" => Text(message) },
+        Canonicalization(cause) => "grading-canonicalization" { "cause" => Cause(cause) },
+        ProjectionLimit(message) => "grading-projection-limit" { "message" => Text(message) },
+        DuplicateAssertion { subject, case } => "grading-duplicate-assertion" {
+            "subject" => Iri(subject), "case" => Iri(case),
+        },
+    }
+}
+
 impl fmt::Display for GradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, message) = match self {
