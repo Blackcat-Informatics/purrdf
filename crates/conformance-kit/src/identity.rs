@@ -44,16 +44,35 @@ impl Identities {
     }
 
     pub(crate) fn map(&mut self, domain: &str, value: &TermValue) -> TermValue {
-        value.fold(
+        match self.try_map(domain, value, &mut |_, _| {
+            Ok::<_, core::convert::Infallible>(None)
+        }) {
+            Ok(value) => value,
+            Err(error) => match error {},
+        }
+    }
+
+    /// Share one global blank map while a caller explicitly normalizes literals.
+    pub(crate) fn try_map<E>(
+        &mut self,
+        domain: &str,
+        value: &TermValue,
+        normalize: &mut impl FnMut(&str, &str) -> Result<Option<String>, E>,
+    ) -> Result<TermValue, E> {
+        value.try_fold(
             |term| match term {
-                TermValue::Blank { label, scope } => self.blank(domain, label, *scope),
+                TermValue::Blank { label, scope } => Ok(self.blank(domain, label, *scope)),
                 TermValue::Literal {
                     lexical_form,
                     datatype,
                     language,
                     direction,
                 } => {
-                    let lexical = rewrite_cdt_blank_terms(lexical_form, datatype, &mut |token| {
+                    let normalized = normalize(lexical_form, datatype)?.map_or_else(
+                        || std::borrow::Cow::Borrowed(lexical_form.as_str()),
+                        std::borrow::Cow::Owned,
+                    );
+                    let lexical = rewrite_cdt_blank_terms(&normalized, datatype, &mut |token| {
                         let (label, scope) =
                             BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel).resolve(token);
                         let TermValue::Blank { label, scope } = self.blank(domain, &label, scope)
@@ -65,19 +84,25 @@ impl Identities {
                             encode_blank_label(&label, scope, LabelAlphabet::BlankNodeLabel)
                         ))
                     });
-                    TermValue::Literal {
-                        lexical_form: lexical.into_owned(),
+                    let lexical_form = match lexical {
+                        std::borrow::Cow::Borrowed(_) => normalized.into_owned(),
+                        std::borrow::Cow::Owned(text) => text,
+                    };
+                    Ok(TermValue::Literal {
+                        lexical_form,
                         datatype: datatype.clone(),
                         language: language.clone(),
                         direction: *direction,
-                    }
+                    })
                 }
-                term => term.clone(),
+                term => Ok(term.clone()),
             },
-            |s, p, o| TermValue::Triple {
-                s: Box::new(s).into(),
-                p: Box::new(p).into(),
-                o: Box::new(o).into(),
+            |s, p, o| {
+                Ok(TermValue::Triple {
+                    s: Box::new(s).into(),
+                    p: Box::new(p).into(),
+                    o: Box::new(o).into(),
+                })
             },
         )
     }

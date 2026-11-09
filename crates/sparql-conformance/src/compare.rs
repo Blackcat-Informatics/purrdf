@@ -11,24 +11,25 @@
 //! * `CONSTRUCT`/`DESCRIBE` → canonical (RDFC-1.0) N-Quads equality.
 //! * syntax tests → parse success/failure matches the kind.
 //!
-//! Blank-node equality reuses the same RDFC-1.0 canonicalizer the
-//! CONSTRUCT/UPDATE dataset comparison is built on ([`purrdf_core::try_canonicalize`]):
-//! the **entire** result set is encoded as ONE synthetic dataset (a distinct
-//! solution blank node per row, one quad `(solution, var-predicate, value)` per
-//! bound cell) and canonicalized once, so a single bijection must map every
-//! blank node across every row at once (never a looser per-row bijection) while
-//! non-blank terms — IRIs, literals including datatype/language/base-direction,
-//! and their variable positions — still compare exactly. See
-//! the private `encode_solution_set`.
+//! Ground solutions use admitted structural row keys after both complete inputs
+//! pass native RDF validation. Results containing blanks use the shared kit's
+//! single global identity map and RDFC-1.0 carrier, including blanks inside CDT
+//! literals and triple terms. Numeric literals compare by canonical lexical
+//! identity under their original datatype; other lexical forms remain exact.
+//! The separate [`canonical_solutions`] trace encoder retains its frozen bytes.
 
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
+use purrdf_conformance_kit::bag::{
+    self, ComparisonLaw, GroundComparison, HeaderLaw, LiteralLaw, RowLaw, SolutionRows,
+};
 use purrdf_core::{
     BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
     try_fold_nested,
 };
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_sparql_results::ParsedSolutions;
 
 use crate::manifest::{ExpectedResult, SparqlTestCase, TestKind};
@@ -42,12 +43,15 @@ pub enum CompareError {
     Mismatch(String),
     /// Original canonicalization failure; no equality verdict was established.
     Canonicalization(purrdf_core::CanonError),
+    /// Original shared shape/preparation refusal; it is never a semantic mismatch.
+    Preparation(purrdf_conformance_kit::GradeError),
 }
 
 impl purrdf_hash::error::StructuredError for CompareError {
     purrdf_hash::error_visit! {
         Mismatch(message) => "sparql-comparison-mismatch" { "message" => Text(message) },
         Canonicalization(cause) => "sparql-comparison-canonicalization" { "cause" => Cause(cause) },
+        Preparation(cause) => "sparql-comparison-preparation" { "cause" => Cause(cause) },
     }
 }
 
@@ -56,6 +60,7 @@ impl fmt::Display for CompareError {
         match self {
             Self::Mismatch(message) => fmt::Display::fmt(message, f),
             Self::Canonicalization(cause) => fmt::Display::fmt(cause, f),
+            Self::Preparation(cause) => fmt::Display::fmt(cause, f),
         }
     }
 }
@@ -65,6 +70,7 @@ impl std::error::Error for CompareError {
         match self {
             Self::Mismatch(_) => None,
             Self::Canonicalization(cause) => Some(cause),
+            Self::Preparation(cause) => Some(cause),
         }
     }
 }
@@ -73,6 +79,30 @@ purrdf_lex::variant_from!(CompareError {
     Mismatch(String),
     Canonicalization(purrdf_core::CanonError),
 });
+
+impl From<StorageError> for CompareError {
+    fn from(cause: StorageError) -> Self {
+        Self::Canonicalization(purrdf_core::CanonError::Storage(cause))
+    }
+}
+
+impl From<purrdf_core::RdfDiagnostic> for CompareError {
+    fn from(cause: purrdf_core::RdfDiagnostic) -> Self {
+        Self::Canonicalization(purrdf_core::CanonError::Invalid(cause))
+    }
+}
+
+impl From<purrdf_conformance_kit::GradeError> for CompareError {
+    fn from(cause: purrdf_conformance_kit::GradeError) -> Self {
+        use purrdf_conformance_kit::GradeError;
+        match cause {
+            GradeError::Mismatch(message) => Self::Mismatch(message),
+            GradeError::Storage(cause) => cause.into(),
+            GradeError::Canonicalization(cause) => Self::Canonicalization(cause),
+            cause => Self::Preparation(cause),
+        }
+    }
+}
 
 /// Compare `outcome` against `case`'s expected result.
 ///
@@ -206,21 +236,19 @@ pub fn compare_results(
                 rows: r_rows,
                 ..
             },
-        ) => {
-            if l_vars != r_vars {
-                return Err(format!("variable lists differ: {l_vars:?} vs {r_vars:?}").into());
-            }
-            compare_solutions(
-                l_vars,
-                l_rows,
-                &ParsedSolutions {
-                    variables: r_vars.clone(),
-                    rows: r_rows.clone(),
-                },
-                ordered,
-                control,
-            )
-        }
+        ) => compare_solution_rows(
+            SolutionRows {
+                variables: l_vars,
+                rows: l_rows,
+            },
+            SolutionRows {
+                variables: r_vars,
+                rows: r_rows,
+            },
+            ordered,
+            HeaderLaw::IdenticalVector,
+            control,
+        ),
         (SparqlResult::Graph(l), SparqlResult::Graph(r)) => {
             let l_canon = purrdf_core::try_canonicalize(l, control)?;
             let r_canon = purrdf_core::try_canonicalize(r, control)?;
@@ -413,6 +441,25 @@ fn compare_case_solutions(
     if !case.lax_cardinality {
         return compare_solutions(variables, rows, expected, ordered, control);
     }
+    let ground = ground_comparison(
+        SolutionRows { variables, rows },
+        SolutionRows {
+            variables: &expected.variables,
+            rows: &expected.rows,
+        },
+        RowLaw::Reduced,
+        HeaderLaw::ByName,
+        control,
+    )?;
+    if let Some(equal) = ground.matches {
+        return if equal {
+            Ok(())
+        } else {
+            Err("REDUCED multiplicities or distinct solutions differ"
+                .to_owned()
+                .into())
+        };
+    }
     // The W3C test-case rules require each solution at least once and no more
     // often than its expected multiplicity. Match distinct rows with ONE global
     // blank-node bijection: ordered prefix comparison pins each chosen row pair,
@@ -479,12 +526,10 @@ fn row_multiplicities(rows: &[Vec<Option<TermValue>>]) -> Vec<(&Vec<Option<TermV
 /// Compare a native solution sequence against the expected one under W3C
 /// solution-set equality with a **single global blank-node bijection**.
 ///
-/// Both sides are encoded as one synthetic dataset each (see
-/// [`encode_solution_set`]) and canonicalized once; equality is byte-equality of
-/// the two canonical N-Quads strings. When `ordered` is `true` (a top-level
-/// `ORDER BY`) each row also carries an ordinal literal so position is pinned
-/// into the canonical output — the comparison becomes an ordered-sequence match
-/// while blank-node identity stays global-bijection-normalized.
+/// Ground rows compare through structural keys. Blank-sensitive rows use the
+/// shared global carrier, with row ordinals when a top-level `ORDER BY` makes
+/// position observable. Both routes align unique headers by variable name and
+/// apply the same explicit numeric literal law.
 fn compare_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
@@ -492,12 +537,102 @@ fn compare_solutions(
     ordered: bool,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), CompareError> {
-    let actual_canon = encode_solution_set(variables, rows, ordered, Literals::ByValue, control)?;
-    let expected_canon = encode_solution_set(
-        &expected.variables,
-        &expected.rows,
+    compare_solution_rows(
+        SolutionRows { variables, rows },
+        SolutionRows {
+            variables: &expected.variables,
+            rows: &expected.rows,
+        },
         ordered,
-        Literals::ByValue,
+        HeaderLaw::ByName,
+        control,
+    )
+}
+
+fn ground_comparison(
+    actual: SolutionRows<'_>,
+    expected: SolutionRows<'_>,
+    rows: RowLaw,
+    headers: HeaderLaw,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<GroundComparison, CompareError> {
+    bag::compare_ground_with_memory(
+        actual,
+        expected,
+        ComparisonLaw {
+            headers,
+            rows,
+            literals: LiteralLaw::ByValue,
+        },
+        &mut comparison_lexical_with_memory,
+        &mut Memory::new(&mut Resident),
+        control,
+    )
+    .map_err(CompareError::from)
+}
+
+fn compare_solution_rows(
+    actual: SolutionRows<'_>,
+    expected: SolutionRows<'_>,
+    ordered: bool,
+    headers: HeaderLaw,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), CompareError> {
+    let ground = ground_comparison(
+        actual,
+        expected,
+        if ordered {
+            RowLaw::Ordered
+        } else {
+            RowLaw::Multiset
+        },
+        headers,
+        control,
+    )?;
+    if matches!(headers, HeaderLaw::IdenticalVector) && actual.variables != expected.variables {
+        return Err(format!(
+            "variable lists differ: {:?} vs {:?}",
+            actual.variables, expected.variables
+        )
+        .into());
+    }
+    if let Some(equal) = ground.matches {
+        return if equal {
+            Ok(())
+        } else {
+            Err(format!(
+                "solution {} mismatch: {} expected rows vs {} actual rows",
+                if ordered {
+                    "ordered sequence"
+                } else {
+                    "multiset"
+                },
+                expected.rows.len(),
+                actual.rows.len()
+            )
+            .into())
+        };
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut normalize = |lexical: &str, datatype: &str| {
+        comparison_lexical_with_memory(lexical, datatype, &mut memory)
+            .map_err(purrdf_conformance_kit::GradeError::from)
+    };
+    let actual_canon = bag::canonical_solutions_with_literal_law(
+        actual.variables,
+        actual.rows,
+        ordered,
+        LiteralLaw::ByValue,
+        &mut normalize,
+        control,
+    )?;
+    let expected_canon = bag::canonical_solutions_with_literal_law(
+        expected.variables,
+        expected.rows,
+        ordered,
+        LiteralLaw::ByValue,
+        &mut normalize,
         control,
     )?;
     if actual_canon.nquads() == expected_canon.nquads() {
@@ -511,7 +646,7 @@ fn compare_solutions(
         Err(format!(
             "solution {mode} mismatch: {} expected rows vs {} actual rows; first canonical difference: {}",
             expected.rows.len(),
-            rows.len(),
+            actual.rows.len(),
             actual_canon
                 .nquads()
                 .lines()
@@ -577,56 +712,38 @@ fn encode_solution_set(
     literals: Literals,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_core::Canonicalized, CompareError> {
+    bag::validate_solution_shape(variables, rows)?;
     let mut builder = RdfDatasetBuilder::new();
-    let index_predicate = builder
-        .intern_iri(&format!("{CONFORMANCE_NS}index"))
-        .map_err(|error| error.to_string())?;
+    let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"))?;
     for (i, row) in rows.iter().enumerate() {
         // A distinct solution blank per row (its label is the row ordinal, but
         // its identity is bijection-normalized away by RDFC-1.0 — only its
         // structure, i.e. the cells hanging off it, is observable).
-        let solution = builder
-            .intern_blank(&format!("row{i}"), SOLUTION_SCOPE)
-            .map_err(|error| error.to_string())?;
+        let solution = builder.intern_blank(&format!("row{i}"), SOLUTION_SCOPE)?;
         for (var, cell) in variables.iter().zip(row) {
             if let Some(term) = cell {
-                let predicate = builder
-                    .intern_iri(&format!("{CONFORMANCE_NS}var:{var}"))
-                    .map_err(|error| error.to_string())?;
-                let object = intern_term_value(&mut builder, term, literals)
-                    .map_err(|error| error.to_string())?;
-                builder
-                    .push_quad(solution, predicate, object, None)
-                    .map_err(|error| error.to_string())?;
+                let predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}var:{var}"))?;
+                let object = intern_term_value(&mut builder, term, literals)?;
+                builder.push_quad(solution, predicate, object, None)?;
             }
         }
         if !ordered && row.iter().all(Option::is_none) {
             // A wholly unbound solution still has a multiplicity. Without a
             // statement the synthetic solution node would vanish from RDF.
-            let empty = builder
-                .intern_iri(&format!("{CONFORMANCE_NS}empty"))
-                .map_err(|error| error.to_string())?;
-            builder
-                .push_quad(solution, empty, empty, None)
-                .map_err(|error| error.to_string())?;
+            let empty = builder.intern_iri(&format!("{CONFORMANCE_NS}empty"))?;
+            builder.push_quad(solution, empty, empty, None)?;
         }
         if ordered {
-            let ordinal = builder
-                .intern_literal(RdfLiteral {
-                    lexical_form: i.to_string(),
-                    datatype: Some(XSD_INTEGER.to_owned()),
-                    language: None,
-                    direction: None,
-                })
-                .map_err(|error| error.to_string())?;
-            builder
-                .push_quad(solution, index_predicate, ordinal, None)
-                .map_err(|error| error.to_string())?;
+            let ordinal = builder.intern_literal(RdfLiteral {
+                lexical_form: i.to_string(),
+                datatype: Some(XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })?;
+            builder.push_quad(solution, index_predicate, ordinal, None)?;
         }
     }
-    let dataset = builder
-        .freeze()
-        .map_err(|e| format!("encode solution set for comparison: {e}"))?;
+    let dataset = builder.freeze()?;
     purrdf_core::try_canonicalize(&dataset, control).map_err(CompareError::from)
 }
 
@@ -634,9 +751,9 @@ fn encode_solution_set(
 /// N-Quads of its `encode_solution_set` encoding: one fresh blank node per row, one
 /// quad per bound cell, plus a row-ordinal quad when `ordered`.
 ///
-/// Two sequences are equal under the comparer exactly when these strings are equal,
-/// so a snapshot that records this string pins a result up to the same blank-node
-/// relabelling (and, unless `ordered`, the same row reordering) the comparer allows.
+/// This exact trace preserves the evaluator's literal spellings independently of
+/// numeric value normalization in comparison. It pins the historical carrier up
+/// to blank-node relabelling and, unless `ordered`, row reordering.
 ///
 /// # Errors
 ///
@@ -658,8 +775,8 @@ pub fn canonical_solutions(
 enum Literals {
     /// As written.
     Exact,
-    /// A same-datatype numeric literal by its value ([`comparison_lexical`]): the
-    /// spelling result comparison uses.
+    /// The original encoding remains an in-artifact differential and allocation baseline.
+    #[cfg(test)]
     ByValue,
 }
 
@@ -677,7 +794,7 @@ fn intern_term_value(
     builder: &mut RdfDatasetBuilder,
     term: &TermValue,
     literals: Literals,
-) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+) -> Result<TermId, CompareError> {
     try_fold_nested(
         term,
         builder,
@@ -695,7 +812,13 @@ fn intern_term_value(
                 } => builder.intern_literal(RdfLiteral {
                     lexical_form: match literals {
                         Literals::Exact => lexical_form.clone(),
-                        Literals::ByValue => comparison_lexical(lexical_form, datatype),
+                        #[cfg(test)]
+                        Literals::ByValue => {
+                            let mut resident = Resident;
+                            let mut memory = Memory::new(&mut resident);
+                            comparison_lexical_with_memory(lexical_form, datatype, &mut memory)?
+                                .map_or_else(|| memory.string(lexical_form), Ok)?
+                        }
                     },
                     datatype: Some(datatype.clone()),
                     language: language.clone(),
@@ -704,7 +827,7 @@ fn intern_term_value(
                 TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
             }?))
         },
-        |builder, _, s, p, o| builder.intern_triple(s, p, o),
+        |builder, _, s, p, o| builder.intern_triple(s, p, o).map_err(CompareError::from),
     )
 }
 
@@ -726,13 +849,90 @@ fn intern_term_value(
 /// not `op:numeric-equal`, so a NaN cell matches a NaN cell of the same datatype
 /// (its canonical spelling is `NaN`); comparing by `=` would make a row holding one
 /// match nothing, itself included. The infinities match the same way.
-fn comparison_lexical(lexical: &str, datatype: &str) -> String {
-    use purrdf::xsd::XsdDatatype;
-    match XsdDatatype::from_iri(datatype) {
-        Some(dt) if dt.is_numeric() => purrdf::xsd::parse(lexical, dt)
-            .map_or_else(|_| lexical.to_owned(), |value| value.canonical_lexical()),
-        _ => lexical.to_owned(),
+fn comparison_lexical_with_memory<S: Admission + ?Sized>(
+    lexical: &str,
+    datatype: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<String>, purrdf_core::CanonError> {
+    use purrdf::xsd::{XsdDatatype, bigint::LimbScratchError, value::ParsedValue};
+    use purrdf_core::CanonError;
+    let Some(datatype) = XsdDatatype::from_iri(datatype).filter(|datatype| datatype.is_numeric())
+    else {
+        return Ok(None);
+    };
+    let baseline = memory.admitted_bytes();
+    let result = (|| {
+        let ParsedValue::Value(value) =
+            purrdf::xsd::value::try_parse_with_memory(lexical, datatype, false, memory)
+                .map_err(CanonError::Storage)?
+        else {
+            return Ok(None);
+        };
+        let prepared = purrdf::xsd::numeric::prepare_numeric_text(&value, &mut |layout| {
+            memory
+                .add_bytes(layout.required_bytes())
+                .map_err(LimbScratchError::Storage)
+        })
+        .map_err(|cause| match cause {
+            LimbScratchError::Storage(cause) => CanonError::Storage(cause),
+            cause => numeric_refusal(cause, memory),
+        })?
+        .ok_or_else(|| {
+            purrdf_core::RdfDiagnostic::try_error_with_memory(
+                "sparql-comparison-numeric-shape",
+                &"numeric datatype produced a nonnumeric value",
+                memory,
+            )
+            .map_or_else(CanonError::Storage, CanonError::Invalid)
+        })?;
+        let mut text = String::new();
+        memory
+            .reserve_string(&mut text, prepared.len())
+            .map_err(CanonError::Storage)?;
+        prepared
+            .write_to(&mut text)
+            .map_err(|cause| numeric_refusal(cause, memory))?;
+        Ok(Some(text))
+    })();
+    let retained = match &result {
+        Ok(Some(text)) => Some(text.capacity()),
+        Err(CanonError::Invalid(cause)) => cause.retained_bytes(),
+        _ => Some(0),
+    };
+    let Some(released) = retained
+        .and_then(|bytes| baseline.checked_add(bytes))
+        .and_then(|live| memory.admitted_bytes().checked_sub(live))
+    else {
+        drop(result);
+        if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+            let _ = memory.release_bytes(bytes);
+        }
+        return Err(CanonError::Storage(StorageError::SizeOverflow));
+    };
+    let cleanup = memory.release_bytes(released);
+    if result.is_ok() {
+        cleanup.map_err(CanonError::Storage)?;
     }
+    result
+}
+
+fn numeric_refusal<S: Admission + ?Sized>(
+    cause: impl purrdf_hash::error::NativeError + 'static,
+    memory: &mut Memory<'_, S>,
+) -> purrdf_core::CanonError {
+    let result = (|| {
+        let diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+            "sparql-comparison-numeric-render",
+            &cause,
+            memory,
+        )?;
+        let cause = purrdf_lex::allocation::retain_native_cause(cause)?;
+        diagnostic.with_native_cause(cause, memory)
+    })();
+    result.map_or_else(
+        purrdf_core::CanonError::Storage,
+        purrdf_core::CanonError::Invalid,
+    )
 }
 
 /// Read an expected SELECT result file (SRX or SRJ).
@@ -756,6 +956,9 @@ fn read_boolean(path: &Path, json: bool) -> Result<bool, String> {
     }
     .map_err(|e| format!("parse expected boolean {}: {e}", path.display()))
 }
+
+#[cfg(test)]
+mod ground_tests;
 
 #[cfg(test)]
 mod tests {
@@ -842,7 +1045,7 @@ mod tests {
     }
 
     /// A minimal case whose `mf:result` is the given expectation.
-    fn case_with(expected: ExpectedResult) -> SparqlTestCase {
+    pub(super) fn case_with(expected: ExpectedResult) -> SparqlTestCase {
         SparqlTestCase {
             iri: "http://purrdf.test/property-functions#probe".to_owned(),
             base: crate::manifest::BASE_ROOT.to_owned(),
@@ -924,7 +1127,7 @@ mod tests {
         );
     }
 
-    fn lit(lexical_form: &str, datatype: &str) -> TermValue {
+    pub(super) fn lit(lexical_form: &str, datatype: &str) -> TermValue {
         TermValue::Literal {
             lexical_form: lexical_form.to_owned(),
             datatype: datatype.to_owned(),
@@ -933,7 +1136,7 @@ mod tests {
         }
     }
 
-    fn blank(label: &str) -> TermValue {
+    pub(super) fn blank(label: &str) -> TermValue {
         TermValue::Blank {
             label: label.to_owned(),
             scope: BlankScope::DEFAULT,

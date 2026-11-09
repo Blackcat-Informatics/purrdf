@@ -3,12 +3,16 @@
 
 //! Global scoped-blank equality for complete solution bags and sequences.
 
-use std::collections::BTreeSet;
-
 use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermFactory, TermValue};
 
 use crate::GradeError;
 use crate::identity::Identities;
+
+mod ground;
+pub use ground::{
+    ComparisonLaw, ComparisonWork, GroundComparison, HeaderLaw, LiteralLaw, RowLaw, SolutionRows,
+    compare_ground_with_memory, validate_solution_shape,
+};
 
 const NS: &str = "urn:purrdf:conformance:solution:";
 
@@ -27,12 +31,31 @@ pub fn canonical_solutions(
     ordered: bool,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_core::Canonicalized, GradeError> {
-    let names: BTreeSet<&str> = variables.iter().map(String::as_str).collect();
-    if names.len() != variables.len() {
-        return Err(GradeError::Malformed(
-            "duplicate result variable".to_owned(),
-        ));
-    }
+    canonical_solutions_with_literal_law(
+        variables,
+        rows,
+        ordered,
+        LiteralLaw::Exact,
+        &mut |_, _| Ok(None),
+        control,
+    )
+}
+
+/// Encode a blank-sensitive comparison with an explicitly supplied literal law.
+/// The one global identity map rewrites bare, nested and composite blank references
+/// together. Exact trace callers keep [`canonical_solutions`]'s existing bytes.
+///
+/// # Errors
+/// Returns the original normalization, malformed-input or kernel refusal.
+pub fn canonical_solutions_with_literal_law(
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ordered: bool,
+    literals: LiteralLaw,
+    normalize: &mut impl FnMut(&str, &str) -> Result<Option<String>, GradeError>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<purrdf_core::Canonicalized, GradeError> {
+    validate_solution_shape(variables, rows)?;
     let mut builder = RdfDatasetBuilder::new();
     let mut identities = Identities::default();
     let set = builder.intern_blank("set", BlankScope(1))?;
@@ -56,13 +79,6 @@ pub fn canonical_solutions(
         builder.push_quad(set, header, name, None)?;
     }
     for (row_index, row) in rows.iter().enumerate() {
-        if row.len() != variables.len() {
-            return Err(GradeError::Malformed(format!(
-                "row {row_index} has {} cells for {} variables",
-                row.len(),
-                variables.len()
-            )));
-        }
         let row_node = builder.intern_blank(&format!("row{row_index}"), BlankScope(1))?;
         builder.push_quad(set, row_predicate, row_node, None)?;
         for (column, cell) in row.iter().enumerate() {
@@ -70,7 +86,15 @@ pub fn canonical_solutions(
                 let binding_node =
                     builder.intern_blank(&format!("binding{row_index}_{column}"), BlankScope(1))?;
                 let name = builder.intern_literal(literal(variables[column].clone()))?;
-                let mapped = identities.map("result", value);
+                let mapped =
+                    identities.try_map(
+                        "result",
+                        value,
+                        &mut |lexical, datatype| match literals {
+                            LiteralLaw::Exact => Ok(None),
+                            LiteralLaw::ByValue => normalize(lexical, datatype),
+                        },
+                    )?;
                 let value = builder.intern_value(&mapped)?;
                 builder.push_quad(row_node, binding, binding_node, None)?;
                 builder.push_quad(binding_node, variable, name, None)?;
@@ -101,16 +125,55 @@ pub fn compare_solutions(
     ordered: bool,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
+    let comparison = compare_ground_with_memory(
+        SolutionRows {
+            variables: expected_variables,
+            rows: expected_rows,
+        },
+        SolutionRows {
+            variables: actual_variables,
+            rows: actual_rows,
+        },
+        ComparisonLaw {
+            headers: HeaderLaw::ByName,
+            literals: LiteralLaw::Exact,
+            rows: if ordered {
+                RowLaw::Ordered
+            } else {
+                RowLaw::Multiset
+            },
+        },
+        &mut |_, _, _| Ok(None),
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        control,
+    )?;
+    if let Some(equal) = comparison.matches {
+        return if equal {
+            Ok(())
+        } else {
+            Err(solution_mismatch(
+                expected_rows.len(),
+                actual_rows.len(),
+                ordered,
+            ))
+        };
+    }
     let expected = canonical_solutions(expected_variables, expected_rows, ordered, control)?;
     let actual = canonical_solutions(actual_variables, actual_rows, ordered, control)?;
     if expected.nquads() == actual.nquads() {
         Ok(())
     } else {
-        Err(GradeError::Mismatch(format!(
-            "solution {}: {} expected rows, {} actual rows",
-            if ordered { "sequence" } else { "bag" },
+        Err(solution_mismatch(
             expected_rows.len(),
-            actual_rows.len()
-        )))
+            actual_rows.len(),
+            ordered,
+        ))
     }
+}
+
+fn solution_mismatch(expected: usize, actual: usize, ordered: bool) -> GradeError {
+    GradeError::Mismatch(format!(
+        "solution {}: {expected} expected rows, {actual} actual rows",
+        if ordered { "sequence" } else { "bag" },
+    ))
 }

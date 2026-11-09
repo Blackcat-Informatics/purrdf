@@ -936,6 +936,7 @@ name = "purrdf-sparql-conformance"
 version = "4.0.1"
 dependencies = [
  "purrdf",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-conformance-kit",
  "purrdf-core",
