@@ -4,7 +4,6 @@
 //! Physical bounds and the standard flat-column page indexes.
 
 use core::cmp::Ordering;
-use core::hash::Hasher;
 
 use super::encoding::Plain;
 use crate::compact::CompactWriter;
@@ -176,9 +175,7 @@ pub(super) fn bloom(
             PhysicalType::Int64 => value,
             PhysicalType::ByteArray => &value[4..],
         };
-        let mut hash = twox_hash::XxHash64::with_seed(0);
-        hash.write(value);
-        let hash = hash.finish();
+        let hash = purrdf_hash::xxh64::hash(0, value);
         let block = (((hash >> 32) * blocks as u64) >> 32) as usize;
         const SALT: [u32; 8] = [
             0x47b6_137b,

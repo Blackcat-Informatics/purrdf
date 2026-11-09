@@ -17,7 +17,7 @@
 use alloc::vec::Vec;
 use core::convert::TryInto;
 
-use twox_hash::XxHash64;
+use purrdf_hash::xxh64::Xxh64;
 
 use core::hash::Hasher;
 
@@ -144,7 +144,7 @@ pub struct FrameCompressor<
     /// 128 KiB blocks). Set via [`Self::set_target_block_size`].
     target_block_size: Option<u32>,
 
-    hasher: XxHash64,
+    hasher: Xxh64,
 
     /// Effective strategy tag when a public-parameter
     /// [`Strategy`](crate::encoding::Strategy) override is active.
@@ -942,7 +942,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
             dict_id_flag: true,
             target_block_size: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
 
             strategy_override: None,
         }
@@ -1328,7 +1328,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
             dict_id_flag: true,
             target_block_size: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
 
             strategy_override: None,
         }
@@ -1692,7 +1692,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
         );
 
         {
-            self.hasher = XxHash64::with_seed(0);
+            self.hasher = Xxh64::with_seed(0);
         }
         let window_size = self.state.matcher.window_size();
         assert!(

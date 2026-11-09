@@ -48,6 +48,10 @@ harness = false
 name = "hasher"
 harness = false
 
+[[bench]]
+name = "xxh64"
+harness = false
+
 # The frozen-vector replay of MD5, SHA-1, SHA-3 and CRC-32 over every path the
 # host runs. Every target below runs natively on purrdf_testkit's
 # `harness = false` runner; focused WASM selects actual SIMD kernels.
@@ -93,4 +97,9 @@ harness = false
 
 [[test]]
 name = "word_id"
+harness = false
+
+# Independent seeded answers and native streaming/unaligned boundaries.
+[[test]]
+name = "xxh64"
 harness = false

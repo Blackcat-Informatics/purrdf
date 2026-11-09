@@ -9,11 +9,12 @@
 //! | [`md5`] | MD5 | RFC 1321 | 16 bytes |
 //! | [`sha1`] | SHA-1 | FIPS 180-4 | 20 bytes |
 //! | [`sha3`] | SHA3-224, SHA3-256, SHA3-384, SHA3-512 and Keccak-f\[1600\] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
-//! | [`sha3`] | SHAKE128, SHAKE256 | FIPS 202 | caller-selected byte length |
+//! | [`sha3`] | `SHAKE128`, `SHAKE256` | FIPS 202 | caller-selected byte length |
 //! | [`crc32`] | CRC-32/ISO-HDLC | the reflected polynomial `0xEDB88320` | a `u32` |
+//! | [`xxh64`] | `XXH64`, seeded and streaming | xxHash algorithm specification | a `u64` |
 //! | [`fixed`] | the fixed-key table hasher | this crate (folded multiplies; AES rounds on AES builds) | a `u64` |
 //! | [`fnv`] | FNV-1a, 64-bit | Fowler, Noll and Vo (`draft-eastlake-fnv`) | a `u64` |
-//! | [`mix`] | the SplitMix64 generator and finaliser | Steele, Lea and Flood (OOPSLA 2014) | a `u64` |
+//! | [`mix`] | the `SplitMix64` generator and finaliser | Steele, Lea and Flood (OOPSLA 2014) | a `u64` |
 //!
 //! [`frame`] is the workspace's length framing: a variable-length field as its
 //! length in eight little-endian bytes and then its bytes, appended to a
@@ -36,12 +37,14 @@
 //! back with a typed error, [`hex::nibble`] reads one digit, and
 //! [`hex::Digest32`] is the 32-byte value every content identity wraps.
 //!
-//! Every fixed-output hasher has a one-shot associated function
+//! The fixed-output digest hashers have a one-shot associated function
 //! (`Md5::digest(data)`) and a streaming form (`new`, `update`, `finalize`);
 //! both give the same answer for every way of splitting the input. Every
-//! fixed-output hasher also implements the object-safe [`Digest`] trait, so a
+//! digest hasher also implements the object-safe [`Digest`] trait, so a
 //! caller can choose an algorithm at run
 //! time and drive it through `&mut dyn Digest`.
+//! [`xxh64`] instead exposes seeded [`xxh64::hash`] and a non-consuming
+//! [`core::hash::Hasher`] stream.
 //! SHAKE uses [`sha3::Shake128`] or [`sha3::Shake256`] instead: `update`
 //! streams input, `finalize` consumes the absorber, and the returned reader's
 //! `squeeze` continues its output across arbitrary caller-owned buffers.
@@ -54,20 +57,20 @@
 //! # Hardware paths
 //!
 //! SHA-1 runs on the x86 SHA extensions or the Armv8 SHA1 instructions, and
-//! CRC-32 on `pclmulqdq` carry-less-multiply folding or the Armv8 CRC32
+//! CRC-32 on `pclmulqdq` carry-less-multiply folding or the Armv8 `CRC32`
 //! instructions, whenever the processor reports them at run time; otherwise
 //! the portable code runs. Every path computes the same bytes. MD5 is a single
 //! serial dependency chain and SHA-3's Keccak-f\[1600\] needs 64-bit lane
 //! rotates most vector units lack, so both are portable scalar code. Base16
 //! encoding is a compare-select loop the compiler packs on every vector
 //! target; inputs longer than a digest run SSSE3 `pshufb` on x86-64 below
-//! AVX-512BW, NEON `tbl` on AArch64, and wasm `i8x16.swizzle` when the build
+//! AVX-512BW, NEON `tbl` on `AArch64`, and wasm `i8x16.swizzle` when the build
 //! enables `simd128`.
 //!
 //! The table hasher [`fixed::FixedHasher`] is the exception to run-time
 //! selection. It uses an AES accumulator when the *build's target* enables
-//! AES (x86-64 or little-endian AArch64).
-//! Otherwise it uses folded multiplies, on wasm32 and 32-bit targets too.
+//! AES (x86-64 or little-endian `AArch64`).
+//! Otherwise it uses folded multiplies, on `wasm32` and 32-bit targets too.
 //! Each build therefore has exactly one table-hash function, and that
 //! function is not the same on every build. A table hash is never persisted.
 //!
@@ -119,6 +122,7 @@ mod secret;
 pub mod sha1;
 pub mod sha3;
 pub mod word_id;
+pub mod xxh64;
 
 pub use digest::{Digest, MAX_OUTPUT_LEN};
 pub use dispatch::Backend;

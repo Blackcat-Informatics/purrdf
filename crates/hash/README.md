@@ -19,8 +19,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 `purrdf-hash` is the PurRDF toolkit's digest leaf: the SPARQL `MD5()`,
 `SHA1()` and `SHA3-*()` built-ins, OpenPGP v4 key fingerprints and Datalog
 derivation identities all compute through it, and `fixed::FixedHasher` is
-the workspace's in-memory table hasher. It has **no runtime dependencies**,
-allocates nothing, and builds for `wasm32-unknown-unknown`.
+the workspace's in-memory table hasher. It has **no runtime dependencies**.
+Its hashing paths allocate nothing, and it builds for `wasm32-unknown-unknown`.
 
 | Module | Algorithm | Specification | Output |
 |---|---|---|---|
@@ -28,8 +28,15 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
-| `sha3` | SHAKE128 / 256 | FIPS 202 | caller-selected byte length |
+| `sha3` | `SHAKE128` / 256 | FIPS 202 | caller-selected byte length |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
+| `xxh64` | Seeded `XXH64` | [algorithm specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md#xxh64-algorithm-description) | `u64` |
+
+`xxh64::hash(seed, data)` hashes a complete borrowed slice. `xxh64::Xxh64`
+accepts incremental `update` calls and implements `std::hash::Hasher`;
+`finish` borrows the state so callers can inspect a prefix and continue it.
+Zstandard checksums, LDM windows and Parquet Bloom filters use this one home.
+Its non-cryptographic output preserves the specified byte and seed identity.
 
 `frame` is the workspace's length framing: `frame_le` appends a field as its
 length in eight little-endian bytes followed by its bytes, `frame_le_into`
@@ -78,7 +85,7 @@ so `purrdf-hash` keeps its zero runtime dependencies.
 Beside the digests, the crate is the home of the small specified kernels every
 other crate uses, each the workspace's one implementation (`helpers-ledger.toml`
 names the job, and `purrdf-hash-conformance` replays their frozen vectors
-natively and on wasm32):
+natively; WASM execution follows the [exact kernel inventory](../../docs/WASM_TESTING.md)):
 
 | Module | What it holds |
 |---|---|
@@ -86,7 +93,7 @@ natively and on wasm32):
 | `frame` | Length framing: `frame_le`, `frame_le_into`, `frame_be_labelled` |
 | `Domain` (crate root) | The registered hash domain-separation string (see [Hash domains](#hash-domains)) |
 | `fnv` | FNV-1a 64-bit: `BASIS`, `PRIME`, `fnv1a64`, and `fold` into a caller's state |
-| `mix` | SplitMix64 (`splitmix64_next`, the published counter stream; `splitmix64_step`, the self-composed stream; `splitmix64_finalize`; `GOLDEN_GAMMA`); the signed-unit draws that map a 64-bit draw onto an exact binary64 in `[-1, 1)` (`signed_unit`, `signed_unit_next`, `signed_unit_step` and their `_nonzero` forms); and the 64-bit linear congruential generator with Knuth's MMIX multiplier (`lcg64_next`, `LCG64_MULTIPLIER`, `LCG64_MMIX_INCREMENT`) |
+| `mix` | `SplitMix64` (`splitmix64_next`, the published counter stream; `splitmix64_step`, the self-composed stream; `splitmix64_finalize`; `GOLDEN_GAMMA`); the signed-unit draws that map a 64-bit draw onto an exact `binary64` in `[-1, 1)` (`signed_unit`, `signed_unit_next`, `signed_unit_step` and their `_nonzero` forms); and the 64-bit linear congruential generator with Knuth's MMIX multiplier (`lcg64_next`, `LCG64_MULTIPLIER`, `LCG64_MMIX_INCREMENT`) |
 | `dispatch` | The `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`) and `PURRDF_REQUIRE_SIMD_PATHS`, the one variable a test run sets to require paths: `1` for every path the host is expected to run, or a `family:path` list; `vector_backend!`, which declares a family of named paths and its `Backend` impl from one list |
 | `default_from_new!`, `debug_non_exhaustive!` (crate root) | The impl macros every crate shares: a `Default` that is the type's `const` or non-derived `new` (or another named constructor, `T => name`), and a `Debug` that shows the named fields and elides the rest |
 
@@ -112,8 +119,9 @@ sha1.update(b"c");
 assert_eq!(sha1.finalize(), Sha1::digest(b"abc"));
 ```
 
-Every fixed-output hasher also implements the object-safe `Digest` trait, so an
-algorithm chosen at run time can be driven through `&mut dyn Digest`.
+The fixed-output digest hashers also implement the object-safe `Digest` trait,
+so an algorithm chosen at run time can be driven through `&mut dyn Digest`.
+`XXH64` uses the seeded slice function and `Hasher` stream described above.
 
 SHAKE uses a distinct absorber and reader because its output has no fixed
 length. Finalization consumes the absorber; successive `squeeze` calls
@@ -143,11 +151,11 @@ assert_eq!(next, whole[32..]);
 |---|---|---|
 | BLAKE3 | SSE2 / SSSE3 / AVX2 / AVX-512, NEON, wasm SIMD128, portable | See the capability table below; streaming and one-shot use the same kernels |
 | SHA-1 | x86 SHA extensions (`sha1rnds4`, `sha1nexte`, `sha1msg1/2`) | x86-64 with `sha`, `ssse3`, `sse4.1` |
-| | Armv8 SHA1 instructions (`sha1c/p/m`, `sha1h`, `sha1su0/1`) | AArch64 with SHA1 |
+| | Armv8 SHA1 instructions (`sha1c/p/m`, `sha1h`, `sha1su0/1`) | `AArch64` with SHA1 |
 | | portable | otherwise |
 | CRC-32 | `pclmulqdq` folding, 64 bytes per step, Barrett reduction | x86-64 with `pclmulqdq`, `sse4.1` |
-| | Armv8 CRC32 instructions | AArch64 with CRC32 |
-| | Armv8 `pmull` folding finished by CRC32 | never (available to tests and the bench; not yet measured on Arm hardware) |
+| | Armv8 `CRC32` instructions | `AArch64` with `CRC32` |
+| | Armv8 `pmull` folding finished by `CRC32` | never (available to tests and the bench; not yet measured on Arm hardware) |
 | | slicing-by-16 tables | otherwise |
 | MD5 | portable (a strict serial dependency chain) | always |
 | SHA-3 / SHAKE | portable Keccak-f[1600] | always |
@@ -299,9 +307,9 @@ benefit without needing multiple chunks.
 | x86-64 SSSE3 | 4 | Byte-shuffle rotations |
 | x86-64 AVX2 | 8 | AVX2 message permutations and byte-shuffle rotations |
 | x86-64 AVX-512F/VL | 4 or 16 | Native lane rotations and vector permutations |
-| Little-endian AArch64 NEON | 4 | NEON quarter rounds |
-| wasm32 SIMD128 | 4 | SIMD quarter rounds |
-| Other targets, including baseline wasm32 | 1 | Portable 32-bit ARX |
+| Little-endian `AArch64` NEON | 4 | NEON quarter rounds |
+| `wasm32` SIMD128 | 4 | SIMD quarter rounds |
+| Other targets, including baseline `wasm32` | 1 | Portable 32-bit ARX |
 
 The portable compressor uses 32-bit wrapping addition, XOR and rotation;
 it does not require 64-bit multiplication or vector instructions. This is
@@ -491,7 +499,7 @@ IDs retain all 64 bits on the global path. `pack_short_bytes` uses fixed-size
 loads and shifts; variable-length copies were measurably more expensive.
 Borrowed, stored, global and frozen lookups share the same protocol.
 
-AES selection is made at compile time. On 32-bit targets (i686, wasm32), the
+AES selection is made at compile time. On 32-bit targets (`i686`, `wasm32`), the
 portable 128-bit product is built from 32-bit multiplies with identical output.
 Both functions are pinned by their own frozen self-vectors. The portable vectors
 record the seeded-lane law; the AES vectors also pin its short-terminal fallback. Avalanche,

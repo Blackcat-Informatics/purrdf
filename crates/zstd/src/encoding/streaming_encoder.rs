@@ -19,7 +19,7 @@ use crate::common::MAX_BLOCK_SIZE;
 
 use core::hash::Hasher;
 
-use twox_hash::XxHash64;
+use purrdf_hash::xxh64::Xxh64;
 
 use crate::encoding::levels::compress_block_encoded;
 use crate::encoding::{
@@ -91,7 +91,7 @@ pub struct StreamingEncoder<W: Write, M: Matcher = MatchGeneratorDriver> {
     /// dictionary is attached so each frame start is a cheap clone.
     dictionary_entropy_cache: Option<CachedDictionaryEntropy>,
 
-    hasher: XxHash64,
+    hasher: Xxh64,
 }
 
 impl<W: Write> StreamingEncoder<W, MatchGeneratorDriver> {
@@ -191,7 +191,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
             dictionary_id_flag: true,
             dictionary_entropy_cache: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
         }
     }
 
@@ -597,7 +597,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
         );
 
         {
-            self.hasher = XxHash64::with_seed(0);
+            self.hasher = Xxh64::with_seed(0);
         }
 
         let window_size = self.state.matcher.window_size();
