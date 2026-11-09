@@ -408,7 +408,7 @@ fn positive_batches_match_cold_literal_key_equality_and_causal_owners() {
             (
                 iri("b"),
                 iri("p"),
-                TermValue::typed_literal("01", purrdf_xsd::datatype::XSD_INTEGER),
+                TermValue::typed_literal("1.0", purrdf_xsd::datatype::XSD_DECIMAL),
             ),
             (
                 iri("b"),
