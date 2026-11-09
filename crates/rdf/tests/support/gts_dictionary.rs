@@ -165,6 +165,8 @@ pub(super) struct Files {
     root: PathBuf,
     pub(super) reads: usize,
     pub(super) writes: usize,
+    pub(super) commits: usize,
+    pub(super) discard_writes: Option<&'static str>,
     pub(super) cancel_after: Option<usize>,
     pub(super) limits: DictionaryLimits,
 }
@@ -177,6 +179,8 @@ impl Files {
             root: root.to_owned(),
             reads: 0,
             writes: 0,
+            commits: 0,
+            discard_writes: None,
             cancel_after: None,
             limits: DictionaryLimits {
                 encoded_frame_bytes: WINDOW,
@@ -212,6 +216,9 @@ impl Files {
     }
     fn write(&mut self, key: TermKey, suffix: &str, value: &Value) -> Result<(), DictionaryError> {
         self.checkpoint(1)?;
+        if self.discard_writes == Some(suffix) {
+            return Ok(());
+        }
         let bytes = cbor::encode(value);
         if bytes.len() > WINDOW {
             return Err(DictionaryError::Corrupt("native record exceeds window"));
@@ -409,7 +416,9 @@ impl TermStorage for Files {
         Ok(())
     }
     fn commit(&mut self) -> Result<(), DictionaryError> {
-        self.checkpoint(0)
+        self.checkpoint(0)?;
+        self.commits += 1;
+        Ok(())
     }
 }
 

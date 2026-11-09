@@ -136,6 +136,7 @@ struct OrderingSink {
     leases: Vec<TermLease>,
     refuse_scratch: bool,
     replay_scratch: bool,
+    refuse_in_frame: Option<(&'static str, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
 #[derive(Default)]
@@ -185,6 +186,11 @@ impl StreamingSink for OrderingSink {
         })
     }
     fn frame(&mut self, ctx: FrameContext<'_>) {
+        if let Some((kind, flag)) = &self.refuse_in_frame
+            && ctx.frame_type == *kind
+        {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         self.log
             .push(format!("frame:{}:{}", ctx.segment_index, ctx.frame_index));
     }
@@ -236,8 +242,8 @@ struct StoredTerms {
     bindings: std::collections::BTreeMap<TermKey, purrdf_gts::model::Triple3>,
     dropped: Arc<std::sync::atomic::AtomicUsize>,
     fail_read: bool,
-    fail_after_reads: Option<usize>,
-    reads: usize,
+    refuse_reads: Option<Arc<std::sync::atomic::AtomicBool>>,
+    refused_reads: usize,
     omit_read: bool,
 }
 
@@ -283,12 +289,13 @@ impl TermStorage for StoredTerms {
     }
 
     fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {
-        self.reads += 1;
         if self.fail_read
             || self
-                .fail_after_reads
-                .is_some_and(|limit| self.reads > limit)
+                .refuse_reads
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
         {
+            self.refused_reads += 1;
             return Err(purrdf_hash::error::io_error(
                 std::io::ErrorKind::Other,
                 purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
@@ -471,8 +478,8 @@ fn stored_reader_preserves_order_and_pins_and_returns_original_storage_failures(
     }
     assert_eq!(original, Some(u128::MAX));
 
-    // The first reads pin each introduced term. Refuse the next actual row
-    // validation read, and verify every production handler stops before output
+    // Refuse reads at the actual row frame after all terms were introduced,
+    // independently of the number of admission probes, and verify every production handler stops before output
     // or the following frame while preserving the host's original typed cause.
     let terms = purrdf_gts::reader::read(&data, false, None).terms;
     for (kind, event) in [
@@ -517,17 +524,20 @@ fn stored_reader_preserves_order_and_pins_and_returns_original_storage_failures(
             accepted.log.iter().any(|entry| entry.starts_with("blob:")),
             "{kind}"
         );
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut storage = StoredTerms {
-            fail_after_reads: Some(terms.len()),
+            refuse_reads: Some(flag.clone()),
             ..StoredTerms::default()
         };
-        let mut sink = OrderingSink::default();
+        let mut sink = OrderingSink {
+            refuse_in_frame: Some((kind, flag)),
+            ..OrderingSink::default()
+        };
         let error =
             read_to_sink_with_dictionary(&bytes, ReadOptions::default(), &mut storage, &mut sink)
                 .expect_err("row storage refusal cannot become a skipped row");
         assert_eq!(
-            storage.reads,
-            terms.len() + 1,
+            storage.refused_reads, 1,
             "{kind}: no reads after the first refusal"
         );
         assert!(

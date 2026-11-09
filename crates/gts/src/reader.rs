@@ -2419,8 +2419,7 @@ impl StoredTerms for ExternalTerms<'_> {
             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
         let mut storage = self.storage.borrow_mut();
         storage.checkpoint(1)?;
-        storage.put(key, term)?;
-        let lease = storage.get(key)?.ok_or(DictionaryError::Missing(key))?;
+        let lease = storage.introduce(key, term)?;
         self.count.set(next);
         Ok(lease)
     }
