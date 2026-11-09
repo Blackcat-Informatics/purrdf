@@ -117,7 +117,10 @@ pub use gts_import_blobs::{
     import_gts_events_with_blobs, import_gts_inline_for_export, import_gts_inline_to,
 };
 pub use gts_import_graph::import_gts_graph;
-pub use gts_import_sink::import_gts_events;
+pub use gts_import_sink::{
+    GtsTextExport, export_gts_rdf_nquads_with_dictionary, import_gts_events,
+    import_gts_events_with_dictionary,
+};
 pub use native_codecs::jsonld::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
     JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
