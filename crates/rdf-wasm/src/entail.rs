@@ -51,6 +51,8 @@ use purrdf_validate::regime::{
     prove_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
+mod positive;
+pub use positive::{PositiveReasoner, PositiveUpdateWork};
 
 /// Preserve the original native fields with the existing plain rejection message.
 pub(crate) fn reasoning_error(error: ReasoningError) -> JsValue {
@@ -1384,6 +1386,31 @@ impl std::fmt::Debug for Reasoner {
 
 #[wasm_bindgen]
 impl Reasoner {
+    /// Open a recorded positive world with explicit decimal-string retention limits.
+    /// The shared cancellation bit governs the complete lifetime, including updates.
+    /// This factory consumes the supplied token wrapper; pass `cancel.share()` to
+    /// retain a caller handle that can cancel the same lifetime.
+    /// Mutating failures consume the returned positive handle; immutable sessions
+    /// opened with `new` or `withProofs` keep their existing behavior.
+    #[wasm_bindgen(js_name = withPositiveProofs)]
+    pub fn with_positive_proofs(
+        document: &str,
+        limits: &str,
+        step_cap: u32,
+        work_cap: u32,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<PositiveReasoner, JsValue> {
+        PositiveReasoner::open(
+            document,
+            limits,
+            step_cap,
+            work_cap,
+            canonical_search,
+            cancel,
+        )
+    }
+
     /// Parse `document` and open a session over it.
     ///
     /// `stepCap` narrows the per-decision tableau step cap for every question asked

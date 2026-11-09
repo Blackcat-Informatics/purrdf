@@ -21,6 +21,7 @@ use purrdf_core::{RdfDatasetBuilder, TermFactory, TermId, TermValue};
 pub(crate) struct Interner {
     index: HashTable<u32>,
     values: Vec<TermValue>,
+    live: usize,
 }
 
 impl Interner {
@@ -30,16 +31,45 @@ impl Interner {
 
     /// Intern `v`, returning its stable dense id (assigned in first-seen order).
     pub(crate) fn intern(&mut self, v: TermValue) -> u32 {
+        self.try_intern(v)
+            .expect("native term interning requires allocated addressable storage")
+    }
+
+    pub(crate) fn try_intern(
+        &mut self,
+        v: TermValue,
+    ) -> Result<u32, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{Memory, Resident, StorageError, growth_capacity};
         let hash = purrdf_core::FastHasher::default().hash_one(&v);
         if let Some(&id) = self.index.find(hash, |&id| self.values[id as usize] == v) {
-            return id;
+            return Ok(id);
         }
-        let id = u32::try_from(self.values.len()).expect("term count fits u32");
-        self.values.push(v);
-        self.index.insert_unique(hash, id, |&id| {
-            purrdf_core::FastHasher::default().hash_one(&self.values[id as usize])
-        });
-        id
+        let required = self
+            .values
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        u32::try_from(required).map_err(|_| StorageError::SizeOverflow)?;
+        let id = u32::try_from(self.values.len()).map_err(|_| StorageError::SizeOverflow)?;
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, self.live);
+        let result = (|| {
+            let capacity = growth_capacity::<TermValue>(self.values.capacity(), required)?;
+            memory.reserve(&mut self.values, capacity)?;
+            purrdf_core::hash::reserve_table_with_memory(
+                &mut self.index,
+                required,
+                |&id| purrdf_core::FastHasher::default().hash_one(&self.values[id as usize]),
+                &mut memory,
+            )?;
+            self.values.push(v);
+            self.index.insert_unique(hash, id, |&id| {
+                purrdf_core::FastHasher::default().hash_one(&self.values[id as usize])
+            });
+            Ok(id)
+        })();
+        self.live = memory.admitted_bytes();
+        result
     }
 
     /// Intern an IRI by string.

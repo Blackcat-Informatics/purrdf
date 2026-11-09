@@ -64,10 +64,10 @@
 //! the service made them and claims in the order the answer reports them, so
 //! [`ServiceProof::encode`] is byte-identical run to run and on `wasm32`.
 
-use purrdf_core::TermBox;
 use purrdf_core::{DatasetView, TermValue};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
@@ -96,6 +96,7 @@ use crate::report::Construct;
 /// what the tag is for.
 const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
 const PREPARATION_SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v3");
+const POSITIVE_SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-positive-service-proof-v1");
 
 pub mod causal;
 mod current;
@@ -771,6 +772,7 @@ pub(crate) struct StopPoint {
 /// the module extractor — so there is no third way to get an unjustified claim into one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceProof {
+    positive_layout: Option<crate::owl_dl::proof::layout::PreparationLayout>,
     /// BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology — the PRODUCER-INDEPENDENT
     /// input identity, recomputable by the consumer.
     input: [u8; 32],
@@ -801,6 +803,7 @@ impl ServiceProof {
         truncated: bool,
     ) -> Self {
         Self {
+            positive_layout: None,
             input,
             trust_base: TrustBaseEntry::ALL.to_vec(),
             service: question.service(),
@@ -810,6 +813,13 @@ impl ServiceProof {
             receipt,
             truncated,
         }
+    }
+
+    pub(crate) fn attach_positive_layout(
+        &mut self,
+        layout: crate::owl_dl::proof::layout::PreparationLayout,
+    ) {
+        self.positive_layout = Some(layout);
     }
 
     /// The producer-independent input identity: BLAKE3 over the ontology's canonical N-Quads.
@@ -881,6 +891,9 @@ impl ServiceProof {
         question: &Question,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<(), DlProofError<D::ReadError>> {
+        if self.positive_layout.is_some() {
+            return Err(DlProofError::Ontology { detail: "positive proof requires prepare_positive_context and complete-state source capability".to_owned() });
+        }
         let expected = crate::owl_dl::proof::try_ontology_identity(ontology, control)
             .map_err(DlProofError::Canonicalization)?;
         self.binds_identity(expected, question)
@@ -1073,6 +1086,38 @@ impl ServiceProof {
         self.verify_prepared_inner(question, certificate, ctx, None)
     }
 
+    /// Independently align a positive proof against the consumer's complete latest source.
+    /// Prior syntax is replayed by native preparation; the current question is
+    /// supplied separately and prepared once. No producer theory is imported.
+    ///
+    /// # Errors
+    /// Typed source/evidence, aggregate retention/work, preparation and proof refusals.
+    pub fn prepare_positive_context<D: purrdf_core::FallibleDatasetView>(
+        &self,
+        source: &D,
+        question: &Question,
+        limits: super::PositiveWorldLimits,
+        schema: super::SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<DlProofContext<'static>, super::PositiveWorldError<D::Error, D::Evidence>> {
+        let layout = self.positive_layout.as_ref().ok_or_else(|| {
+            super::PositiveWorldError::Proof(DlProofError::Ontology {
+                detail: "proof has no positive preparation supplement".to_owned(),
+            })
+        })?;
+        let final_stop = stop.clone();
+        let context = layout.prepare(source, question, limits, schema, stop, control)?;
+        self.binds_identity(context.input(), question)
+            .map_err(|error| super::PositiveWorldError::Proof(error.with_read_error()))?;
+        if purrdf_core::governor::is_stopped(final_stop.as_deref()) {
+            return Err(super::PositiveWorldError::Entail(
+                crate::EntailError::Stopped,
+            ));
+        }
+        Ok(context)
+    }
+
     /// One native verification loop, with requested causal capture in that same replay.
     fn verify_prepared_inner(
         &self,
@@ -1081,6 +1126,15 @@ impl ServiceProof {
         ctx: &DlProofContext<'_>,
         mut causal: Option<&mut causal::Captures>,
     ) -> Result<ServiceReplay, DlProofError> {
+        let positive = self.positive_layout.is_some() || ctx.positive_stamp.is_some();
+        if positive && purrdf_core::governor::is_stopped(ctx.kb.stop.as_deref()) {
+            return Err(DlProofError::Stopped);
+        }
+        match (&self.positive_layout, ctx.positive_stamp) {
+            (None, None) => {}
+            (Some(layout), Some(stamp)) if stamp == layout.stamp(ctx.contract) => {}
+            _ => return Err(DlProofError::Ontology { detail: "positive proof and complete-state context require the same validated preparation supplement".to_owned() }),
+        }
         self.binds_identity(ctx.input(), question)?;
         let mut checks = CheckReport::new();
         // The identity was computed by consumer preparation; both bindings are checked here.
@@ -1185,6 +1239,9 @@ impl ServiceProof {
         }
         if self.truncated {
             checks.leave(1);
+        }
+        if positive && purrdf_core::governor::is_stopped(ctx.kb.stop.as_deref()) {
+            return Err(DlProofError::Stopped);
         }
         Ok(ServiceReplay {
             runs: self.runs.len(),
@@ -1460,6 +1517,17 @@ impl ServiceProof {
     /// ```
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
+        if let Some(layout) = &self.positive_layout {
+            let mut out = Vec::new();
+            frame_le(&mut out, POSITIVE_SERVICE_ENCODING_TAG.as_bytes());
+            frame_le(&mut out, &self.encode_native());
+            layout.encode(&mut out);
+            return out;
+        }
+        self.encode_native()
+    }
+
+    fn encode_native(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let preparation = self
             .receipt
@@ -1589,6 +1657,11 @@ impl ServiceProof {
     pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
         let mut reader = Reader::new(bytes);
         let tag = reader.frame()?;
+        if tag == POSITIVE_SERVICE_ENCODING_TAG.as_bytes() {
+            return Err(malformed(
+                "positive proof decoding requires explicit consumer limits through decode_positive",
+            ));
+        }
         let preparation = tag == PREPARATION_SERVICE_ENCODING_TAG.as_bytes();
         if !preparation && tag != SERVICE_ENCODING_TAG.as_bytes() {
             return Err(malformed(
@@ -1655,6 +1728,7 @@ impl ServiceProof {
             ));
         }
         Ok(Self {
+            positive_layout: None,
             input,
             trust_base,
             service,
@@ -1664,6 +1738,32 @@ impl ServiceProof {
             receipt,
             truncated,
         })
+    }
+
+    /// Decode a versioned positive supplement under explicit consumer limits.
+    /// Legacy proof layouts keep their original bytes and decoder behavior.
+    ///
+    /// # Errors
+    /// Malformed, unsupported or over-limit encodings and physical storage refusal.
+    pub fn decode_positive(
+        bytes: &[u8],
+        limits: super::PositiveWorldLimits,
+    ) -> Result<Self, DlProofError> {
+        let mut reader = Reader::new(bytes);
+        if reader.frame()? != POSITIVE_SERVICE_ENCODING_TAG.as_bytes() {
+            return Err(malformed(
+                "positive service proof version tag is absent or unsupported",
+            ));
+        }
+        let mut proof = Self::decode(reader.frame()?)?;
+        proof.positive_layout = Some(crate::owl_dl::proof::layout::PreparationLayout::decode(
+            &mut reader,
+            limits,
+        )?);
+        if !reader.is_exhausted() {
+            return Err(malformed("trailing positive service proof bytes"));
+        }
+        Ok(proof)
     }
 }
 
@@ -1837,7 +1937,39 @@ pub(crate) fn receipt_of(
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
 
 /// Append a `usize` as a little-endian `u64`.
-fn length(out: &mut Vec<u8>, value: usize) {
+/// The same native codec can count its exact destination before allocating it.
+pub(crate) trait PreparationEncoding {
+    fn extend_from_slice(&mut self, bytes: &[u8]);
+    fn push(&mut self, byte: u8) {
+        self.extend_from_slice(&[byte]);
+    }
+    fn frame(&mut self, bytes: &[u8]) {
+        purrdf_hash::frame::frame_le_with(bytes, &mut |part| self.extend_from_slice(part));
+    }
+}
+
+impl PreparationEncoding for Vec<u8> {
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        Self::extend_from_slice(self, bytes);
+    }
+}
+
+pub(crate) struct PreparationSize(pub(crate) Option<usize>);
+
+impl PreparationSize {
+    pub(crate) const fn new() -> Self {
+        Self(Some(0))
+    }
+}
+purrdf_hash::default_from_new!(PreparationSize);
+
+impl PreparationEncoding for PreparationSize {
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.0 = self.0.and_then(|size| size.checked_add(bytes.len()));
+    }
+}
+
+pub(crate) fn length(out: &mut (impl PreparationEncoding + ?Sized), value: usize) {
     out.extend_from_slice(&(value as u64).to_le_bytes());
 }
 
@@ -1862,17 +1994,17 @@ const fn answer_ordinal(answer: ProofAnswer) -> u8 {
 ///
 /// The terms are appended in [`TermValue::visit_terms`]'s pre-order: a triple term's kind
 /// byte, then its subject's whole encoding, then its predicate's, then its object's.
-fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
+pub(crate) fn encode_term(out: &mut (impl PreparationEncoding + ?Sized), term: &TermValue) {
     let ControlFlow::Continue(()) = term.visit_terms(|term| -> ControlFlow<Infallible> {
         match term {
             TermValue::Iri(iri) => {
                 out.push(TERM_IRI);
-                frame_le(out, iri.as_bytes());
+                out.frame(iri.as_bytes());
             }
             TermValue::Blank { label, scope } => {
                 out.push(TERM_BLANK);
                 out.extend_from_slice(&scope.ordinal().to_le_bytes());
-                frame_le(out, label.as_bytes());
+                out.frame(label.as_bytes());
             }
             TermValue::Literal {
                 lexical_form,
@@ -1881,16 +2013,16 @@ fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
                 direction,
             } => {
                 out.push(TERM_LITERAL);
-                frame_le(out, datatype.as_bytes());
+                out.frame(datatype.as_bytes());
                 match language.as_deref() {
                     Some(tag) => {
                         out.push(1);
-                        frame_le(out, tag.as_bytes());
+                        out.frame(tag.as_bytes());
                     }
                     None => out.push(0),
                 }
                 out.push(direction_ordinal(*direction));
-                frame_le(out, lexical_form.as_bytes());
+                out.frame(lexical_form.as_bytes());
             }
             TermValue::Triple { .. } => out.push(TERM_TRIPLE),
         }
@@ -1908,7 +2040,7 @@ const fn direction_ordinal(direction: Option<purrdf_core::RdfTextDirection>) -> 
 }
 
 /// Append a list of terms.
-fn encode_terms(out: &mut Vec<u8>, terms: &[TermValue]) {
+fn encode_terms(out: &mut (impl PreparationEncoding + ?Sized), terms: &[TermValue]) {
     length(out, terms.len());
     for term in terms {
         encode_term(out, term);
@@ -1916,7 +2048,7 @@ fn encode_terms(out: &mut Vec<u8>, terms: &[TermValue]) {
 }
 
 /// Append a [`Question`].
-fn encode_question(out: &mut Vec<u8>, question: &Question) {
+pub(crate) fn encode_question(out: &mut (impl PreparationEncoding + ?Sized), question: &Question) {
     match question {
         Question::ClassAnalysis {
             individuals,
@@ -1975,7 +2107,7 @@ fn encode_question(out: &mut Vec<u8>, question: &Question) {
 /// as this once did, put a term on the wire that nothing reads: a forger could rewrite it
 /// freely and the stream would still decode to the same axiom, which is precisely the field
 /// [`ServiceProof::decode`]'s single-byte-edit sweep exists to find.
-fn encode_axiom(out: &mut Vec<u8>, axiom: &DlAxiom) {
+fn encode_axiom(out: &mut (impl PreparationEncoding + ?Sized), axiom: &DlAxiom) {
     let (kind, terms): (u8, [&TermValue; 2]) = match axiom {
         DlAxiom::SubClassOf { sub, sup } => (0, [sub, sup]),
         DlAxiom::EquivalentClasses { left, right } => (1, [left, right]),
@@ -2100,9 +2232,16 @@ fn encode_receipt(out: &mut Vec<u8>, receipt: &StopReceipt) {
 
 /// Take a length-prefixed UTF-8 string, refusing bytes that are not one.
 fn decode_text(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
-    core::str::from_utf8(reader.frame()?)
-        .map(str::to_owned)
-        .map_err(|_| malformed("a text field is not UTF-8"))
+    decode_text_with_memory(reader, &mut Memory::new(&mut Resident))
+}
+
+fn decode_text_with_memory<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, DlProofError> {
+    let text = core::str::from_utf8(reader.frame()?)
+        .map_err(|_| malformed("a text field is not UTF-8"))?;
+    Ok(memory.string(text)?)
 }
 
 /// The language-tag grammar a tag read out of a proof's BYTES is held to.
@@ -2135,8 +2274,11 @@ const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// no per-item diagnostic channel and no survivors to fold on.) The detail quotes
 /// `purrdf-iri`'s own `langtag-*` diagnostic code and the offending tag, so the
 /// refusal names the production that made it.
-fn decode_language(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
-    let tag = decode_text(reader)?;
+fn decode_language<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, DlProofError> {
+    let tag = decode_text_with_memory(reader, memory)?;
     match purrdf_iri::langtag::parse_with(&tag, LANGTAG_PROFILE) {
         Ok(_) => Ok(tag),
         Err(error) => Err(malformed(&format!(
@@ -2148,30 +2290,41 @@ fn decode_language(reader: &mut Reader<'_>) -> Result<String, DlProofError> {
 }
 
 /// Take a [`TermValue`], refusing one nested past [`MAX_NESTING`].
-fn decode_term(reader: &mut Reader<'_>) -> Result<TermValue, DlProofError> {
-    decode_term_at(reader, 0)
+pub(crate) fn decode_term(reader: &mut Reader<'_>) -> Result<TermValue, DlProofError> {
+    decode_term_with_memory(reader, &mut Memory::new(&mut Resident))
+}
+
+pub(crate) fn decode_term_with_memory<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<TermValue, DlProofError> {
+    memory.try_scope(|memory| decode_term_at(reader, 0, memory))
 }
 
 /// Take a [`TermValue`] nested `depth` triple terms deep.
-fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, DlProofError> {
+fn decode_term_at<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    depth: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<TermValue, DlProofError> {
     if depth > MAX_NESTING {
         return Err(malformed("a term nests past the decoder's ceiling"));
     }
     match reader.byte()? {
-        TERM_IRI => Ok(TermValue::Iri(decode_text(reader)?)),
+        TERM_IRI => Ok(TermValue::Iri(decode_text_with_memory(reader, memory)?)),
         TERM_BLANK => {
             let scope = purrdf_core::BlankScope(reader.u32()?);
             Ok(TermValue::Blank {
-                label: decode_text(reader)?,
+                label: decode_text_with_memory(reader, memory)?,
                 scope,
             })
         }
         TERM_LITERAL => {
-            let datatype = decode_text(reader)?;
+            let datatype = decode_text_with_memory(reader, memory)?;
             // Ask the grammar — see [`decode_language`] for why this field cannot
             // be the one untrusted field in the literal that nothing judges.
             let language = if reader.flag()? {
-                Some(decode_language(reader)?)
+                Some(decode_language(reader, memory)?)
             } else {
                 None
             };
@@ -2182,20 +2335,20 @@ fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, Dl
                 _ => return Err(malformed("unknown base-direction ordinal")),
             };
             Ok(TermValue::Literal {
-                lexical_form: decode_text(reader)?,
+                lexical_form: decode_text_with_memory(reader, memory)?,
                 datatype,
                 language,
                 direction,
             })
         }
         TERM_TRIPLE => {
-            let s = decode_term_at(reader, depth + 1)?;
-            let p = decode_term_at(reader, depth + 1)?;
-            let o = decode_term_at(reader, depth + 1)?;
+            let s = decode_term_at(reader, depth + 1, memory)?;
+            let p = decode_term_at(reader, depth + 1, memory)?;
+            let o = decode_term_at(reader, depth + 1, memory)?;
             Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
+                s: memory.boxed(s)?.into(),
+                p: memory.boxed(p)?.into(),
+                o: memory.boxed(o)?.into(),
             })
         }
         _ => Err(malformed("unknown term kind")),
@@ -2203,28 +2356,39 @@ fn decode_term_at(reader: &mut Reader<'_>, depth: usize) -> Result<TermValue, Dl
 }
 
 /// Take a list of terms.
-fn decode_terms(reader: &mut Reader<'_>) -> Result<Vec<TermValue>, DlProofError> {
+fn decode_terms<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<TermValue>, DlProofError> {
     let mut out = Vec::new();
     for _ in 0..reader.length()? {
-        out.push(decode_term(reader)?);
+        let term = decode_term_with_memory(reader, memory)?;
+        memory.push(&mut out, term)?;
     }
     Ok(out)
 }
 
 /// Take a [`DlAxiom`] — a kind byte and exactly the terms that kind carries.
 fn decode_axiom(reader: &mut Reader<'_>) -> Result<DlAxiom, DlProofError> {
+    decode_axiom_with_memory(reader, &mut Memory::new(&mut Resident))
+}
+
+fn decode_axiom_with_memory<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<DlAxiom, DlProofError> {
     let kind = reader.byte()?;
     if kind == 4 {
-        let subject = decode_term(reader)?;
-        let property = decode_term(reader)?;
+        let subject = decode_term_with_memory(reader, memory)?;
+        let property = decode_term_with_memory(reader, memory)?;
         return Ok(DlAxiom::ObjectPropertyAssertion {
             subject,
             property,
-            object: decode_term(reader)?,
+            object: decode_term_with_memory(reader, memory)?,
         });
     }
-    let first = decode_term(reader)?;
-    let second = decode_term(reader)?;
+    let first = decode_term_with_memory(reader, memory)?;
+    let second = decode_term_with_memory(reader, memory)?;
     Ok(match kind {
         0 => DlAxiom::SubClassOf {
             sub: first,
@@ -2259,44 +2423,54 @@ fn decode_axiom(reader: &mut Reader<'_>) -> Result<DlAxiom, DlProofError> {
 }
 
 /// Take a [`Question`].
-fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
-    match reader.byte()? {
+pub(crate) fn decode_question(reader: &mut Reader<'_>) -> Result<Question, DlProofError> {
+    decode_question_with_memory(reader, &mut Memory::new(&mut Resident))
+}
+
+pub(crate) fn decode_question_with_memory<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Question, DlProofError> {
+    memory.try_scope(|memory| match reader.byte()? {
         0 => Ok(Question::Consistency),
         1 => Ok(Question::ClassSatisfiability {
-            class: decode_term(reader)?,
+            class: decode_term_with_memory(reader, memory)?,
         }),
         2 => Ok(Question::Classification {
-            classes: decode_terms(reader)?,
+            classes: decode_terms(reader, memory)?,
         }),
         3 => {
-            let individuals = decode_terms(reader)?;
+            let individuals = decode_terms(reader, memory)?;
             Ok(Question::Realization {
                 individuals,
-                classes: decode_terms(reader)?,
+                classes: decode_terms(reader, memory)?,
             })
         }
         4 => Ok(Question::InstanceRetrieval {
-            class: decode_term(reader)?,
+            class: decode_term_with_memory(reader, memory)?,
         }),
         5 => Ok(Question::AxiomEntailment {
-            axiom: Box::new(decode_axiom(reader)?),
+            axiom: {
+                let axiom = decode_axiom_with_memory(reader, memory)?;
+                memory.boxed(axiom)?
+            },
         }),
         6 => {
-            let signature = decode_terms(reader)?;
+            let signature = decode_terms(reader, memory)?;
             let method = *ModuleMethod::ALL
                 .get(usize::from(reader.byte()?))
                 .ok_or_else(|| malformed("module method ordinal outside ModuleMethod::ALL"))?;
             Ok(Question::ModuleExtraction { signature, method })
         }
         7 => Ok(Question::ObjectPropertyClassification {
-            properties: decode_terms(reader)?,
+            properties: decode_terms(reader, memory)?,
         }),
         8 => Ok(Question::ClassAnalysis {
-            individuals: decode_terms(reader)?,
-            classes: decode_terms(reader)?,
+            individuals: decode_terms(reader, memory)?,
+            classes: decode_terms(reader, memory)?,
         }),
         _ => Err(malformed("unknown question kind")),
-    }
+    })
 }
 
 /// Take one [`RunProof`] — its assumptions, its answer, and its trace when it kept one.

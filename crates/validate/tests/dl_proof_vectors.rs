@@ -145,4 +145,127 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
 purrdf_testkit::harness_main!(
     all_shared_dl_proof_vectors_match_the_current_native_boundary,
     imported_closure_proofs_check_against_the_consumers_native_snapshot,
+    positive_limits_preserve_strict_fields_and_original_integer_failure,
+    positive_transport_checks_complete_operands_and_retains_revision_caps,
 );
+
+fn positive_limits_preserve_strict_fields_and_original_integer_failure() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_validate::regime::{ReasoningError, positive_limits_from_json};
+
+    let text = r#"{"historySteps":"16","sourceTerms":"512","sourceRows":"512","questionBytes":"8192","metadataBytes":"4194304","metadataWork":"4194304"}"#;
+    positive_limits_from_json(text).unwrap();
+    for bad in [
+        text.replace("\"16\"", "16"),
+        text.replace("\"16\"", "\"016\""),
+        text.replace("\"16\"", "\"+16\""),
+        text.replace("\"historySteps\":\"16\",", ""),
+        text.replace("\"historySteps\"", "\"unknown\""),
+        text.replace(
+            "\"historySteps\":\"16\"",
+            "\"historySteps\":\"16\",\"historySteps\":\"16\"",
+        ),
+    ] {
+        assert!(positive_limits_from_json(&bad).is_err(), "{bad}");
+    }
+    let offered = "184467440737095516160";
+    let bad = text.replace("\"16\"", &format!("\"{offered}\""));
+    let ReasoningError::PositiveLimits { cause, .. } = positive_limits_from_json(&bad).unwrap_err()
+    else {
+        panic!("expected original positive limit refusal");
+    };
+    assert_eq!(cause.pointer(), "/historySteps");
+    let captured = Capture::read(cause.native_cause().unwrap());
+    assert_eq!(captured.code, "positive-limit-integer");
+    assert!(matches!(captured.field("offered"), ErrorValue::Text(value) if value == offered));
+    assert!(matches!(
+        captured.field("target"),
+        ErrorValue::Code("usize")
+    ));
+    assert_eq!(captured.child("cause").code, "std-integer-parse");
+    let original = std::error::Error::source(cause.native_cause().unwrap()).unwrap();
+    assert!(original.is::<core::num::ParseIntError>());
+}
+
+fn positive_transport_checks_complete_operands_and_retains_revision_caps() {
+    use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
+    use purrdf_lex::json::{self, Limits};
+    use purrdf_validate::regime::{
+        PositiveReasonerSession, decode_dl_proof, positive_limits_from_json,
+    };
+
+    let vector = json::read_slice(
+        include_bytes!("fixtures/positive-host.json"),
+        Limits::DEFAULT,
+    )
+    .unwrap();
+    let field = |name| vector.get(name).unwrap().as_str().unwrap();
+    let control = || CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let open = |source, steps, work| {
+        PositiveReasonerSession::open_with_proofs(
+            source,
+            positive_limits_from_json(field("limits")).unwrap(),
+            steps,
+            work,
+            None,
+            &mut control(),
+        )
+        .unwrap()
+    };
+    let producer = open(field("initial"), 7, 11);
+    let before = producer.consistency().unwrap();
+    let (producer, _) = producer.advance(field("latest"), &mut control()).unwrap();
+    let after = producer.consistency().unwrap();
+    for certificate in [before.certificate(), after.certificate()] {
+        assert!(
+            certificate.contains("\nbudget 7\n"),
+            "decision cap changed across revisions"
+        );
+        assert!(
+            certificate.contains("\nwork-budget 11\n"),
+            "decision work cap changed across revisions"
+        );
+    }
+    let producer = open(field("initial"), 0, 0);
+    let (producer, _) = producer.class_satisfiability("<urn:query>").unwrap();
+    let (producer, _) = producer.advance(field("latest"), &mut control()).unwrap();
+    let (_, produced) = producer.entails(field("axiom")).unwrap();
+    assert!(
+        produced.answer() == field("answer"),
+        "frozen answer bytes changed"
+    );
+    assert!(
+        produced.certificate() == field("certificate"),
+        "frozen certificate bytes changed"
+    );
+    assert!(
+        produced.proof_document() == field("proof"),
+        "frozen proof bytes changed"
+    );
+    assert!(decode_dl_proof(field("proof")).is_err());
+    let consumer = open(field("latest"), 0, 0);
+    let check = |answer, certificate, proof| {
+        consumer.check_positive_proof(
+            "entails",
+            field("axiom"),
+            answer,
+            certificate,
+            proof,
+            &mut control(),
+        )
+    };
+    assert!(check("entails false\n", field("certificate"), field("proof")).is_err());
+    assert!(check(field("answer"), "invalid certificate", field("proof")).is_err());
+    let forged = field("proof").replacen("input ", "input 0", 1);
+    assert!(
+        forged != field("proof"),
+        "the forged identity probe must change the frozen proof"
+    );
+    assert!(check(field("answer"), field("certificate"), &forged).is_err());
+    assert!(
+        check(field("answer"), field("certificate"), field("proof")).unwrap() == field("report"),
+        "frozen independent check report bytes changed"
+    );
+    consumer.consistency().unwrap();
+}

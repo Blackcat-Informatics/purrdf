@@ -1804,6 +1804,49 @@ Public schema depth and output-budget constants, and `emitted_bytes_bound`, rema
 available for caller planning. Carrier thresholds, request defaults, rule selection,
 refusal order and successful RDF identities are unchanged.
 
+## Strict tar source inventory
+
+`purrdf_gts::tar::inventory::read` is the supplied-uncompressed-byte evidence API.
+Its explicit limits and original admission govern source bytes, physical headers
+including extensions, cumulative metadata bytes, native storage and logical work.
+Complete immutable records expose original ranges and borrowed payloads without
+extracting files or round-tripping through GTS. USTAR prefix/name fragments retain
+separate locations; GNU and local/global PAX values retain their original source.
+Path UTF-8 conversion is explicit and reports the native cause without replacement.
+Package containment is a caller policy over those exact fields, not a tar grammar
+or transport-decoding responsibility.
+PAX keyword lookup uses admitted ordered storage and selected metadata merges
+in key order. Failed inventory construction releases partial owners before
+requesting their admission refund; a refused refund preserves the first error
+and leaves the original reservation with its caller.
+
+Buffered and seekable import share the same effective-size and metadata engine.
+A selected PAX size governs the body boundary, global and local overrides retain
+separate lifetimes, and each real member consumes pending GNU values even when
+PAX wins. Malformed selected numeric overrides and incomplete or unsupported
+framing refuse before a partial inventory escapes. Public import signatures and
+constructible options remain unchanged; `TarError::Inventory` retains additional
+typed original framing, metadata and resource causes. Existing native PAX errors
+retain their body-relative locations and original UTF-8/integer causes.
+
+The shared core selects its framing policy before parsing. Strict inventory
+requires complete zero padding, two zero end blocks and zero trailing bytes.
+Existing imports retain their v4 termination tolerance: the first zero header
+or header EOF ends a nonempty archive, partial next headers and unused pending
+metadata are ignored, and padding is skipped without checking its bytes or
+presence. Truncated member payloads still refuse. Seekable import does not add
+an end-relative seek requirement; non-EOF header I/O failures retain their
+original operation and cause.
+
+The evidence API does not change the existing v4 GTS timestamp representation.
+The explicit legacy import projection uses unsigned whole seconds: positive
+fractions floor, and valid negative PAX timestamps or whole seconds outside `u64`
+use the original header value.
+The shared core validates the complete signed decimal grammar before projection;
+malformed values never fall back. The strict inventory retains the exact selected
+value and originating range. Legacy name replacement/trimming is likewise a
+projection over the shared core, never a retry after strict refusal.
+
 ## Compatibility after 4.0
 
 The public surface of the stable `rust-v4.0.0` tree is the v4 compatibility

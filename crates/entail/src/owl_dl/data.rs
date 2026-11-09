@@ -317,6 +317,7 @@ pub(crate) fn literal_value(literal: &TermValue) -> Option<LiteralValue> {
 }
 
 /// The VALUE-space partition of the literals a knowledge base holds.
+#[cfg(test)]
 pub(crate) struct LiteralClasses {
     /// Literal term id → its value class. Two ids share a class exactly when they denote one
     /// value; two ids with different classes denote different values. A literal whose value
@@ -338,67 +339,88 @@ pub(crate) struct LiteralClasses {
 /// values of different families are never one value, so a bucket boundary can never separate
 /// two literals that should share a class. The buckets are an insertion-ordered `Vec` rather
 /// than a map because there are at most as many of them as there are value spaces.
+#[cfg(test)]
 pub(crate) fn literal_classes_until<E>(
     literals: &[(u32, LiteralValue)],
-    mut poll: impl FnMut() -> Result<(), E>,
+    poll: impl FnMut() -> Result<(), E>,
 ) -> Result<LiteralClasses, E> {
     let mut out = LiteralClasses {
         class_of: BTreeMap::new(),
         any_unmodelled: false,
     };
-    let mut buckets: Vec<(&'static str, Vec<(XsdValue, u32)>)> = Vec::new();
-    let mut next_class = 0u32;
-    for (term, value) in literals {
-        poll()?;
-        match value {
-            LiteralValue::Value(value) => {
-                let family = family_of(value);
-                let mut position = None;
-                for (index, (name, _)) in buckets.iter().enumerate() {
-                    poll()?;
-                    if *name == family {
-                        position = Some(index);
-                        break;
-                    }
-                }
-                let index = match position {
-                    Some(index) => index,
-                    None => {
-                        buckets.push((family, Vec::new()));
-                        buckets.len() - 1
-                    }
-                };
-                let bucket = &mut buckets[index].1;
-                let mut existing = None;
-                for (candidate, class) in bucket.iter() {
-                    poll()?;
-                    if purrdf_xsd::range::same_value(candidate, value) {
-                        existing = Some(*class);
-                        break;
-                    }
-                }
-                let class = existing.unwrap_or_else(|| {
-                    let class = next_class;
-                    bucket.push((value.clone(), class));
-                    class
-                });
-                if existing.is_none() {
-                    next_class += 1;
-                }
-                out.class_of.insert(*term, class);
-            }
-            LiteralValue::TermIdentified(_) => {
-                out.class_of.insert(*term, next_class);
-                next_class += 1;
-            }
-            LiteralValue::Unmodelled => out.any_unmodelled = true,
-            // An ill-typed literal denotes nothing, so it belongs to no class: giving it one
-            // would make it distinct from — or equal to — a value it does not have. The empty
-            // data range the caller gives it is what closes the branch instead.
-            LiteralValue::IllTyped => {}
-        }
-    }
+    out.any_unmodelled =
+        LiteralPartition::default().extend_until(literals, &mut out.class_of, poll)?;
     Ok(out)
+}
+
+/// The original value-family scan retained across positive source additions.
+/// Each representative is admitted once; later updates compare only new literals.
+#[derive(Default)]
+pub(crate) struct LiteralPartition {
+    buckets: Vec<(&'static str, Vec<(XsdValue, u32)>)>,
+    next_class: u32,
+}
+
+impl LiteralPartition {
+    pub(crate) fn extend_until<E>(
+        &mut self,
+        literals: &[(u32, LiteralValue)],
+        class_of: &mut BTreeMap<u32, u32>,
+        mut poll: impl FnMut() -> Result<(), E>,
+    ) -> Result<bool, E> {
+        let mut any_unmodelled = false;
+        for (term, value) in literals {
+            poll()?;
+            match value {
+                LiteralValue::Value(value) => {
+                    let family = family_of(value);
+                    let mut position = None;
+                    for (index, (name, _)) in self.buckets.iter().enumerate() {
+                        poll()?;
+                        if *name == family {
+                            position = Some(index);
+                            break;
+                        }
+                    }
+                    let index = match position {
+                        Some(index) => index,
+                        None => {
+                            self.buckets.push((family, Vec::new()));
+                            self.buckets.len() - 1
+                        }
+                    };
+                    let bucket = &mut self.buckets[index].1;
+                    let mut existing = None;
+                    for (candidate, class) in bucket.iter() {
+                        poll()?;
+                        if purrdf_xsd::range::same_value(candidate, value) {
+                            existing = Some(*class);
+                            break;
+                        }
+                    }
+                    let class = existing.unwrap_or_else(|| {
+                        let class = self.next_class;
+                        bucket.push((value.clone(), class));
+                        class
+                    });
+                    if existing.is_none() {
+                        self.next_class += 1;
+                    }
+                    class_of.insert(*term, class);
+                }
+                LiteralValue::TermIdentified(_) => {
+                    class_of.insert(*term, self.next_class);
+                    self.next_class += 1;
+                }
+                LiteralValue::Unmodelled => any_unmodelled = true,
+                // An ill-typed literal denotes nothing, so it belongs to no class: giving it one
+                // would make it distinct from — or equal to — a value it does not have. The empty
+                // data range the caller gives it is what closes the branch instead.
+                LiteralValue::IllTyped => {}
+            }
+        }
+        Ok(any_unmodelled)
+    }
 }
 
 /// A stable name for the VALUE SPACE a value inhabits, used only to bucket the
