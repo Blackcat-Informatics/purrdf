@@ -404,6 +404,8 @@ pub enum EntailError<E = std::convert::Infallible> {
     Decision(Box<DlCertificate>),
     /// A key-membership check presented to a different source or preparation phase.
     KeyMembership(Box<KeyMembershipError>),
+    /// A source update removed retained RDF or attempted to change its frozen schema.
+    PositiveUpdate(Box<reasoner::positive::PositiveUpdateRefusal>),
     /// An object-property hierarchy is malformed, nonregular, or physically
     /// refused before the regular-language program could be constructed.
     RoleHierarchy(RoleHierarchyError),
@@ -627,6 +629,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         RifVariable(cause) => "entailment-rif-variable" { "cause" => Cause(cause) },
         Decision(report) => "entailment-owl-decision" { "report" => Record(report.as_ref()) },
         KeyMembership(cause) => "entailment-key-membership" { "cause" => Cause(cause.as_ref()) },
+        PositiveUpdate(cause) => "entailment-positive-update" { "cause" => Cause(cause.as_ref()) },
         RoleHierarchy(cause) => "entailment-role-hierarchy" { "cause" => Cause(cause) },
         PropertyKind { property, conflict } => "entailment-property-kind" {
             "property" => Iri(property), "conflict" => Boolean(*conflict),
@@ -689,6 +692,7 @@ impl EntailError {
             Self::RifVariable(cause) => EntailError::RifVariable(cause),
             Self::Decision(report) => EntailError::Decision(report),
             Self::KeyMembership(cause) => EntailError::KeyMembership(cause),
+            Self::PositiveUpdate(cause) => EntailError::PositiveUpdate(cause),
             Self::RoleHierarchy(cause) => EntailError::RoleHierarchy(cause),
             Self::PropertyKind { property, conflict } => {
                 EntailError::PropertyKind { property, conflict }
@@ -767,6 +771,7 @@ impl<E: std::fmt::Display> std::fmt::Display for EntailError<E> {
                 f.write_str("entailment build error: OWL-Direct decision could not complete")
             }
             Self::KeyMembership(cause) => write!(f, "entailment build error: {cause}"),
+            Self::PositiveUpdate(cause) => cause.fmt(f),
             Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
             Self::PropertyKind { property, conflict } => write!(
                 f,
@@ -910,6 +915,7 @@ impl<E: std::error::Error + 'static> std::error::Error for EntailError<E> {
             Self::RifXml(inner) => Some(inner.as_ref()),
             Self::RifVariable(inner) => Some(inner),
             Self::KeyMembership(inner) => Some(inner.as_ref()),
+            Self::PositiveUpdate(inner) => Some(inner.as_ref()),
             Self::Collection(inner) => Some(inner.as_ref()),
             Self::SourceRead(inner) => Some(inner),
             Self::Build(_)
@@ -1388,16 +1394,16 @@ mod tests {
     }
 
     #[test]
-    fn second_traversal_failure_retains_the_original_cause_without_a_partial_reasoner() {
+    fn completed_source_failure_retains_the_original_cause_without_a_partial_reasoner() {
         let data = dataset(&[(X, RDF_TYPE, A)]);
         for fail_term in [false, true] {
-            let source = FailingSource::new(Arc::clone(&data), fail_term, 2);
+            let source = FailingSource::new(Arc::clone(&data), fail_term, 1);
             let cause = Arc::clone(&source.cause);
-            let error = Reasoner::new(&source).expect_err("the second source pass must fail");
-            assert_eq!(source.passes.get(), 2);
+            let error = Reasoner::new(&source).expect_err("the completed source read must fail");
+            assert_eq!(source.passes.get(), 1);
             drop(source);
             let EntailError::SourceRead(native) = &error else {
-                panic!("expected the native second-pass cause, got {error:?}");
+                panic!("expected the native completed-read cause, got {error:?}");
             };
             assert!(Arc::ptr_eq(native, &cause));
             let chained = std::error::Error::source(&error)
@@ -1408,7 +1414,7 @@ mod tests {
         }
         let source = FailingSource::new(data, false, usize::MAX);
         let reasoner = Reasoner::new(&source).expect("the neighboring complete source is valid");
-        assert_eq!(source.passes.get(), 2);
+        assert_eq!(source.passes.get(), 1);
         assert!(!reasoner.records_proofs());
     }
 

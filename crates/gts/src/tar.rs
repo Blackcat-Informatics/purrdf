@@ -4,10 +4,11 @@
 //! Tar stream import/export for files-profile-v2 GTS archives.
 
 mod error;
+pub mod inventory;
 pub use error::TarError;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, Write};
 
 use crate::codec::encode_chain;
 use crate::files::{FileEntry, FileEntryKind, FilePaxRecord, read_entries};
@@ -478,371 +479,13 @@ fn decimal_digits(mut value: usize) -> usize {
 }
 
 pub(crate) fn read_uncompressed_tar(data: &[u8]) -> Result<Vec<RawTarEntry<'_>>, TarError> {
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    let mut pax: BTreeMap<String, String> = BTreeMap::new();
-    let mut long_path: Option<String> = None;
-    let mut long_link: Option<String> = None;
-    while offset + BLOCK <= data.len() {
-        let header = &data[offset..offset + BLOCK];
-        if header == ZERO_BLOCK {
-            break;
-        }
-        verify_checksum(header, offset as u64)?;
-        let typeflag = header[156];
-        let size = parse_octal(&header[124..136]).ok_or_else(|| TarError::InvalidSize {
-            offset: offset as u64,
-            actual: header[124..136].to_vec(),
-        })?;
-        offset += BLOCK;
-        let body_end = usize::try_from(size)
-            .ok()
-            .and_then(|size| offset.checked_add(size))
-            .filter(|end| *end <= data.len())
-            .ok_or(TarError::BodyOverrun {
-                offset,
-                size,
-                available: data.len(),
-            })?;
-        let body = &data[offset..body_end];
-        offset = body_end + (BLOCK - body.len() % BLOCK) % BLOCK;
-
-        match typeflag {
-            b'x' => {
-                pax = parse_pax_body(body)?;
-            }
-            b'L' => {
-                long_path = Some(tar_string(body));
-            }
-            b'K' => {
-                long_link = Some(tar_string(body));
-            }
-            b'0' | 0 | b'5' | b'2' | b'1' | b'6' | b'3' | b'4' => {
-                let entry = raw_entry_from_header(
-                    header,
-                    typeflag,
-                    body,
-                    &pax,
-                    &mut long_path,
-                    &mut long_link,
-                )?;
-                out.push(entry);
-                pax.clear();
-            }
-            other => {
-                return Err(TarError::EntryType {
-                    actual: other,
-                    block: (offset / BLOCK) as u128,
-                });
-            }
-        }
-    }
-    if out.is_empty() {
-        return Err(TarError::EmptyArchive);
-    }
-    Ok(out)
+    inventory::legacy::buffered(data)
 }
 
 pub(crate) fn index_uncompressed_tar<R: Read + Seek>(
     reader: &mut R,
 ) -> Result<Vec<SeekTarEntry>, TarError> {
-    let mut out = Vec::new();
-    let mut offset = reader
-        .stream_position()
-        .map_err(|cause| TarError::io("read tar position", None, cause))?;
-    let mut pax: BTreeMap<String, String> = BTreeMap::new();
-    let mut long_path: Option<String> = None;
-    let mut long_link: Option<String> = None;
-
-    loop {
-        let mut header = [0_u8; BLOCK];
-        match reader.read_exact(&mut header) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(cause) => return Err(TarError::io("read tar header", None, cause)),
-        }
-        let header_offset = offset;
-        offset = offset
-            .checked_add(BLOCK as u64)
-            .ok_or(TarError::OffsetOverflow {
-                offset,
-                size: BLOCK as u64,
-                padding: 0,
-            })?;
-        if header == ZERO_BLOCK {
-            break;
-        }
-        verify_checksum(&header, header_offset)?;
-        let typeflag = header[156];
-        let size = parse_octal(&header[124..136]).ok_or_else(|| TarError::InvalidSize {
-            offset: header_offset,
-            actual: header[124..136].to_vec(),
-        })?;
-        let body_offset = offset;
-        let next_offset = next_tar_offset(body_offset, size)?;
-
-        match typeflag {
-            b'x' => {
-                let body = read_current_body(reader, size)?;
-                pax = parse_pax_body(&body)?;
-            }
-            b'L' => {
-                let body = read_current_body(reader, size)?;
-                long_path = Some(tar_string(&body));
-            }
-            b'K' => {
-                let body = read_current_body(reader, size)?;
-                long_link = Some(tar_string(&body));
-            }
-            b'0' | 0 | b'5' | b'2' | b'1' | b'6' | b'3' | b'4' => {
-                let entry = seek_entry_from_header(
-                    &header,
-                    typeflag,
-                    &pax,
-                    &mut long_path,
-                    &mut long_link,
-                    body_offset,
-                    size,
-                )?;
-                out.push(entry);
-                pax.clear();
-            }
-            other => {
-                return Err(TarError::EntryType {
-                    actual: other,
-                    block: u128::from(header_offset / BLOCK as u64),
-                });
-            }
-        }
-
-        reader
-            .seek(SeekFrom::Start(next_offset))
-            .map_err(|cause| TarError::io("seek tar member boundary", None, cause))?;
-        offset = next_offset;
-    }
-
-    if out.is_empty() {
-        return Err(TarError::EmptyArchive);
-    }
-    Ok(out)
-}
-
-fn read_current_body<R: Read>(reader: &mut R, size: u64) -> Result<Vec<u8>, TarError> {
-    let len = usize::try_from(size).map_err(|_| TarError::BodyTooLarge { size })?;
-    let mut body = vec![0_u8; len];
-    reader
-        .read_exact(&mut body)
-        .map_err(|cause| TarError::io("read tar member body", None, cause))?;
-    Ok(body)
-}
-
-fn next_tar_offset(body_offset: u64, size: u64) -> Result<u64, TarError> {
-    let padding = (BLOCK as u64 - size % BLOCK as u64) % BLOCK as u64;
-    body_offset
-        .checked_add(size)
-        .and_then(|offset| offset.checked_add(padding))
-        .ok_or(TarError::OffsetOverflow {
-            offset: body_offset,
-            size,
-            padding,
-        })
-}
-
-fn raw_entry_from_header<'a>(
-    header: &[u8],
-    typeflag: u8,
-    body: &'a [u8],
-    pax: &BTreeMap<String, String>,
-    long_path: &mut Option<String>,
-    long_link: &mut Option<String>,
-) -> Result<RawTarEntry<'a>, TarError> {
-    let kind = match typeflag {
-        b'0' | 0 => FileEntryKind::File,
-        b'5' => FileEntryKind::Directory,
-        b'2' => FileEntryKind::Symlink,
-        b'1' => FileEntryKind::Hardlink,
-        b'6' => FileEntryKind::Fifo,
-        b'3' => FileEntryKind::CharDev,
-        b'4' => FileEntryKind::BlockDev,
-        _ => unreachable!("filtered by caller"),
-    };
-    let path = pax
-        .get("path")
-        .cloned()
-        .or_else(|| long_path.take())
-        .unwrap_or_else(|| header_path(header));
-    if path.is_empty() {
-        return Err(TarError::EmptyPath);
-    }
-    let link_target = pax
-        .get("linkpath")
-        .cloned()
-        .or_else(|| long_link.take())
-        .or_else(|| {
-            let link = field_string(&header[157..257]);
-            (!link.is_empty()).then_some(link)
-        });
-    let pax_records = pax
-        .iter()
-        .filter(|(key, _)| !CORE_PAX_KEYS.contains(&key.as_str()))
-        .map(|(key, value)| FilePaxRecord {
-            key: key.clone(),
-            value: value.clone(),
-        })
-        .collect();
-    Ok(RawTarEntry {
-        path: path
-            .trim_start_matches("./")
-            .trim_end_matches('/')
-            .to_string(),
-        kind,
-        mode: parse_octal(&header[100..108]).map(|value| value as u32),
-        modified_seconds: pax
-            .get("mtime")
-            .and_then(|value| parse_pax_seconds(value))
-            .or_else(|| parse_octal(&header[136..148])),
-        uid: pax
-            .get("uid")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[108..116])),
-        gid: pax
-            .get("gid")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[116..124])),
-        user_name: pax
-            .get("uname")
-            .cloned()
-            .or_else(|| non_empty(field_string(&header[265..297]))),
-        group_name: pax
-            .get("gname")
-            .cloned()
-            .or_else(|| non_empty(field_string(&header[297..329]))),
-        link_target,
-        dev_major: pax
-            .get("devmajor")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[329..337])),
-        dev_minor: pax
-            .get("devminor")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[337..345])),
-        pax_records,
-        data: if kind == FileEntryKind::File {
-            body
-        } else {
-            &[]
-        },
-    })
-}
-
-fn seek_entry_from_header(
-    header: &[u8],
-    typeflag: u8,
-    pax: &BTreeMap<String, String>,
-    long_path: &mut Option<String>,
-    long_link: &mut Option<String>,
-    body_offset: u64,
-    size: u64,
-) -> Result<SeekTarEntry, TarError> {
-    let kind = match typeflag {
-        b'0' | 0 => FileEntryKind::File,
-        b'5' => FileEntryKind::Directory,
-        b'2' => FileEntryKind::Symlink,
-        b'1' => FileEntryKind::Hardlink,
-        b'6' => FileEntryKind::Fifo,
-        b'3' => FileEntryKind::CharDev,
-        b'4' => FileEntryKind::BlockDev,
-        _ => unreachable!("filtered by caller"),
-    };
-    let path = pax
-        .get("path")
-        .cloned()
-        .or_else(|| long_path.take())
-        .unwrap_or_else(|| header_path(header));
-    if path.is_empty() {
-        return Err(TarError::EmptyPath);
-    }
-    let link_target = pax
-        .get("linkpath")
-        .cloned()
-        .or_else(|| long_link.take())
-        .or_else(|| {
-            let link = field_string(&header[157..257]);
-            (!link.is_empty()).then_some(link)
-        });
-    let pax_records = pax
-        .iter()
-        .filter(|(key, _)| !CORE_PAX_KEYS.contains(&key.as_str()))
-        .map(|(key, value)| FilePaxRecord {
-            key: key.clone(),
-            value: value.clone(),
-        })
-        .collect();
-    Ok(SeekTarEntry {
-        path: path
-            .trim_start_matches("./")
-            .trim_end_matches('/')
-            .to_string(),
-        kind,
-        mode: parse_octal(&header[100..108]).map(|value| value as u32),
-        modified_seconds: pax
-            .get("mtime")
-            .and_then(|value| parse_pax_seconds(value))
-            .or_else(|| parse_octal(&header[136..148])),
-        uid: pax
-            .get("uid")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[108..116])),
-        gid: pax
-            .get("gid")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[116..124])),
-        user_name: pax
-            .get("uname")
-            .cloned()
-            .or_else(|| non_empty(field_string(&header[265..297]))),
-        group_name: pax
-            .get("gname")
-            .cloned()
-            .or_else(|| non_empty(field_string(&header[297..329]))),
-        link_target,
-        dev_major: pax
-            .get("devmajor")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[329..337])),
-        dev_minor: pax
-            .get("devminor")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| parse_octal(&header[337..345])),
-        pax_records,
-        data_offset: body_offset,
-        data_size: if kind == FileEntryKind::File { size } else { 0 },
-    })
-}
-
-fn verify_checksum(header: &[u8], offset: u64) -> Result<(), TarError> {
-    let Some(expected) = parse_octal(&header[148..156]) else {
-        return Err(TarError::InvalidChecksum {
-            offset,
-            actual: header[148..156].to_vec(),
-        });
-    };
-    let mut sum = 0u64;
-    for (idx, byte) in header.iter().enumerate() {
-        if (148..156).contains(&idx) {
-            sum += u64::from(b' ');
-        } else {
-            sum += u64::from(*byte);
-        }
-    }
-    if sum != expected {
-        return Err(TarError::Checksum {
-            offset,
-            actual: sum,
-            expected,
-        });
-    }
-    Ok(())
+    inventory::legacy::seekable(reader)
 }
 
 /// Read one ustar header numeric field.
@@ -907,93 +550,9 @@ pub fn parse_octal(field: &[u8]) -> Option<u64> {
     u64::from_str_radix(text, 8).ok()
 }
 
+#[cfg(test)]
 fn parse_pax_body(body: &[u8]) -> Result<BTreeMap<String, String>, TarError> {
-    let mut out = BTreeMap::new();
-    let mut offset = 0usize;
-    while offset < body.len() {
-        let len_end = body[offset..]
-            .iter()
-            .position(|byte| *byte == b' ')
-            .map(|idx| offset + idx)
-            .ok_or(TarError::PaxLengthMissing {
-                offset,
-                remaining: body.len() - offset,
-            })?;
-        let len_text = std::str::from_utf8(&body[offset..len_end]).map_err(|cause| {
-            TarError::PaxLengthUtf8 {
-                offset,
-                actual: body[offset..len_end].to_vec(),
-                cause,
-            }
-        })?;
-        let len: usize = len_text
-            .parse()
-            .map_err(|cause| TarError::PaxLengthInteger {
-                actual: len_text.to_owned(),
-                cause,
-            })?;
-        let end = offset
-            .checked_add(len)
-            .filter(|end| *end <= body.len() && *end > len_end)
-            .ok_or(TarError::PaxOverrun {
-                offset,
-                length: len,
-                available: body.len(),
-            })?;
-        let record = std::str::from_utf8(&body[len_end + 1..end]).map_err(|cause| {
-            TarError::PaxRecordUtf8 {
-                offset,
-                actual: body[len_end + 1..end].to_vec(),
-                cause,
-            }
-        })?;
-        let record = record
-            .strip_suffix('\n')
-            .ok_or_else(|| TarError::PaxNewline {
-                offset,
-                actual: record.to_owned(),
-            })?;
-        let (key, value) = record.split_once('=').ok_or_else(|| TarError::PaxEquals {
-            offset,
-            actual: record.to_owned(),
-        })?;
-        out.insert(key.to_string(), value.to_string());
-        offset = end;
-    }
-    Ok(out)
-}
-
-fn parse_pax_seconds(value: &str) -> Option<u64> {
-    let whole = value.split('.').next().unwrap_or(value);
-    whole.parse().ok()
-}
-
-fn header_path(header: &[u8]) -> String {
-    let name = field_string(&header[0..100]);
-    let prefix = field_string(&header[345..500]);
-    if prefix.is_empty() {
-        name
-    } else {
-        format!("{prefix}/{name}")
-    }
-}
-
-fn field_string(field: &[u8]) -> String {
-    let end = field
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(field.len());
-    String::from_utf8_lossy(&field[..end]).to_string()
-}
-
-fn tar_string(body: &[u8]) -> String {
-    String::from_utf8_lossy(body)
-        .trim_end_matches('\0')
-        .to_string()
-}
-
-fn non_empty(value: String) -> Option<String> {
-    (!value.is_empty()).then_some(value)
+    inventory::legacy::pax(body)
 }
 
 #[cfg(test)]
@@ -1173,19 +732,22 @@ mod tests {
         records.insert("path".to_string(), "a/b.txt".to_string());
         records.insert("comment".to_string(), "kept".to_string());
         let body = pax_body(&records);
-        let pax = parse_pax_body(&body).unwrap();
-        let mut long_path = None;
-        let mut long_link = None;
-        let mut header = [0u8; BLOCK];
-        write_path_fields(&mut header, "ignored").unwrap();
-        write_octal(&mut header[100..108], 0o644).unwrap();
-        write_octal(&mut header[108..116], 0).unwrap();
-        write_octal(&mut header[116..124], 0).unwrap();
-        write_octal(&mut header[124..136], 0).unwrap();
-        write_octal(&mut header[136..148], 0).unwrap();
-        header[156] = b'0';
-        let entry = raw_entry_from_header(&header, b'0', &[], &pax, &mut long_path, &mut long_link)
-            .unwrap();
+        let entry = FileEntry {
+            path: "ignored".to_owned(),
+            ..FileEntry::default()
+        };
+        let mut metadata =
+            HeaderMetadata::from_entry(&entry, body.len() as u64, &ToTarOptions::default())
+                .unwrap();
+        metadata.typeflag = b'x';
+        let mut tar = Vec::new();
+        write_header(&mut tar, &metadata, &body).unwrap();
+        let metadata = HeaderMetadata::from_entry(&entry, 0, &ToTarOptions::default()).unwrap();
+        write_header(&mut tar, &metadata, &[]).unwrap();
+        tar.extend_from_slice(&ZERO_BLOCK);
+        tar.extend_from_slice(&ZERO_BLOCK);
+        let parsed = read_uncompressed_tar(&tar).unwrap();
+        let entry = &parsed[0];
         assert_eq!(entry.path, "a/b.txt");
         assert_eq!(entry.pax_records.len(), 1);
         assert_eq!(entry.pax_records[0].key, "comment");

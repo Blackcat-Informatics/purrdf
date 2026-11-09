@@ -11,6 +11,8 @@ use purrdf_hash::error::{ErrorValue, IoFailure};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TarError {
+    /// Strict shared archive framing, metadata or resource refusal.
+    Inventory(super::inventory::Error),
     /// Input transport decoding failed.
     Transport(crate::transport::TransportError),
     /// A member requires an import option that was not enabled.
@@ -243,6 +245,7 @@ impl TarError {
 impl fmt::Display for TarError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Inventory(cause) => cause.fmt(f),
             Self::Transport(cause) => write!(f, "decode tar input: {cause}"),
             Self::Refused { path, kind, option } => {
                 write!(f, "refusing {} entry {path}: use {option}", kind.as_str())
@@ -323,6 +326,7 @@ impl fmt::Display for TarError {
 }
 
 purrdf_lex::error_source!(TarError => {
+    Self::Inventory(cause) => cause,
     Self::Transport(cause) => cause,
     Self::MtimeConversion { cause, .. } => cause,
     Self::MtimeFormat { cause, .. } => cause,
@@ -338,6 +342,7 @@ purrdf_lex::error_source!(TarError => {
 
 impl purrdf_hash::error::StructuredError for TarError {
     purrdf_hash::error_visit! {
+        Inventory(cause) => "gts-tar-inventory" { "cause" => Cause(cause) },
         Transport(cause) => "gts-tar-transport" { "cause" => Cause(cause) },
         Refused { path, kind, option } => "gts-tar-refused" { "path" => Text(path), "kind" => Code(kind.as_str()), "option" => Code(option) },
         ImportSocket { path } => "gts-tar-import-socket" { "path" => Text(path) },

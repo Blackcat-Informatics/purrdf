@@ -7,7 +7,9 @@ use super::{
     Arity, Evaluation, ProofArena, ProofError, ProofId, ShapeFact, StoreShape, TermInterner,
 };
 use crate::seminaive::Derivation;
-use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, Shared, StorageError};
+use purrdf_lex::allocation::{
+    Admission, Memory, OrderedTable, Resident, Shared, StorageError, increment_count,
+};
 use purrdf_lex::walk::{WorkList, try_sort_unstable_by};
 
 /// Actual index and traversal operations, independent of elapsed time.
@@ -19,13 +21,6 @@ pub struct ProofIndexWork {
     pub source_slots: u64,
     /// Fact/order comparisons in index preparation or lookup.
     pub index_comparisons: u64,
-}
-
-impl ProofIndexWork {
-    fn increment(value: &mut u64) -> Result<(), StorageError> {
-        *value = value.checked_add(1).ok_or(StorageError::SizeOverflow)?;
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -150,7 +145,7 @@ where
                 // The ordinal reproduces the eager stable sort's tie order without
                 // allocating a second sorting buffer.
                 try_sort_unstable_by(&mut entries, |left, right| {
-                    ProofIndexWork::increment(&mut preparation.index_comparisons)?;
+                    increment_count(&mut preparation.index_comparisons)?;
                     let a = &derivations[left.derivation];
                     let b = &derivations[right.derivation];
                     Ok::<_, StorageError>((a.proof_height(), a.fact(), left.derivation).cmp(&(
@@ -163,7 +158,7 @@ where
                     entry.rank = rank;
                 }
                 try_sort_unstable_by(&mut entries, |left, right| {
-                    ProofIndexWork::increment(&mut preparation.index_comparisons)?;
+                    increment_count(&mut preparation.index_comparisons)?;
                     Ok::<_, StorageError>(
                         (derivations[left.derivation].fact(), left.rank)
                             .cmp(&(derivations[right.derivation].fact(), right.rank)),
@@ -251,7 +246,7 @@ where
                     },
                     memory,
                 )?;
-                ProofIndexWork::increment(&mut work.derivations)?;
+                increment_count(&mut work.derivations)?;
                 while let Some(mut frame) = pending.pop() {
                     let entry = &self.entries[frame.entry];
                     let derivation = &derivations[entry.derivation];
@@ -269,13 +264,13 @@ where
                                     },
                                     memory,
                                 )?;
-                                ProofIndexWork::increment(&mut work.derivations)?;
+                                increment_count(&mut work.derivations)?;
                                 continue;
                             }
                         } else {
                             arena.axiom(source.clone())?
                         };
-                        ProofIndexWork::increment(&mut work.source_slots)?;
+                        increment_count(&mut work.source_slots)?;
                         memory.push(&mut frame.premises, premise)?;
                         pending.try_push_admitted(frame, memory)?;
                     } else {
@@ -316,7 +311,7 @@ where
         while low < high {
             let mid = low + (high - low) / 2;
             let entry = &self.entries[mid];
-            ProofIndexWork::increment(&mut work.index_comparisons)?;
+            increment_count(&mut work.index_comparisons)?;
             if (derivations[entry.derivation].fact(), entry.rank) < (goal, before) {
                 low = mid + 1;
             } else {
@@ -326,7 +321,7 @@ where
         let Some(index) = low.checked_sub(1) else {
             return Ok(None);
         };
-        ProofIndexWork::increment(&mut work.index_comparisons)?;
+        increment_count(&mut work.index_comparisons)?;
         Ok((derivations[self.entries[index].derivation].fact() == goal).then_some(index))
     }
 }

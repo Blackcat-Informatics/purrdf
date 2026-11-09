@@ -11,6 +11,15 @@ use purrdf_core::TermValue;
 pub enum OwlSyntaxError {
     /// An extraction left an unfinished native syntax capture.
     IncompleteCapture,
+    /// A functional expression operand has two distinct source values.
+    AmbiguousOperand {
+        /// The original expression node.
+        node: TermValue,
+        /// The functional syntax predicate.
+        predicate: TermValue,
+        /// The first original value and a distinct competing value.
+        operands: Box<[TermValue; 2]>,
+    },
     /// An anonymous class-expression descent reached its native depth ceiling.
     ExpressionDepth {
         /// The original node the extractor refused to enter.
@@ -70,6 +79,10 @@ pub enum OwlSyntaxError {
 impl purrdf_hash::error::StructuredError for OwlSyntaxError {
     purrdf_hash::error_visit! {
         IncompleteCapture => "owl-syntax-incomplete-capture" {},
+        AmbiguousOperand { node, predicate, operands } => "owl-syntax-ambiguous-operand" {
+            "node" => Term(node), "predicate" => Term(predicate),
+            "operands" => List(operands.iter().map(|term| purrdf_hash::error::ErrorValue::Term(term))),
+        },
         ExpressionDepth { node, active_depth, limit } => "owl-syntax-expression-depth" {
             "node" => Term(node), "active_depth" => Unsigned(*active_depth as u128),
             "limit" => Unsigned(*limit as u128),
@@ -100,6 +113,15 @@ impl core::fmt::Display for OwlSyntaxError {
     fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::IncompleteCapture => output.write_str("native syntax capture did not complete"),
+            Self::AmbiguousOperand {
+                node,
+                predicate,
+                operands,
+            } => write!(
+                output,
+                "OWL expression {node:?} has distinct operands for {predicate:?}: {:?} and {:?}",
+                operands[0], operands[1]
+            ),
             Self::ExpressionDepth { limit, .. } => {
                 write!(output, "OWL class expression nests deeper than {limit}")
             }
