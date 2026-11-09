@@ -188,10 +188,7 @@ fn row_keys<'a, S: Admission + ?Sized>(
                             let lexical = match law {
                                 LiteralLaw::Exact => Cow::Borrowed(lexical_form.as_str()),
                                 LiteralLaw::ByValue => normalize(lexical_form, datatype, memory)?
-                                    .map_or_else(
-                                        || Cow::Borrowed(lexical_form.as_str()),
-                                        Cow::Owned,
-                                    ),
+                                    .map_or(Cow::Borrowed(lexical_form.as_str()), Cow::Owned),
                             };
                             let language = language
                                 .as_deref()

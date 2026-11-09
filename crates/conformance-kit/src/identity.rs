@@ -68,8 +68,8 @@ impl Identities {
                     language,
                     direction,
                 } => {
-                    let normalized = normalize(lexical_form, datatype)?.map_or_else(
-                        || std::borrow::Cow::Borrowed(lexical_form.as_str()),
+                    let normalized = normalize(lexical_form, datatype)?.map_or(
+                        std::borrow::Cow::Borrowed(lexical_form.as_str()),
                         std::borrow::Cow::Owned,
                     );
                     let lexical = rewrite_cdt_blank_terms(&normalized, datatype, &mut |token| {
