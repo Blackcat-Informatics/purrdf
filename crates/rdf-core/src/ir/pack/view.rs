@@ -141,6 +141,18 @@ fn unified_graph(g: GraphMatch<PackId>) -> GraphMatch<PackTermId> {
     }
 }
 
+/// The validated resident pack provides complete, infallible read checkpoints.
+impl crate::FallibleDatasetView for PackView<'_> {
+    type Error = std::convert::Infallible;
+    type Evidence = ();
+
+    /// The immutable resident bytes and opened readers expose no operational
+    /// read failure; source operations already return `Infallible`.
+    fn operation_status(&self) -> crate::ViewOperationStatus<Self::Error, Self::Evidence> {
+        crate::ViewOperationStatus::Ready { evidence: () }
+    }
+}
+
 /// A [`PackView`] answers [`DatasetView`] directly over its decoded dictionary +
 /// borrowed bitmap-triples + borrowed side-tables — no materialization step. See
 /// the [module docs](self) for the id/`TermRef`/`GraphMatch` mapping this impl

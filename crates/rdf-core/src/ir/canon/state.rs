@@ -163,6 +163,23 @@ impl<E: std::error::Error + 'static, V: fmt::Debug> std::error::Error for Datase
     }
 }
 
+impl<E: purrdf_hash::error::StructuredError, V: purrdf_hash::error::StructuredError>
+    purrdf_hash::error::StructuredError for DatasetStateError<E, V>
+{
+    purrdf_hash::error_visit! {
+        Operation(failure) => "dataset-state-operation" { "cause" => Cause(failure) },
+        Read(error) => "dataset-state-read" { "cause" => Cause(error) },
+        IncoherentEmbeddedBlank => "dataset-state-incoherent-blank" {},
+        InvalidTerm => "dataset-state-invalid-term" {},
+        Capacity => "dataset-state-capacity" {},
+        SearchBudgetExceeded { limit, work } => "dataset-state-search-budget" {
+            "limit" => Unsigned(u128::from(*limit)), "work" => Record(work),
+        },
+        SearchControl(refusal) => "dataset-state-search-control" { "cause" => Record(refusal) },
+        RefinementInvariant => "dataset-state-refinement-invariant" {},
+    }
+}
+
 type StateResult<D, T> = Result<
     T,
     DatasetStateError<<D as FallibleDatasetView>::Error, <D as FallibleDatasetView>::Evidence>,

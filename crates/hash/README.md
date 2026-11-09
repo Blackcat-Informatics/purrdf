@@ -617,6 +617,7 @@ source on every run.
 | `b"purrdf-datalog/demand-predicates/v1"` | `NAMESPACE` | `crates/datalog/src/demand/transform.rs` |
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
+| `b"purrdf-dl-positive-service-proof-v1"` | `POSITIVE_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-dl-service-proof-v3"` | `PREPARATION_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-entail-refutation-native-canonical-proof-v1"` | `REFUTATION_EVIDENCE` | `crates/entail/src/engine.rs` |
@@ -666,6 +667,7 @@ source on every run.
 | `b"purrdf-owl-dl-proof-v5"` | `CURRENT_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v6"` | `MERGE_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v7"` | `INTRODUCTION_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-positive-preparation/v1"` | `PROGRAM_DOMAIN` | `crates/entail/src/owl_dl/proof/layout.rs` |
 | `b"purrdf-retrieval/scoped-fused-row/v1"` | `(inline)` | `crates/retrieval/src/scope.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |

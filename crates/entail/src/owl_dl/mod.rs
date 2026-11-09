@@ -57,6 +57,7 @@ use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
 pub(crate) mod absorb;
+mod assertions;
 pub(crate) mod bounds;
 pub(crate) mod clause;
 pub(crate) mod concept;
@@ -75,6 +76,7 @@ pub(crate) mod property_kinds;
 pub(crate) mod query;
 pub(crate) mod roles;
 pub(crate) mod saturate;
+mod source_terms;
 pub(crate) mod support;
 pub(crate) mod syntax;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
@@ -121,8 +123,8 @@ pub(crate) struct Kb {
     pub(crate) inputs: input_source::Inputs,
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
-    /// Term-id boundary before any query/refutation symbol is minted.
-    pub(crate) source_terms: u32,
+    /// Actual source membership, preserving holes occupied by query symbols.
+    pub(crate) source_terms: source_terms::SourceTerms,
     /// The structural concept interner.
     pub(crate) table: ConceptTable,
     /// Source-owned class-bound products; invalidated only at TBox ingress.
@@ -131,6 +133,7 @@ pub(crate) struct Kb {
     pub(crate) schema_budget: bounds::SchemaPreparationBudget,
     /// Deferred only by an honest incomplete preparation, never silently omitted.
     keys_applied: bool,
+    key_equalities_start: Option<usize>,
     pub(crate) key_proofs: key_proofs::Records,
     /// Same-producer uncached control; absent from every shipped build.
     #[cfg(test)]
@@ -315,7 +318,7 @@ impl Kb {
             query_syntax: syntax::Syntax::query(),
             inputs: input_source::Inputs::default(),
             interner: Interner::default(),
-            source_terms: 0,
+            source_terms: source_terms::SourceTerms::default(),
             meta_sources: Vec::new(),
             absorbed_sources: Vec::new(),
             tbox_sources: Vec::new(),
@@ -323,6 +326,7 @@ impl Kb {
             schema: bounds::Preparation::default(),
             schema_budget: bounds::SchemaPreparationBudget::default(),
             keys_applied: false,
+            key_equalities_start: None,
             key_proofs: key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
@@ -408,17 +412,26 @@ impl Kb {
         budget: bounds::SchemaPreparationBudget,
         input: Option<[u8; 32]>,
     ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::from_dataset_recording_prepared(ds, stop, budget, input).map(|(kb, _)| kb)
+    }
+
+    pub(crate) fn from_dataset_recording_prepared<D: DatasetView>(
+        ds: &D,
+        stop: Option<Arc<dyn StopSignal>>,
+        budget: bounds::SchemaPreparationBudget,
+        input: Option<[u8; 32]>,
+    ) -> Result<(Self, parser::Ingress), EntailError<D::ReadError>> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
-        let mut kb = parser::build_with_preparation(ds, stop.as_deref(), budget)?;
+        let (mut kb, ingress) = parser::build_prepared(ds, stop.as_deref(), budget)?;
         kb.key_proofs = input.map_or(key_proofs::Records::Disabled, key_proofs::Records::Pending);
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
         }
         kb.apply_keys().map_err(EntailError::with_read_error)?;
-        Ok(kb)
+        Ok((kb, ingress))
     }
 
     /// Apply every `owl:hasKey` axiom, recording the identifications it forces.
@@ -509,6 +522,7 @@ impl Kb {
         values.release(&mut memory)?;
         drop(context);
         let stop = self.stop.as_deref();
+        self.key_equalities_start = Some(self.same_as.len());
         self.inputs
             .record_key_equalities(self.same_as.len(), &forced, || {
                 if stop.is_some_and(StopSignal::stopped) {
@@ -530,6 +544,15 @@ impl Kb {
             .extend(forced.into_iter().map(|(_, left, right)| (left, right)));
         self.keys_applied = true;
         Ok(())
+    }
+
+    pub(crate) fn begin_positive_update(&mut self, input: Option<[u8; 32]>) {
+        if let Some(start) = self.key_equalities_start.take() {
+            self.same_as.truncate(start);
+            self.inputs.retire_key_equalities(start);
+        }
+        self.keys_applied = false;
+        self.key_proofs = input.map_or(key_proofs::Records::Disabled, key_proofs::Records::Pending);
     }
 
     /// The constructs this knowledge base could not fully handle.

@@ -160,6 +160,7 @@ impl Inputs {
             return Some(Capture::Root(root.get() - 1));
         }
         (self.complete
+            && !self.pending.contains(&input)
             && matches!(
                 self.get(input),
                 Some(Source::Anchor(_) | Source::LiteralValue(_))
@@ -170,6 +171,23 @@ impl Inputs {
     pub(crate) fn finish_parse(&mut self) {
         assert!(!self.active, "input capture finished at an axiom boundary");
         self.complete = true;
+    }
+
+    pub(crate) fn retire_key_equalities(&mut self, start: usize) {
+        assert!(
+            !self.active,
+            "key retirement is outside a parser source scope"
+        );
+        assert!(
+            self.sources.ordinals[2]
+                .iter()
+                .skip(start)
+                .all(|source| matches!(source, Some(Source::KeyInference { .. }))),
+            "only key-derived equality provenance may be retired"
+        );
+        self.sources.ordinals[2].truncate(start);
+        self.syntax.ordinals[2].truncate(start);
+        self.key_values = None;
     }
 
     pub(crate) fn begin_scope(&mut self) {

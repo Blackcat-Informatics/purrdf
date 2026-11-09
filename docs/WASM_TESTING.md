@@ -3,6 +3,16 @@
 
 # Native ownership and WASM execution
 
+The exact package case `positive world proofs preserve frozen native bytes and retained cause handles`
+in `reasoning-positive-host.test.mjs` compares the answer, certificate, positive
+proof and independent check report with the frozen native `positive-host.json`
+vector. It exercises the retained positive handle, BigInt work counters, canonical
+receipts, shared cancellation after the original JavaScript token is freed,
+mutating-policy failure consuming the owner and retained native causes and receipts after
+the wrappers are freed. Run only this named case with
+`node --test --test-name-pattern` against fresh optimized package output.
+Native Rust owns positive-update semantics, limits and proof validation.
+
 The exact package case `reasoning errors retain native handles across direct and query exports`
 in `reasoning-host-error.test.mjs` checks actual JavaScript exception prototypes,
 native-cause JSON properties and retained wasm-bindgen cause handles across direct,
