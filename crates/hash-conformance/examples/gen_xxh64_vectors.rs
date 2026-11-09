@@ -3,8 +3,9 @@
 
 //! Record independent `XXH64` answers from a caller-selected reference executable.
 //! The native implementation is never called while recording these answers.
-//! The executable accepts `--version` and `-H64 --seed SEED -`, with full-width
-//! unsigned seeds. Some `xxhsum` versions refuse valid seeds near `u64::MAX`.
+//! The executable reports its version and reads bytes from standard input using
+//! the hash-selection and seed arguments below. It accepts every unsigned 64-bit
+//! seed; some `xxhsum` versions refuse valid seeds near `u64::MAX`.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
