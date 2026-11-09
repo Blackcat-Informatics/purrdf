@@ -4,6 +4,8 @@
 //! Stored dictionary projection through the shared RDF term spelling and drain.
 
 use super::{RdfDiagnostic, SinkImporter, dictionary_import_failure};
+use purrdf_core::ir::NativeBuildError;
+use purrdf_core::ir::validate::{self, Kind};
 use purrdf_core::sink::{ByteDrain, TextSink};
 use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression, TermKind};
@@ -36,10 +38,102 @@ struct Emitter<'o, 'm, 'a, T, A: Admission + ?Sized> {
     dictionary: T,
     output: TextSink<'o>,
     memory: &'m mut Memory<'a, A>,
+    diagnostic_bytes: &'m std::cell::Cell<usize>,
     metadata: SinkImporter<'static>,
 }
 
 impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
+    fn native_error(&self, error: NativeBuildError) -> RdfDiagnostic {
+        match error {
+            NativeBuildError::Storage(error) => error.into(),
+            NativeBuildError::Diagnostic(diagnostic) => match diagnostic.retained_bytes() {
+                Some(bytes) => {
+                    self.diagnostic_bytes.set(bytes);
+                    diagnostic
+                }
+                None => {
+                    drop(diagnostic);
+                    purrdf_lex::allocation::StorageError::SizeOverflow.into()
+                }
+            },
+        }
+    }
+
+    fn composite_error(&mut self, error: purrdf_core::cdt_blank::CdtBlankError) -> RdfDiagnostic {
+        match error.into_diagnostic_with_memory(self.memory) {
+            Ok(diagnostic) => self.native_error(NativeBuildError::Diagnostic(diagnostic)),
+            Err(error) => error.into(),
+        }
+    }
+
+    fn term_diagnostic(
+        &mut self,
+        code: &str,
+        detail: &str,
+        segment: u64,
+        term: usize,
+    ) -> Result<RdfDiagnostic, RdfDiagnostic> {
+        let mut diagnostic = RdfDiagnostic::try_error_with_memory(code, &detail, self.memory)?;
+        let location = crate::RdfLocation::logical(self.memory.string("gts:sink")?)
+            .with_gts_segment(segment)
+            .with_gts_term(term as u64);
+        diagnostic.location = Some(self.memory.boxed(location)?);
+        Ok(self.native_error(NativeBuildError::Diagnostic(diagnostic)))
+    }
+
+    fn checked_literal(
+        &mut self,
+        key: TermKey,
+        lexical: &str,
+        datatype: Option<TermKey>,
+        language: Option<&str>,
+        direction: Option<&str>,
+    ) -> Result<TermKey, RdfDiagnostic> {
+        let datatype = datatype.map(|key| self.term(key)).transpose()?;
+        if datatype
+            .as_deref()
+            .is_some_and(|term| term.kind != TermKind::Iri)
+        {
+            return Err(self.term_diagnostic(
+                "rdf-ir-literal-datatype-not-iri",
+                "GTS literal datatype must resolve to an IRI",
+                key.segment,
+                key.term,
+            )?);
+        }
+        let direction =
+            crate::gts_resolve::parse_gts_direction_with_memory(direction, language, self.memory)
+                .map_err(|error| self.native_error(error))?;
+        let datatype = crate::RdfLiteral::datatype_iri_from_parts(
+            datatype.as_deref().and_then(|term| term.value.as_deref()),
+            language,
+            direction,
+        );
+        let baseline = self.memory.admitted_bytes();
+        let bound = purrdf_core::cdt_blank::bind_cdt_blank_labels_with_memory(
+            lexical,
+            datatype,
+            purrdf_core::cdt_blank::BlankBinding::Ambient(super::segment_scope(key.segment)?),
+            self.memory,
+        )
+        .map_err(|error| self.composite_error(error))?;
+        validate::validate_literal_with_memory(&bound, datatype, language, direction, self.memory)
+            .map_err(|error| self.native_error(error))?;
+        drop(bound);
+        self.memory
+            .release_bytes(self.memory.admitted_bytes() - baseline)?;
+        Ok(key)
+    }
+
+    fn kind(&mut self, key: TermKey) -> Result<Kind, RdfDiagnostic> {
+        Ok(match self.term(key)?.kind {
+            TermKind::Iri => Kind::Iri,
+            TermKind::Bnode => Kind::Blank,
+            TermKind::Literal => Kind::Literal,
+            TermKind::Triple => Kind::Triple,
+        })
+    }
+
     fn term(&mut self, key: TermKey) -> Result<TermLease, RdfDiagnostic> {
         self.dictionary
             .checkpoint(1)
@@ -112,10 +206,12 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             .as_deref()
                             .and_then(|term| term.value.as_deref())
                             .unwrap_or(purrdf_xsd::datatype::XSD_STRING);
-                        let direction = crate::gts_resolve::parse_gts_direction(
+                        let direction = crate::gts_resolve::parse_gts_direction_with_memory(
                             term.direction.as_deref(),
                             term.lang.as_deref(),
-                        )?;
+                            self.memory,
+                        )
+                        .map_err(|error| self.native_error(error))?;
                         let datatype = crate::RdfLiteral::datatype_iri_from_parts(
                             Some(datatype),
                             term.lang.as_deref(),
@@ -129,7 +225,8 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                                 key.segment,
                             )?),
                             self.memory,
-                        )?;
+                        )
+                        .map_err(|error| self.composite_error(error))?;
                         term_syntax::write_literal(
                             &lexical,
                             datatype,
@@ -203,15 +300,15 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         iri: &str,
     ) -> Result<TermKey, RdfDiagnostic> {
         if iri.is_empty() {
-            return Err(super::sink_term_error(
-                RdfDiagnostic::error(
-                    "rdf-ir-iri-missing-value",
-                    "GTS IRI term requires a non-empty value",
-                ),
+            return Err(self.term_diagnostic(
+                "rdf-ir-iri-missing-value",
+                "GTS IRI term requires a non-empty value",
                 segment,
                 term,
-            ));
+            )?);
         }
+        validate::validate_iri_with_memory(iri, self.memory)
+            .map_err(|error| self.native_error(error))?;
         Ok(TermKey { segment, term })
     }
     fn intern_blank(
@@ -220,31 +317,25 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         term: usize,
         _label: &str,
     ) -> Result<TermKey, RdfDiagnostic> {
+        super::segment_scope(segment)?;
         Ok(TermKey { segment, term })
     }
     fn intern_literal(
         &mut self,
         segment: u64,
         term: usize,
-        _lexical: String,
+        lexical: String,
         datatype: Option<TermKey>,
         language: Option<String>,
         direction: Option<String>,
     ) -> Result<TermKey, RdfDiagnostic> {
-        if let Some(datatype) = datatype
-            && self.term(datatype)?.kind != TermKind::Iri
-        {
-            return Err(super::sink_term_error(
-                RdfDiagnostic::error(
-                    "rdf-ir-literal-datatype-not-iri",
-                    "GTS literal datatype must resolve to an IRI",
-                ),
-                segment,
-                term,
-            ));
-        }
-        crate::gts_resolve::parse_gts_direction(direction.as_deref(), language.as_deref())?;
-        Ok(TermKey { segment, term })
+        self.checked_literal(
+            TermKey { segment, term },
+            &lexical,
+            datatype,
+            language.as_deref(),
+            direction.as_deref(),
+        )
     }
     fn intern_stored_literal(
         &mut self,
@@ -253,48 +344,24 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         literal: TermLease,
         datatype: Option<TermKey>,
     ) -> Result<TermKey, RdfDiagnostic> {
-        let datatype = datatype.map(|key| self.term(key)).transpose()?;
-        if datatype
-            .as_deref()
-            .is_some_and(|term| term.kind != TermKind::Iri)
-        {
-            return Err(super::sink_term_error(
-                RdfDiagnostic::error(
-                    "rdf-ir-literal-datatype-not-iri",
-                    "GTS literal datatype must resolve to an IRI",
-                ),
-                segment,
-                term,
-            ));
-        }
-        let direction = crate::gts_resolve::parse_gts_direction(
-            literal.direction.as_deref(),
-            literal.lang.as_deref(),
-        )?;
-        let baseline = self.memory.admitted_bytes();
-        let bound = purrdf_core::cdt_blank::bind_cdt_blank_labels_with_memory(
+        self.checked_literal(
+            TermKey { segment, term },
             literal.value.as_deref().unwrap_or_default(),
-            crate::RdfLiteral::datatype_iri_from_parts(
-                datatype.as_deref().and_then(|term| term.value.as_deref()),
-                literal.lang.as_deref(),
-                direction,
-            ),
-            purrdf_core::cdt_blank::BlankBinding::Ambient(super::segment_scope(segment)?),
-            self.memory,
-        )?;
-        drop(bound);
-        self.memory
-            .release_bytes(self.memory.admitted_bytes() - baseline)?;
-        Ok(TermKey { segment, term })
+            datatype,
+            literal.lang.as_deref(),
+            literal.direction.as_deref(),
+        )
     }
     fn intern_triple(
         &mut self,
         segment: u64,
         term: usize,
-        _s: TermKey,
-        _p: TermKey,
+        s: TermKey,
+        p: TermKey,
         _o: TermKey,
     ) -> Result<TermKey, RdfDiagnostic> {
+        validate::validate_triple_positions_with_memory(self.kind(s)?, self.kind(p)?, self.memory)
+            .map_err(|error| self.native_error(error))?;
         Ok(TermKey { segment, term })
     }
     fn push_quad(
@@ -305,6 +372,14 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         o: TermKey,
         graph: Option<TermKey>,
     ) -> Result<(), RdfDiagnostic> {
+        let graph_kind = graph.map(|key| self.kind(key)).transpose()?;
+        validate::validate_statement_positions_with_memory(
+            self.kind(s)?,
+            self.kind(p)?,
+            graph_kind,
+            self.memory,
+        )
+        .map_err(|error| self.native_error(error))?;
         for (index, term) in [s, p, o].into_iter().enumerate() {
             if index != 0 {
                 self.output.push(' ');
@@ -322,6 +397,16 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         o: TermKey,
         graph: Option<TermKey>,
     ) -> Result<(), RdfDiagnostic> {
+        validate::validate_triple_positions_with_memory(self.kind(s)?, self.kind(p)?, self.memory)
+            .map_err(|error| self.native_error(error))?;
+        let graph_kind = graph.map(|key| self.kind(key)).transpose()?;
+        validate::validate_statement_positions_with_memory(
+            self.kind(reifier)?,
+            Kind::Iri,
+            graph_kind,
+            self.memory,
+        )
+        .map_err(|error| self.native_error(error))?;
         self.write_term(reifier)?;
         self.output.push(' ');
         term_syntax::write_iri(purrdf_iri::vocab::rdf::REIFIES, &mut self.output);
@@ -408,6 +493,9 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
 /// # Errors
 /// Preserves original reader, storage, allocation, cancellation and drain
 /// failures. A late failure never reports a complete successful projection.
+/// A diagnostic constructed by the exporter retains its charge in `memory`;
+/// keep that account alive and release the retained delta after destroying it.
+/// Host errors whose diagnostics own independent accounts add no such charge.
 pub fn export_gts_rdf_nquads_with_dictionary<D, A: Admission + ?Sized>(
     bytes: &[u8],
     dictionary: &mut dyn TermStorage,
@@ -420,7 +508,9 @@ where
     D: ResolutionStorage<TermKey>,
     D::Error: purrdf_hash::error::NativeError + 'static,
 {
-    memory.try_scope(|memory| {
+    let baseline = memory.admitted_bytes();
+    let diagnostic_bytes = std::cell::Cell::new(0);
+    let result = (|| {
         memory.add_bytes(purrdf_core::sink::DRAIN_BUFFER_BYTES)?;
         let result = (|| {
             let dictionary = std::cell::RefCell::new(dictionary);
@@ -429,6 +519,7 @@ where
                 dictionary: &dictionary,
                 output: TextSink::to_drain(drain),
                 memory: &mut *memory,
+                diagnostic_bytes: &diagnostic_bytes,
                 metadata: SinkImporter::new(),
             };
             let [quads, reifiers, annotations] = replay;
@@ -470,5 +561,29 @@ where
             Err(error) => Err(error),
             Ok(output) => released.map(|()| output),
         }
-    })
+    })();
+    // The construction closure has destroyed every exporter-owned scratch
+    // payload. NativeBuildError::Diagnostic alone retains bytes in this account;
+    // independently owned host diagnostics are deliberately not counted here.
+    let retained = if result.is_err() {
+        diagnostic_bytes.get()
+    } else {
+        0
+    };
+    let Some(released) = memory
+        .admitted_bytes()
+        .checked_sub(baseline)
+        .and_then(|bytes| bytes.checked_sub(retained))
+    else {
+        drop(result);
+        if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+            let _ = memory.release_bytes(bytes);
+        }
+        return Err(purrdf_lex::allocation::StorageError::SizeOverflow.into());
+    };
+    let cleanup = memory.release_bytes(released).map_err(RdfDiagnostic::from);
+    match result {
+        Err(original) => Err(original),
+        Ok(value) => cleanup.map(|()| value),
+    }
 }

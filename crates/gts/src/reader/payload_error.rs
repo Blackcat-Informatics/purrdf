@@ -59,11 +59,7 @@ impl From<DecodeError> for PayloadError {
     }
 }
 
-impl From<crate::dictionary::DictionaryError> for PayloadError {
-    fn from(error: crate::dictionary::DictionaryError) -> Self {
-        Self::Dictionary(error)
-    }
-}
+purrdf_lex::variant_from!(PayloadError { Dictionary(crate::dictionary::DictionaryError) });
 
 fn stream_classification(
     error: &(dyn std::error::Error + 'static),

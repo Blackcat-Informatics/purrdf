@@ -2433,17 +2433,10 @@ enum ProcessError {
     Dictionary(DictionaryError),
 }
 
-impl From<cbor::DecodeError> for ProcessError {
-    fn from(error: cbor::DecodeError) -> Self {
-        Self::Decode(error)
-    }
-}
-
-impl From<DictionaryError> for ProcessError {
-    fn from(error: DictionaryError) -> Self {
-        Self::Dictionary(error)
-    }
-}
+purrdf_lex::variant_from!(ProcessError {
+    Decode(cbor::DecodeError),
+    Dictionary(DictionaryError),
+});
 
 struct ActiveStreamingSegment {
     g: Graph,

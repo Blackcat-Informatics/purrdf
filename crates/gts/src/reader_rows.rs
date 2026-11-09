@@ -60,11 +60,7 @@ pub(crate) enum RowCheckError {
     Storage(DictionaryError),
 }
 
-impl From<DictionaryError> for RowCheckError {
-    fn from(error: DictionaryError) -> Self {
-        Self::Storage(error)
-    }
-}
+purrdf_lex::variant_from!(RowCheckError { Storage(DictionaryError) });
 
 pub(crate) fn decode_reifier_row(
     row: Option<NumericRow<5>>,

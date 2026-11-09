@@ -522,7 +522,7 @@ fn native_spill_commits_before_refund_and_never_falls_back_after_failure() {
 fn scoped_nested_and_composite_terms_preserve_identity_and_native_refusal() {
     let directory = purrdf_testkit::temp_dir!().expect("nested native directory");
     let root = directory.path();
-    for malformed in [false, true] {
+    for (malformed, invalid_subject) in [(false, false), (true, false), (false, true)] {
         let mut bytes = Vec::new();
         for _ in 0..2 {
             let mut writer = Writer::new("rdf12");
@@ -539,7 +539,11 @@ fn scoped_nested_and_composite_terms_preserve_identity_and_native_refusal() {
                 Term::iri("http://w3id.org/awslabs/neptune/SPARQL-CDTs/List"),
                 Term::literal(if malformed { "[" } else { "[_:b]" }, Some(2)),
                 Term::triple_term((1, 0, 3)),
-                Term::triple_term((1, 0, 4)),
+                Term::triple_term(if invalid_subject {
+                    (4, 0, 3)
+                } else {
+                    (1, 0, 4)
+                }),
                 indirect,
                 language,
             ]);
@@ -554,23 +558,45 @@ fn scoped_nested_and_composite_terms_preserve_identity_and_native_refusal() {
             bytes.extend_from_slice(&writer.into_bytes());
         }
         let resident = import_gts_events(&bytes);
-        check_event_order(&bytes, &root.join(format!("events-{malformed}")));
-        let mut raw = storage::Files::new(&root.join(format!("raw-{malformed}")));
+        check_event_order(
+            &bytes,
+            &root.join(format!("events-{malformed}-{invalid_subject}")),
+        );
+        let mut raw = storage::Files::new(&root.join(format!("raw-{malformed}-{invalid_subject}")));
         let replay = raw.replay();
-        let mut resolution = storage::Resolution::new(&root.join(format!("state-{malformed}")));
+        let mut resolution =
+            storage::Resolution::new(&root.join(format!("state-{malformed}-{invalid_subject}")));
         let mut output = WriterDrain(Vec::new());
         let mut ceiling = Ceiling(128 * 1024);
+        let mut memory = Memory::new(&mut ceiling);
         let stored = export_gts_rdf_nquads_with_dictionary(
             &bytes,
             &mut raw,
             &mut resolution,
             replay,
             &mut output,
-            &mut Memory::new(&mut ceiling),
+            &mut memory,
         );
-        if malformed {
-            assert!(resident.is_err(), "native composite refusal");
-            assert!(stored.is_err(), "stored composite refusal");
+        if invalid_subject || malformed {
+            let resident = resident.expect_err("native triple-component position refusal");
+            let stored = stored.expect_err("streamed triple-component position refusal");
+            if invalid_subject {
+                assert_eq!(resident.code, "rdf-ir-triple-subject");
+            }
+            assert_eq!(stored.code, resident.code);
+            let retained = stored
+                .retained_bytes()
+                .expect("native retained diagnostic layout");
+            assert_eq!(
+                memory.admitted_bytes(),
+                retained,
+                "only the returned original-account diagnostic remains charged"
+            );
+            drop(stored);
+            memory
+                .release_bytes(retained)
+                .expect("refund after diagnostic destruction");
+            assert_eq!(memory.admitted_bytes(), 0);
         } else {
             stored.expect("scoped nested export");
             let resident = resident.expect("native scoped terms");
