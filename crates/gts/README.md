@@ -85,12 +85,18 @@ record kinds or sparse framing, incomplete headers/bodies/padding, unfinished
 extensions and missing end markers refuse. Two zero end blocks and only zero
 trailing padding are required. Unknown ordinary PAX properties remain visible
 as original metadata.
+Keyword state uses admitted native ordered tables; selected properties are
+merged in key order. Distinct ordinary keywords do not cause repeated full-table
+scans in either import profile.
 
 Limits admit source bytes, every physical nonzero header, extension body bytes,
 owned metadata/record storage and logical scan/comparison/storage work. They do
 not claim a universal allocator peak or include a caller's subsequent processing.
 The strict path retains invalid path bytes until explicit UTF-8 conversion; it
 never substitutes a legacy parser after refusal.
+Failed inventory construction drops its partial owners before requesting a
+refund of their original admission. A caller that refuses the refund retains
+the reservation; the original parsing or resource error remains authoritative.
 
 Buffered and seekable GTS import use the same framing and metadata core. Their
 existing v4 options and output projection remain distinct from the evidence API:

@@ -61,6 +61,23 @@ fn checksum(tar: &mut [u8], start: usize) {
     write_octal(&mut header[148..156], sum).unwrap();
 }
 
+#[derive(Default)]
+struct Reservation {
+    live: usize,
+    refuse_refund: bool,
+}
+impl Admission for Reservation {
+    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+        // Native growth may retire old scratch while construction is live.
+        // Refuse only the final whole-construction refund in this fixture.
+        if self.refuse_refund && bytes == 0 && self.live > 0 {
+            return Err(StorageError::AdmissionFailed);
+        }
+        self.live = bytes;
+        Ok(())
+    }
+}
+
 #[test]
 fn inventory_preserves_borrowed_payloads_ustar_fragments_raw_names_and_utf8_causes() {
     let mut tar = Vec::new();
@@ -116,17 +133,42 @@ fn effective_pax_sizes_global_local_deletions_and_gnu_consumption_share_one_fram
     pax(&mut tar, b'x', &[("path", ""), ("size", ""), ("uid", "")]);
     append(&mut tar, "header-three", b'0', 2, b"zz");
     append(&mut tar, "header-four", b'0', 1, b"hello");
+    pax(
+        &mut tar,
+        b'g',
+        &[("path", "replaced"), ("size", "2"), ("uid", "11")],
+    );
+    append(&mut tar, "header-five", b'0', 1, b"xy");
+    pax(
+        &mut tar,
+        b'g',
+        &[("path", ""), ("size", ""), ("uid", ""), ("unseen", "")],
+    );
+    append(&mut tar, "header-six", b'0', 1, b"z");
+    pax(&mut tar, b'g', &[("path", "reinserted"), ("uid", "13")]);
+    append(&mut tar, "header-seven", b'0', 1, b"w");
     finish(&mut tar);
     let view = inventory(&tar);
     assert_eq!(
-        (0..4).map(|index| name(&view, index)).collect::<Vec<_>>(),
-        ["local", "global", "header-three", "global"]
+        (0..7).map(|index| name(&view, index)).collect::<Vec<_>>(),
+        [
+            "local",
+            "global",
+            "header-three",
+            "global",
+            "replaced",
+            "header-six",
+            "reinserted"
+        ]
     );
     let entries: Vec<_> = view.entries().collect();
     assert_eq!(entries[0].payload().unwrap(), b"abc");
     assert_eq!(entries[1].payload().unwrap(), b"abcde");
     assert_eq!(entries[2].payload().unwrap(), b"zz");
     assert_eq!(entries[3].payload().unwrap(), b"hello");
+    assert_eq!(entries[4].payload().unwrap(), b"xy");
+    assert_eq!(entries[5].payload().unwrap(), b"z");
+    assert_eq!(entries[6].payload().unwrap(), b"w");
     assert_eq!(
         entries[0].link_target().unwrap().unwrap().utf8().unwrap(),
         "pax-link"
@@ -139,7 +181,11 @@ fn effective_pax_sizes_global_local_deletions_and_gnu_consumption_share_one_fram
     assert_eq!(entries[1].uid(), 7);
     assert_eq!(entries[2].uid(), 1);
     assert_eq!(entries[3].uid(), 7);
-    assert_eq!(view.records().len(), 9);
+    assert_eq!(entries[4].uid(), 11);
+    assert_eq!(entries[5].uid(), 1);
+    assert_eq!(entries[6].uid(), 13);
+    assert!(entries[5].properties().next().is_none());
+    assert_eq!(view.records().len(), 15);
     assert!(
         entries[0]
             .properties()
@@ -275,10 +321,12 @@ fn exact_source_extension_storage_and_work_admission_have_adjacent_refusals() {
             Limit::Storage => exact.storage_bytes -= 1,
             Limit::Work => exact.work -= 1,
         }
+        let mut reservation = Reservation::default();
         assert!(
-            matches!(read(&tar, exact, &mut Resident), Err(Error::Limit { kind: refused, .. }) if refused == kind),
+            matches!(read(&tar, exact, &mut reservation), Err(Error::Limit { kind: refused, .. }) if refused == kind),
             "{kind:?}"
         );
+        assert_eq!(reservation.live, 0, "failed {kind:?} grant is refunded");
     }
     struct Refuse;
     impl Admission for Refuse {
@@ -293,6 +341,89 @@ fn exact_source_extension_storage_and_work_admission_have_adjacent_refusals() {
             ..
         })
     ));
+}
+
+#[test]
+fn late_inventory_failure_refunds_original_admission_and_preserves_first_error() {
+    let mut tar = Vec::new();
+    pax(&mut tar, b'x', &[("path", "leaf"), ("comment", "retained")]);
+    append(&mut tar, "placeholder", b'0', 3, b"abc");
+    finish(&mut tar);
+    let mut malformed = tar.clone();
+    *malformed.last_mut().unwrap() = 1;
+    for refuse_refund in [false, true] {
+        let mut reservation = Reservation {
+            refuse_refund,
+            ..Reservation::default()
+        };
+        let error =
+            read(&malformed, limits(), &mut reservation).expect_err("the malformed tail refuses");
+        assert!(
+            matches!(
+                error,
+                Error::Invalid {
+                    problem: Problem::Trailing,
+                    ..
+                }
+            ),
+            "refuse_refund={refuse_refund}: {error:?}"
+        );
+        if refuse_refund {
+            assert!(
+                reservation.live > 0,
+                "the original caller refused the refund"
+            );
+        } else {
+            assert_eq!(reservation.live, 0);
+            let accepted = read(&tar, limits(), &mut reservation)
+                .expect("the same caller can admit the valid neighbor after refund");
+            assert_eq!(
+                accepted.entries().next().unwrap().payload().unwrap(),
+                b"abc"
+            );
+            assert!(reservation.live > 0, "successful output retains its grant");
+        }
+    }
+}
+
+#[test]
+fn many_pax_keys_preserve_effective_metadata_under_subquadratic_work() {
+    fn archive(count: usize) -> Vec<u8> {
+        let fields = (0..count)
+            .map(|index| (format!("ordinary-{index:04}"), "retained".to_owned()))
+            .collect();
+        let body = pax_body(&fields);
+        let mut tar = Vec::new();
+        append(&mut tar, "metadata", b'x', body.len() as u64, &body);
+        append(&mut tar, "leaf", b'0', 1, b"x");
+        finish(&mut tar);
+        tar
+    }
+    let smaller = archive(128);
+    let larger = archive(256);
+    let small = inventory(&smaller);
+    let large = inventory(&larger);
+    assert!(
+        large.usage().work < small.usage().work * 3,
+        "doubling ordinary PAX keys must avoid quadratic scan work: {} -> {}",
+        small.usage().work,
+        large.usage().work
+    );
+    let properties = large.entries().next().unwrap().properties();
+    assert_eq!(properties.len(), 256);
+    for (index, property) in properties.enumerate() {
+        let property = property.unwrap();
+        assert_eq!(property.key.utf8().unwrap(), format!("ordinary-{index:04}"));
+        assert_eq!(property.value.bytes(), b"retained");
+    }
+    let options = crate::from_tar::FromTarOptions::default();
+    let buffered = crate::from_tar::from_tar_bytes(&larger, &options).unwrap();
+    let seekable = crate::from_tar::from_seekable_tar(&mut Cursor::new(&larger), &options).unwrap();
+    assert_eq!(buffered, seekable);
+    let graph = crate::reader::read(&buffered, false, None);
+    assert_eq!(graph.diagnostics, Vec::<crate::model::Diagnostic>::new());
+    let entries = crate::files::read_entries(&graph).unwrap();
+    assert_eq!(entries["leaf"].pax_records.len(), 256);
 }
 
 #[test]

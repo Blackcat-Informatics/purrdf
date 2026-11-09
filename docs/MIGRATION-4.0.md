@@ -1815,6 +1815,10 @@ separate locations; GNU and local/global PAX values retain their original source
 Path UTF-8 conversion is explicit and reports the native cause without replacement.
 Package containment is a caller policy over those exact fields, not a tar grammar
 or transport-decoding responsibility.
+PAX keyword lookup uses admitted ordered storage and selected metadata merges
+in key order. Failed inventory construction releases partial owners before
+requesting their admission refund; a refused refund preserves the first error
+and leaves the original reservation with its caller.
 
 Buffered and seekable import share the same effective-size and metadata engine.
 A selected PAX size governs the body boundary, global and local overrides retain

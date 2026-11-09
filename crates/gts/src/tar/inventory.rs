@@ -346,6 +346,8 @@ impl<'a> Entry<'_, 'a> {
 /// # Errors
 /// Returns typed original framing/metadata/resource failures before partial output
 /// escapes. Invalid path UTF-8 remains exact bytes until explicit `Field::utf8`.
+/// Failed construction requests its original reservation refund after partial
+/// owners drop. A refused refund retains the first error and the caller's grant.
 pub fn read<'a, A: Admission + ?Sized>(
     data: &'a [u8],
     limits: Limits,
@@ -357,12 +359,14 @@ pub fn read<'a, A: Admission + ?Sized>(
         meter: &meter,
     };
     let mut memory = Memory::new(&mut account);
-    let model = core::parse(
-        &mut core::Slice(data),
-        core::FramingPolicy::Strict,
-        &meter,
-        &mut memory,
-    );
+    let model = memory.try_scope(|memory| {
+        core::parse(
+            &mut core::Slice(data),
+            core::FramingPolicy::Strict,
+            &meter,
+            memory,
+        )
+    });
     match model {
         Ok(model) => Ok(Inventory {
             data,

@@ -7,9 +7,11 @@ use super::{
     Error, Member, Meter, Model, NameSpans, Operation, Pax, Problem, Record, Span, storage,
 };
 use crate::files::FileEntryKind;
-use purrdf_lex::allocation::{Admission, Memory};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
+use purrdf_lex::walk::try_equal_range_by;
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     io::{Read, Seek, SeekFrom},
 };
 
@@ -123,8 +125,8 @@ struct HeaderBytes<'a> {
 }
 #[derive(Default)]
 struct State {
-    global: Vec<usize>,
-    local: Vec<usize>,
+    global: OrderedTable<usize, usize>,
+    local: OrderedTable<usize, usize>,
     long_name: Option<Span>,
     long_link: Option<Span>,
     pending: bool,
@@ -507,8 +509,9 @@ pub(super) fn pax_fields<A: Admission + ?Sized>(
 ) -> Result<Vec<Pax>, Error> {
     let mut fields = Vec::new();
     let mut offset = 0;
+    // Per-record syntax scans partition this body; admit their linear pass once.
+    meter.work(bytes.len() as u64)?;
     while offset < bytes.len() {
-        meter.work((bytes.len() - offset) as u64)?;
         let rest = Span {
             start: body.start + offset as u64,
             end: body.end,
@@ -624,37 +627,50 @@ fn key_position(
     key: &str,
     meter: &Meter,
 ) -> Result<Option<usize>, Error> {
-    for (position, index) in indexes.iter().enumerate() {
-        meter.work(
-            (fields[*index].key.len() as u64)
-                .saturating_add(key.len() as u64)
-                .saturating_add(1),
-        )?;
-        if fields[*index].key == key {
-            return Ok(Some(position));
-        }
-    }
-    Ok(None)
+    let range = try_equal_range_by(indexes, |index| key_order(&fields[*index].key, key, meter))?;
+    Ok((!range.is_empty()).then_some(range.start))
 }
+
+fn key_order(left: &str, right: &str, meter: &Meter) -> Result<Ordering, Error> {
+    meter.work(
+        (left.len() as u64)
+            .saturating_add(right.len() as u64)
+            .saturating_add(1),
+    )?;
+    Ok(left.cmp(right))
+}
+
 fn update<A: Admission + ?Sized>(
-    indexes: &mut Vec<usize>,
+    indexes: &mut OrderedTable<usize, usize>,
     index: usize,
     fields: &[Pax],
     delete_empty: bool,
     meter: &Meter,
     memory: &mut Memory<'_, A>,
 ) -> Result<(), Error> {
-    let old = key_position(fields, indexes, &fields[index].key, meter)?;
     let delete = delete_empty && fields[index].value.start == fields[index].value.end;
-    match (old, delete) {
-        (Some(position), true) => {
-            indexes.remove(position);
+    let removal = {
+        let entry = indexes
+            .prepare_insert_with_memory(index, memory, |left, right, memory| {
+                let left = &fields[*left].key;
+                let right = &fields[*right].key;
+                memory.admission_mut().checkpoint(
+                    (left.len() as u64)
+                        .saturating_add(right.len() as u64)
+                        .saturating_add(1),
+                )?;
+                Ok::<_, StorageError>(left.cmp(right))
+            })
+            .map_err(|cause| storage(meter, cause))?;
+        if delete {
+            entry.is_occupied().then_some(entry.slot())
+        } else {
+            entry.publish(index);
+            None
         }
-        (Some(position), false) => indexes[position] = index,
-        (None, false) => memory
-            .push(indexes, index)
-            .map_err(|cause| storage(meter, cause))?,
-        (None, true) => {}
+    };
+    if let Some(slot) = removal {
+        indexes.remove_slot(slot);
     }
     Ok(())
 }
@@ -665,11 +681,33 @@ fn effective<A: Admission + ?Sized>(
     memory: &mut Memory<'_, A>,
 ) -> Result<Vec<usize>, Error> {
     let mut indexes = Vec::new();
-    memory
-        .extend(&mut indexes, state.global.iter().copied())
-        .map_err(|cause| storage(meter, cause))?;
-    for index in &state.local {
-        update(&mut indexes, *index, &model.pax, true, meter, memory)?;
+    let mut global = state.global.ordered().map(|(_, index)| *index).peekable();
+    let mut local = state.local.ordered().map(|(_, index)| *index).peekable();
+    while global.peek().is_some() || local.peek().is_some() {
+        meter.work(1)?;
+        let (index, local_value) = match (global.peek().copied(), local.peek().copied()) {
+            (Some(left), Some(right)) => {
+                match key_order(&model.pax[left].key, &model.pax[right].key, meter)? {
+                    Ordering::Less => (global.next(), false),
+                    Ordering::Equal => {
+                        global.next();
+                        (local.next(), true)
+                    }
+                    Ordering::Greater => (local.next(), true),
+                }
+            }
+            (Some(_), None) => (global.next(), false),
+            (None, Some(_)) => (local.next(), true),
+            (None, None) => break,
+        };
+        if let Some(index) = index {
+            let value = model.pax[index].value;
+            if !local_value || value.start != value.end {
+                memory
+                    .push(&mut indexes, index)
+                    .map_err(|cause| storage(meter, cause))?;
+            }
+        }
     }
     Ok(indexes)
 }
