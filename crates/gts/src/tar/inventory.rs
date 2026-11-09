@@ -357,7 +357,12 @@ pub fn read<'a, A: Admission + ?Sized>(
         meter: &meter,
     };
     let mut memory = Memory::new(&mut account);
-    let model = core::parse(&mut core::Slice(data), &meter, &mut memory);
+    let model = core::parse(
+        &mut core::Slice(data),
+        core::FramingPolicy::Strict,
+        &meter,
+        &mut memory,
+    );
     match model {
         Ok(model) => Ok(Inventory {
             data,

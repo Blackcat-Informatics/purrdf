@@ -651,7 +651,6 @@ mod tests {
             let header = HeaderMetadata::from_entry(&entry, 0, &ToTarOptions::default()).unwrap();
             write_header(&mut bytes, &header, &[]).unwrap();
             bytes.extend_from_slice(&ZERO_BLOCK);
-            bytes.extend_from_slice(&ZERO_BLOCK);
             let options = crate::from_tar::FromTarOptions::default();
             let errors = [
                 crate::from_tar::from_tar_bytes(&bytes, &options).unwrap_err(),

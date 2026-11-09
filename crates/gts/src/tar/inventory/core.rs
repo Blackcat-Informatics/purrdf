@@ -14,7 +14,10 @@ use std::{
 };
 
 pub(super) trait Source {
-    fn len(&self) -> u64;
+    fn extent_limit(&self) -> u64;
+    fn header_eof_requires_read(&self) -> bool {
+        false
+    }
     fn read<'a, A: Admission + ?Sized>(
         &'a mut self,
         span: Span,
@@ -25,7 +28,7 @@ pub(super) trait Source {
 }
 pub(super) struct Slice<'a>(pub(super) &'a [u8]);
 impl Source for Slice<'_> {
-    fn len(&self) -> u64 {
+    fn extent_limit(&self) -> u64 {
         self.0.len() as u64
     }
     fn read<'a, A: Admission + ?Sized>(
@@ -41,13 +44,16 @@ impl Source for Slice<'_> {
 }
 pub(super) struct Seeking<'a, R> {
     pub(super) reader: &'a mut R,
-    pub(super) length: u64,
     pub(super) buffer: Vec<u8>,
     pub(super) cached: Option<Span>,
 }
 impl<R: Read + Seek> Source for Seeking<'_, R> {
-    fn len(&self) -> u64 {
-        self.length
+    fn extent_limit(&self) -> u64 {
+        // Legacy seekable input has no measured extent; actual reads establish EOF.
+        u64::MAX
+    }
+    fn header_eof_requires_read(&self) -> bool {
+        true
     }
     fn read<'a, A: Admission + ?Sized>(
         &'a mut self,
@@ -67,9 +73,11 @@ impl<R: Read + Seek> Source for Seeking<'_, R> {
             };
             return relative.slice(&self.buffer).map(Cow::Borrowed);
         }
-        let count = usize::try_from(span.end - span.start).map_err(|_| Error::Truncated {
-            required: span,
-            available: self.length,
+        let count = usize::try_from(span.end - span.start).map_err(|_| Error::Limit {
+            kind: super::Limit::Storage,
+            attempted: u128::from(span.end - span.start),
+            maximum: usize::MAX as u128,
+            offset: span.start,
         })?;
         memory
             .reserve(&mut self.buffer, count)
@@ -109,6 +117,10 @@ struct Header {
     dev_major: u64,
     dev_minor: u64,
 }
+struct HeaderBytes<'a> {
+    span: Span,
+    bytes: Cow<'a, [u8]>,
+}
 #[derive(Default)]
 struct State {
     global: Vec<usize>,
@@ -118,8 +130,16 @@ struct State {
     pending: bool,
 }
 
+/// Select tail and padding requirements before reading through the shared grammar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FramingPolicy {
+    Strict,
+    LegacyV4,
+}
+
 pub(super) fn parse<A: Admission + ?Sized>(
     source: &mut impl Source,
+    framing: FramingPolicy,
     meter: &Meter,
     memory: &mut Memory<'_, A>,
 ) -> Result<Model, Error> {
@@ -128,13 +148,25 @@ pub(super) fn parse<A: Admission + ?Sized>(
     let mut offset = 0;
     loop {
         meter.offset.set(offset);
-        let header_span = bounded(offset, 512, source.len())?;
-        meter.work(2048)?;
-        let bytes = source.read(header_span, Operation::Header, meter, memory)?;
+        let Some(HeaderBytes {
+            span: header_span,
+            bytes,
+        }) = next_header(source, offset, framing, meter, memory)?
+        else {
+            return nonempty(
+                model,
+                Span {
+                    start: offset,
+                    end: offset,
+                },
+            );
+        };
         if bytes.iter().all(|byte| *byte == 0) {
             drop(bytes);
-            finish(source, header_span.end, &state, &model, meter, memory)?;
-            return Ok(model);
+            if framing == FramingPolicy::Strict {
+                finish(source, header_span.end, &state, &model, meter, memory)?;
+            }
+            return nonempty(model, header_span);
         }
         meter.entry()?;
         let mut header = header(&bytes, header_span)?;
@@ -155,21 +187,24 @@ pub(super) fn parse<A: Admission + ?Sized>(
                 size = decimal(&bytes, field.value)?;
             }
         }
-        header.record.body = bounded(header_span.end, size, source.len())?;
+        header.record.body = bounded(header_span.end, size, source.extent_limit())?;
         // The effective size is established before both body slicing and the
         // next-header offset; extension headers retain their own physical size.
         let pad = (512 - (header.record.body.end - header.record.body.start) % 512) % 512;
-        let padding = bounded(header.record.body.end, pad, source.len())?;
-        meter.work(pad)?;
-        if source
-            .read(padding, Operation::Padding, meter, memory)?
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(Error::Invalid {
-                span: padding,
-                problem: Problem::Padding,
-            });
+        let padding = bounded(header.record.body.end, pad, u64::MAX)?;
+        if framing == FramingPolicy::Strict {
+            let padding = bounded(header.record.body.end, pad, source.extent_limit())?;
+            meter.work(pad)?;
+            if source
+                .read(padding, Operation::Padding, meter, memory)?
+                .iter()
+                .any(|byte| *byte != 0)
+            {
+                return Err(Error::Invalid {
+                    span: padding,
+                    problem: Problem::Padding,
+                });
+            }
         }
         offset = padding.end;
         memory
@@ -188,6 +223,50 @@ pub(super) fn parse<A: Admission + ?Sized>(
     }
 }
 
+/// A seekable source observes real header I/O even when its length predicts EOF.
+fn next_header<'a, A: Admission + ?Sized>(
+    source: &'a mut impl Source,
+    offset: u64,
+    framing: FramingPolicy,
+    meter: &Meter,
+    memory: &mut Memory<'_, A>,
+) -> Result<Option<HeaderBytes<'a>>, Error> {
+    let legacy = framing == FramingPolicy::LegacyV4;
+    let probe = legacy && source.header_eof_requires_read();
+    if legacy && !probe && source.extent_limit().saturating_sub(offset) < 512 {
+        return Ok(None);
+    }
+    let span = bounded(
+        offset,
+        512,
+        if probe {
+            u64::MAX
+        } else {
+            source.extent_limit()
+        },
+    )?;
+    meter.work(2048)?;
+    match source.read(span, Operation::Header, meter, memory) {
+        Err(Error::Io {
+            operation: Operation::Header,
+            cause,
+            ..
+        }) if legacy && cause.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
+        result => result.map(|bytes| Some(HeaderBytes { span, bytes })),
+    }
+}
+
+fn nonempty(model: Model, span: Span) -> Result<Model, Error> {
+    if model.members.is_empty() {
+        Err(Error::Invalid {
+            span,
+            problem: Problem::Empty,
+        })
+    } else {
+        Ok(model)
+    }
+}
+
 fn finish<A: Admission + ?Sized>(
     source: &mut impl Source,
     offset: u64,
@@ -196,7 +275,7 @@ fn finish<A: Admission + ?Sized>(
     meter: &Meter,
     memory: &mut Memory<'_, A>,
 ) -> Result<(), Error> {
-    let second = bounded(offset, 512, source.len())?;
+    let second = bounded(offset, 512, source.extent_limit())?;
     meter.work(512)?;
     if source
         .read(second, Operation::Terminator, meter, memory)?
@@ -209,8 +288,12 @@ fn finish<A: Admission + ?Sized>(
         });
     }
     let mut offset = second.end;
-    while offset < source.len() {
-        let span = bounded(offset, (source.len() - offset).min(4096), source.len())?;
+    while offset < source.extent_limit() {
+        let span = bounded(
+            offset,
+            (source.extent_limit() - offset).min(4096),
+            source.extent_limit(),
+        )?;
         meter.work(span.end - span.start)?;
         if source
             .read(span, Operation::Terminator, meter, memory)?

@@ -8,7 +8,10 @@ use crate::files::{FileEntry, FileEntryKind};
 use crate::tar::{HeaderMetadata, ToTarOptions, ZERO_BLOCK, pax_body, write_header, write_octal};
 use purrdf_lex::allocation::{Admission, Resident, StorageError};
 use purrdf_testkit::error_capture::Capture;
-use std::{collections::BTreeMap, io::Cursor};
+use std::{
+    collections::BTreeMap,
+    io::{self, Cursor, Read, Seek, SeekFrom},
+};
 
 fn limits() -> Limits {
     Limits {
@@ -294,6 +297,7 @@ fn exact_source_extension_storage_and_work_admission_have_adjacent_refusals() {
 
 #[test]
 fn buffered_and_seekable_imports_preserve_canonical_outputs_and_explicit_legacy_projection() {
+    assert_legacy_framing();
     for (stamp, projected) in [
         ("-12.50", "1970-01-01T00:00:00Z"),
         ("12.50", "1970-01-01T00:00:12Z"),
@@ -340,5 +344,101 @@ fn buffered_and_seekable_imports_preserve_canonical_outputs_and_explicit_legacy_
         let canonical = crate::tar::to_tar_vec(&graph, &ToTarOptions::default()).unwrap();
         let repeated = crate::from_tar::from_tar_bytes(&canonical, &options).unwrap();
         assert_eq!(repeated, buffered);
+    }
+}
+
+/// Legacy tail tolerance never weakens the strict inventory's complete framing.
+fn assert_legacy_framing() {
+    let mut complete = Vec::new();
+    append(&mut complete, "leaf", b'0', 3, b"abc");
+    let member = complete.clone();
+    finish(&mut complete);
+    inventory(&complete);
+    let options = crate::from_tar::FromTarOptions::default();
+    let expected = crate::from_tar::from_tar_bytes(&complete, &options).unwrap();
+    let mut tails = vec![
+        member.clone(),
+        complete[..member.len() + 512].to_vec(),
+        member[..515].to_vec(),
+    ];
+    let mut nonzero_padding = complete.clone();
+    nonzero_padding[515] = 1;
+    tails.push(nonzero_padding);
+    let mut partial_header = member.clone();
+    partial_header.extend_from_slice(b"partial header");
+    tails.push(partial_header);
+    let mut trailing = complete.clone();
+    trailing[member.len() + 512] = 1;
+    tails.push(trailing);
+    for kind in *b"xLK" {
+        let mut pending = member.clone();
+        if kind == b'x' {
+            pax(&mut pending, kind, &[("path", "unused")]);
+        } else {
+            append(&mut pending, "metadata", kind, 7, b"unused\0");
+        }
+        tails.push(pending.clone());
+        finish(&mut pending);
+        tails.push(pending);
+    }
+    for tar in tails {
+        assert!(read(&tar, limits(), &mut Resident).is_err());
+        assert_eq!(
+            crate::from_tar::from_tar_bytes(&tar, &options).unwrap(),
+            expected
+        );
+        let mut reader = LegacyReader {
+            cursor: Cursor::new(&tar),
+            fail_at: None,
+        };
+        assert_eq!(
+            crate::from_tar::from_seekable_tar(&mut reader, &options).unwrap(),
+            expected
+        );
+    }
+    for tar in [&[][..], &complete[..100], &complete[..514], &ZERO_BLOCK] {
+        assert!(crate::from_tar::from_tar_bytes(tar, &options).is_err());
+        assert!(crate::from_tar::from_seekable_tar(&mut Cursor::new(tar), &options).is_err());
+    }
+    let mut reader = LegacyReader {
+        cursor: Cursor::new(member.as_slice()),
+        fail_at: Some(member.len() as u64),
+    };
+    let error = crate::from_tar::from_seekable_tar(&mut reader, &options).unwrap_err();
+    let crate::tar::TarError::Io {
+        operation, cause, ..
+    } = error
+    else {
+        panic!("{error}")
+    };
+    assert_eq!(operation, "read tar header");
+    assert_eq!(cause.raw_os_error(), Some(13));
+}
+
+/// A legacy reader needs start/current seeks and distinguishes header EOF from I/O failure.
+struct LegacyReader<'a> {
+    cursor: Cursor<&'a [u8]>,
+    fail_at: Option<u64>,
+}
+impl Read for LegacyReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        if self
+            .fail_at
+            .is_some_and(|offset| self.cursor.position() >= offset)
+        {
+            return Err(io::Error::from_raw_os_error(13));
+        }
+        self.cursor.read(bytes)
+    }
+}
+impl Seek for LegacyReader<'_> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        if matches!(position, SeekFrom::End(_)) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "end-relative seek unavailable",
+            ));
+        }
+        self.cursor.seek(position)
     }
 }

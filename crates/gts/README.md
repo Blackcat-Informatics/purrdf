@@ -94,7 +94,12 @@ never substitutes a legacy parser after refusal.
 
 Buffered and seekable GTS import use the same framing and metadata core. Their
 existing v4 options and output projection remain distinct from the evidence API:
-legacy paths retain replacement decoding and `./`/trailing-separator trimming.
+legacy imports stop at the first zero header or header EOF, ignore partial next
+headers and unused pending metadata, and skip padding without checking it.
+They still refuse truncated member payloads. The strict inventory requires its
+complete end markers and zero padding. Legacy seekable import requires no
+end-relative seek.
+Legacy paths retain replacement decoding and `./`/trailing-separator trimming.
 The legacy timestamp projection keeps unsigned whole seconds, floors positive
 fractions, and uses the original header timestamp for a valid negative PAX value
 or a whole-second value outside `u64`.

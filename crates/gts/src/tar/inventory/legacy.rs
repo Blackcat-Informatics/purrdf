@@ -12,7 +12,7 @@ use core::Source;
 use purrdf_lex::allocation::{Admission, Memory, Resident};
 #[cfg(test)]
 use std::collections::BTreeMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
 
 fn limits(source_bytes: u64) -> Limits {
     // Existing entry points carry no caller-selected budget. This selects their
@@ -36,8 +36,13 @@ pub(crate) fn buffered(data: &[u8]) -> Result<Vec<RawTarEntry<'_>>, TarError> {
         meter: &meter,
     };
     let mut memory = Memory::new(&mut account);
-    let model = core::parse(&mut source, &meter, &mut memory)
-        .map_err(|error| project_error(error, &mut source, &meter, &mut memory))?;
+    let model = core::parse(
+        &mut source,
+        core::FramingPolicy::LegacyV4,
+        &meter,
+        &mut memory,
+    )
+    .map_err(|error| project_error(error, &mut source, &meter, &mut memory))?;
     let mut output = Vec::new();
     for member in &model.members {
         let entry = project(&mut source, member, &model, &meter, &mut memory)?;
@@ -70,24 +75,27 @@ pub(crate) fn buffered(data: &[u8]) -> Result<Vec<RawTarEntry<'_>>, TarError> {
 }
 
 pub(crate) fn seekable<R: Read + Seek>(reader: &mut R) -> Result<Vec<SeekTarEntry>, TarError> {
-    let length = reader
-        .seek(SeekFrom::End(0))
-        .map_err(|cause| TarError::io("read tar length", None, cause))?;
     let mut source = core::Seeking {
         reader,
-        length,
         buffer: Vec::new(),
         cached: None,
     };
-    let meter = Meter::new(limits(length), length).map_err(TarError::Inventory)?;
+    // No physical extent is required by the v4 streaming index. Actual reads
+    // establish header/metadata EOF; the production blob replay checks payloads.
+    let meter = Meter::new(limits(u64::MAX), u64::MAX).map_err(TarError::Inventory)?;
     let mut resident = Resident;
     let mut account = Account {
         original: &mut resident,
         meter: &meter,
     };
     let mut memory = Memory::new(&mut account);
-    let model = core::parse(&mut source, &meter, &mut memory)
-        .map_err(|error| project_error(error, &mut source, &meter, &mut memory))?;
+    let model = core::parse(
+        &mut source,
+        core::FramingPolicy::LegacyV4,
+        &meter,
+        &mut memory,
+    )
+    .map_err(|error| project_error(error, &mut source, &meter, &mut memory))?;
     model
         .members
         .iter()

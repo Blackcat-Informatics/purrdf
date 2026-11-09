@@ -1825,6 +1825,15 @@ constructible options remain unchanged; `TarError::Inventory` retains additional
 typed original framing, metadata and resource causes. Existing native PAX errors
 retain their body-relative locations and original UTF-8/integer causes.
 
+The shared core selects its framing policy before parsing. Strict inventory
+requires complete zero padding, two zero end blocks and zero trailing bytes.
+Existing imports retain their v4 termination tolerance: the first zero header
+or header EOF ends a nonempty archive, partial next headers and unused pending
+metadata are ignored, and padding is skipped without checking its bytes or
+presence. Truncated member payloads still refuse. Seekable import does not add
+an end-relative seek requirement; non-EOF header I/O failures retain their
+original operation and cause.
+
 The evidence API does not change the existing v4 GTS timestamp representation.
 The explicit legacy import projection uses unsigned whole seconds: positive
 fractions floor, and valid negative PAX timestamps or whole seconds outside `u64`
