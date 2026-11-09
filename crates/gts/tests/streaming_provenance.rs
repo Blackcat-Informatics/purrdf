@@ -236,6 +236,8 @@ struct StoredTerms {
     bindings: std::collections::BTreeMap<TermKey, purrdf_gts::model::Triple3>,
     dropped: Arc<std::sync::atomic::AtomicUsize>,
     fail_read: bool,
+    fail_after_reads: Option<usize>,
+    reads: usize,
     omit_read: bool,
 }
 
@@ -281,7 +283,12 @@ impl TermStorage for StoredTerms {
     }
 
     fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {
-        if self.fail_read {
+        self.reads += 1;
+        if self.fail_read
+            || self
+                .fail_after_reads
+                .is_some_and(|limit| self.reads > limit)
+        {
             return Err(purrdf_hash::error::io_error(
                 std::io::ErrorKind::Other,
                 purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
@@ -463,6 +470,91 @@ fn stored_reader_preserves_order_and_pins_and_returns_original_storage_failures(
         cause = error.source();
     }
     assert_eq!(original, Some(u128::MAX));
+
+    // The first reads pin each introduced term. Refuse the next actual row
+    // validation read, and verify every production handler stops before output
+    // or the following frame while preserving the host's original typed cause.
+    let terms = purrdf_gts::reader::read(&data, false, None).terms;
+    for (kind, event) in [
+        ("quads", "quad:"),
+        ("reifies", "reifier:"),
+        ("annot", "annotation:"),
+    ] {
+        let mut writer = Writer::new("generic");
+        writer.add_terms(&terms);
+        match kind {
+            "quads" => {
+                writer.add_quads(&[(0, 1, 2, None)]);
+            }
+            "reifies" => {
+                writer.add_reifies(&[(0, (0, 1, 2), None)]);
+            }
+            "annot" => {
+                writer.add_annot(&[(0, 1, 2, None)]);
+            }
+            _ => unreachable!("the fixture names one production row handler"),
+        }
+        writer.add_blob(b"after-row", None, None);
+        let bytes = writer.to_bytes();
+        let mut accepted = OrderingSink::default();
+        let neighbour = read_to_sink_with_dictionary(
+            &bytes,
+            ReadOptions::default(),
+            &mut StoredTerms::default(),
+            &mut accepted,
+        )
+        .unwrap();
+        assert!(
+            neighbour.diagnostics.is_empty(),
+            "{kind}: {:?}",
+            neighbour.diagnostics
+        );
+        assert!(
+            accepted.log.iter().any(|entry| entry.starts_with(event)),
+            "{kind}"
+        );
+        assert!(
+            accepted.log.iter().any(|entry| entry.starts_with("blob:")),
+            "{kind}"
+        );
+        let mut storage = StoredTerms {
+            fail_after_reads: Some(terms.len()),
+            ..StoredTerms::default()
+        };
+        let mut sink = OrderingSink::default();
+        let error =
+            read_to_sink_with_dictionary(&bytes, ReadOptions::default(), &mut storage, &mut sink)
+                .expect_err("row storage refusal cannot become a skipped row");
+        assert_eq!(
+            storage.reads,
+            terms.len() + 1,
+            "{kind}: no reads after the first refusal"
+        );
+        assert!(
+            !sink
+                .log
+                .iter()
+                .any(|entry| entry.starts_with(event) || entry.starts_with("blob:")),
+            "{kind}: no failed-row or subsequent-frame output"
+        );
+        assert_eq!(
+            sink.leases.len(),
+            terms.len(),
+            "introduced owners remain pinned"
+        );
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut original = None;
+        while let Some(cause) = source {
+            if let Some(cause) =
+                cause.downcast_ref::<purrdf_testkit::error_capture::CallerRefusal>()
+            {
+                original = Some(cause.limit);
+                break;
+            }
+            source = cause.source();
+        }
+        assert_eq!(original, Some(u128::MAX), "{kind}");
+    }
 
     let mut storage = StoredTerms {
         omit_read: true,

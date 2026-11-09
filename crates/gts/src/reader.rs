@@ -49,7 +49,7 @@ use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
     RowCheckError, RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
-    decode_reifier_row, numeric_row,
+    decode_reifier_row, numeric_row, take_storage_failure,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
@@ -603,13 +603,22 @@ impl Folder<'_, '_, '_> {
     }
 
     fn terms(&self) -> TermsRef<'_> {
-        if let Some(terms) = self.stored_terms {
-            return TermsRef::Stored(terms);
-        }
-        match self.shared_terms.as_deref() {
-            Some(terms) => TermsRef::Shared(terms),
-            None => TermsRef::Owned(&self.g.terms),
-        }
+        TermsRef::from_sources(
+            self.stored_terms,
+            self.shared_terms.as_deref().map(Vec::as_slice),
+            &self.g.terms,
+        )
+    }
+
+    fn row_terms(&mut self) -> (TermsRef<'_>, &mut Option<DictionaryError>) {
+        (
+            TermsRef::from_sources(
+                self.stored_terms,
+                self.shared_terms.as_deref().map(Vec::as_slice),
+                &self.g.terms,
+            ),
+            &mut self.dictionary_failure,
+        )
     }
 
     /// Report the ONE shape a multi-bound reifier id can still break: a
@@ -1202,9 +1211,10 @@ impl Folder<'_, '_, '_> {
         let (Some(s), Some(p), Some(o)) = (s, p, o) else {
             return Ok(());
         };
-        if let Err(detail) = check_quad_positions(self.terms(), s, p, o, gslot) {
+        let (terms, failure) = self.row_terms();
+        if let Err(detail) = check_quad_positions(terms, s, p, o, gslot, failure) {
             let detail = match detail {
-                RowCheckError::Storage(error) => return Err(error.into()),
+                RowCheckError::Storage => return Err(take_storage_failure(failure).into()),
                 RowCheckError::Position(detail) => detail,
             };
             let message = detail.to_string();
@@ -1213,14 +1223,11 @@ impl Folder<'_, '_, '_> {
         }
         let quad = (s, p, o, gslot);
         if self.streamable {
-            let terms = if let Some(terms) = self.stored_terms {
-                TermsRef::Stored(terms)
-            } else {
-                match self.shared_terms.as_deref() {
-                    Some(terms) => TermsRef::Shared(terms),
-                    None => TermsRef::Owned(&self.g.terms),
-                }
-            };
+            let terms = TermsRef::from_sources(
+                self.stored_terms,
+                self.shared_terms.as_deref().map(Vec::as_slice),
+                &self.g.terms,
+            );
             self.provenance.observe_terms(terms, s, p, o)?;
         }
         self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
@@ -1259,21 +1266,22 @@ impl Folder<'_, '_, '_> {
         index: u64,
         base: TermIdBase,
     ) -> Result<(), PayloadError> {
-        let (rid, triple, gslot) =
-            match decode_reifier_row(numeric_row::<5>(row)?, self.terms(), base) {
-                RowDecode::Skip => return Ok(()),
-                RowDecode::Storage(error) => return Err(error.into()),
-                RowDecode::Row(row) => row,
-                RowDecode::Damaged(detail) => {
-                    self.damaged_row(*detail, index);
-                    return Ok(());
-                }
-                RowDecode::Position(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("PositionConstraint", *detail, message, index);
-                    return Ok(());
-                }
-            };
+        let row = numeric_row::<5>(row)?;
+        let (terms, failure) = self.row_terms();
+        let (rid, triple, gslot) = match decode_reifier_row(row, terms, base, failure) {
+            RowDecode::Skip => return Ok(()),
+            RowDecode::Storage => return Err(take_storage_failure(failure).into()),
+            RowDecode::Row(row) => row,
+            RowDecode::Damaged(detail) => {
+                self.damaged_row(*detail, index);
+                return Ok(());
+            }
+            RowDecode::Position(detail) => {
+                let message = detail.to_string();
+                self.diag_native("PositionConstraint", *detail, message, index);
+                return Ok(());
+            }
+        };
         // `rdf:reifies` is NOT functional: one reifier id legitimately
         // binds several distinct triple terms (`r rdf:reifies <<s p o1>>`
         // and `r rdf:reifies <<s p o2>>` are both assertable, in the same
@@ -1329,9 +1337,11 @@ impl Folder<'_, '_, '_> {
         index: u64,
         base: TermIdBase,
     ) -> Result<(), PayloadError> {
-        let annotation = match decode_annotation_row(numeric_row::<4>(row)?, self.terms(), base) {
+        let row = numeric_row::<4>(row)?;
+        let (terms, failure) = self.row_terms();
+        let annotation = match decode_annotation_row(row, terms, base, failure) {
             RowDecode::Skip => return Ok(()),
-            RowDecode::Storage(error) => return Err(error.into()),
+            RowDecode::Storage => return Err(take_storage_failure(failure).into()),
             RowDecode::Row(row) => row,
             RowDecode::Damaged(detail) => {
                 self.damaged_row(*detail, index);
