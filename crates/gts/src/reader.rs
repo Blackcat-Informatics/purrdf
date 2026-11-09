@@ -18,7 +18,8 @@ use crate::{FastMap, FastSet};
 use std::io::Read;
 use std::sync::Arc;
 
-use crate::term_table::TermsRef;
+use crate::dictionary::{DictionaryError, DictionaryLimits, TermKey, TermLease, TermStorage};
+use crate::term_table::{StoredTerms, TermsRef};
 
 mod fold_error;
 use fold_error::FoldError;
@@ -47,7 +48,7 @@ use crate::model::{
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
-    RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
+    RowCheckError, RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
     decode_reifier_row, numeric_row,
 };
 use crate::reader_union::union_segments;
@@ -402,6 +403,19 @@ pub trait StreamingSink {
     /// The reader releases its owner after segment validation; a sink may keep
     /// this handle without copying the term's strings.
     fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {}
+    /// Accept a term while retaining its original admission owner through use.
+    /// Stored readers call this method instead of the legacy `Arc` callback.
+    ///
+    /// # Errors
+    /// Refuses a sink that has not selected the admitted ownership protocol.
+    fn stored_term(
+        &mut self,
+        _segment_index: u64,
+        _term_id: usize,
+        _term: TermLease,
+    ) -> Result<(), DictionaryError> {
+        Err(DictionaryError::UnsupportedSink)
+    }
     /// Accepted quad row.
     fn quad(&mut self, _segment_index: u64, _quad: Quad) {}
     /// Accepted reifier row.
@@ -526,22 +540,16 @@ fn push_result_diagnostic(
     result.diagnostics.push(diagnostic);
 }
 
-fn absorb_segment_result(result: &mut StreamingReadResult, segment: &Graph) {
-    result
-        .diagnostics
-        .extend(segment.diagnostics.iter().cloned());
-    result
-        .segment_heads
-        .extend(segment.segment_heads.iter().cloned());
+fn absorb_segment_result(result: &mut StreamingReadResult, segment: &mut Graph) {
+    result.diagnostics.append(&mut segment.diagnostics);
+    result.segment_heads.append(&mut segment.segment_heads);
     result
         .segment_profiles
-        .extend(segment.segment_profiles.iter().cloned());
-    result
-        .segment_meta
-        .extend(segment.segment_meta.iter().cloned());
+        .append(&mut segment.segment_profiles);
+    result.segment_meta.append(&mut segment.segment_meta);
     result
         .segment_streamable
-        .extend(segment.segment_streamable.iter().cloned());
+        .append(&mut segment.segment_streamable);
 }
 
 /// Mutable fold state; one per segment (and shared by the snapshot handler).
@@ -549,6 +557,8 @@ struct Folder<'g, 's, 'k> {
     g: &'g mut Graph,
     // Present only for streaming folds; materialized folds write Graph::terms.
     shared_terms: Option<&'g mut Vec<Arc<Term>>>,
+    stored_terms: Option<&'g dyn StoredTerms>,
+    dictionary_failure: Option<DictionaryError>,
     sink: Option<&'s mut dyn StreamingSink>,
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: u64,
@@ -577,7 +587,25 @@ struct Folder<'g, 's, 'k> {
 }
 
 impl Folder<'_, '_, '_> {
+    fn decode_limit(&self, blob: bool) -> Option<usize> {
+        let sink_limit = self.sink.as_deref().and_then(|sink| {
+            if blob {
+                sink.blob_decode_limit()
+            } else {
+                sink.frame_decode_limit()
+            }
+        });
+        match (sink_limit, self.stored_terms) {
+            (Some(limit), Some(terms)) => Some(limit.min(terms.limits().decoded_frame_bytes)),
+            (None, Some(terms)) => Some(terms.limits().decoded_frame_bytes),
+            (limit, None) => limit,
+        }
+    }
+
     fn terms(&self) -> TermsRef<'_> {
+        if let Some(terms) = self.stored_terms {
+            return TermsRef::Stored(terms);
+        }
         match self.shared_terms.as_deref() {
             Some(terms) => TermsRef::Shared(terms),
             None => TermsRef::Owned(&self.g.terms),
@@ -593,20 +621,21 @@ impl Folder<'_, '_, '_> {
     ///
     /// Run after the whole segment is folded so it does not depend on whether
     /// the `terms` frame happened to precede the `reifies` frame.
-    fn report_ambiguous_reifiers(&mut self) {
-        let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
-            .into_iter()
-            .filter(|&(rid, _)| {
-                let terms = self.terms();
-                self.reifier_index.anchors(rid).iter().any(|&tid| {
-                    let term = &terms[tid];
-                    term.triple.is_none() && term.reifier == Some(rid)
-                })
-            })
-            .collect();
-        for (rid, index) in ambiguous {
-            self.diag(FoldError::ConflictingReifier { reifier: rid }, index);
+    fn report_ambiguous_reifiers(&mut self) -> Result<(), DictionaryError> {
+        for (rid, index) in std::mem::take(&mut self.rebound_reifiers) {
+            let mut ambiguous = false;
+            for &tid in self.reifier_index.anchors(rid) {
+                let term = self.terms().required(tid)?;
+                if term.triple.is_none() && term.reifier == Some(rid) {
+                    ambiguous = true;
+                    break;
+                }
+            }
+            if ambiguous {
+                self.diag(FoldError::ConflictingReifier { reifier: rid }, index);
+            }
         }
+        Ok(())
     }
 
     fn with_sink(&mut self, f: impl FnOnce(u64, &mut dyn StreamingSink)) {
@@ -759,13 +788,7 @@ impl Folder<'_, '_, '_> {
             // A blob frame is bounded by the blob ceiling; every other frame by
             // the frame ceiling, which is what keeps an embedded snapshot blob
             // map from decoding without limit.
-            let limit = self.sink.as_deref().and_then(|sink| {
-                if blob {
-                    sink.blob_decode_limit()
-                } else {
-                    sink.frame_decode_limit()
-                }
-            });
+            let limit = self.decode_limit(blob);
             let decoded = if let Some(content_key) = self.content_key {
                 let limit = limit.unwrap_or(usize::MAX);
                 let decrypt =
@@ -785,10 +808,7 @@ impl Folder<'_, '_, '_> {
         }
         if blob
             && let Some(bytes) = bytes.as_deref()
-            && let Some(limit) = self
-                .sink
-                .as_deref()
-                .and_then(StreamingSink::blob_decode_limit)
+            && let Some(limit) = self.decode_limit(true)
             && bytes.len() > limit
         {
             return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
@@ -832,7 +852,7 @@ impl Folder<'_, '_, '_> {
             }
             Ok(p) => p,
         };
-        let folded = (|| -> Result<(), cbor::DecodeError> {
+        let folded = (|| -> Result<(), PayloadError> {
             match ftype {
                 "terms" => self.h_terms(payload.view(), index, TermIdBase(0))?,
                 "quads" => self.h_quads(payload.view(), index, TermIdBase(0))?,
@@ -856,23 +876,8 @@ impl Folder<'_, '_, '_> {
             Ok(())
         })();
         if let Err(cause) = folded {
-            self.damaged_payload(frame, ftype, index, cause);
+            self.failed_payload(frame, ftype, index, cause);
         }
-    }
-
-    fn damaged_payload(
-        &mut self,
-        frame: &[(Value, Value)],
-        frame_type: &str,
-        index: u64,
-        cause: cbor::DecodeError,
-    ) {
-        self.failed_payload(
-            frame,
-            frame_type,
-            index,
-            PayloadError::Damaged(PayloadCause::Cbor(cause)),
-        );
     }
 
     fn failed_payload(
@@ -882,6 +887,20 @@ impl Folder<'_, '_, '_> {
         index: u64,
         error: PayloadError,
     ) {
+        if let PayloadError::Dictionary(error) = error {
+            self.dictionary_failure = Some(error);
+            return;
+        }
+        if self.stored_terms.is_some() {
+            let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+            while let Some(found) = cause {
+                if let Some(original) = found.downcast_ref::<DictionaryError>() {
+                    self.dictionary_failure = Some(original.clone());
+                    return;
+                }
+                cause = found.source();
+            }
+        }
         self.opaque(frame, frame_type, error.opaque_reason());
         let detail = error.diagnostic_detail();
         self.diag_native(
@@ -921,20 +940,25 @@ impl Folder<'_, '_, '_> {
         payload: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let Some(rows) = payload.array()? else {
             return Ok(());
         };
         for raw in rows {
             let raw = raw?.to_value()?;
-            self.h_term_row(raw.as_ref(), index, base);
+            self.h_term_row(raw.as_ref(), index, base)?;
         }
         Ok(())
     }
 
-    fn h_term_row(&mut self, raw: &Value, index: u64, base: TermIdBase) {
+    fn h_term_row(
+        &mut self,
+        raw: &Value,
+        index: u64,
+        base: TermIdBase,
+    ) -> Result<(), PayloadError> {
         let Value::Map(entries) = raw else {
-            return;
+            return Ok(());
         };
         let kind = TermKind::from_wire(map_get(entries, "k").and_then(as_i128));
         let value = map_get(entries, "v")
@@ -1110,7 +1134,13 @@ impl Folder<'_, '_, '_> {
             reifier: rf,
             triple: tt,
         };
-        if let Some(terms) = self.shared_terms.as_deref_mut() {
+        if let Some(terms) = self.stored_terms {
+            let lease = terms.append(&term)?;
+            self.reifier_index.observe_term(term_id, &lease);
+            if let Some(sink) = self.sink.as_deref_mut() {
+                sink.stored_term(self.segment_index, term_id, lease)?;
+            }
+        } else if let Some(terms) = self.shared_terms.as_deref_mut() {
             let term = Arc::new(term);
             terms.push(Arc::clone(&term));
             self.reifier_index.observe_term(term_id, &term);
@@ -1122,6 +1152,7 @@ impl Folder<'_, '_, '_> {
             self.reifier_index
                 .observe_term(term_id, &self.g.terms[term_id]);
         }
+        Ok(())
     }
 
     fn h_quads(
@@ -1129,7 +1160,7 @@ impl Folder<'_, '_, '_> {
         payload: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let Some(rows) = payload.array()? else {
             return Ok(());
         };
@@ -1144,7 +1175,7 @@ impl Folder<'_, '_, '_> {
         row: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let Some(items) = numeric_row::<4>(row)? else {
             return Ok(());
         };
@@ -1172,17 +1203,25 @@ impl Folder<'_, '_, '_> {
             return Ok(());
         };
         if let Err(detail) = check_quad_positions(self.terms(), s, p, o, gslot) {
+            let detail = match detail {
+                RowCheckError::Storage(error) => return Err(error.into()),
+                RowCheckError::Position(detail) => detail,
+            };
             let message = detail.to_string();
             self.diag_native("PositionConstraint", *detail, message, index);
             return Ok(());
         }
         let quad = (s, p, o, gslot);
         if self.streamable {
-            let terms = match self.shared_terms.as_deref() {
-                Some(terms) => TermsRef::Shared(terms),
-                None => TermsRef::Owned(&self.g.terms),
+            let terms = if let Some(terms) = self.stored_terms {
+                TermsRef::Stored(terms)
+            } else {
+                match self.shared_terms.as_deref() {
+                    Some(terms) => TermsRef::Shared(terms),
+                    None => TermsRef::Owned(&self.g.terms),
+                }
             };
-            self.provenance.observe_terms(terms, s, p, o);
+            self.provenance.observe_terms(terms, s, p, o)?;
         }
         self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
         if self.materialize {
@@ -1190,8 +1229,8 @@ impl Folder<'_, '_, '_> {
         }
         // Layout bookkeeping (§3.3): a stream:digest quad describes an
         // upcoming manifestation — record the IOU for the blob check.
-        if self.terms()[p].value.as_deref() == Some(STREAM_DIGEST)
-            && let Some(obj) = self.terms()[o].value.clone()
+        if self.terms().required(p)?.value.as_deref() == Some(STREAM_DIGEST)
+            && let Some(obj) = self.terms().required(o)?.value.clone()
         {
             self.described.insert(obj);
         }
@@ -1203,7 +1242,7 @@ impl Folder<'_, '_, '_> {
         payload: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let Some(rows) = payload.array()? else {
             self.diag(FoldError::ReifiesArray { snapshot: false }, index);
             return Ok(());
@@ -1219,10 +1258,11 @@ impl Folder<'_, '_, '_> {
         row: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let (rid, triple, gslot) =
             match decode_reifier_row(numeric_row::<5>(row)?, self.terms(), base) {
                 RowDecode::Skip => return Ok(()),
+                RowDecode::Storage(error) => return Err(error.into()),
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
                     self.damaged_row(*detail, index);
@@ -1248,7 +1288,7 @@ impl Folder<'_, '_, '_> {
         }
         if self
             .reifier_index
-            .binding_is_recursive(self.terms(), rid, triple)
+            .binding_is_recursive(self.terms(), rid, triple)?
         {
             self.diag(
                 FoldError::RecursiveReifier {
@@ -1261,6 +1301,9 @@ impl Folder<'_, '_, '_> {
         }
         self.reifier_index
             .record(self.g, (rid, triple, gslot), self.materialize);
+        if let Some(terms) = self.stored_terms {
+            terms.bind_first(rid, triple)?;
+        }
         self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         Ok(())
     }
@@ -1270,7 +1313,7 @@ impl Folder<'_, '_, '_> {
         payload: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let Some(rows) = payload.array()? else {
             return Ok(());
         };
@@ -1285,9 +1328,10 @@ impl Folder<'_, '_, '_> {
         row: ValueRef<'_>,
         index: u64,
         base: TermIdBase,
-    ) -> Result<(), cbor::DecodeError> {
+    ) -> Result<(), PayloadError> {
         let annotation = match decode_annotation_row(numeric_row::<4>(row)?, self.terms(), base) {
             RowDecode::Skip => return Ok(()),
+            RowDecode::Storage(error) => return Err(error.into()),
             RowDecode::Row(row) => row,
             RowDecode::Damaged(detail) => {
                 self.damaged_row(*detail, index);
@@ -1531,11 +1575,7 @@ impl Folder<'_, '_, '_> {
                 limit,
             }));
         }
-        let limit = self
-            .sink
-            .as_deref()
-            .and_then(StreamingSink::blob_decode_limit)
-            .unwrap_or(usize::MAX);
+        let limit = self.decode_limit(true).unwrap_or(usize::MAX);
         if codecs.is_empty() && bytes.byte_len() > limit {
             return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
                 actual: bytes.byte_len(),
@@ -1594,7 +1634,7 @@ impl Folder<'_, '_, '_> {
     /// Decode local term ids against the captured outer base through the same
     /// handlers and semantic checks as equivalent streamed frames. The source
     /// payload remains borrowed; rebasing never builds another CBOR tree.
-    fn h_snapshot(&mut self, payload: ValueRef<'_>, index: u64) -> Result<(), cbor::DecodeError> {
+    fn h_snapshot(&mut self, payload: ValueRef<'_>, index: u64) -> Result<(), PayloadError> {
         if !payload.is_map() {
             return Ok(());
         }
@@ -1618,10 +1658,7 @@ impl Folder<'_, '_, '_> {
         if let Some(blobs) = payload.get("blobs")?
             && let Some(blobs) = blobs.map()?
         {
-            let ceiling = self
-                .sink
-                .as_deref()
-                .and_then(StreamingSink::blob_decode_limit);
+            let ceiling = self.decode_limit(true);
             for entry in blobs {
                 let (_, value) = entry?;
                 if let Some(bytes) = value.byte_chunks() {
@@ -2118,9 +2155,41 @@ pub fn read_to_sink_with_options(
         &mut SliceItems {
             remaining: data,
             offset: 0,
+            maximum: None,
         },
         options,
         sink,
+    )
+}
+
+/// Read through the production fold with caller-owned dictionary storage.
+///
+/// Accepted terms retain their original segment-local ids and reach
+/// [`StreamingSink::stored_term`] with their admission owners. The reader does
+/// not retain a resident term vector on this path. Frame buffers, validation
+/// sidecars and the caller's output are separate resources; external term
+/// storage alone does not claim that those resources are bounded.
+///
+/// # Errors
+/// Returns original dictionary storage, admission and cancellation failures.
+/// A missing admitted entry or unsupported sink is a hard failure, never a
+/// resident fallback or a shortened successful result.
+pub fn read_to_sink_with_dictionary(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    let limits = dictionary.limits()?;
+    read_items_stored(
+        &mut SliceItems {
+            remaining: data,
+            offset: 0,
+            maximum: Some(limits.encoded_frame_bytes),
+        },
+        options,
+        sink,
+        Some(dictionary),
     )
 }
 
@@ -2128,6 +2197,35 @@ struct StreamingCountingReader<R> {
     inner: R,
     pos: u64,
     address_exhausted: Option<(u64, usize)>,
+    maximum: Option<usize>,
+}
+
+struct ItemWindow<'a, R> {
+    source: &'a mut R,
+    remaining: usize,
+    maximum: usize,
+}
+
+impl<R: Read> Read for ItemWindow<'_, R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                DictionaryError::Limit {
+                    resource: "encoded-frame-bytes",
+                    required: self.maximum.saturating_add(1),
+                    limit: self.maximum,
+                },
+            ));
+        }
+        let width = self.remaining.min(output.len());
+        let count = self.source.read(&mut output[..width])?;
+        self.remaining = self.remaining.saturating_sub(count);
+        Ok(count)
+    }
 }
 
 impl<R: Read> Read for StreamingCountingReader<R> {
@@ -2154,7 +2252,18 @@ fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
 ) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
     let start = reader.pos;
-    match cbor::read_encoded_from(&mut *reader, cbor::Limits::DEFAULT).and_then(|item| {
+    let decoded = match reader.maximum {
+        Some(maximum) => cbor::read_encoded_from(
+            &mut ItemWindow {
+                source: &mut *reader,
+                remaining: maximum,
+                maximum,
+            },
+            cbor::Limits::DEFAULT,
+        ),
+        None => cbor::read_encoded_from(&mut *reader, cbor::Limits::DEFAULT),
+    };
+    match decoded.and_then(|item| {
         item.map(|item| encoded_frame::classify(encoded_frame::FrameItem::Owned(item)))
             .transpose()
     }) {
@@ -2167,16 +2276,41 @@ fn next_stream_item<R: Read>(
     }
 }
 
+enum ItemError {
+    Torn(TornAppendError),
+    Dictionary(DictionaryError),
+}
+
+impl From<TornAppendError> for ItemError {
+    fn from(error: TornAppendError) -> Self {
+        let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        while let Some(found) = cause {
+            if let Some(dictionary) = found.downcast_ref::<DictionaryError>() {
+                return Self::Dictionary(dictionary.clone());
+            }
+            cause = found.source();
+        }
+        Self::Torn(error)
+    }
+}
+
 trait ItemSource {
-    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError>;
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, ItemError>;
     fn address_exhausted(&self) -> Option<(u64, usize)> {
         None
     }
 }
 
 impl<R: Read> ItemSource for StreamingCountingReader<R> {
-    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
-        next_stream_item(self)
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, ItemError> {
+        let stored = self.maximum.is_some();
+        next_stream_item(self).map_err(|error| {
+            if stored {
+                ItemError::from(error)
+            } else {
+                ItemError::Torn(error)
+            }
+        })
     }
     fn address_exhausted(&self) -> Option<(u64, usize)> {
         self.address_exhausted
@@ -2186,21 +2320,40 @@ impl<R: Read> ItemSource for StreamingCountingReader<R> {
 struct SliceItems<'a> {
     remaining: &'a [u8],
     offset: u64,
+    maximum: Option<usize>,
 }
 
 impl ItemSource for SliceItems<'_> {
-    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, TornAppendError> {
+    fn next(&mut self) -> Result<Option<(StreamItem<'_>, u64, u64)>, ItemError> {
         if self.remaining.is_empty() {
             return Ok(None);
         }
         let start = self.offset;
+        let length = self.maximum.map_or(self.remaining.len(), |maximum| {
+            maximum.min(self.remaining.len())
+        });
         let (item, used) =
-            cbor::borrowed_prefix(self.remaining, cbor::Limits::DEFAULT).map_err(|cause| {
-                TornAppendError {
-                    offset: start,
-                    cause,
+            match cbor::borrowed_prefix(&self.remaining[..length], cbor::Limits::DEFAULT) {
+                Ok(item) => item,
+                Err(cause) => {
+                    if self
+                        .maximum
+                        .is_some_and(|maximum| self.remaining.len() > maximum)
+                        && cause.kind() == cbor::DecodeErrorKind::Truncated
+                    {
+                        return Err(ItemError::Dictionary(DictionaryError::Limit {
+                            resource: "encoded-frame-bytes",
+                            required: length.saturating_add(1),
+                            limit: length,
+                        }));
+                    }
+                    return Err(TornAppendError {
+                        offset: start,
+                        cause,
+                    }
+                    .into());
                 }
-            })?;
+            };
         let item =
             encoded_frame::classify(encoded_frame::FrameItem::Borrowed(item)).map_err(|cause| {
                 TornAppendError {
@@ -2214,11 +2367,90 @@ impl ItemSource for SliceItems<'_> {
     }
 }
 
+struct ExternalTerms<'a> {
+    storage: std::cell::RefCell<&'a mut dyn TermStorage>,
+    segment: u64,
+    count: std::cell::Cell<usize>,
+    limits: DictionaryLimits,
+}
+
+impl StoredTerms for ExternalTerms<'_> {
+    fn limits(&self) -> DictionaryLimits {
+        self.limits
+    }
+    fn len(&self) -> usize {
+        self.count.get()
+    }
+
+    fn get(&self, id: usize) -> Result<Option<TermLease>, DictionaryError> {
+        if id >= self.count.get() {
+            return Ok(None);
+        }
+        let key = TermKey {
+            segment: self.segment,
+            term: id,
+        };
+        let mut storage = self.storage.borrow_mut();
+        storage.checkpoint(1)?;
+        storage
+            .get(key)?
+            .map(Some)
+            .ok_or(DictionaryError::Missing(key))
+    }
+
+    fn append(&self, term: &Term) -> Result<TermLease, DictionaryError> {
+        let key = TermKey {
+            segment: self.segment,
+            term: self.count.get(),
+        };
+        let next = key
+            .term
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let mut storage = self.storage.borrow_mut();
+        storage.checkpoint(1)?;
+        storage.put(key, term)?;
+        let lease = storage.get(key)?.ok_or(DictionaryError::Missing(key))?;
+        self.count.set(next);
+        Ok(lease)
+    }
+
+    fn bind_first(&self, id: usize, triple: crate::model::Triple3) -> Result<(), DictionaryError> {
+        let mut storage = self.storage.borrow_mut();
+        storage.checkpoint(1)?;
+        storage.bind_first(
+            TermKey {
+                segment: self.segment,
+                term: id,
+            },
+            triple,
+        )
+    }
+}
+
+enum ProcessError {
+    Decode(cbor::DecodeError),
+    Dictionary(DictionaryError),
+}
+
+impl From<cbor::DecodeError> for ProcessError {
+    fn from(error: cbor::DecodeError) -> Self {
+        Self::Decode(error)
+    }
+}
+
+impl From<DictionaryError> for ProcessError {
+    fn from(error: DictionaryError) -> Self {
+        Self::Dictionary(error)
+    }
+}
+
 struct ActiveStreamingSegment {
     g: Graph,
     // These owners outlive every validation callback in the segment, then drop
     // before the resolver flushes it on the next segment's first RDF event.
     shared_terms: Vec<Arc<Term>>,
+    external_term_count: usize,
     header: Vec<(Value, Value)>,
     expected_prev: Vec<u8>,
     frame_ids: Vec<Vec<u8>>,
@@ -2241,6 +2473,32 @@ struct ActiveStreamingSegment {
 }
 
 impl ActiveStreamingSegment {
+    fn retained_entries(&self) -> usize {
+        [
+            self.header.len(),
+            self.frame_ids.len(),
+            self.catalog.len(),
+            self.index_records.len(),
+            self.described.len(),
+            self.blob_events.len(),
+            self.rebound_reifiers.len(),
+            self.reifier_index.retained_entries(),
+            self.provenance.retained_entries(),
+            self.g.blob_meta.len().saturating_mul(2),
+            self.g.meta.len(),
+            self.g.diagnostics.len(),
+            self.g.segment_heads.len(),
+            self.g.segment_profiles.len(),
+            self.g.segment_meta.len(),
+            self.g.segment_streamable.len(),
+            self.g.opaque.len(),
+            self.g.signatures.len(),
+            self.g.suppressions.len(),
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add)
+    }
+
     fn new(
         raw_header: Value,
         index_offset: u64,
@@ -2322,6 +2580,7 @@ impl ActiveStreamingSegment {
         Self {
             g,
             shared_terms: Vec::new(),
+            external_term_count: 0,
             header,
             expected_prev,
             frame_ids: Vec::new(),
@@ -2344,15 +2603,25 @@ impl ActiveStreamingSegment {
         &mut self,
         raw: BorrowedItem<'_>,
         abs_index: u64,
-        frame_start: u64,
-        frame_end: u64,
+        range: ByteRange,
         sink: &mut dyn StreamingSink,
         content_key: Option<&'k ContentKeyResolver<'k>>,
-    ) -> Result<(), cbor::DecodeError> {
+        dictionary: Option<&mut dyn TermStorage>,
+    ) -> Result<(), ProcessError> {
         if !self.valid_header {
             return Ok(());
         }
         let mut parsed = encoded_frame::Frame::new(raw)?;
+        let external_terms = dictionary
+            .map(|storage| {
+                Ok::<_, DictionaryError>(ExternalTerms {
+                    limits: storage.limits()?,
+                    storage: std::cell::RefCell::new(storage),
+                    segment: self.segment_index,
+                    count: std::cell::Cell::new(self.external_term_count),
+                })
+            })
+            .transpose()?;
         let raw = &parsed.metadata;
         // Captured before any push below — the zero-based index of THIS
         // frame within the segment (mirrors `collect_frames` in
@@ -2369,6 +2638,10 @@ impl ActiveStreamingSegment {
         let mut folder = Folder {
             g: &mut self.g,
             shared_terms: Some(&mut self.shared_terms),
+            stored_terms: external_terms
+                .as_ref()
+                .map(|terms| terms as &dyn StoredTerms),
+            dictionary_failure: None,
             sink: Some(sink),
             content_key,
             segment_index: self.segment_index,
@@ -2388,10 +2661,6 @@ impl ActiveStreamingSegment {
         // `sink.frame()` is fired for THIS frame before any of its rows are
         // folded (the `StreamingSink::frame` contract), so index builders can
         // attribute the rows that follow to this frame's provenance.
-        let range = ByteRange {
-            start: frame_start,
-            end: frame_end,
-        };
         if let Value::Map(frame) = raw {
             let stored_id: Option<&Vec<u8>> = match map_get(frame, "id") {
                 Some(Value::Bytes(b)) => Some(b),
@@ -2497,7 +2766,11 @@ impl ActiveStreamingSegment {
         let rebound_reifiers = std::mem::take(&mut folder.rebound_reifiers);
         let reifier_index = std::mem::take(&mut folder.reifier_index);
         self.provenance = std::mem::take(&mut folder.provenance);
+        let dictionary_failure = folder.dictionary_failure.take();
         drop(folder);
+        if let Some(terms) = external_terms.as_ref() {
+            self.external_term_count = terms.count.get();
+        }
         self.catalog = catalog;
         self.blob_index = blob_index;
         self.blob_meta_index = blob_meta_index;
@@ -2506,6 +2779,21 @@ impl ActiveStreamingSegment {
         self.blob_events = blob_events;
         self.rebound_reifiers = rebound_reifiers;
         self.reifier_index = reifier_index;
+        if let Some(error) = dictionary_failure {
+            return Err(ProcessError::Dictionary(error));
+        }
+        if let Some(terms) = external_terms.as_ref() {
+            terms
+                .storage
+                .borrow_mut()
+                .reader_metadata(crate::dictionary::ReaderMetadata {
+                    entries: self.retained_entries(),
+                    frame_ids: self.frame_ids.len(),
+                    frame_capacity: self.frame_ids.capacity(),
+                    provenance_subjects: self.provenance.retained_entries(),
+                    provenance_capacity: self.provenance.retained_capacity(),
+                })?;
+        }
         Ok(())
     }
 
@@ -2513,7 +2801,29 @@ impl ActiveStreamingSegment {
         mut self,
         result: &mut StreamingReadResult,
         sink: &mut dyn StreamingSink,
-    ) {
+        dictionary: Option<&mut dyn TermStorage>,
+    ) -> Result<(), DictionaryError> {
+        let external_terms = dictionary
+            .map(|storage| {
+                Ok::<_, DictionaryError>(ExternalTerms {
+                    limits: storage.limits()?,
+                    storage: std::cell::RefCell::new(storage),
+                    segment: self.segment_index,
+                    count: std::cell::Cell::new(self.external_term_count),
+                })
+            })
+            .transpose()?;
+        if let Some(terms) = external_terms.as_ref() {
+            // Reserve final head/profile/layout slots and at most one native
+            // diagnostic per retained index/blob-layout observation, plus the
+            // fixed header/footer checks, before running final validation.
+            let required = self
+                .retained_entries()
+                .saturating_add(self.index_records.len())
+                .saturating_add(self.blob_events.len())
+                .saturating_add(8);
+            check_metadata_limit(required, terms.limits)?;
+        }
         if self.valid_header {
             // Every frame of this segment has been folded, so a multi-bound
             // reifier id can now be judged against the segment's full term
@@ -2522,6 +2832,10 @@ impl ActiveStreamingSegment {
                 let mut folder = Folder {
                     g: &mut self.g,
                     shared_terms: Some(&mut self.shared_terms),
+                    stored_terms: external_terms
+                        .as_ref()
+                        .map(|terms| terms as &dyn StoredTerms),
+                    dictionary_failure: None,
                     sink: Some(sink),
                     content_key: None,
                     segment_index: self.segment_index,
@@ -2538,13 +2852,13 @@ impl ActiveStreamingSegment {
                     rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
                     reifier_index: std::mem::take(&mut self.reifier_index),
                 };
-                folder.report_ambiguous_reifiers();
+                folder.report_ambiguous_reifiers()?;
             }
             self.g.segment_heads.push(self.expected_prev);
             if let Some(head) = self.g.segment_heads.last() {
                 sink.segment_head(self.segment_index, head);
             }
-            let seg_meta = self.g.meta.clone();
+            let seg_meta = std::mem::take(&mut self.g.meta);
             self.g.segment_meta.push(seg_meta);
             self.g
                 .segment_profiles
@@ -2573,7 +2887,8 @@ impl ActiveStreamingSegment {
                 sink.streamable_layout(self.segment_index, info);
             }
         }
-        absorb_segment_result(result, &self.g);
+        absorb_segment_result(result, &mut self.g);
+        Ok(())
     }
 }
 
@@ -2593,8 +2908,32 @@ pub fn read_to_sink_from_reader<R: Read>(
         inner: reader,
         pos: 0,
         address_exhausted: None,
+        maximum: None,
     };
     read_items(&mut reader, options, sink)
+}
+
+/// Read a byte stream through the same caller-owned dictionary fold.
+///
+/// This has the ownership and resource boundaries of
+/// [`read_to_sink_with_dictionary`] while consuming source items incrementally.
+///
+/// # Errors
+/// Returns original dictionary storage, admission and cancellation failures.
+pub fn read_to_sink_from_reader_with_dictionary<R: Read>(
+    reader: R,
+    options: ReadOptions<'_>,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    let limits = dictionary.limits()?;
+    let mut reader = StreamingCountingReader {
+        inner: reader,
+        pos: 0,
+        address_exhausted: None,
+        maximum: Some(limits.encoded_frame_bytes),
+    };
+    read_items_stored(&mut reader, options, sink, Some(dictionary))
 }
 
 fn read_items(
@@ -2602,57 +2941,139 @@ fn read_items(
     options: ReadOptions<'_>,
     sink: &mut dyn StreamingSink,
 ) -> StreamingReadResult {
-    let mut result = StreamingReadResult::default();
-    let mut torn_cause = None;
-    let mut item_index = 0u64;
-    let mut current: Option<ActiveStreamingSegment> = None;
-    loop {
-        let (item, frame_start, frame_end) = match reader.next() {
-            Ok(Some(item)) => item,
-            Ok(None) => break,
-            Err(torn) => {
-                if let Some((position, read)) = reader.address_exhausted() {
+    // Resident adapters perform no fallible dictionary-storage operation.
+    match read_items_stored(reader, options, sink, None) {
+        Ok(result) => result,
+        Err(error) => unreachable!("resident dictionary storage cannot fail: {error}"),
+    }
+}
+
+fn read_items_stored(
+    reader: &mut impl ItemSource,
+    options: ReadOptions<'_>,
+    sink: &mut dyn StreamingSink,
+    mut dictionary: Option<&mut dyn TermStorage>,
+) -> Result<StreamingReadResult, DictionaryError> {
+    let limits = dictionary
+        .as_deref_mut()
+        .map(TermStorage::limits)
+        .transpose()?;
+    let result = (|| {
+        let mut result = StreamingReadResult::default();
+        let mut completed_meta_entries = 0usize;
+        let mut torn_cause = None;
+        let mut item_index = 0u64;
+        let mut current: Option<ActiveStreamingSegment> = None;
+        loop {
+            let (item, frame_start, frame_end) = match reader.next() {
+                Ok(Some(item)) => item,
+                Ok(None) => break,
+                Err(ItemError::Dictionary(error)) => return Err(error),
+                Err(ItemError::Torn(torn)) => {
+                    if let Some((position, read)) = reader.address_exhausted() {
+                        push_result_diagnostic(
+                            &mut result,
+                            sink,
+                            Diagnostic {
+                                cause: None,
+                                code: "ResourceLimit".to_owned(),
+                                detail: "GTS source byte offset exceeds u64::MAX".to_owned(),
+                                frame_index: Some(item_index),
+                            }
+                            .with_native_cause(FoldError::ByteOffset { position, read }),
+                        );
+                        return Ok(result);
+                    }
+                    result.torn = Some(torn.offset);
+                    torn_cause = Some(torn);
+                    break;
+                }
+            };
+            if let StreamItem::Header(item) = item {
+                if let Some(segment) = current.take() {
+                    if !options.allow_segments {
+                        segment.finish_into_result(
+                            &mut result,
+                            sink,
+                            dictionary
+                                .as_mut()
+                                .map(|store| &mut **store as &mut dyn TermStorage),
+                        )?;
+                        push_result_diagnostic(
+                            &mut result,
+                            sink,
+                            Diagnostic {
+                                cause: None,
+                                code: "SegmentBoundary".to_string(),
+                                detail: format!(
+                                    "segment boundary at item {item_index} but reader is in \
+                                     pre-segment mode; remainder of file NOT folded (folding \
+                                     it with file-global term-ids would silently misfold — §16)"
+                                ),
+                                frame_index: Some(item_index),
+                            }
+                            .with_native_cause(FoldError::SegmentBoundary { item: item_index }),
+                        );
+                        return Ok(result);
+                    }
+                    segment.finish_into_result(
+                        &mut result,
+                        sink,
+                        dictionary
+                            .as_mut()
+                            .map(|store| &mut **store as &mut dyn TermStorage),
+                    )?;
+                    completed_meta_entries = completed_meta_entries
+                        .saturating_add(result.segment_meta.last().map_or(0, Vec::len));
+                } else if item_index != 0 {
                     push_result_diagnostic(
                         &mut result,
                         sink,
                         Diagnostic {
                             cause: None,
-                            code: "ResourceLimit".to_owned(),
-                            detail: "GTS source byte offset exceeds u64::MAX".to_owned(),
-                            frame_index: Some(item_index),
+                            code: "DamagedFrame".to_string(),
+                            detail: "first item is not a header".to_string(),
+                            frame_index: Some(0),
                         }
-                        .with_native_cause(FoldError::ByteOffset { position, read }),
+                        .with_native_cause(FoldError::FirstHeader),
                     );
-                    return result;
+                    return Ok(result);
                 }
-                result.torn = Some(torn.offset);
-                torn_cause = Some(torn);
-                break;
-            }
-        };
-        if let StreamItem::Header(item) = item {
-            if let Some(segment) = current.take() {
-                if !options.allow_segments {
-                    segment.finish_into_result(&mut result, sink);
-                    push_result_diagnostic(
-                        &mut result,
-                        sink,
-                        Diagnostic {
-                            cause: None,
-                            code: "SegmentBoundary".to_string(),
-                            detail: format!(
-                                "segment boundary at item {item_index} but reader is in \
-                                 pre-segment mode; remainder of file NOT folded (folding \
-                                 it with file-global term-ids would silently misfold — §16)"
-                            ),
-                            frame_index: Some(item_index),
-                        }
-                        .with_native_cause(FoldError::SegmentBoundary { item: item_index }),
-                    );
-                    return result;
+                current = Some(ActiveStreamingSegment::new(
+                    item,
+                    item_index,
+                    result.segment_heads.len() as u64,
+                    sink,
+                ));
+            } else if let Some(segment) = current.as_mut() {
+                let StreamItem::Frame(item) = item else {
+                    unreachable!("headers are handled before frame dispatch");
+                };
+                if let Err(error) = segment.process_frame(
+                    item.view(),
+                    item_index,
+                    ByteRange {
+                        start: frame_start,
+                        end: frame_end,
+                    },
+                    sink,
+                    options.content_key,
+                    dictionary
+                        .as_mut()
+                        .map(|store| &mut **store as &mut dyn TermStorage),
+                ) {
+                    let cause = match error {
+                        ProcessError::Dictionary(error) => return Err(error),
+                        ProcessError::Decode(cause) => cause,
+                    };
+                    result.torn = Some(frame_start);
+                    torn_cause = Some(TornAppendError {
+                        offset: frame_start,
+                        cause,
+                    });
+                    break;
                 }
-                segment.finish_into_result(&mut result, sink);
-            } else if item_index != 0 {
+            } else {
                 push_result_diagnostic(
                     &mut result,
                     sink,
@@ -2664,120 +3085,126 @@ fn read_items(
                     }
                     .with_native_cause(FoldError::FirstHeader),
                 );
-                return result;
+                return Ok(result);
             }
-            current = Some(ActiveStreamingSegment::new(
-                item,
-                item_index,
-                result.segment_heads.len() as u64,
-                sink,
-            ));
-        } else if let Some(segment) = current.as_mut() {
-            let StreamItem::Frame(item) = item else {
-                unreachable!("headers are handled before frame dispatch");
+            if let Some(limits) = limits {
+                let required = completed_meta_entries
+                    .saturating_add(result.diagnostics.len())
+                    .saturating_add(result.segment_heads.len().saturating_mul(4))
+                    .saturating_add(
+                        current
+                            .as_ref()
+                            .map_or(0, ActiveStreamingSegment::retained_entries),
+                    );
+                check_metadata_limit(required, limits)?;
+            }
+            item_index = match item_index.checked_add(1) {
+                Some(next) => next,
+                None => {
+                    push_result_diagnostic(
+                        &mut result,
+                        sink,
+                        Diagnostic {
+                            cause: None,
+                            code: "ResourceLimit".to_owned(),
+                            detail: "GTS item ordinal exceeds u64::MAX".to_owned(),
+                            frame_index: Some(item_index),
+                        }
+                        .with_native_cause(FoldError::ItemOrdinal { item: item_index }),
+                    );
+                    return Ok(result);
+                }
             };
-            if let Err(cause) = segment.process_frame(
-                item.view(),
-                item_index,
-                frame_start,
-                frame_end,
-                sink,
-                options.content_key,
-            ) {
-                result.torn = Some(frame_start);
-                torn_cause = Some(TornAppendError {
-                    offset: frame_start,
-                    cause,
-                });
-                break;
-            }
-        } else {
+        }
+
+        if item_index == 0 {
+            let diagnostic = Diagnostic {
+                cause: None,
+                code: "EmptyFile".to_string(),
+                detail: "no CBOR items".to_string(),
+                frame_index: None,
+            };
             push_result_diagnostic(
                 &mut result,
                 sink,
-                Diagnostic {
-                    cause: None,
-                    code: "DamagedFrame".to_string(),
-                    detail: "first item is not a header".to_string(),
-                    frame_index: Some(0),
-                }
-                .with_native_cause(FoldError::FirstHeader),
+                match torn_cause {
+                    Some(error) => diagnostic.with_native_cause(error),
+                    None => diagnostic.with_native_cause(FoldError::EmptyFile),
+                },
             );
-            return result;
+            return Ok(result);
         }
-        item_index = match item_index.checked_add(1) {
-            Some(next) => next,
-            None => {
+        if let Some(segment) = current {
+            segment.finish_into_result(
+                &mut result,
+                sink,
+                dictionary
+                    .as_mut()
+                    .map(|store| &mut **store as &mut dyn TermStorage),
+            )?;
+        }
+
+        if let Some(expected) = options.expected_head {
+            let last_head = result.segment_heads.last().cloned().unwrap_or_default();
+            if last_head != expected {
                 push_result_diagnostic(
                     &mut result,
                     sink,
                     Diagnostic {
                         cause: None,
-                        code: "ResourceLimit".to_owned(),
-                        detail: "GTS item ordinal exceeds u64::MAX".to_owned(),
-                        frame_index: Some(item_index),
+                        code: "TruncatedLog".to_string(),
+                        detail: "observed head does not match expected head".to_string(),
+                        frame_index: None,
                     }
-                    .with_native_cause(FoldError::ItemOrdinal { item: item_index }),
+                    .with_native_cause(FoldError::ExpectedHead {
+                        actual: last_head,
+                        expected: expected.to_vec(),
+                    }),
                 );
-                return result;
             }
-        };
-    }
-
-    if item_index == 0 {
-        let diagnostic = Diagnostic {
-            cause: None,
-            code: "EmptyFile".to_string(),
-            detail: "no CBOR items".to_string(),
-            frame_index: None,
-        };
-        push_result_diagnostic(
-            &mut result,
-            sink,
-            match torn_cause {
-                Some(error) => diagnostic.with_native_cause(error),
-                None => diagnostic.with_native_cause(FoldError::EmptyFile),
-            },
-        );
-        return result;
-    }
-    if let Some(segment) = current {
-        segment.finish_into_result(&mut result, sink);
-    }
-
-    if let Some(expected) = options.expected_head {
-        let last_head = result.segment_heads.last().cloned().unwrap_or_default();
-        if last_head != expected {
+        }
+        if let Some(error) = torn_cause {
             push_result_diagnostic(
                 &mut result,
                 sink,
                 Diagnostic {
                     cause: None,
-                    code: "TruncatedLog".to_string(),
-                    detail: "observed head does not match expected head".to_string(),
+                    code: "TornAppendError".to_string(),
+                    detail: error.to_string(),
                     frame_index: None,
                 }
-                .with_native_cause(FoldError::ExpectedHead {
-                    actual: last_head,
-                    expected: expected.to_vec(),
-                }),
+                .with_native_cause(error),
             );
         }
-    }
-    if let Some(error) = torn_cause {
-        push_result_diagnostic(
-            &mut result,
-            sink,
-            Diagnostic {
-                cause: None,
-                code: "TornAppendError".to_string(),
-                detail: error.to_string(),
-                frame_index: None,
-            }
-            .with_native_cause(error),
-        );
+        Ok(result)
+    })();
+    if result.is_ok() {
+        if let (Some(limits), Ok(result)) = (limits, &result) {
+            let required = result
+                .segment_meta
+                .iter()
+                .map(Vec::len)
+                .fold(0usize, usize::saturating_add)
+                .saturating_add(result.diagnostics.len())
+                .saturating_add(result.segment_heads.len().saturating_mul(4));
+            check_metadata_limit(required, limits)?;
+        }
+        if let Some(storage) = dictionary {
+            storage.commit()?;
+        }
     }
     result
+}
+
+fn check_metadata_limit(required: usize, limits: DictionaryLimits) -> Result<(), DictionaryError> {
+    if required > limits.metadata_entries {
+        return Err(DictionaryError::Limit {
+            resource: "retained-metadata-entries",
+            required,
+            limit: limits.metadata_entries,
+        });
+    }
+    Ok(())
 }
 
 /// The per-segment view of a file — the input to composition tooling (§14.1):
@@ -2975,6 +3402,8 @@ fn read_segment(
         let mut folder = Folder {
             g: &mut g,
             shared_terms: None,
+            stored_terms: None,
+            dictionary_failure: None,
             sink: None,
             content_key,
             segment_index: 0,
@@ -3059,7 +3488,10 @@ fn read_segment(
             }
             folder.fold_frame(frame, abs_index, map_get(frame, "d").map(ValueRef::Owned));
         }
-        folder.report_ambiguous_reifiers();
+        // Resident lookup has no fallible external storage operation.
+        folder
+            .report_ambiguous_reifiers()
+            .expect("resident term lookup cannot fail");
         (folder.index_records, folder.blob_events)
     };
     g.segment_heads.push(expected_prev);
@@ -3096,6 +3528,7 @@ mod transformed_payload_tests {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,
             address_exhausted: None,
+            maximum: None,
         };
         let (_, start, end) = next_stream_item(&mut reader).unwrap().unwrap();
         assert_eq!(start, (1 << 32) + 7);
@@ -3104,6 +3537,7 @@ mod transformed_payload_tests {
             inner: std::io::Cursor::new([1u8]),
             pos: u64::MAX,
             address_exhausted: None,
+            maximum: None,
         };
         assert_eq!(next_stream_item(&mut reader).unwrap_err().offset, u64::MAX);
         assert_eq!(reader.address_exhausted, Some((u64::MAX, 1)));

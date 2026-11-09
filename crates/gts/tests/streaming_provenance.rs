@@ -9,10 +9,13 @@
 //! same bytes: both derive their per-frame `(content-id, byte range, wire
 //! type, valid)` from the same frames, so they must agree field-for-field.
 
+use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, Term};
 use purrdf_gts::reader::{FrameContext, StreamingSink, read_to_sink};
+use purrdf_gts::reader::{ReadOptions, read_to_sink_with_dictionary};
 use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
+use purrdf_lex::allocation::{Ceiling, Memory, OwnedAdmission, SharedOwned};
 use std::sync::Arc;
 
 /// Owned copy of one streamed [`FrameContext`], captured for later assertion.
@@ -130,15 +133,73 @@ fn streaming_frame_provenance_matches_offline_inventory() {
 #[derive(Default)]
 struct OrderingSink {
     log: Vec<String>,
+    leases: Vec<TermLease>,
+    refuse_scratch: bool,
+    replay_scratch: bool,
+}
+
+#[derive(Default)]
+struct LocalReplay(std::io::Cursor<Vec<u8>>);
+impl std::io::Read for LocalReplay {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.0, bytes)
+    }
+}
+impl std::io::Write for LocalReplay {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::io::Write::write(&mut self.0, bytes)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl std::io::Seek for LocalReplay {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.0, position)
+    }
+}
+impl purrdf_lex::cbor::ReplayStorage for LocalReplay {
+    fn finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl OrderingSink {
+    fn record_term(&mut self, segment: u64, term: usize) {
+        self.log.push(format!("term:{segment}:{term}"));
+    }
 }
 
 impl StreamingSink for OrderingSink {
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        if self.replay_scratch {
+            return Some(Ok(Box::new(LocalReplay::default())));
+        }
+        self.refuse_scratch.then(|| {
+            Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
+            ))
+        })
+    }
     fn frame(&mut self, ctx: FrameContext<'_>) {
         self.log
             .push(format!("frame:{}:{}", ctx.segment_index, ctx.frame_index));
     }
     fn term(&mut self, segment_index: u64, term_id: usize, _term: Arc<Term>) {
-        self.log.push(format!("term:{segment_index}:{term_id}"));
+        self.record_term(segment_index, term_id);
+    }
+    fn stored_term(
+        &mut self,
+        segment: u64,
+        id: usize,
+        term: TermLease,
+    ) -> Result<(), DictionaryError> {
+        self.record_term(segment, id);
+        self.leases.push(term);
+        Ok(())
     }
     fn quad(&mut self, segment_index: u64, _quad: Quad) {
         self.log.push(format!("quad:{segment_index}"));
@@ -155,6 +216,269 @@ impl StreamingSink for OrderingSink {
     fn opaque(&mut self, segment_index: u64, _opaque: &OpaqueNode) {
         self.log.push(format!("opaque:{segment_index}"));
     }
+}
+
+struct TermAccount {
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+    account: OwnedAdmission<Ceiling>,
+}
+
+impl Drop for TermAccount {
+    fn drop(&mut self) {
+        self.dropped
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[derive(Default)]
+struct StoredTerms {
+    terms: std::collections::BTreeMap<TermKey, TermLease>,
+    bindings: std::collections::BTreeMap<TermKey, purrdf_gts::model::Triple3>,
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+    fail_read: bool,
+    omit_read: bool,
+}
+
+impl TermStorage for StoredTerms {
+    fn limits(&mut self) -> Result<purrdf_gts::dictionary::DictionaryLimits, DictionaryError> {
+        Ok(purrdf_gts::dictionary::DictionaryLimits {
+            encoded_frame_bytes: 4096,
+            decoded_frame_bytes: 4096,
+            metadata_entries: 4096,
+        })
+    }
+    fn put(&mut self, key: TermKey, term: &Term) -> Result<(), DictionaryError> {
+        let mut owner = TermAccount {
+            dropped: Arc::clone(&self.dropped),
+            account: OwnedAdmission::new(Ceiling(4096)),
+        };
+        let mut memory = Memory::new(&mut owner.account);
+        let copied = Term {
+            kind: term.kind,
+            value: term
+                .value
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            datatype: term.datatype,
+            lang: term
+                .lang
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            direction: term
+                .direction
+                .as_deref()
+                .map(|text| memory.string(text))
+                .transpose()?,
+            reifier: term.reifier,
+            triple: term.triple,
+        };
+        memory.add_bytes(SharedOwned::<Term>::allocation_layout::<TermAccount>().size())?;
+        self.terms
+            .insert(key, TermLease::try_from_admitted(copied, owner)?);
+        Ok(())
+    }
+
+    fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {
+        if self.fail_read {
+            return Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                purrdf_testkit::error_capture::CallerRefusal { limit: u128::MAX },
+            )
+            .into());
+        }
+        Ok((!self.omit_read)
+            .then(|| self.terms.get(&key).cloned())
+            .flatten())
+    }
+
+    fn checkpoint(&mut self, _units: u64) -> Result<(), DictionaryError> {
+        Ok(())
+    }
+    fn commit(&mut self) -> Result<(), DictionaryError> {
+        Ok(())
+    }
+
+    fn first_binding(
+        &mut self,
+        key: TermKey,
+    ) -> Result<Option<purrdf_gts::model::Triple3>, DictionaryError> {
+        Ok(self.bindings.get(&key).copied())
+    }
+
+    fn bind_first(
+        &mut self,
+        key: TermKey,
+        triple: purrdf_gts::model::Triple3,
+    ) -> Result<(), DictionaryError> {
+        self.bindings.entry(key).or_insert(triple);
+        Ok(())
+    }
+}
+
+#[test]
+fn stored_reader_preserves_order_and_pins_and_returns_original_storage_failures() {
+    struct NativeRefusal;
+    impl std::io::Read for NativeRefusal {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                DictionaryError::Corrupt("original source refusal"),
+            ))
+        }
+    }
+    // A caller source may carry any native cause. Its type must not select the
+    // external-storage protocol or break the resident reader's torn contract.
+    let resident_refusal = purrdf_gts::reader::read_to_sink_from_reader(
+        NativeRefusal,
+        ReadOptions::default(),
+        &mut OrderingSink::default(),
+    );
+    assert_eq!(resident_refusal.diagnostics[0].code, "EmptyFile");
+    let mut transformed = Writer::new("rdf12");
+    transformed.add_frame(
+        "snapshot",
+        None,
+        Some(purrdf_lex::cbor::encode(&purrdf_lex::cbor::Value::Map(
+            vec![(
+                "terms".into(),
+                purrdf_lex::cbor::Value::Array(vec![purrdf_gts::writer::term_to_wire(&Term::iri(
+                    "https://example.org/transformed",
+                ))]),
+            )],
+        ))),
+        Some(&["gzip".to_owned()]),
+        None,
+    );
+    let transformed = transformed.into_bytes();
+    let valid = read_to_sink_with_dictionary(
+        &transformed,
+        ReadOptions::default(),
+        &mut StoredTerms::default(),
+        &mut OrderingSink::default(),
+    )
+    .expect("bounded transformed neighbour");
+    assert_eq!(valid.diagnostics.len(), 0, "{:?}", valid.diagnostics);
+    let (mut items, torn) = purrdf_gts::wire::iter_items(&transformed);
+    assert!(torn.is_none());
+    let purrdf_lex::cbor::Value::Map(frame) = &mut items[1].1 else {
+        panic!("snapshot frame map");
+    };
+    purrdf_lex::assoc::insert(
+        frame,
+        "d".into(),
+        purrdf_lex::cbor::Value::Bytes(b"invalid gzip".to_vec()),
+    );
+    let id = purrdf_gts::wire::content_id(frame);
+    purrdf_lex::assoc::insert(frame, "id".into(), purrdf_lex::cbor::Value::Bytes(id));
+    let mut corrupt = Vec::new();
+    for (_, item) in items {
+        corrupt.extend(purrdf_gts::wire::canonical(&item));
+    }
+    let resident = read_to_sink(
+        &corrupt,
+        false,
+        None,
+        &mut OrderingSink {
+            replay_scratch: true,
+            ..OrderingSink::default()
+        },
+    );
+    let stored = read_to_sink_with_dictionary(
+        &corrupt,
+        ReadOptions::default(),
+        &mut StoredTerms::default(),
+        &mut OrderingSink {
+            replay_scratch: true,
+            ..OrderingSink::default()
+        },
+    )
+    .expect("carrier corruption retains permissive diagnostics");
+    assert_eq!(resident.diagnostics.len(), stored.diagnostics.len());
+    for (expected, actual) in resident.diagnostics.iter().zip(&stored.diagnostics) {
+        assert_eq!(
+            (&actual.code, &actual.detail, actual.frame_index),
+            (&expected.code, &expected.detail, expected.frame_index)
+        );
+    }
+    assert_eq!(stored.diagnostics[0].code, "DamagedFrame");
+    let refused = read_to_sink_with_dictionary(
+        &transformed,
+        ReadOptions::default(),
+        &mut StoredTerms::default(),
+        &mut OrderingSink {
+            refuse_scratch: true,
+            ..OrderingSink::default()
+        },
+    )
+    .expect_err("supplied scratch failure cannot become an opaque successful read");
+    assert_eq!(
+        purrdf_testkit::error_capture::Capture::read(&refused).code,
+        "gts-dictionary-io"
+    );
+    let data = three_frame_fixture();
+    let mut resident = OrderingSink::default();
+    let resident_read = read_to_sink(&data, false, None, &mut resident);
+    assert_eq!(
+        resident_read.diagnostics.len(),
+        0,
+        "{:?}",
+        resident_read.diagnostics
+    );
+    let mut storage = StoredTerms::default();
+    let dropped = Arc::clone(&storage.dropped);
+    let mut stored = OrderingSink::default();
+    let result =
+        read_to_sink_with_dictionary(&data, ReadOptions::default(), &mut storage, &mut stored)
+            .expect("stored reader accepts the valid neighbour");
+    assert_eq!(result.diagnostics.len(), 0, "{:?}", result.diagnostics);
+    assert_eq!(stored.log, resident.log);
+    let lease = stored.leases[0].clone();
+    drop(storage);
+    drop(stored);
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(lease.value.as_deref(), Some("http://example.org/s"));
+    drop(lease);
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+    let mut storage = StoredTerms {
+        fail_read: true,
+        ..StoredTerms::default()
+    };
+    let error = read_to_sink_with_dictionary(
+        &data,
+        ReadOptions::default(),
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("original host refusal must abort the drive");
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut original = None;
+    while let Some(error) = cause {
+        if let Some(found) = error.downcast_ref::<purrdf_testkit::error_capture::CallerRefusal>() {
+            original = Some(found.limit);
+            break;
+        }
+        cause = error.source();
+    }
+    assert_eq!(original, Some(u128::MAX));
+
+    let mut storage = StoredTerms {
+        omit_read: true,
+        ..StoredTerms::default()
+    };
+    let error = read_to_sink_with_dictionary(
+        &data,
+        ReadOptions::default(),
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("an absent persisted entry cannot yield a short successful answer");
+    assert_eq!(
+        purrdf_testkit::error_capture::Capture::read(&error).code,
+        "gts-dictionary-missing"
+    );
 }
 
 /// A single-segment fixture with three frames, each producing a known,

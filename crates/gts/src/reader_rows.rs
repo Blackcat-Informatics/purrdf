@@ -3,6 +3,7 @@
 
 use purrdf_lex::cbor::{DecodeError, Value, ValueRef};
 
+use crate::dictionary::DictionaryError;
 use crate::model::{AnnotationRow, ReifierRow, TermKind, Triple3};
 use crate::reader::as_i128;
 use crate::term_table::TermsRef;
@@ -51,6 +52,18 @@ pub(crate) enum RowDecode<T> {
     Row(T),
     Damaged(Box<RowError>),
     Position(Box<RowError>),
+    Storage(DictionaryError),
+}
+
+pub(crate) enum RowCheckError {
+    Position(Box<RowError>),
+    Storage(DictionaryError),
+}
+
+impl From<DictionaryError> for RowCheckError {
+    fn from(error: DictionaryError) -> Self {
+        Self::Storage(error)
+    }
 }
 
 pub(crate) fn decode_reifier_row(
@@ -92,7 +105,10 @@ pub(crate) fn decode_reifier_row(
     };
     let triple = (s, p, o);
     if let Err(detail) = check_statement_positions(terms, triple, graph_slot, "reifier row") {
-        return RowDecode::Position(detail);
+        return match detail {
+            RowCheckError::Position(detail) => RowDecode::Position(detail),
+            RowCheckError::Storage(error) => RowDecode::Storage(error),
+        };
     }
     RowDecode::Row((rid, triple, graph_slot))
 }
@@ -135,19 +151,27 @@ pub(crate) fn decode_annotation_row(
     let (Some(reifier), Some(predicate), Some(value)) = (reifier, predicate, value) else {
         return RowDecode::Skip;
     };
-    if terms[predicate].kind != TermKind::Iri {
+    let predicate_kind = match terms.required(predicate) {
+        Ok(term) => term.kind,
+        Err(error) => return RowDecode::Storage(error),
+    };
+    if predicate_kind != TermKind::Iri {
         return RowDecode::Position(Box::new(RowError::AnnotationPredicate {
             id: predicate,
-            actual: terms[predicate].kind,
+            actual: predicate_kind,
         }));
     }
-    if let Some(graph_name) = graph_slot
-        && matches!(terms[graph_name].kind, TermKind::Literal | TermKind::Triple)
-    {
-        return RowDecode::Position(Box::new(RowError::AnnotationGraph {
-            id: graph_name,
-            actual: terms[graph_name].kind,
-        }));
+    if let Some(graph_name) = graph_slot {
+        let kind = match terms.required(graph_name) {
+            Ok(term) => term.kind,
+            Err(error) => return RowDecode::Storage(error),
+        };
+        if matches!(kind, TermKind::Literal | TermKind::Triple) {
+            return RowDecode::Position(Box::new(RowError::AnnotationGraph {
+                id: graph_name,
+                actual: kind,
+            }));
+        }
     }
     RowDecode::Row((reifier, predicate, value, graph_slot))
 }
@@ -158,7 +182,7 @@ pub(crate) fn check_quad_positions(
     p: usize,
     o: usize,
     graph_slot: Option<usize>,
-) -> Result<(), Box<RowError>> {
+) -> Result<(), RowCheckError> {
     check_statement_positions(terms, (s, p, o), graph_slot, "quad")
 }
 
@@ -167,39 +191,42 @@ fn check_statement_positions(
     (s, p, o): Triple3,
     graph_slot: Option<usize>,
     context: &'static str,
-) -> Result<(), Box<RowError>> {
+) -> Result<(), RowCheckError> {
     let n = terms.len();
     if !(s < n && p < n && o < n && graph_slot.is_none_or(|gv| gv < n)) {
-        return Err(Box::new(RowError::Bounds {
+        return Err(RowCheckError::Position(Box::new(RowError::Bounds {
             context,
             s,
             p,
             o,
             graph: graph_slot,
             terms: n,
-        }));
+        })));
     }
 
     // A well-formed quad: predicate is an IRI, subject is not a literal, and any
     // graph name is neither a literal nor a quoted triple.
-    let ok = terms[p].kind == TermKind::Iri
-        && terms[s].kind != TermKind::Literal
-        && graph_slot.is_none_or(|graph_name| {
-            !matches!(terms[graph_name].kind, TermKind::Literal | TermKind::Triple)
-        });
+    let predicate_kind = terms.required(p)?.kind;
+    let subject_kind = terms.required(s)?.kind;
+    let graph_kind = graph_slot
+        .map(|graph_name| terms.required(graph_name).map(|term| term.kind))
+        .transpose()?;
+    let ok = predicate_kind == TermKind::Iri
+        && subject_kind != TermKind::Literal
+        && graph_kind.is_none_or(|kind| !matches!(kind, TermKind::Literal | TermKind::Triple));
     if ok {
         Ok(())
     } else {
-        Err(Box::new(RowError::Positions {
+        Err(RowCheckError::Position(Box::new(RowError::Positions {
             context,
             s,
             p,
             o,
             graph: graph_slot,
-            subject_kind: terms[s].kind,
-            predicate_kind: terms[p].kind,
-            graph_kind: graph_slot.map(|id| terms[id].kind),
-        }))
+            subject_kind,
+            predicate_kind,
+            graph_kind,
+        })))
     }
 }
 
