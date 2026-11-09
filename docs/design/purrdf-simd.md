@@ -916,6 +916,12 @@ source statistics and directories. Its mapped site identifies the shared
 single-block hashing used by source identities. Fixture construction, validation
 for the materialization case, and output destruction remain outside timing.
 
+`freeze_alloc` uses the same fixture in a separate counting-allocator process.
+It reports allocation count, requested bytes, retained live-byte change and peak
+working span for freeze, validated materialization and build plus freeze. The
+combined case exposes costs shifted into ingestion. Verification, reporting and
+output destruction remain outside each measurement window.
+
 <!-- simd-asm:benches:begin -->
 | bench | sites |
 |---|---|
@@ -964,6 +970,7 @@ for the materialization case, and output destruction remain outside timing.
 | `crates/rdf-core/benches/dataset_state_digest.rs` | blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf-core/benches/distance.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
 | `crates/rdf-core/benches/freeze.rs` | blake3.single-block |
+| `crates/rdf-core/benches/freeze_alloc.rs` | blake3.single-block |
 | `crates/rdf-core/benches/intern_absoluteness.rs` | core.intern, iri.delimiter-scan |
 | `crates/rdf-core/benches/intern_content_id.rs` | core.intern, hash.hex-decode, hash.hex-lower, hash.fixed-terminal |
 | `crates/rdf-core/benches/ir_layout.rs` | core.dataset-scan-filter, core.intern |

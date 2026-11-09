@@ -141,6 +141,11 @@ name = "freeze"
 harness = false
 
 [[bench]]
+# Separate allocator instrumentation for freeze, materialization and build costs.
+name = "freeze_alloc"
+harness = false
+
+[[bench]]
 # Complete-state identity construction over fixed native shapes. Report-only;
 # it does not alter or compare any preexisting identity's hot path.
 name = "dataset_state_digest"
