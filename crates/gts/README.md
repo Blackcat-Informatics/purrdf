@@ -46,6 +46,62 @@ The crate owns the wire-format machinery:
   Private keys and shared secrets clear their owned storage on drop. Matrix
   sampling depends on public data; secret arithmetic uses fixed schedules.
 
+### Exact tar source inventory
+
+`tar::inventory::read` reads supplied **uncompressed** archive bytes with explicit
+`Limits` and a caller's `purrdf_lex::allocation::Admission`. It returns a complete
+immutable inventory or an original typed refusal. It performs no transport
+detection, decompression, extraction or GTS serialization.
+
+```rust
+use purrdf_gts::tar::inventory::{self, Inventory, Limits};
+use purrdf_lex::allocation::Resident;
+
+fn checked_archive(uncompressed: &[u8]) -> Result<Inventory<'_>, inventory::Error> {
+    let limits = Limits {
+        source_bytes: 64 * 1024 * 1024,
+        entries: 4096,
+        metadata_bytes: 8 * 1024 * 1024,
+        storage_bytes: 64 * 1024 * 1024,
+        work: 64 * 1024 * 1024,
+    };
+    inventory::read(uncompressed, limits, &mut Resident)
+}
+```
+
+`Name` keeps a USTAR prefix and name in separate original ranges; their effective
+separator is one `/`. GNU long names/links and local/global PAX overrides retain
+their exact originating bytes. Paths are neither normalized nor decoded lossily.
+`Field::bytes` exposes original bytes, and `Field::utf8` reports its native cause
+at the original range. Payloads borrow the original input. `records` includes
+all physical GNU/PAX extension headers, and each member exposes its selected PAX
+properties, including core keywords, rather than discarding them.
+
+PAX size controls body boundaries before the next header is located. Global
+values persist; local values belong to the next real member. Empty overrides
+remove the applicable value. Both pending GNU fields are consumed by that member
+even when PAX overrides them. Malformed selected numeric values, unsupported
+record kinds or sparse framing, incomplete headers/bodies/padding, unfinished
+extensions and missing end markers refuse. Two zero end blocks and only zero
+trailing padding are required. Unknown ordinary PAX properties remain visible
+as original metadata.
+
+Limits admit source bytes, every physical nonzero header, extension body bytes,
+owned metadata/record storage and logical scan/comparison/storage work. They do
+not claim a universal allocator peak or include a caller's subsequent processing.
+The strict path retains invalid path bytes until explicit UTF-8 conversion; it
+never substitutes a legacy parser after refusal.
+
+Buffered and seekable GTS import use the same framing and metadata core. Their
+existing v4 options and output projection remain distinct from the evidence API:
+legacy paths retain replacement decoding and `./`/trailing-separator trimming.
+The legacy timestamp projection keeps unsigned whole seconds, floors positive
+fractions, and uses the original header timestamp for a valid negative PAX value
+or a whole-second value outside `u64`.
+The core validates the complete signed decimal spelling first; malformed values
+never select header fallback. The inventory retains the exact selected timestamp
+property without claiming that this GTS projection preserves its full precision.
+
 For ML-KEM, construct `mlkem1024::DecapsulationKey::from_seed(&seed)`, obtain its
 checked public key with `encapsulation_key()?`, then call
 `public.encapsulate(&m)` to obtain `(ciphertext, shared_secret)`. The recipient
