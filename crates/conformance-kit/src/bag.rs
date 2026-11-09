@@ -6,7 +6,7 @@
 use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermFactory, TermValue};
 
 use crate::GradeError;
-use crate::identity::Identities;
+pub use crate::identity::Identities;
 
 mod ground;
 pub use ground::{
@@ -29,30 +29,6 @@ pub fn canonical_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
-    control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<purrdf_core::Canonicalized, GradeError> {
-    canonical_solutions_with_literal_law(
-        variables,
-        rows,
-        ordered,
-        LiteralLaw::Exact,
-        &mut |_, _| Ok(None),
-        control,
-    )
-}
-
-/// Encode a blank-sensitive comparison with an explicitly supplied literal law.
-/// The one global identity map rewrites bare, nested and composite blank references
-/// together. Exact trace callers keep [`canonical_solutions`]'s existing bytes.
-///
-/// # Errors
-/// Returns the original normalization, malformed-input or kernel refusal.
-pub fn canonical_solutions_with_literal_law(
-    variables: &[String],
-    rows: &[Vec<Option<TermValue>>],
-    ordered: bool,
-    literals: LiteralLaw,
-    normalize: &mut impl FnMut(&str, &str) -> Result<Option<String>, GradeError>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_core::Canonicalized, GradeError> {
     validate_solution_shape(variables, rows)?;
@@ -86,15 +62,7 @@ pub fn canonical_solutions_with_literal_law(
                 let binding_node =
                     builder.intern_blank(&format!("binding{row_index}_{column}"), BlankScope(1))?;
                 let name = builder.intern_literal(literal(variables[column].clone()))?;
-                let mapped =
-                    identities.try_map(
-                        "result",
-                        value,
-                        &mut |lexical, datatype| match literals {
-                            LiteralLaw::Exact => Ok(None),
-                            LiteralLaw::ByValue => normalize(lexical, datatype),
-                        },
-                    )?;
+                let mapped = identities.map("result", value);
                 let value = builder.intern_value(&mapped)?;
                 builder.push_quad(row_node, binding, binding_node, None)?;
                 builder.push_quad(binding_node, variable, name, None)?;

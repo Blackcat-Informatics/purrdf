@@ -26,8 +26,8 @@ use purrdf_conformance_kit::bag::{
     self, ComparisonLaw, GroundComparison, HeaderLaw, LiteralLaw, RowLaw, SolutionRows,
 };
 use purrdf_core::{
-    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
-    try_fold_nested,
+    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermFactory,
+    TermId, TermValue, try_fold_nested,
 };
 use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_sparql_results::ParsedSolutions;
@@ -613,28 +613,8 @@ fn compare_solution_rows(
             .into())
         };
     }
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let mut normalize = |lexical: &str, datatype: &str| {
-        comparison_lexical_with_memory(lexical, datatype, &mut memory)
-            .map_err(purrdf_conformance_kit::GradeError::from)
-    };
-    let actual_canon = bag::canonical_solutions_with_literal_law(
-        actual.variables,
-        actual.rows,
-        ordered,
-        LiteralLaw::ByValue,
-        &mut normalize,
-        control,
-    )?;
-    let expected_canon = bag::canonical_solutions_with_literal_law(
-        expected.variables,
-        expected.rows,
-        ordered,
-        LiteralLaw::ByValue,
-        &mut normalize,
-        control,
-    )?;
+    let actual_canon = encode_comparison_set(actual, ordered, control)?;
+    let expected_canon = encode_comparison_set(expected, ordered, control)?;
     if actual_canon.nquads() == expected_canon.nquads() {
         Ok(())
     } else {
@@ -658,6 +638,30 @@ fn compare_solution_rows(
                 )
         ).into())
     }
+}
+
+/// Keep the compact row carrier's finite-search behavior while sharing one map
+/// for bare, triple and composite blank references across the complete result.
+fn encode_comparison_set(
+    input: SolutionRows<'_>,
+    ordered: bool,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<purrdf_core::Canonicalized, CompareError> {
+    let mut identities = bag::Identities::default();
+    let mut normalize = |lexical: &str, datatype: &str| {
+        comparison_lexical_with_memory(lexical, datatype, &mut Memory::new(&mut Resident))
+            .map_err(CompareError::from)
+    };
+    encode_solution_set_using(
+        input.variables,
+        input.rows,
+        ordered,
+        &mut |builder, term| {
+            let mapped = identities.try_map("result", term, &mut normalize)?;
+            builder.intern_value(&mapped).map_err(CompareError::from)
+        },
+        control,
+    )
 }
 
 /// The reserved namespace for the synthetic terms [`encode_solution_set`]
@@ -712,6 +716,23 @@ fn encode_solution_set(
     literals: Literals,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_core::Canonicalized, CompareError> {
+    encode_solution_set_using(
+        variables,
+        rows,
+        ordered,
+        &mut |builder, term| intern_term_value(builder, term, literals),
+        control,
+    )
+}
+
+/// One row-carrier layout, with the caller's explicit term identity policy.
+fn encode_solution_set_using(
+    variables: &[String],
+    rows: &[Vec<Option<TermValue>>],
+    ordered: bool,
+    intern: &mut impl FnMut(&mut RdfDatasetBuilder, &TermValue) -> Result<TermId, CompareError>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<purrdf_core::Canonicalized, CompareError> {
     bag::validate_solution_shape(variables, rows)?;
     let mut builder = RdfDatasetBuilder::new();
     let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"))?;
@@ -723,7 +744,7 @@ fn encode_solution_set(
         for (var, cell) in variables.iter().zip(row) {
             if let Some(term) = cell {
                 let predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}var:{var}"))?;
-                let object = intern_term_value(&mut builder, term, literals)?;
+                let object = intern(&mut builder, term)?;
                 builder.push_quad(solution, predicate, object, None)?;
             }
         }

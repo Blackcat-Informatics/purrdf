@@ -9,10 +9,14 @@ use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::cdt_blank::{BlankBinding, rewrite_cdt_blank_terms};
 use purrdf_core::{BlankScope, TermValue};
 
-/// An identity includes its original source domain and scope. Synthetic carrier
-/// nodes use a separate namespace and cannot alias a caller's blank spelling.
-#[derive(Default)]
-pub(crate) struct Identities {
+/// One blank identity map for a complete result or report carrier.
+///
+/// An identity includes its original source domain and scope. Keep this map
+/// across every row that shares blank references. Mapped values use the default
+/// blank scope; synthetic carrier nodes must use another scope so they cannot
+/// alias a caller's blank spelling.
+#[derive(Debug, Default)]
+pub struct Identities {
     names: BTreeMap<(String, String, BlankScope), String>,
 }
 
@@ -52,8 +56,12 @@ impl Identities {
         }
     }
 
-    /// Share one global blank map while a caller explicitly normalizes literals.
-    pub(crate) fn try_map<E>(
+    /// Map bare, triple and composite blanks together under one source domain,
+    /// while the caller explicitly normalizes literals.
+    ///
+    /// # Errors
+    /// Preserves the caller's original literal-normalization refusal.
+    pub fn try_map<E>(
         &mut self,
         domain: &str,
         value: &TermValue,
