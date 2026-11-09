@@ -276,6 +276,39 @@
       "source_checksum": "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
     },
     {
+      "id": "gb18030-mapping-data",
+      "license": "Unicode-3.0",
+      "notices": [
+        "third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA"
+      ],
+      "paths": [
+        "crates/lex/data/gb18030/gbkuni30.txt",
+        "crates/lex/data/gb18030/gb18030-source.html",
+        "crates/lex/src/gb18030/tables.rs"
+      ],
+      "provenance": [
+        "crates/lex/data/gb18030/PROVENANCE.md",
+        "docs/GB18030.md"
+      ],
+      "scope": "original GB 18030 mapping data, source explanation and generated native tables; original Unicode and IBM notices retained; converter and generator independently written",
+      "source": "https://github.com/unicode-org/icu-data"
+    },
+    {
+      "id": "gb18030-reference-2005",
+      "license": "Unicode-DFS-2016 AND ICU",
+      "notices": [
+        "third-party/gb18030-reference-2005/0-LICENSE-ICU-71"
+      ],
+      "paths": [
+        "crates/lex/data/gb18030/gb18030-2005.ucm"
+      ],
+      "provenance": [
+        "crates/lex/data/gb18030/PROVENANCE.md"
+      ],
+      "scope": "source-only independent pre-2022 mapping reference for generator and native qualification, with original notices; no converter code adopted",
+      "source": "https://github.com/unicode-org/icu/blob/release-71-1/icu4c/source/data/mappings/gb18030.ucm"
+    },
+    {
       "id": "getrandom-0.4.3",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -1240,7 +1273,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "7650c0583d78e196252e850ce8bbb9a3a670a2ad2eaf6836b40504d50168504b",
+    "NOTICE.txt": "82f8840d8a6276432cc610d9b5578bc0ef1e182308f48727a31f8f949b190883",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.4/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1361,6 +1394,8 @@
     "third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
     "third-party/eff-word-alphabet/0-CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
     "third-party/eff-word-alphabet/1-EFF-NOTICE.txt": "164492e87bbd29552b8c407e06d1396d9552b00ae363ef958021ab839010a28a",
+    "third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA": "f72db45707e93c90c4bf400edfa5d38ce44fe692789e385548e627459c1bf6c9",
+    "third-party/gb18030-reference-2005/0-LICENSE-ICU-71": "af3e84c401f1a35e8d32d6eb1a33fe587c3981aa5cd206033d9527c1855b57a2",
     "third-party/hashbrown-native-table/0-MIT.txt": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
     "third-party/hashbrown-native-table/1-Apache-2.0.txt": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "third-party/hashbrown-native-table/2-NOTICE": "1523147a6efc4f8c0a660994a10465c2918c3b2c2dd243b3403f6b860b136a4d",

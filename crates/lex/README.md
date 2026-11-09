@@ -136,3 +136,8 @@ The inherited YAML emitter additionally retains its MIT terms, and the generated
 HTML reference data retains `BSD-3-Clause`; see
 [LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
 for the preserved notices and source provenance.
+
+The GB 18030 tables retain Unicode-3.0 mapping-data terms. The source-only
+independent 2005 reference additionally preserves `Unicode-DFS-2016` and `ICU`
+grants in [the original ICU notice](data/gb18030/LICENSE-ICU-71); see the
+[mapping provenance](data/gb18030/PROVENANCE.md) for exact inputs and scopes.
