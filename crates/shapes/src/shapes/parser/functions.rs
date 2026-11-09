@@ -722,7 +722,7 @@ pub(crate) fn invoke_expression_function(
             .as_ref()
             .map(term_value_to_native)
             .filter(|term| !(blank_is_error && matches!(term, Term::BlankNode(_))));
-        if bound.is_none() && index < func.required {
+        if bound.is_none() && (index < func.required || index >= func.params.len()) {
             return Ok(None);
         }
         args.push(bound);

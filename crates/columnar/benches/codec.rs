@@ -19,6 +19,7 @@ fn bench_codec(c: &mut Bench) {
         common::Workload::Mixed,
         common::Workload::Reifiers,
         common::Workload::LargeBlobs,
+        common::Workload::SharedTerms,
     ] {
         let (dataset, blobs) = common::fixture(workload);
         let encoded = write(&*dataset, &blobs, Compression::Zstd)

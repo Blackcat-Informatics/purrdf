@@ -3,6 +3,117 @@
 
 //! Actual question-bound public verification, with explicit missing-evidence refusals.
 
+/// A shared datatype value licenses a key even when another asserted value differs.
+#[test]
+fn public_causal_keys_preserve_cross_datatype_values_and_refuse_a_distinct_neighbour() {
+    use crate::reasoner::{DlAxiom, Verdict};
+    for (lexical, expected) in [("1.0", Verdict::True), ("2.0", Verdict::False)] {
+        let mut f = Fixture::default();
+        let class = f.name("Keyed");
+        let property = f.name("key");
+        let properties = f.list(&[property]);
+        f.edge(class, owl::HAS_KEY, properties);
+        let left = f.instance("left", class);
+        let right = f.instance("right", class);
+        let mut literal = |lexical: &str, datatype: &str| {
+            f.builder
+                .intern_literal(purrdf_core::RdfLiteral {
+                    lexical_form: lexical.to_owned(),
+                    datatype: Some(datatype.to_owned()),
+                    language: None,
+                    direction: None,
+                })
+                .unwrap()
+        };
+        let first = literal("01", purrdf_xsd::datatype::XSD_INTEGER);
+        let second = literal(lexical, purrdf_xsd::datatype::XSD_DECIMAL);
+        let extra = literal("2", purrdf_xsd::datatype::XSD_INTEGER);
+        f.builder.push_quad(left, property, first, None).unwrap();
+        f.builder.push_quad(right, property, second, None).unwrap();
+        f.builder.push_quad(right, property, extra, None).unwrap();
+        let source = f.freeze();
+        let axiom = DlAxiom::SameIndividual {
+            left: source.term_value(left),
+            right: source.term_value(right),
+        };
+        assert_eq!(
+            *Reasoner::new(&source)
+                .unwrap()
+                .entails(&axiom)
+                .unwrap()
+                .answer(),
+            expected
+        );
+        if expected == Verdict::False {
+            continue;
+        }
+        let mut producer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        let answer = producer.entails(&axiom).unwrap();
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let mut consumer = Reasoner::with_proofs(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+        consumer.prepare(&question).unwrap();
+        let ctx = consumer.borrowed_proof_context().unwrap();
+        let encoded = answer.proof().unwrap().encode();
+        let proof = ServiceProof::decode(&encoded).unwrap();
+        let causal = proof
+            .verify_prepared_causal(&question, Some(answer.certificate()), &ctx)
+            .unwrap();
+        let first = source.term_value(first);
+        let second = source.term_value(second);
+        let mut matches = 0;
+        for (_, refutation) in causal.refutations() {
+            for clash in refutation.clashes() {
+                for input in clash.inputs() {
+                    if let Some(values) = input.key_values() {
+                        for value in values {
+                            matches += 1;
+                            assert_eq!(value.equality(), CausalKeyEquality::LiteralValue);
+                            assert_ne!(value.value(), value.right_value());
+                            for (assertion, original) in [
+                                (value.left(), value.value()),
+                                (value.right(), value.right_value()),
+                            ] {
+                                let CausalInputSource::Axiom(ResolvedAxiomSource::Triple {
+                                    object,
+                                    ..
+                                }) = assertion.source()
+                                else {
+                                    unreachable!()
+                                };
+                                assert_eq!(object, original);
+                                assert!(
+                                    [ResolvedTerm::Source(&first), ResolvedTerm::Source(&second)]
+                                        .contains(&original)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            matches > 0,
+            "the independent checked proof retains its key-value warrant"
+        );
+    }
+}
+
 /// The original native prefix must establish the inequality closing a nominal merge.
 #[test]
 fn public_causal_counting_checks_reachable_merge_closure_and_generated_inequality() {

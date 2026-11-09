@@ -4,10 +4,9 @@
 //! Bounded resident fixture construction and complete untrusted-image validation.
 
 use super::super::statistics::{LocalStatistics, StatisticsMergeError, StatisticsSection};
-use purrdf_lex::allocation::{Memory, Resident};
+use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError};
 use std::sync::Arc;
 
-use crate::backend::TermFactory;
 use crate::{GlobalTermId, QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 
 use super::format::{self, DecodedRecords, Header, Reader, Stream};
@@ -32,6 +31,10 @@ pub struct SegmentedBuildLimits {
 }
 impl SegmentedBuildLimits {
     /// Choose resident construction limits and the persisted block layout explicitly.
+    /// `terms` and `term_bytes` bound distinct dictionary entries and their UTF-8
+    /// payload, including datatype and reification IRIs. Spare allocation capacity
+    /// and temporary workspace are separate. `rows` counts accepted row and named
+    /// graph declaration operations, including duplicates.
     ///
     /// # Errors
     /// Refuses invalid block sizes or zero/oversized dictionary block counts.
@@ -80,18 +83,14 @@ impl SegmentedBuildLimits {
 pub struct SegmentedBuilder {
     builder: RdfDatasetBuilder,
     limits: SegmentedBuildLimits,
-    admitted_terms: u64,
-    admitted_bytes: u64,
     admitted_rows: u64,
 }
 impl SegmentedBuilder {
     /// Start an empty resident builder without allocating its declared ceilings.
     pub fn new(limits: SegmentedBuildLimits) -> Result<Self, SegmentedError> {
         Ok(Self {
-            builder: RdfDatasetBuilder::new(),
+            builder: RdfDatasetBuilder::with_dictionary_limits(limits.terms, limits.term_bytes),
             limits,
-            admitted_terms: 0,
-            admitted_bytes: 0,
             admitted_rows: 0,
         })
     }
@@ -133,33 +132,19 @@ impl SegmentedBuilder {
     /// output. Every returned ID remains valid in this generation after sealing.
     ///
     /// # Errors
-    /// Refuses before interning when conservative referenced-term/string bounds
-    /// would exceed the declared resident construction limits.
+    /// Refuses a value atomically when its new terms or string bytes exceed the
+    /// declared dictionary limits. Earlier batch values remain admitted.
     pub fn intern_batch(
         &mut self,
         values: &[TermValue],
         mut visit: impl FnMut(&TermValue, GlobalTermId),
     ) -> Result<(), SegmentedError> {
         for value in values {
-            let (terms, bytes) = value_bound(value)?;
-            let next_terms = self
-                .admitted_terms
-                .checked_add(terms)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            let next_bytes = self
-                .admitted_bytes
-                .checked_add(bytes)
-                .ok_or(SegmentedError::AddressExhausted)?;
-            if next_terms > u64::from(self.limits.terms)
-                || next_bytes > u64::from(self.limits.term_bytes)
-            {
-                return Err(SegmentedError::ConstructionLimit);
-            }
-            // The conservative bound includes dependency IRIs and composite blank
-            // labels. It is intentionally independent of whether interning hits.
-            let id = self.builder.intern_value(value)?;
-            self.admitted_terms = next_terms;
-            self.admitted_bytes = next_bytes;
+            validate_constructor_value(value)?;
+            let id = self
+                .builder
+                .intern_value_atomically(value)
+                .map_err(construction_storage_error)?;
             visit(value, self.global(id));
         }
         Ok(())
@@ -203,24 +188,10 @@ impl SegmentedBuilder {
     ) -> Result<(), SegmentedError> {
         let (r, t) = (self.local(reifier)?, self.local(triple)?);
         let g = graph.map(|id| self.local(id)).transpose()?;
-        let terms = self
-            .admitted_terms
-            .checked_add(1)
-            .ok_or(SegmentedError::AddressExhausted)?;
-        let bytes = self
-            .admitted_bytes
-            .checked_add(
-                u64::try_from(purrdf_iri::vocab::rdf::REIFIES.len())
-                    .expect("vocabulary length fits u64"),
-            )
-            .ok_or(SegmentedError::AddressExhausted)?;
-        if terms > u64::from(self.limits.terms) || bytes > u64::from(self.limits.term_bytes) {
-            return Err(SegmentedError::ConstructionLimit);
-        }
         let rows = self.next_row_count()?;
-        self.builder.push_reifier_in_graph(r, t, g)?;
-        self.admitted_terms = terms;
-        self.admitted_bytes = bytes;
+        self.builder
+            .push_reifier_in_graph(r, t, g)
+            .map_err(construction_storage_error)?;
         self.admitted_rows = rows;
         Ok(())
     }
@@ -264,63 +235,44 @@ impl SegmentedBuilder {
     }
 }
 
-fn value_bound(value: &TermValue) -> Result<(u64, u64), SegmentedError> {
-    let mut terms = 0_u64;
-    let mut bytes = 0_u64;
-    let mut stack: crate::SmallVec<[(&TermValue, u32); 64]> = crate::SmallVec::default();
-    stack.push((value, 0_u32));
-    while let Some((value, depth)) = stack.pop() {
-        if depth > 16 {
-            return Err(SegmentedError::ConstructionLimit);
+fn construction_storage_error(cause: StorageError) -> SegmentedError {
+    match cause {
+        StorageError::Capacity(error)
+            if matches!(
+                error.space,
+                CapacitySpace::LocalTerms | CapacitySpace::LocalTermBytes
+            ) =>
+        {
+            SegmentedError::ConstructionLimit
         }
-        terms = terms
-            .checked_add(1)
-            .ok_or(SegmentedError::AddressExhausted)?;
-        let size = match value {
-            TermValue::Iri(iri) => {
-                super::super::absolute::check_absolute(iri)
-                    .map_err(|_| SegmentedError::Corrupt("constructor IRI is not absolute"))?;
-                iri.len()
-            }
-            TermValue::Blank { label, .. } => label.len(),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                ..
-            } => {
-                super::super::absolute::check_absolute(datatype)
-                    .map_err(|_| SegmentedError::Corrupt("constructor datatype is not absolute"))?;
-                terms = terms
-                    .checked_add(1)
-                    .ok_or(SegmentedError::AddressExhausted)?;
-                // Composite lexical blank labels may be interned by the shared IR;
-                // one byte is a conservative lower bound on each label's spelling.
-                if crate::cdt_blank::is_cdt_datatype(datatype) {
-                    terms = terms
-                        .checked_add(
-                            u64::try_from(lexical_form.len())
-                                .map_err(|_| SegmentedError::AddressExhausted)?,
-                        )
-                        .ok_or(SegmentedError::AddressExhausted)?;
-                }
-                lexical_form
-                    .len()
-                    .checked_mul(2)
-                    .and_then(|v| v.checked_add(datatype.len()))
-                    .and_then(|v| v.checked_add(language.as_ref().map_or(0, String::len)))
-                    .ok_or(SegmentedError::AddressExhausted)?
-            }
-            TermValue::Triple { s, p, o } => {
-                stack.extend([(&**o, depth + 1), (&**p, depth + 1), (&**s, depth + 1)]);
-                0
-            }
-        };
-        bytes = bytes
-            .checked_add(u64::try_from(size).map_err(|_| SegmentedError::AddressExhausted)?)
-            .ok_or(SegmentedError::AddressExhausted)?;
+        cause => SegmentedError::Storage(cause),
     }
-    Ok((terms, bytes))
+}
+
+fn validate_constructor_value(value: &TermValue) -> Result<(), SegmentedError> {
+    use core::ops::ControlFlow;
+    use purrdf_lex::allocation::{Memory, Resident};
+    match value.visit_terms_with_memory(
+        |term, _| {
+            let check = match term {
+                TermValue::Iri(iri) => Some((iri.as_str(), "constructor IRI is not absolute")),
+                TermValue::Literal { datatype, .. } => {
+                    Some((datatype.as_str(), "constructor datatype is not absolute"))
+                }
+                TermValue::Blank { .. } | TermValue::Triple { .. } => None,
+            };
+            Ok(match check {
+                Some((iri, reason)) if super::super::absolute::check_absolute(iri).is_err() => {
+                    ControlFlow::Break(SegmentedError::Corrupt(reason))
+                }
+                _ => ControlFlow::Continue(()),
+            })
+        },
+        &mut Memory::new(&mut Resident),
+    )? {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(cause) => Err(cause),
+    }
 }
 
 /// Complete persisted image plus the authority produced by full certification.
@@ -504,11 +456,11 @@ impl SegmentedImage {
         }
         let mut builder = SegmentedBuilder::new(limits)?;
         super::super::import::DatasetImporter::new(&mut builder.builder, source.as_ref())
-            .map_err(purrdf_lex::allocation::StorageError::from)?
+            .map_err(StorageError::from)
+            .map_err(construction_storage_error)?
             .append()
-            .map_err(purrdf_lex::allocation::StorageError::from)?;
-        builder.admitted_terms = terms;
-        builder.admitted_bytes = term_bytes;
+            .map_err(StorageError::from)
+            .map_err(construction_storage_error)?;
         builder.admitted_rows = rows;
         for graph in graphs {
             if !matches!(graph, TermValue::Iri(_) | TermValue::Blank { .. }) {
@@ -624,7 +576,7 @@ fn encode_dataset(
                 let local = TermId::from_index(
                     u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?,
                 )
-                .map_err(purrdf_lex::allocation::StorageError::from)?;
+                .map_err(StorageError::from)?;
                 Ok(dataset
                     .resolve(local)
                     .map_ids(|id| map_id(id, limits.first_term_index)))
@@ -721,11 +673,7 @@ fn encode_dataset(
         block_bytes: limits.block_bytes,
         records_per_block: limits.records_per_block,
         first_term_index: limits.first_term_index,
-        max_owned_term_bytes: footprints
-            .iter()
-            .map(|(bytes, _)| *bytes)
-            .max()
-            .unwrap_or(0),
+        max_owned_term_bytes: footprints.iter().copied().max().unwrap_or(0),
         terms: u64::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?,
         dictionary,
         reverse,
@@ -1397,13 +1345,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             "annotation value interval directory is incomplete",
         ));
     }
-    if header.max_owned_term_bytes
-        != footprints
-            .iter()
-            .map(|(bytes, _)| *bytes)
-            .max()
-            .unwrap_or(0)
-    {
+    if header.max_owned_term_bytes != footprints.iter().copied().max().unwrap_or(0) {
         return Err(SegmentedError::Corrupt(
             "expanded term footprint claim is false",
         ));
@@ -1551,10 +1493,10 @@ pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8
 fn expanded_footprint(
     term: TermRef<'_, u64>,
     first: u64,
-    previous: &[(u64, u32)],
-) -> Result<(u64, u32), SegmentedError> {
+    previous: &[u64],
+) -> Result<u64, SegmentedError> {
     let base = OWNED_TERM_NODE_BYTES;
-    let reference = |id: u64| -> Result<(u64, u32), SegmentedError> {
+    let reference = |id: u64| -> Result<u64, SegmentedError> {
         id.checked_sub(first)
             .and_then(|v| usize::try_from(v).ok())
             .and_then(|v| previous.get(v).copied())
@@ -1562,51 +1504,38 @@ fn expanded_footprint(
                 "non-topological expanded-term reference",
             ))
     };
-    let (payload, depth) = match term {
-        TermRef::Iri(iri) => (
-            u64::try_from(iri.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-            0,
-        ),
-        TermRef::Blank { label, .. } => (
-            u64::try_from(label.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-            0,
-        ),
+    let payload = match term {
+        TermRef::Iri(iri) => {
+            u64::try_from(iri.len()).map_err(|_| SegmentedError::AddressExhausted)?
+        }
+        TermRef::Blank { label, .. } => {
+            u64::try_from(label.len()).map_err(|_| SegmentedError::AddressExhausted)?
+        }
         TermRef::Literal {
             lexical,
             datatype,
             language,
             ..
-        } => (
+        } => {
+            let datatype = reference(datatype)?;
             u64::try_from(lexical.len())
                 .map_err(|_| SegmentedError::AddressExhausted)?
                 .checked_add(
                     u64::try_from(language.map_or(0, str::len))
                         .map_err(|_| SegmentedError::AddressExhausted)?,
                 )
-                .and_then(|n| n.checked_add(reference(datatype).ok()?.0))
-                .ok_or(SegmentedError::AddressExhausted)?,
-            0,
-        ),
+                .and_then(|n| n.checked_add(datatype))
+                .ok_or(SegmentedError::AddressExhausted)?
+        }
         TermRef::Triple { s, p, o } => {
             let (s, p, o) = (reference(s)?, reference(p)?, reference(o)?);
-            (
-                s.0.checked_add(p.0)
-                    .and_then(|n| n.checked_add(o.0))
-                    .ok_or(SegmentedError::AddressExhausted)?,
-                s.1.max(p.1).max(o.1) + 1,
-            )
+            s.checked_add(p)
+                .and_then(|n| n.checked_add(o))
+                .ok_or(SegmentedError::AddressExhausted)?
         }
     };
-    if depth > 16 {
-        return Err(SegmentedError::Corrupt(
-            "expanded term nesting exceeds validated IR limit",
-        ));
-    }
-    Ok((
-        base.checked_add(payload)
-            .ok_or(SegmentedError::AddressExhausted)?,
-        depth,
-    ))
+    base.checked_add(payload)
+        .ok_or(SegmentedError::AddressExhausted)
 }
 
 /// Compute the same certified expansion law once when a resident carrier is
@@ -1625,7 +1554,7 @@ pub(super) fn resident_owned_term_bound(dataset: &RdfDataset) -> Result<u64, Seg
             0,
             &footprints,
         )?;
-        widest = widest.max(footprint.0);
+        widest = widest.max(footprint);
         footprints.push(footprint);
     }
     Ok(widest)
@@ -1690,9 +1619,9 @@ mod certification_tests {
     }
 
     #[test]
-    fn conservative_term_admission_does_not_authorize_unminted_ids() {
+    fn constructor_duplicate_hits_do_not_authorize_unminted_ids() {
         let first = 1_u64 << 40;
-        let limits = SegmentedBuildLimits::new(2, 1024, 1, 512, 2)
+        let limits = SegmentedBuildLimits::new(1, 1024, 1, 512, 2)
             .unwrap()
             .with_first_term_index(first)
             .unwrap();
@@ -1702,7 +1631,6 @@ mod certification_tests {
         builder
             .intern_batch(&[value.clone(), value], |_, term| id = Some(term))
             .unwrap();
-        assert_eq!(builder.admitted_terms, 2);
         assert_eq!(builder.builder.term_count(), 1);
         let foreign = GlobalTermId::from_index(first + 1).unwrap();
         for _ in 0..2 {
@@ -1714,6 +1642,202 @@ mod certification_tests {
         }
         builder.declare_named_graph(id.unwrap()).unwrap();
         assert_eq!(builder.admitted_rows, 1);
+    }
+
+    /// Duplicate values consume neither new dictionary slots nor stored text.
+    #[test]
+    fn constructor_counts_distinct_terms_and_stored_text() {
+        let datatype = purrdf_xsd::datatype::XSD_STRING;
+        let literal = |lexical_form| TermValue::Literal {
+            lexical_form,
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        };
+        let values = [
+            TermValue::iri("urn:s"),
+            TermValue::iri("urn:p"),
+            literal("é".repeat(50)),
+            literal("ø".repeat(50)),
+        ];
+        // Two IRIs, one shared datatype and two lexical forms of 100 bytes each.
+        let text = u32::try_from(10 + datatype.len() + 200).unwrap();
+        let mut images = Vec::new();
+        for repeats in [1, 32] {
+            let limits = SegmentedBuildLimits::new(5, text, 2, 512, 4).unwrap();
+            let mut builder = SegmentedBuilder::new(limits).unwrap();
+            let mut ids = Vec::new();
+            builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+            for _ in 0..repeats {
+                let mut repeated = Vec::new();
+                builder
+                    .intern_batch(&values[2..], |_, id| repeated.push(id))
+                    .unwrap();
+                assert_eq!(repeated, ids[2..]);
+            }
+            for &object in &ids[2..] {
+                builder
+                    .push_quad(QuadIds {
+                        s: ids[0],
+                        p: ids[1],
+                        o: object,
+                        g: None,
+                    })
+                    .unwrap();
+            }
+            images.push(builder.seal().unwrap().bytes);
+        }
+        assert_eq!(images[0], images[1]);
+    }
+
+    /// A later child's refusal preserves the accepted prefix and reusable IDs.
+    #[test]
+    fn constructor_late_quota_refusal_rolls_back_the_whole_value() {
+        let value = TermValue::Triple {
+            s: crate::TermBox::new(TermValue::iri("urn:s")),
+            p: crate::TermBox::new(TermValue::iri("urn:p")),
+            o: crate::TermBox::new(TermValue::iri("urn:o")),
+        };
+        let first = 1_u64 << 40;
+        for (terms, text) in [(3, 1000), (10, 18)] {
+            let limits = SegmentedBuildLimits::new(terms, text, 0, 512, 4)
+                .unwrap()
+                .with_first_term_index(first)
+                .unwrap();
+            let mut builder = SegmentedBuilder::new(limits).unwrap();
+            let mut visited = Vec::new();
+            assert_eq!(
+                builder.intern_batch(&[TermValue::iri("urn:base"), value.clone()], |_, id| {
+                    visited.push(id);
+                },),
+                Err(SegmentedError::ConstructionLimit)
+            );
+            assert_eq!(visited, [GlobalTermId::from_index(first).unwrap()]);
+            let mut resumed = Vec::new();
+            builder
+                .intern_batch(
+                    &[TermValue::iri("urn:base"), TermValue::iri("urn:next")],
+                    |_, id| resumed.push(id),
+                )
+                .unwrap();
+            assert_eq!(
+                resumed,
+                [
+                    GlobalTermId::from_index(first).unwrap(),
+                    GlobalTermId::from_index(first + 1).unwrap(),
+                ]
+            );
+            builder.seal().unwrap();
+        }
+    }
+
+    /// Distinct reifier rows share the one implicit predicate dictionary entry.
+    #[test]
+    fn constructor_reifier_bindings_charge_the_predicate_once() {
+        let values = [
+            TermValue::iri("urn:r0"),
+            TermValue::iri("urn:r1"),
+            TermValue::iri("urn:r2"),
+            TermValue::Triple {
+                s: crate::TermBox::new(TermValue::iri("urn:s")),
+                p: crate::TermBox::new(TermValue::iri("urn:p")),
+                o: crate::TermBox::new(TermValue::iri("urn:o")),
+            },
+        ];
+        let text = 33 + u32::try_from(purrdf_iri::vocab::rdf::REIFIES.len()).unwrap();
+        let limits = SegmentedBuildLimits::new(8, text, 4, 512, 4).unwrap();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        let mut ids = Vec::new();
+        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+        for &reifier in &ids[..3] {
+            builder.push_reifier(reifier, ids[3], None).unwrap();
+        }
+        builder.push_reifier(ids[0], ids[3], None).unwrap();
+        assert_eq!(builder.statement_count(), 3);
+        builder.seal().unwrap();
+    }
+
+    /// A reifier's statement wraps its nested object in one more triple term.
+    /// Both that boundary and deeper stored claims retain their IDs on reopen.
+    #[test]
+    fn constructor_deep_reified_claims_reopen_and_lookup_on_a_small_stack() {
+        use crate::DatasetView;
+        purrdf_stack::on_stack(128 * 1024, || {
+            for levels in [16, 256] {
+                let mut object = TermValue::iri("urn:o");
+                for _ in 0..=levels {
+                    object = TermValue::Triple {
+                        s: crate::TermBox::new(TermValue::iri("urn:s")),
+                        p: crate::TermBox::new(TermValue::iri("urn:p")),
+                        o: crate::TermBox::new(object),
+                    };
+                }
+                let values = [TermValue::iri("urn:r"), object];
+                let limits = SegmentedBuildLimits::new(1000, 1000, 2, 4096, 32).unwrap();
+                let mut builder = SegmentedBuilder::new(limits).unwrap();
+                let mut ids = Vec::new();
+                builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+                builder.push_reifier(ids[0], ids[1], None).unwrap();
+                let image = builder.seal().unwrap();
+                let session = image
+                    .open_session(SegmentedReadLimits::new(
+                        32_000_000,
+                        4,
+                        100_000,
+                        100_000_000,
+                        2,
+                    ))
+                    .unwrap();
+                assert_eq!(session.triple_term_nesting_bound(), None);
+                assert_eq!(session.term_id_by_value(&values[1]).unwrap(), Some(ids[1]));
+                assert_eq!(session.reifier_quads().next().unwrap().o, ids[1]);
+                assert_eq!(session.term_value(ids[1]).unwrap(), values[1]);
+                assert!(session.read_error().is_none());
+            }
+        })
+        .expect("the thread starts");
+    }
+
+    /// Refusing the implicit predicate publishes no row and consumes no term ID.
+    #[test]
+    fn constructor_refused_predicate_preserves_rows_and_dictionary_ids() {
+        let values = [
+            TermValue::iri("urn:r"),
+            TermValue::Triple {
+                s: crate::TermBox::new(TermValue::iri("urn:s")),
+                p: crate::TermBox::new(TermValue::iri("urn:p")),
+                o: crate::TermBox::new(TermValue::iri("urn:o")),
+            },
+        ];
+        for (terms, text) in [(5, 1000), (6, 20)] {
+            let limits = SegmentedBuildLimits::new(terms, text, 1, 512, 4).unwrap();
+            let mut builder = SegmentedBuilder::new(limits).unwrap();
+            let mut ids = Vec::new();
+            builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+            assert_eq!(
+                builder.push_reifier(ids[0], ids[1], None),
+                Err(SegmentedError::ConstructionLimit)
+            );
+            assert_eq!(builder.statement_count(), 0);
+            assert!(matches!(
+                builder.declare_named_graph(GlobalTermId::from_index(5).unwrap()),
+                Err(SegmentedError::Corrupt("foreign constructor term ID"))
+            ));
+            let mut predicate = None;
+            builder
+                .intern_batch(&[TermValue::iri("urn:p")], |_, id| predicate = Some(id))
+                .unwrap();
+            builder
+                .push_quad(QuadIds {
+                    s: ids[0],
+                    p: predicate.unwrap(),
+                    o: ids[0],
+                    g: None,
+                })
+                .unwrap();
+            assert_eq!(builder.statement_count(), 1);
+            builder.seal().unwrap();
+        }
     }
 
     fn image() -> SegmentedImage {

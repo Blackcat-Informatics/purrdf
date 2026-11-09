@@ -758,8 +758,8 @@ pub struct CustomFunction {
     /// then the optional ones, each block in ascending IRI order — which keeps
     /// `params[..required]` exactly its required keys.
     pub params: Vec<ArgKey>,
-    /// The number of leading REQUIRED parameters (arity is `[required,
-    /// params.len()]`), from `sh:optional`.
+    /// The number of leading required documented parameters, from `sh:optional`.
+    /// A list function with no parameter documentation admits any argument count.
     pub required: usize,
     /// The `sh:bodyExpression` node expression, installed once every declaration has
     /// been interned.
@@ -812,6 +812,20 @@ pub enum SparqlCallForm {
 }
 
 impl SparqlCallForm {
+    fn handles_unbound_arguments(self) -> bool {
+        matches!(
+            self,
+            Self::Call("BOUND" | "COALESCE" | "IF") | Self::Infix("&&" | "||")
+        )
+    }
+
+    fn catches_evaluation_failures(self) -> bool {
+        matches!(
+            self,
+            Self::Call("COALESCE" | "IF") | Self::Infix("&&" | "||") | Self::Membership(_)
+        )
+    }
+
     /// The SPARQL expression text for this form over `arity` placeholder
     /// variables `?a0 … ?a{arity-1}`.
     ///
@@ -1518,15 +1532,25 @@ fn eval_sparql_arguments(
 }
 
 /// Let SPARQL decide masking and EBV; retain the node-expression failure cause.
-/// IF selects the argument outcome itself, because a selected empty argument
-/// remains empty even when its unselected branch failed. Processor failures have
-/// already escaped before this boundary and are never stored as operands.
+/// IF selects the argument outcome itself. November treats an unbound selected
+/// result as an evaluation failure; earlier laws retain the unbound projection.
+/// Processor failures already escaped before this boundary and are never stored
+/// as operands.
 fn finish_sparql_arguments(
     store: &ShaclData,
     form: SparqlCallForm,
     query: &str,
     args: Vec<Result<Option<Term>, crate::error::ShapesError>>,
+    profile: crate::profile::ShaclProfile,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
+    let strict = profile.reads_november_draft_semantics();
+    if strict
+        && args.iter().any(|arg| matches!(arg, Ok(None)))
+        && !form.handles_unbound_arguments()
+        && args.iter().all(Result::is_ok)
+    {
+        return Ok(None);
+    }
     if form == SparqlCallForm::Call("IF") {
         if args.len() != 3 {
             return Err(crate::error::ShapesError::internal(
@@ -1539,17 +1563,32 @@ fn finish_sparql_arguments(
         let condition =
             eval_sparql_arguments(store, "SELECT ((!(! ?a0)) AS ?result) WHERE {}", &args[..1])?;
         let Some(condition) = condition else {
-            return Ok(None);
+            return if strict {
+                Err("SPARQL IF condition produced an evaluation error".into())
+            } else {
+                Ok(None)
+            };
         };
         let selected = if is_true_term(&condition) { 1 } else { 2 };
-        return args.into_iter().nth(selected).ok_or_else(|| {
+        let selected = args.into_iter().nth(selected).ok_or_else(|| {
             crate::error::ShapesError::internal("an admitted SPARQL IF lost its selected argument")
-        })?;
+        })??;
+        return match selected {
+            None if strict => Err("SPARQL IF selected an unbound argument".into()),
+            value => Ok(value),
+        };
     }
     if let Some(value) = eval_sparql_arguments(store, query, &args)? {
         return Ok(Some(value));
     }
-    args.into_iter().find_map(Result::err).map_or(Ok(None), Err)
+    if let Some(error) = args.into_iter().find_map(Result::err) {
+        return Err(error);
+    }
+    if strict {
+        Err("SPARQL node-expression function produced an evaluation error".into())
+    } else {
+        Ok(None)
+    }
 }
 
 // ── Evaluator ───────────────────────────────────────────────────────────────────
@@ -2157,12 +2196,8 @@ fn eval_node_expr_at_depth(
                     )
                 })?;
             let form = sparql_ns_lowering(local)?;
-            let catches = matches!(
-                form,
-                SparqlCallForm::Call("COALESCE" | "IF")
-                    | SparqlCallForm::Infix("&&" | "||")
-                    | SparqlCallForm::Membership(_)
-            );
+            let profile = plan.binding().validation_request().shacl_profile;
+            let catches = form.catches_evaluation_failures();
             let mut arguments = Vec::with_capacity(args.len());
             for (position, arg) in args.iter().enumerate() {
                 let mut values = match descend!(arg, position) {
@@ -2180,13 +2215,20 @@ fn eval_node_expr_at_depth(
                     0 => None,
                     1 => values.pop(),
                     more => {
-                        return Err(format!(
+                        let error: crate::error::ShapesError = format!(
                             "<{}> argument {position} produced {more} nodes; a SPARQL function \
                              is a list parameter function, whose every argument must produce at \
                              most one node",
                             iri.as_str()
                         )
-                        .into());
+                        .into();
+                        // Earlier laws reject cardinality before SPARQL masking;
+                        // November treats it as a catchable argument failure.
+                        if catches && profile.reads_november_draft_semantics() {
+                            arguments.push(Err(error));
+                            continue;
+                        }
+                        return Err(error);
                     }
                 };
                 arguments.push(Ok(argument));
@@ -2197,7 +2239,7 @@ fn eval_node_expr_at_depth(
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.
-            let result = finish_sparql_arguments(store, form, query, arguments)?;
+            let result = finish_sparql_arguments(store, form, query, arguments, profile)?;
             Ok(result.into_iter().collect())
         }
         // §4.2.1 Distinct expression: first occurrences, in input order, by term
@@ -2441,29 +2483,45 @@ fn eval_node_expr_at_depth(
         // argument must produce at most one node. No node ⇒ the empty list (the
         // spec's stated "no value" case); otherwise the boolean conformance answer.
         NodeExpr::ConformsToShape { node, shape } => {
-            match conformance_focus(descend!(node, 0)?)? {
-                None => Ok(Vec::new()),
-                Some(only) => {
-                    // The shape argument is resolved the way it was written: a
-                    // NAMED one was parsed at load, a COMPUTED one is evaluated
-                    // here against the shapes graph's own shape index.
-                    match shape {
-                        ShapeArg::Named(shape) => Ok(vec![bool_literal(conforms_guarded(
-                            store,
-                            &only,
-                            lowered.shape(plan, 0, shape)?,
-                            guard,
-                        )?)]),
-                        ShapeArg::Computed { expr, .. } => {
-                            let produced = descend!(expr, 1)?;
-                            let shape_plan = conformance_target(&produced, plan, lowered.index()?)?;
-                            Ok(vec![bool_literal(conforms_guarded(
-                                store, &only, shape_plan, guard,
-                            )?)])
-                        }
-                    }
-                }
+            let node = conformance_focus(descend!(node, 0)?)?;
+            let november = plan
+                .binding()
+                .validation_request()
+                .shacl_profile
+                .reads_november_draft_semantics();
+            if node.is_none() && !november {
+                return Ok(Vec::new());
             }
+            let computed = match shape {
+                ShapeArg::Computed { expr, .. } => {
+                    let produced = descend!(expr, 1)?;
+                    if produced.len() > 1 {
+                        return Err(format!("shnex:conformsToShape shape argument must produce exactly one shape IRI, got {}", produced.len()).into());
+                    }
+                    Some(produced)
+                }
+                ShapeArg::Named(_) => None,
+            };
+            if computed.as_ref().is_some_and(Vec::is_empty) {
+                return Ok(Vec::new());
+            }
+            let Some(node) = node else {
+                return Ok(Vec::new());
+            };
+            let target = match (shape, computed) {
+                (ShapeArg::Named(shape), _) => lowered.shape(plan, 0, shape)?,
+                (ShapeArg::Computed { .. }, Some(produced)) => {
+                    conformance_target(&produced, plan, lowered.index()?)?
+                }
+                (ShapeArg::Computed { .. }, None) => {
+                    return Err(crate::error::ShapesError::internal(
+                        "a computed shape lost its evaluated operand",
+                    ));
+                }
+            };
+            Ok(vec![bool_literal(conforms_guarded(
+                store, &node, target, guard,
+            )?)])
         }
         // SHACL 1.2 SPARQL Extensions §6.1 (`sh:select`) / §6.2 (`sh:sparqlExpr`),
         // whose evaluation clauses are word-for-word the same: run the query
@@ -2618,11 +2676,36 @@ fn eval_node_expr_at_depth(
         NodeExpr::CustomCall { args, .. } => {
             let function = plan.function(lowered.body_key()?)?;
             let func = &function.declaration;
+            let mut values = Vec::new();
+            let argument_scope = if func.kind == CustomFnKind::ListParameter
+                && plan
+                    .binding()
+                    .validation_request()
+                    .shacl_profile
+                    .reads_november_draft_semantics()
+            {
+                for (position, (_, arg)) in args.iter().enumerate() {
+                    let mut output = descend!(arg, position)?;
+                    if output.len() > 1 {
+                        return Err(format!("list-function argument {position} produced {} nodes; expected at most one", output.len()).into());
+                    }
+                    values.push(output.pop());
+                }
+                // All arguments have been evaluated, so a failure cannot be
+                // hidden by an earlier empty argument. An unbound argument
+                // prevents application even when the body ignores that slot.
+                if values.iter().any(Option::is_none) {
+                    return Ok(Vec::new());
+                }
+                Scope::with_values(&values)
+            } else {
+                Scope::with_args(args)
+            };
             let out = eval_custom_call(
                 store,
                 focus,
                 func,
-                Scope::with_args(args),
+                argument_scope,
                 &function.body,
                 plan,
                 guard,

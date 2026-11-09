@@ -57,8 +57,8 @@
 //! whose own tests and benches do not use this crate; `layers.toml` allows no
 //! other. Every crate in the workspace may take this one as a dev-dependency,
 //! so any further first-party edge from here would close a cycle through that
-//! crate's tests. It is never published and appears only in
-//! `[dev-dependencies]` and in unpublished crates: `purrdf-hash-conformance`,
+//! crate's tests. It appears in `[dev-dependencies]` and in unpublished
+//! tooling crates: `purrdf-hash-conformance`,
 //! the home of the root's suites; `purrdf-sparql-conformance`, whose manifest
 //! reader resolves the workspace root; and `helper-census`, which scans it.
 
@@ -88,6 +88,23 @@ pub mod vectors;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use temp::{NamedTempFile, TempDir};
+
+/// The calling crate's workspace root, or its standalone package root.
+///
+/// Captures `CARGO_MANIFEST_DIR` where this macro is expanded and delegates
+/// ancestor discovery to [`paths::workspace_root_from`]. No Cargo process runs.
+///
+/// # Panics
+/// When no ancestor manifest declares a `[workspace]` or `[package]` table.
+#[macro_export]
+macro_rules! workspace_root {
+    () => {
+        $crate::paths::workspace_root_from(::std::path::Path::new(::core::env!(
+            "CARGO_MANIFEST_DIR"
+        )))
+        .expect("the calling crate has no ancestor Cargo workspace or package manifest")
+    };
+}
 
 /// Write a `harness = false` target's `main` over plain functions.
 ///

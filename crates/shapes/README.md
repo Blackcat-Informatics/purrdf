@@ -157,21 +157,27 @@ validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
 ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
 whether or not a shape uses the component.
 
-**Conformance.** The whole W3C `shacl12-test-suite` (592 tests: 213
-`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 209 SPARQL 1.2 RL
-tests) runs, and of the 591 an upstream manifest lists, 590 pass as approved,
-with an empty expected-failure ledger; the one other, `node-expr/shnex-sparql/hasLang-example`,
-is reported failed because it calls `sparql:hasLang` with two arguments where the SPARQL 1.2
-grammar's `hasLANG` takes one:
+**Conformance.** The pinned W3C `shacl12-test-suite` (801 tests: 274
+`sht:Validate`, 276 `sht:EvalNodeExpr`, 42 `sht:Infer` and 209 SPARQL 1.2 RL
+tests) runs, and of the 800 an upstream manifest lists, 800 pass as approved,
+with an empty expected-failure ledger. The SHACL root is pinned to `40231dfb`;
+the separate SPARQL Rules root remains at `4cd46986` for its supported Working
+Draft. The SHACL EARL covers the 591 approved SHACL-root entries.
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
-Three vendored files that no upstream manifest includes are graded and
-reported apart from the approved suite, never counted among its passes; one of
-them, `core/node/xone-003`, is graded with one amendment that quotes its clause
-(6.7.2.2: a property shape's result carries its `sh:path` as `sh:resultPath`). `sh:reifierShape` and `sh:reificationRequired`
+The additional `ED_20261106` profile (`shacl-ed-2026-11-06`) pins W3C commit
+`40231dfb97c5b606d22ae733947c0d14b4f45c07`. It evaluates list-function arguments
+in the caller's scope before application and deduplicates shared run-once rules
+by focus node. The earlier profile and compatibility behavior remain available.
+Standalone Rust callers select it with `free_expression::evaluate_with_profile`;
+the CLI accepts `node-expr --shacl-profile shacl-ed-2026-11-06`.
+
+One vendored file that no upstream manifest includes is graded and reported
+apart from the approved suite, never counted among its passes.
+`sh:reifierShape` and `sh:reificationRequired`
 results carry the value node as `sh:value`, as the approved
 `core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
 names both the triple term and the reifier `t`); a non-conforming reifier's own

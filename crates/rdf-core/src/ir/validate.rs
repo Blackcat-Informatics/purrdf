@@ -20,17 +20,16 @@
 //! - **ID-reference validity:** every `TermId` referenced by any quad / reifier /
 //!   annotation / named graph declaration is `< term_count()`, and a declared named
 //!   graph obeys the graph-name rule above.
-//! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic
-//!   and bounded by `MAX_TERM_NESTING_DEPTH`: no chain holds more than 16 triple terms,
-//!   whatever order they were interned in; a triple term MUST NOT (transitively)
-//!   contain itself.
+//! - **Triple-term acyclicity (C0.3):** the `Triple{s,p,o}` nesting graph is acyclic;
+//!   a triple term MUST NOT (transitively) contain itself. Validation spends admitted
+//!   heap storage rather than machine stack as term nesting grows.
 //!
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
 
 use super::builder::NativeBuildError;
 use crate::RdfDiagnostic;
-use purrdf_events::MAX_TERM_NESTING_DEPTH;
 use purrdf_lex::allocation::{Admission, Memory, Resident};
+use purrdf_lex::walk::WorkList;
 
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
@@ -84,23 +83,18 @@ pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(
                     }
                     TermValue::Triple { .. } => unreachable!("triple components are folded"),
                 };
-                Ok::<_, RdfDiagnostic>((kind, 0usize))
+                Ok::<_, RdfDiagnostic>(kind)
             },
-            |(subject, sd), (predicate, pd), (_, od)| {
+            |subject, predicate, _object| {
                 require_subject_kind(
                     subject,
                     || "triple term subject".to_owned(),
                     TRIPLE_COMPONENT_SUBJECT,
                 )?;
                 require_predicate_kind(predicate, || "triple term predicate".to_owned())?;
-                let depth = sd.max(pd).max(od) + 1;
-                if depth > MAX_TERM_NESTING_DEPTH {
-                    return Err(nesting_limit());
-                }
-                Ok((Kind::Triple, depth))
+                Ok(Kind::Triple)
             },
         )
-        .map(|(kind, _)| kind)
     };
     let q = &record.quad;
     let s = value(&q.s)?;
@@ -231,20 +225,14 @@ pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic>
     ))
 }
 
-/// The original DFS state for global triple-term acyclicity and nesting depth.
+/// Memoized cycle-detection state for the term-reference graph.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VisitState {
     Unvisited,
     /// On the current DFS stack — re-encountering it is a back edge (cycle).
     OnStack,
-    /// Fully explored and proven acyclic, with the triple-term nesting it holds (itself
-    /// included) — never re-walked.
-    Done(usize),
-}
-
-/// The refusal of a triple term nested deeper than [`MAX_TERM_NESTING_DEPTH`].
-fn nesting_limit() -> RdfDiagnostic {
-    nesting_limit_with_memory(&mut Memory::new(&mut Resident)).into()
+    /// Fully explored and proven acyclic — never re-walked.
+    Done,
 }
 
 /// A subject position MUST be an IRI or a blank node; `triple_reason` says why a
@@ -378,8 +366,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate
-    //    and a non-literal subject, and the whole nesting forest is acyclic and
-    //    depth-bounded.
+    //    and a non-literal subject, and the whole nesting forest is acyclic.
     validate_triple_terms_with_memory(builder, term_count, memory)?;
 
     // 2. Every declared named graph names an in-range IRI or blank node, exactly as
@@ -544,7 +531,7 @@ fn require_absolute_iris_with_memory<S: Admission + ?Sized>(
 }
 
 /// Validate every interned triple term: in-range components, IRI predicate,
-/// IRI-or-blank subject, and global acyclicity (C0.3) bounded by depth.
+/// IRI-or-blank subject, and global acyclicity (C0.3).
 fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     builder: &RdfDatasetBuilder,
     term_count: usize,
@@ -591,22 +578,16 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
         }
     }
 
-    // Second pass: acyclicity and nesting. DFS each triple term following only the
-    // components that are themselves triple terms, memoizing every term's nesting (how
-    // many triple terms its longest chain holds, itself included) so a term shared by
-    // many others is walked once. The bound is on that nesting, not on how deep the
-    // search happened to find a term: a chain interned innermost first reaches every
-    // term at depth 0, already finished, and is refused all the same. With ids in range
-    // guaranteed above, a cycle is the only way for the search itself to run past the
-    // bound, so the depth bound doubles as the cycle guard and the recursion never
-    // exceeds MAX_TERM_NESTING_DEPTH + 1 frames.
+    // The positional pass proves that only an object's edge can reach another
+    // triple term. Follow those chains iteratively, coloring the active path and
+    // memoizing completed terms so shared suffixes are checked only once.
     let mut state = memory.collect(core::iter::repeat_n(VisitState::Unvisited, term_count))?;
     let result = (|| {
         for raw in 0..term_count {
             memory.admission_mut().checkpoint(1)?;
             let id = TermId::from_index(raw as u32).expect("stored term index is representable");
             if matches!(builder.term(id), InternedTerm::Triple { .. }) {
-                check_acyclic_with_memory(builder, id, 0, &mut state, memory)?;
+                check_acyclic_with_memory(builder, id, &mut state, memory)?;
             }
         }
         Ok(())
@@ -615,66 +596,45 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     result.and(cleanup)
 }
 
-fn nesting_limit_with_memory<S: Admission + ?Sized>(
-    memory: &mut Memory<'_, S>,
-) -> NativeBuildError {
-    diag_with_memory(
-        "rdf-ir-triple-nesting-limit",
-        format_args!("triple-term nesting depth exceeds the limit of {MAX_TERM_NESTING_DEPTH}"),
-        memory,
-    )
-}
-
-/// DFS from id, depth triple terms below the original root. Detects back edges
-/// and records the subtree's nesting, refusing a depth past MAX_TERM_NESTING_DEPTH.
+/// Follow the validated object chain without consuming machine stack.
 fn check_acyclic_with_memory<S: Admission + ?Sized>(
     builder: &RdfDatasetBuilder,
-    id: TermId,
-    depth: usize,
+    mut id: TermId,
     state: &mut [VisitState],
     memory: &mut Memory<'_, S>,
-) -> Result<usize, NativeBuildError> {
-    memory.admission_mut().checkpoint(1)?;
-    if depth > MAX_TERM_NESTING_DEPTH {
-        return Err(nesting_limit_with_memory(memory));
-    }
-    match state[id.index()] {
-        VisitState::Done(nesting) => return Ok(nesting),
-        VisitState::OnStack => {
-            return Err(diag_with_memory(
-                "rdf-ir-triple-cycle",
-                "triple term participates in a reference cycle (a triple cannot contain itself)",
-                memory,
-            ));
+) -> Result<(), NativeBuildError> {
+    let mut path: WorkList<TermId, 16> = WorkList::new();
+    let result = (|| {
+        loop {
+            memory.admission_mut().checkpoint(1)?;
+            match state[id.index()] {
+                VisitState::Done => break,
+                VisitState::OnStack => {
+                    return Err(diag_with_memory(
+                        "rdf-ir-triple-cycle",
+                        "triple term participates in a reference cycle (a triple cannot contain itself)",
+                        memory,
+                    ));
+                }
+                VisitState::Unvisited => {}
+            }
+            let InternedTerm::Triple { o, .. } = *builder.term(id) else {
+                state[id.index()] = VisitState::Done;
+                break;
+            };
+            path.try_push_admitted(id, memory)?;
+            state[id.index()] = VisitState::OnStack;
+            id = o;
         }
-        VisitState::Unvisited => {}
-    }
-
-    let InternedTerm::Triple { s, p, o } = *builder.term(id) else {
-        // A non-triple leaf is trivially acyclic and holds no triple term.
-        state[id.index()] = VisitState::Done(0);
-        return Ok(0);
-    };
-
-    state[id.index()] = VisitState::OnStack;
-    let mut deepest = 0;
-    for component in [s, p, o] {
-        if matches!(builder.term(component), InternedTerm::Triple { .. }) {
-            deepest = deepest.max(check_acyclic_with_memory(
-                builder,
-                component,
-                depth + 1,
-                state,
-                memory,
-            )?);
+        while let Some(id) = path.pop() {
+            state[id.index()] = VisitState::Done;
         }
-    }
-    let nesting = deepest + 1;
-    if nesting > MAX_TERM_NESTING_DEPTH {
-        return Err(nesting_limit_with_memory(memory));
-    }
-    state[id.index()] = VisitState::Done(nesting);
-    Ok(nesting)
+        Ok(())
+    })();
+    let cleanup = path
+        .release_admitted(memory)
+        .map_err(NativeBuildError::Storage);
+    result.and(cleanup)
 }
 
 /// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
@@ -1218,124 +1178,77 @@ mod tests {
     }
 
     /// A nested-but-acyclic triple term freezes fine even several levels deep.
+    /// Forward references exercise the active path; inner-first references
+    /// exercise memoized suffixes. Neither order imposes a structural ceiling.
     #[test]
-    fn freeze_ok_on_deep_acyclic_nesting() {
-        let mut b = RdfDatasetBuilder::new();
-        let s = iri(&mut b, "s");
-        let p = iri(&mut b, "p");
-        let mut o = iri(&mut b, "o");
-        for _ in 0..MAX_TERM_NESTING_DEPTH {
-            o = b.intern_triple(s, p, o).unwrap();
-        }
-        b.push_quad(s, p, o, None).unwrap();
-        assert!(
-            b.freeze().is_ok(),
-            "acyclic nesting within the bound is valid"
-        );
-    }
-
-    /// The chain interned the way every ingress interns one — innermost first, so the
-    /// search reaches each triple term already finished — is held to the same bound: 16
-    /// triple terms freeze and 17 are refused. Memoizing "finished" without the nesting
-    /// it holds admitted chains of any length in this order.
-    #[test]
-    fn nesting_is_bounded_whatever_order_the_chain_was_interned_in() {
-        let chain = |levels: usize| {
-            let mut b = RdfDatasetBuilder::new();
-            let s = iri(&mut b, "s");
-            let p = iri(&mut b, "p");
-            let mut o = iri(&mut b, "o");
-            for _ in 0..levels {
-                o = b.intern_triple(s, p, o).unwrap();
+    fn deep_nesting_freezes_in_both_intern_orders_on_a_small_stack() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            for levels in [16, 17, 129, 4096] {
+                for outer_first in [false, true] {
+                    let mut b = RdfDatasetBuilder::new();
+                    let s = iri(&mut b, "s");
+                    let p = iri(&mut b, "p");
+                    let leaf = iri(&mut b, "o");
+                    let root = if outer_first {
+                        let base = b.term_count();
+                        for level in 0..levels {
+                            let o = if level + 1 < levels {
+                                TermId::from_index(u32::try_from(base + level + 1).unwrap())
+                                    .unwrap()
+                            } else {
+                                leaf
+                            };
+                            b.intern_triple(s, p, o).unwrap();
+                        }
+                        TermId::from_index(u32::try_from(base).unwrap()).unwrap()
+                    } else {
+                        let mut o = leaf;
+                        for _ in 0..levels {
+                            o = b.intern_triple(s, p, o).unwrap();
+                        }
+                        o
+                    };
+                    b.push_quad(s, p, root, None).unwrap();
+                    let dataset = b.freeze().expect("finite acyclic terms freeze");
+                    assert_eq!(dataset.quads().next().unwrap().o, root);
+                    assert_eq!(dataset.term_count(), levels + 3);
+                }
             }
-            b.push_quad(s, p, o, None).unwrap();
-            b.freeze()
-        };
-        assert!(
-            chain(MAX_TERM_NESTING_DEPTH).is_ok(),
-            "16 nested triple terms freeze"
-        );
-        for levels in [MAX_TERM_NESTING_DEPTH + 1, 100] {
-            let err = chain(levels).expect_err("a chain past the bound is refused");
-            assert_eq!(err.code, "rdf-ir-triple-nesting-limit", "{levels} levels");
-        }
+        })
+        .expect("the thread starts");
     }
 
-    /// Outermost first — every term reached unfinished — the bound is the same: 16 triple
-    /// terms freeze and 17 are refused.
+    /// A long active path must still report a cycle, without a recursion guard
+    /// obscuring the original malformed-reference diagnostic.
     #[test]
-    fn nesting_bound_is_the_same_interned_outermost_first() {
-        let chain = |n: usize| {
+    fn a_deep_forward_cycle_retains_the_cycle_diagnostic() {
+        purrdf_stack::on_stack(128 * 1024, || {
             let mut b = RdfDatasetBuilder::new();
             let s = iri(&mut b, "s");
             let p = iri(&mut b, "p");
-            let leaf = iri(&mut b, "o");
             let base = b.term_count();
-            let mut ids = Vec::with_capacity(n);
-            for i in 0..n {
-                let o = if i + 1 < n {
-                    TermId::from_index((base + i + 1) as u32)
-                        .expect("stored term index is representable")
-                } else {
-                    leaf
-                };
-                ids.push(b.intern_triple(s, p, o).unwrap());
+            let levels = 4096;
+            for level in 0..levels {
+                let next = base + (level + 1) % levels;
+                let o = TermId::from_index(u32::try_from(next).unwrap()).unwrap();
+                b.intern_triple(s, p, o).unwrap();
             }
-            b.push_quad(s, p, ids[0], None).unwrap();
-            b.freeze()
-        };
-        assert!(
-            chain(MAX_TERM_NESTING_DEPTH).is_ok(),
-            "16 nested triple terms freeze"
-        );
-        let err = chain(MAX_TERM_NESTING_DEPTH + 1).expect_err("17 are refused");
-        assert_eq!(err.code, "rdf-ir-triple-nesting-limit");
-    }
-
-    /// An acyclic chain one level beyond MAX_TERM_NESTING_DEPTH must be rejected with
-    /// code "rdf-ir-triple-nesting-limit" — re-homes the deleted writer-level guard test.
-    ///
-    /// The depth guard (`depth > MAX_TERM_NESTING_DEPTH`) fires only when the DFS
-    /// recurses without a memoized `Done` shortcut. We force this by interning triples
-    /// in OUTER-FIRST order: the outermost triple references an inner triple that has
-    /// not yet been visited, so the DFS must recurse all the way down. We achieve this
-    /// by forging the object TermId of each triple before interning the next-inner one.
-    #[test]
-    fn freeze_err_on_too_deep_acyclic_nesting() {
-        let mut b = RdfDatasetBuilder::new();
-        let s = iri(&mut b, "s");
-        let p = iri(&mut b, "p");
-        let leaf = iri(&mut b, "o");
-
-        // We will build a chain of depth = MAX_TERM_NESTING_DEPTH + 2 triples.
-        // The guard fires when depth > MAX_TERM_NESTING_DEPTH, i.e. depth >= 17.
-        // With N triples in outer-first order (root at depth 0, innermost at depth N-1),
-        // depth N-1 > 16 requires N >= 18.  Use MAX_TERM_NESTING_DEPTH + 2 = 18.
-        let n = MAX_TERM_NESTING_DEPTH + 2;
-
-        // Intern N triples from outermost to innermost by forging forward references.
-        // triple[0] (index = base+0) has o = TermId at index base+1 (forged),
-        // triple[1] (index = base+1) has o = TermId at index base+2 (forged),
-        // ...
-        // triple[n-1] (innermost) has o = leaf.
-        let base = b.term_count(); // index of the first triple we are about to intern
-        let mut ids = Vec::with_capacity(n);
-        for i in 0..n {
-            let o = if i + 1 < n {
-                // Forge a reference to the not-yet-interned inner triple.
-                TermId::from_index((base + i + 1) as u32)
-                    .expect("stored term index is representable")
-            } else {
-                leaf
-            };
-            let t = b.intern_triple(s, p, o).unwrap();
-            ids.push(t);
-        }
-        // The DFS starts at the outermost triple (ids[0]) which is a fresh Unvisited
-        // node referencing ids[1], also Unvisited, recurses all the way to depth n-1
-        // = MAX_TERM_NESTING_DEPTH + 1, which exceeds the guard threshold of 16.
-        b.push_quad(s, p, ids[0], None).unwrap();
-        let err = b.freeze().expect_err("nesting beyond the limit must fail");
-        assert_eq!(err.code, "rdf-ir-triple-nesting-limit");
+            let root = TermId::from_index(u32::try_from(base).unwrap()).unwrap();
+            b.push_quad(s, p, root, None).unwrap();
+            // Admit the state table, then refuse the deep path's first spill.
+            // The original allocation cause survives and all scratch is refunded.
+            let mut ceiling =
+                purrdf_lex::allocation::Ceiling(b.term_count() * size_of::<VisitState>());
+            let mut memory = Memory::new(&mut ceiling);
+            assert!(matches!(
+                validate_triple_terms_with_memory(&b, b.term_count(), &mut memory),
+                Err(NativeBuildError::Storage(
+                    purrdf_lex::allocation::StorageError::AdmissionFailed
+                ))
+            ));
+            assert_eq!(memory.admitted_bytes(), 0);
+            assert_eq!(b.freeze().unwrap_err().code, "rdf-ir-triple-cycle");
+        })
+        .expect("the thread starts");
     }
 }

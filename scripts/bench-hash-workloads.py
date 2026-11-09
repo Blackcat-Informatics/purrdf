@@ -54,7 +54,6 @@ def build(label, repo, output, profile, env, jobs):
     generator = project / "manifest-generator"
     subprocess.run(["rustc", "--edition=2024", "-Dwarnings", str(ROOT / "scripts/hash-workload-manifest.rs"), "-o", str(generator)], check=True)
     shutil.copytree(ROOT / "crates/testkit", project / "crates/testkit")
-    shutil.copytree(repo / "crates/jsonschema/tests/metaschemas", project / "crates/jsonschema/tests/metaschemas")
     subprocess.run([str(generator), str(repo), str(ROOT), str(project)], check=True)
     shutil.copy2(repo / "Cargo.lock", project / "Cargo.lock")
     shutil.copy2(ROOT / "scripts/hash-workloads.rs", project / "src/workloads.rs")

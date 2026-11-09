@@ -987,7 +987,12 @@ fn checked_clash_retains_selected_transitive_role_path() {
 fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
     use crate::owl_dl::graph::changes::Journal;
     use crate::owl_dl::input_source::{Input, Source};
-    for (derived_key, branching) in [(false, false), (true, false), (true, true)] {
+    for (derived_key, branching, literals) in [
+        (false, false, false),
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+    ] {
         let mut f = Fixture::default();
         let a = f.name("A");
         let b = f.name("B");
@@ -1015,9 +1020,34 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
             };
             f.edge(left, rdf::TYPE, membership);
             f.edge(right, rdf::TYPE, membership);
-            let value = f.name("shared");
+            let literal = |f: &mut Fixture, lexical: &str, datatype: &str| {
+                f.builder
+                    .intern_literal(purrdf_core::RdfLiteral {
+                        lexical_form: lexical.to_owned(),
+                        datatype: Some(datatype.to_owned()),
+                        language: None,
+                        direction: None,
+                    })
+                    .unwrap()
+            };
+            let value = if literals {
+                literal(&mut f, "01", purrdf_xsd::datatype::XSD_INTEGER)
+            } else {
+                f.name("shared")
+            };
+            let right_value = if literals {
+                literal(&mut f, "1.0", purrdf_xsd::datatype::XSD_DECIMAL)
+            } else {
+                value
+            };
             f.builder.push_quad(left, property, value, None).unwrap();
-            f.builder.push_quad(right, property, value, None).unwrap();
+            f.builder
+                .push_quad(right, property, right_value, None)
+                .unwrap();
+            if literals {
+                let other = literal(&mut f, "2", purrdf_xsd::datatype::XSD_INTEGER);
+                f.builder.push_quad(right, property, other, None).unwrap();
+            }
             let other = f.name("Other");
             let unrelated = f.instance("unrelated", other);
             f.builder
@@ -1094,7 +1124,8 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
                 let right = ctx.kb.abox_roles[read.right];
                 assert_ne!(left.0, right.0);
                 assert_eq!((left.1, left.2), (read.property, read.value));
-                assert_eq!((right.1, right.2), (read.property, read.value));
+                assert_eq!((right.1, right.2), (read.property, read.right_value));
+                assert_eq!(read.value == read.right_value, !literals);
             }
             assert!(matches!(
                 ctx.kb.inputs.get(Input::Equality(0)),
@@ -1125,6 +1156,35 @@ fn checked_input_sources_distinguish_authored_and_key_derived_equality() {
             ));
             let value = &mut kb.inputs.key_values.as_mut().unwrap().values[0];
             std::mem::swap(&mut value.left, &mut value.right);
+            if literals {
+                let original = kb.inputs.key_values.as_ref().unwrap().values[0];
+                let row = original.right;
+                let other = kb
+                    .abox_roles
+                    .iter()
+                    .find(|&&(subject, property, value)| {
+                        subject == kb.abox_roles[row].0
+                            && property == original.property
+                            && value != original.right_value
+                    })
+                    .unwrap()
+                    .2;
+                let old_class = kb.literal_class[&other];
+                kb.literal_class.insert(other, original.class.unwrap());
+                kb.abox_roles[row].2 = other;
+                kb.inputs.key_values.as_mut().unwrap().values[0].right_value = other;
+                assert!(
+                    matches!(
+                        journal.normalized_slice(&kb),
+                        Err(crate::owl_dl::graph::changes::slice::Error::MissingKey(0))
+                    ),
+                    "a forged class witness cannot equate the original distinct literal values"
+                );
+                kb.literal_class.insert(other, old_class);
+                kb.abox_roles[row].2 = original.right_value;
+                kb.inputs.key_values.as_mut().unwrap().values[0] = original;
+                assert!(journal.normalized_slice(&kb).is_ok());
+            }
             #[derive(Debug)]
             struct Stop;
             impl purrdf_datalog::StopSignal for Stop {

@@ -249,7 +249,7 @@ fn read(path: &Path) -> String {
 
 #[test]
 fn native_codecs_seam_is_totally_clean() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let native_codecs = root
         .join("crates")
         .join("rdf")
@@ -275,7 +275,7 @@ fn native_codecs_seam_is_totally_clean() {
 
 #[test]
 fn no_gts_rdf_codec_entrypoint_anywhere() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut all: Vec<(String, String)> = Vec::new();
     for (label, path) in crate_src_rust_files(&root) {
         all.extend(scan_gts_codec_entrypoints(&label, &read(&path)));
@@ -292,7 +292,7 @@ fn no_gts_rdf_codec_entrypoint_anywhere() {
 
 #[test]
 fn no_gts_codec_feature_edge_in_manifests() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut all: Vec<(String, String)> = Vec::new();
     for (label, path) in crate_manifests(&root) {
         all.extend(scan_gts_codec_feature_edges(&label, &read(&path)));

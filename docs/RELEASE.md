@@ -81,7 +81,9 @@ one in [`scripts/release-crates.sh`](../scripts/release-crates.sh), which the
 workflow, the bootstrap script and the crates.io preflight all source, and which
 `scripts/check-doc-claims.py` checks this list against:
 
+- `purrdf-alloc-probe`
 - `purrdf-hash`
+- `purrdf-testkit`
 - `purrdf-stack`
 - `purrdf-lex`
 - `purrdf-events`
@@ -105,6 +107,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-text`
 - `purrdf-retrieval`
 - `purrdf-rdf`
+- `purrdf-conformance-kit`
 - `purrdf-markdown`
 - `purrdf-mime`
 - `purrdf-json`
@@ -197,7 +200,7 @@ first tagged run can publish the complete workspace in dependency order.
 
 ### Bootstrap: complete (ledger empty)
 
-All 37 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
+All 40 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
 `purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and
 `purrdf-glob` received isolated, empty, dependency-free **0.0.0** versions.
 Native and WASM compilation, normal package verification and exact
@@ -205,13 +208,18 @@ empty-source/license archive audits ran with the installed compiler before
 upload. The public registry confirmed each version. These packages expose no
 runtime API and contain no functional implementation.
 
-Record creation and Trusted Publisher setup are complete. On 2026-11-07 the
-maintainer confirmed the matching publisher entries, and the strict public
-preflight verified **Require trusted publishing** on all 37 release records
-(`trustpub_only=true`). Publisher entries have no public read API; the
-maintainer's confirmation and the independently checked registry locks are
-separate evidence. The release lane repeats the strict preflight before any
-functional publication.
+On 2026-11-08, `purrdf-alloc-probe`, `purrdf-testkit` and
+`purrdf-conformance-kit` received the same empty **0.0.0** bootstrap records.
+Rust 1.98.1 verified native tests, WASM compilation and package archives before
+upload; exact source and license audits passed. The public registry confirmed
+all three versions. Their functional release is **4.0.1**.
+
+Record creation and Trusted Publisher setup are complete. The maintainer
+confirmed the new publisher configuration on 2026-11-08, and the strict public
+preflight independently verified **Require trusted publishing** on all 40
+release records (`trustpub_only=true`). Publisher entries have no public read
+API; maintainer confirmation and registry locks are separate evidence. The
+release lane repeats the strict preflight before functional publication.
 
 ### Established records
 
@@ -471,7 +479,9 @@ git push origin npm-v0.1.5
 
 Submit the EARL reports to the W3C data-shapes working group right after every
 release that changes SHACL behavior. Starting with 4.0.0, this is the first
-step after the release lanes finish.
+step after the release lanes finish. Reports may also be submitted from a
+verified source commit between releases, including after a test-suite refresh;
+neither a version bump nor a new package release is required.
 
 1. Download `purrdf-shacl-earl.ttl` (SHACL 2017) and `purrdf-shacl12-earl.ttl`
    (SHACL 1.2) from the published GitHub Release and verify the build-provenance
@@ -485,15 +495,26 @@ step after the release lanes finish.
    gh attestation verify purrdf-shacl12-earl.ttl --repo Blackcat-Informatics/purrdf
    ```
 
-   Submit those exact bytes and do not regenerate them: they were produced on
+   For a release submission, submit those exact bytes: they were produced on
    the tagged commit by `make w3c-earl`.
-2. Check that each report names the released version and tag, and that its
-   pass counts agree with the [conformance scoreboard](./CONFORMANCE.md) at
-   that tag.
+
+   For a source-commit submission, commit the suite, harness and any engine
+   changes through the normal verification hooks, then run `make w3c-earl`
+   from that clean commit. The command records the full source commit, the
+   pinned W3C suite commit and the selected SHACL semantic profile in each
+   report. Retain the generated files and the successful harness output.
+   These are reports for that source commit, not replacement release assets.
+2. Check each report's package version, full source commit, suite revision and
+   semantic profile, and compare its pass counts with the harness output and
+   [conformance scoreboard](./CONFORMANCE.md) at that same commit. Check the
+   reports against the current W3C report page and test inventory; disclose
+   any newer tests outside the report's pinned suite and every failed result.
 3. Open a pull request to [`w3c/data-shapes`](https://github.com/w3c/data-shapes)
    that adds or replaces the PurRDF reports. Put them where that repository's
-   implementation-report instructions say, and link the GitHub Release as their
-   provenance.
+   implementation-report instructions say. Link the GitHub Release for release
+   assets, or the exact source commit and reproduction command for reports
+   generated between releases. A package version alone does not identify a
+   source-commit build.
 4. After the reports merge, record the accepted report locations in
    [CONFORMANCE.md](./CONFORMANCE.md).
 

@@ -23,7 +23,7 @@
 //! - `d_union_4`          — UNION of four branches with mixed cardinalities.
 //! - `e_group_aggregate`  — GROUP BY 200 keys with COUNT + AVG + MAX.
 //! - `f_path_transitive`  — `reportsTo+` closure to the tree root (30k solutions).
-//! - `g_order_by_limit`   — whole-relation ORDER BY (numeric DESC, tiebreak) + LIMIT.
+//! - `g_order_by_limit`   — ORDER BY (numeric DESC, tiebreak) + finite LIMIT.
 //! - `h_distinct_dept`    — SELECT DISTINCT collapsing 30k rows to 200 keys, the
 //!   entry-API dedup path in `modifier.rs`.
 //! - `i_construct_blank_free` — a `CONSTRUCT` template with NO blank-node position,
@@ -87,7 +87,7 @@
 //!
 //! A third — `sort_order` — does the same for the SORT comparator
 //! (`purrdf_xsd::value_total_cmp`, which `modifier.rs`'s `total_order` runs inside
-//! `g_order_by_limit`'s `O(n log n)` sort), laid beside the promotion-based
+//! `g_order_by_limit`'s selection), laid beside the promotion-based
 //! `value_cmp` the `<` operator uses, one row per operand shape. `g_order_by_limit`
 //! sorts a HOMOGENEOUS `xsd:integer` column, so it exercises only the
 //! same-representation rows; the cross-representation and `BigInt`-fallback rows
@@ -263,8 +263,8 @@ const Q_F: &str = "\
 PREFIX ex: <https://example.org/>
 SELECT ?e WHERE { ?e ex:reportsTo+ ex:person0 }";
 
-/// (g) ORDER BY + LIMIT: whole-relation sort (numeric DESC with an entity
-/// tiebreak) of 30k rows, then a top-10 slice.
+/// (g) ORDER BY + LIMIT: whole-relation key evaluation (numeric DESC with an
+/// entity tiebreak) followed by a finite window over 30k rows.
 const Q_G: &str = "\
 PREFIX ex: <https://example.org/>
 SELECT ?p ?a WHERE {
@@ -535,6 +535,21 @@ fn bench_query_eval(c: &mut Bench) {
     group.bench_function("k_property_function_join", |bencher| {
         bencher.iter(|| std::hint::black_box(run_with_relations(&engine, &ds, Q_K, &relations)));
     });
+    // Small windows exercise bounded selection; the large windows retain the
+    // full-sort path. Query text and fixture construction stay outside measurement.
+    for (limit, offset) in [
+        (1, 0),
+        (100, 20),
+        (PEOPLE / 8, 0),
+        (PEOPLE / 2, 0),
+        (PEOPLE, 0),
+    ] {
+        let query = Q_G.replace("LIMIT 10", &format!("LIMIT {limit} OFFSET {offset}"));
+        assert_eq!(run(&engine, &ds, &query), limit.min(PEOPLE - offset));
+        group.bench_function(format!("g_order_window_{limit}_{offset}"), |bencher| {
+            bencher.iter(|| std::hint::black_box(run(&engine, &ds, &query)));
+        });
+    }
     group.finish();
 }
 
@@ -640,7 +655,7 @@ fn bench_value_dispatch(c: &mut Bench) {
 }
 
 /// Isolates the SORT comparator — `purrdf_xsd::value_total_cmp`, the relation
-/// `modifier.rs`'s `total_order` runs inside `ORDER BY`'s `O(n log n)` sort, its
+/// `modifier.rs`'s `total_order` runs inside ORDER BY sorting and selection; its
 /// `DISTINCT` neighbours and `MIN`/`MAX` — beside the promotion-based
 /// `purrdf_xsd::value_cmp` the `<` operator keeps using.
 ///

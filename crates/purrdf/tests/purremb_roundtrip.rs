@@ -16,7 +16,7 @@ use purrdf_core::distance::{Arithmetic as _, Exact};
 use purrdf_core::purremb_fixture::Identities;
 
 fn golden_path() -> std::path::PathBuf {
-    purrdf_testkit::paths::workspace_root().join("crates/rdf-core/tests/goldens/purremb_v1.bin")
+    purrdf_testkit::paths::workspace_root!().join("crates/rdf-core/tests/goldens/purremb_v1.bin")
 }
 
 struct Fixture {

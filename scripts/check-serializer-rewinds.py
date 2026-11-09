@@ -72,11 +72,11 @@ RAW_STRING_OPEN = re.compile(r'r#*"')
 # A char literal (`'a'`, `'\\n'`), as opposed to a lifetime (`'a` with no closing quote).
 CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 
-# (path, receiver) -> why this receiver is not an output buffer.
-#
-# Keyed by receiver rather than by line number so the table survives edits above
-# it: a reasoned exemption should not need renewing every time the file moves.
+# Receiver keys survive source movement; each reason identifies non-output state.
 ALLOWLIST: dict[tuple[str, str], str] = {
+    ("crates/rdf/src/native_codecs/text_parse.rs", "steps"): "The native line parser consumes admitted continuation frames for nested input terms, never emitted bytes.",
+    ("crates/rdf/src/native_codecs/text_parse.rs", "pending"): "The native Turtle parser consumes admitted continuations for quoted and reifying input syntax, never emitted bytes.",
+    ("crates/rdf/src/native_codecs/text_parse.rs", "answers"): "The native parsers consume unpublished child nodes from an admitted semantic result stack to construct their parent term; no serialized output is changed.",
     ("crates/rdf/src/native_codecs/text_parse.rs", "terms"): "The native parser rolls back its just-appended unpublished atom when indexing refuses. This is an in-memory term table, never an emitted byte stream.",
     ("crates/rdf/src/native_codecs/text_parse.rs", "reifiers"): "The native statement fold removes its unindexed trailing reifier row on refusal before any source association or dataset publication. These are semantic rows, not emitted bytes.",
     ("crates/sparql-results/src/json_read.rs", "items"): "The native decoder cleanup consumes original input-owned payloads and restores a refused payload into its vacant admitted slot. The array is cleanup ownership, never serialized output.",

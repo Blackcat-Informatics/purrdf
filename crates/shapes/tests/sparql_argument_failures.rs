@@ -6,6 +6,7 @@
 #[path = "support/turtle.rs"]
 mod turtle;
 
+use purrdf_shapes::ShaclProfile;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::expression::{RecursionGuard, eval_node_expr};
 use purrdf_shapes::term::{NamedNode, Term};
@@ -22,54 +23,79 @@ const PREFIXES: &str = r"
 ";
 
 /// Evaluate a named root through the standalone public boundary.
-fn free_outputs(body: &str) -> Result<Vec<String>, purrdf_shapes::ShapesError> {
+fn free_outputs(
+    body: &str,
+    profile: ShaclProfile,
+) -> Result<Vec<String>, purrdf_shapes::ShapesError> {
     let document =
         purrdf_shapes::text_ingest::parse_turtle_document(&format!("{PREFIXES}{body}"), None)
             .expect("shapes parse");
     let data = parse_turtle_to_dataset("", None).expect("empty data");
-    let evaluated = purrdf_shapes::free_expression::evaluate(
-        &purrdf_shapes::free_expression::FreeExpression {
-            shapes: &document.dataset,
-            prefixes: &document.prefixes,
-            root: &Term::blank("e"),
-            data: data.as_ref(),
-            focus: &Term::NamedNode(NamedNode::new_unchecked("http://example.org/n")),
-            scope: &[],
-            imports: &purrdf_shapes::ShapesImports::new(),
-        },
-    )?;
+    let request = purrdf_shapes::free_expression::FreeExpression {
+        shapes: &document.dataset,
+        prefixes: &document.prefixes,
+        root: &Term::blank("e"),
+        data: data.as_ref(),
+        focus: &Term::NamedNode(NamedNode::new_unchecked("http://example.org/n")),
+        scope: &[],
+        imports: &purrdf_shapes::ShapesImports::new(),
+    };
+    let evaluated = if profile == ShaclProfile::LEGACY {
+        purrdf_shapes::free_expression::evaluate(&request)?
+    } else {
+        match purrdf_shapes::free_expression::evaluate_with_profile(&request, profile) {
+            Ok(evaluated) => evaluated,
+            Err(purrdf_shapes::xpath::XPathValidationError::Shapes(error)) => return Err(error),
+            Err(error) => panic!("unexpected selected-law refusal: {error:?}"),
+        }
+    };
     Ok(evaluated.outputs.iter().map(ToString::to_string).collect())
 }
 
 fn sparql_node_calls_mask_catchable_argument_failures() {
-    let error = "[ shnex:instancesOf 42 ]";
-    for (call, expected) in [
-        (format!("coalesce (\"ok\" {error})"), "\"ok\""),
-        (format!("logical-and (false {error})"), "false"),
-        (format!("logical-and ({error} false)"), "false"),
-        (format!("logical-or (true {error})"), "true"),
-        (format!("logical-or ({error} true)"), "true"),
-        (format!("coalesce ({error} \"ok\")"), "\"ok\""),
-        (format!("if (true \"ok\" {error})"), "\"ok\""),
-        (format!("if (false {error} \"ok\")"), "\"ok\""),
-        (format!("in (ex:x {error} ex:x)"), "true"),
-        (format!("not-in (ex:x {error} ex:x)"), "false"),
-    ] {
-        let expected = if expected.starts_with('"') {
-            expected.to_owned()
-        } else {
-            format!("\"{expected}\"^^<{}>", purrdf_xsd::datatype::XSD_BOOLEAN)
-        };
-        assert_eq!(
-            free_outputs(&format!("_:e sparql:{call} ."))
-                .unwrap_or_else(|error| panic!("{call}: {error}")),
-            vec![expected],
-            "{call}",
-        );
+    for (error, cardinality) in [("[ shnex:instancesOf 42 ]", false), ("(ex:x ex:y)", true)] {
+        for (call, expected) in [
+            (format!("coalesce (\"ok\" {error})"), "\"ok\""),
+            (format!("logical-and (false {error})"), "false"),
+            (format!("logical-and ({error} false)"), "false"),
+            (format!("logical-or (true {error})"), "true"),
+            (format!("logical-or ({error} true)"), "true"),
+            (format!("coalesce ({error} \"ok\")"), "\"ok\""),
+            (format!("if (true \"ok\" {error})"), "\"ok\""),
+            (format!("if (false {error} \"ok\")"), "\"ok\""),
+            (format!("in (ex:x {error} ex:x)"), "true"),
+            (format!("not-in (ex:x {error} ex:x)"), "false"),
+        ] {
+            let expected = if expected.starts_with('"') {
+                expected.to_owned()
+            } else {
+                format!("\"{expected}\"^^<{}>", purrdf_xsd::datatype::XSD_BOOLEAN)
+            };
+            for profile in [
+                ShaclProfile::LEGACY,
+                ShaclProfile::ED_20261016,
+                ShaclProfile::ED_20261106,
+            ] {
+                let outcome = free_outputs(&format!("_:e sparql:{call} ."), profile);
+                if cardinality && profile != ShaclProfile::ED_20261106 {
+                    let error = outcome.expect_err("earlier laws reject multivalued arguments");
+                    assert_eq!(
+                        error.failure_class(),
+                        purrdf_shapes::FailureClass::Evaluation
+                    );
+                } else {
+                    assert_eq!(
+                        outcome.unwrap_or_else(|error| panic!("{profile}: {call}: {error}")),
+                        vec![expected.clone()],
+                        "{profile}: {call}",
+                    );
+                }
+            }
+        }
     }
 }
 
-fn sparql_node_calls_preserve_unmasked_failures_and_empty_branches() {
+fn sparql_node_calls_preserve_unmasked_failures_and_reject_selected_unbound_branches() {
     let error = "[ shnex:instancesOf 42 ]";
     for call in [
         format!("coalesce ({error} {error})"),
@@ -84,8 +110,8 @@ fn sparql_node_calls_preserve_unmasked_failures_and_empty_branches() {
         format!("not-in (ex:x {error} ex:y)"),
         format!("multiply ({error} 0)"),
     ] {
-        let failure =
-            free_outputs(&format!("_:e sparql:{call} .")).expect_err("unmasked nested failure");
+        let failure = free_outputs(&format!("_:e sparql:{call} ."), ShaclProfile::ED_20261106)
+            .expect_err("unmasked nested failure");
         assert_eq!(
             failure.failure_class(),
             purrdf_shapes::FailureClass::Evaluation
@@ -94,12 +120,24 @@ fn sparql_node_calls_preserve_unmasked_failures_and_empty_branches() {
     for call in [
         format!("if (true [ shnex:pathValues ex:missing ] {error})"),
         format!("if (false {error} [ shnex:pathValues ex:missing ])"),
+        "if ([ shnex:var \"missing\" ] true false)".to_owned(),
     ] {
-        assert_eq!(
-            free_outputs(&format!("_:e sparql:{call} ."))
-                .expect("selected empty branch is not a failure"),
-            Vec::<String>::new(),
-        );
+        for profile in [
+            ShaclProfile::LEGACY,
+            ShaclProfile::ED_20261016,
+            ShaclProfile::ED_20261106,
+        ] {
+            let outcome = free_outputs(&format!("_:e sparql:{call} ."), profile);
+            if profile == ShaclProfile::ED_20261106 {
+                let failure = outcome.expect_err("November rejects an unbound IF result");
+                assert_eq!(
+                    failure.failure_class(),
+                    purrdf_shapes::FailureClass::Evaluation
+                );
+            } else {
+                assert_eq!(outcome.unwrap(), [] as [String; 0], "{profile}: {call}");
+            }
+        }
     }
 }
 
@@ -164,9 +202,86 @@ fn sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal() {
     );
 }
 
+fn membership_distinguishes_unbound_arguments_from_catchable_errors() {
+    let truth = vec![format!("\"true\"^^<{}>", purrdf_xsd::datatype::XSD_BOOLEAN)];
+    for profile in [
+        ShaclProfile::LEGACY,
+        ShaclProfile::ED_20261016,
+        ShaclProfile::ED_20261106,
+    ] {
+        assert_eq!(
+            free_outputs(
+                "_:e sparql:in (ex:x [ shnex:var \"missing\" ] ex:y) .",
+                profile
+            )
+            .unwrap(),
+            [] as [String; 0],
+        );
+        let matching = free_outputs(
+            "_:e sparql:in (ex:x [ shnex:var \"missing\" ] ex:x) .",
+            profile,
+        )
+        .unwrap();
+        assert_eq!(
+            matching,
+            if profile == ShaclProfile::ED_20261106 {
+                Vec::new()
+            } else {
+                truth.clone()
+            },
+            "{profile}"
+        );
+        let masked = free_outputs(
+            "_:e sparql:in (ex:x [ shnex:var \"missing\" ] [ shnex:instancesOf 42 ] ex:x) .",
+            profile,
+        )
+        .unwrap();
+        assert_eq!(masked, truth, "{profile}");
+    }
+}
+
+/// November list evaluation cannot hide a failing shape operand behind an empty
+/// node operand. The older law retains its short circuit.
+fn empty_conformance_nodes_follow_the_selected_argument_law() {
+    use purrdf_shapes::ShaclProfile;
+    use purrdf_shapes::free_expression::{FreeExpression, evaluate_with_profile};
+    let document = purrdf_shapes::text_ingest::parse_turtle_document(
+        &format!("{PREFIXES} _:e shnex:conformsToShape ( [] [ shnex:instancesOf 42 ] ) ."),
+        None,
+    )
+    .unwrap();
+    let data = parse_turtle_to_dataset("", None).unwrap();
+    let imports = purrdf_shapes::ShapesImports::new();
+    let request = FreeExpression {
+        shapes: &document.dataset,
+        prefixes: &document.prefixes,
+        root: &Term::blank("e"),
+        data: data.as_ref(),
+        focus: &Term::NamedNode(NamedNode::new_unchecked("http://example.org/n")),
+        scope: &[],
+        imports: &imports,
+    };
+    assert_eq!(
+        evaluate_with_profile(&request, ShaclProfile::ED_20261016)
+            .unwrap()
+            .outputs,
+        [] as [Term; 0],
+    );
+    let error = evaluate_with_profile(&request, ShaclProfile::ED_20261106).unwrap_err();
+    let purrdf_shapes::xpath::XPathValidationError::Shapes(error) = error else {
+        panic!("unexpected failure: {error:?}")
+    };
+    assert_eq!(
+        error.failure_class(),
+        purrdf_shapes::FailureClass::Evaluation
+    );
+}
+
 purrdf_testkit::harness_main!(
     sparql_node_calls_mask_catchable_argument_failures,
-    sparql_node_calls_preserve_unmasked_failures_and_empty_branches,
+    sparql_node_calls_preserve_unmasked_failures_and_reject_selected_unbound_branches,
     sparql_argument_failures_follow_the_same_path_in_dated_validation,
     sparql_node_calls_cannot_mask_a_nested_processor_depth_refusal,
+    membership_distinguishes_unbound_arguments_from_catchable_errors,
+    empty_conformance_nodes_follow_the_selected_argument_law,
 );

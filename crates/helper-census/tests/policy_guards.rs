@@ -19,7 +19,7 @@ fn python_test_policy_accepts_the_repository() {
 
 /// Require the requested mode to succeed, preserving its diagnostics on failure.
 fn accepts(mode: &str) {
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     let output = Command::new(env!("CARGO_BIN_EXE_helper-census"))
         .args(["--root", root.to_str().expect("root"), mode])
         .output()

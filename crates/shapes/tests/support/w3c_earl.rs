@@ -113,9 +113,6 @@ pub struct Suite {
     /// The SHACL semantic-law identifier the suite is graded under
     /// (`ShaclProfile::id`), named in the subject's description.
     pub law: &'static str,
-    /// Whether the report also covers node-expression and SPARQL 1.2 RL records, which no
-    /// SHACL law selects: the description then says they are law-independent.
-    pub law_independent_records: bool,
 }
 
 /// The `earl:TestSubject`: PurRDF, as a DOAP project, naming the build.
@@ -146,24 +143,16 @@ pub fn subject(purrdf_commit: &str, suite: &Suite) -> SubjectDescription {
 
 /// The subject's `doap:description`: the build, the suite commit, the SHACL law the suite is
 /// graded under and that every host selects the same law, so a Working Group reader can
-/// reproduce the result; for a suite with node-expression and SPARQL 1.2 RL records, that
-/// those records are law-independent.
+/// reproduce validation and node-expression results under the same selected law.
 fn description(purrdf_commit: &str, suite: &Suite) -> String {
-    let mut text = format!(
+    format!(
         "PurRDF built from source commit {purrdf_commit}, run against the W3C data-shapes \
          test suite at commit {}, graded under the {} profile. That law is selectable on \
          every host: `purrdf validate --shacl-profile {}` on the command line, and the \
          `shacl_profile` keyword (Python), the `shaclProfile` argument (WebAssembly) and the \
          `shacl_profile` argument of `purrdf_shacl_validate_to_sarif_law` (C)",
         suite.commit, suite.law, suite.law
-    );
-    if suite.law_independent_records {
-        text.push_str(
-            ". Node-expression and SPARQL 1.2 RL records are law-independent: no SHACL law \
-             selects them",
-        );
-    }
-    text
+    )
 }
 
 /// The `earl:Assertor`, named through `foaf:name`.
@@ -519,7 +508,6 @@ pub fn check_descriptions(
     purrdf_commit: &str,
     suite_commit: &str,
     law: &str,
-    law_independent_records: bool,
 ) -> Result<(), String> {
     let statements = statements(bytes)?;
     let about = |subject: &str| -> BTreeSet<(String, String)> {
@@ -538,19 +526,13 @@ pub fn check_descriptions(
         .map(|(_, o)| o.clone())
         .ok_or("the subject has no doap:description")?;
     // Spelled out here independently of `description`, so a change to either is a failure.
-    let mut spelled = format!(
+    let spelled = format!(
         "PurRDF built from source commit {purrdf_commit}, run against the W3C data-shapes test \
          suite at commit {suite_commit}, graded under the {law} profile. That law is selectable \
          on every host: `purrdf validate --shacl-profile {law}` on the command line, and the \
          `shacl_profile` keyword (Python), the `shaclProfile` argument (WebAssembly) and the \
          `shacl_profile` argument of `purrdf_shacl_validate_to_sarif_law` (C)"
     );
-    if law_independent_records {
-        spelled.push_str(
-            ". Node-expression and SPARQL 1.2 RL records are law-independent: no SHACL law \
-             selects them",
-        );
-    }
     if description != literal(&spelled) {
         return Err(format!(
             "doap:description {description} is not exactly {spelled:?}"

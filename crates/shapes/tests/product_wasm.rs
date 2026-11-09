@@ -114,9 +114,10 @@ mod shacl12_subset {
 
     use purrdf_rdf::RdfDataset;
     use purrdf_shacl_conformance::named as iri;
+    use purrdf_shapes::ShaclProfile;
     use purrdf_shapes::data::{GraphFilter, native_quads};
     use purrdf_shapes::engine::validate_dataset_with_shapes_graph;
-    use purrdf_shapes::free_expression::{FreeExpression, evaluate};
+    use purrdf_shapes::free_expression::{FreeExpression, evaluate_with_profile};
     use purrdf_shapes::shapes::from_dataset_with_config_and_graph;
     use purrdf_shapes::srl::{self, InferOptions};
     use purrdf_shapes::term::Term;
@@ -274,22 +275,29 @@ mod shacl12_subset {
             dataset,
             &one(dataset, &manifest, &format!("{MF}entries")).expect("mf:entries"),
         );
-        assert_eq!(entries.len(), 3, "the file's three entries");
+        assert_eq!(
+            entries.len(),
+            5,
+            "three concatenation cases plus empty-list and empty-member cases"
+        );
         for entry in entries {
             let action = one(dataset, &entry, &format!("{MF}action")).expect("mf:action");
             let root = one(dataset, &action, &format!("{SHT}nodeExpr")).expect("sht:nodeExpr");
             // No `sht:focusNode`: a blank node the graph never mentions, as the native
             // harness uses.
             let focus = Term::blank("absent-focus-node");
-            let produced = evaluate(&FreeExpression {
-                shapes: dataset,
-                prefixes: &document.prefixes,
-                root: &root,
-                data: dataset,
-                focus: &focus,
-                scope: &[],
-                imports: &purrdf_shapes::ShapesImports::new(),
-            })
+            let produced = evaluate_with_profile(
+                &FreeExpression {
+                    shapes: dataset,
+                    prefixes: &document.prefixes,
+                    root: &root,
+                    data: dataset,
+                    focus: &focus,
+                    scope: &[],
+                    imports: &purrdf_shapes::ShapesImports::new(),
+                },
+                ShaclProfile::ED_20261106,
+            )
             .unwrap_or_else(|e| panic!("{entry}: evaluates on this target: {e}"))
             .outputs;
             let expected = list(

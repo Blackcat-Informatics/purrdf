@@ -45,6 +45,7 @@ use super::syntax::check_language_tag;
 use purrdf_lex::allocation::OrderedTable;
 use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_lex::control::{ControlledError, Progress, Unmetered};
+use purrdf_lex::walk::{Dismantle, DismantleTree, Nested, WorkList};
 
 use purrdf_core::collections::{ListVocab, try_build_rdf_list_with_copy};
 use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
@@ -57,7 +58,7 @@ use rayon::prelude::*;
 use super::media_type::NativeRdfFormat;
 use super::ser_model::{SerGraph, SerQuad, SerReifierRow, SerTerm, SerTermKind, SerTriple3};
 use super::span::{NoSpans, SpanCollector};
-use crate::nesting::{MAX_PARSE_NESTING_DEPTH, nesting_too_deep};
+use crate::nesting::MAX_PARSE_NESTING_DEPTH;
 use crate::{RdfDiagnostic, RdfLocation};
 
 use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
@@ -212,7 +213,6 @@ fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
 
 /// A parsed RDF term node, mirroring the `from_nquads` `Node` so the
 /// `build_gts` lowering is structurally identical.
-#[derive(Clone, Debug, PartialEq, Eq)]
 enum Node {
     /// A RESOLVED, validated IRI.
     ///
@@ -228,7 +228,162 @@ enum Node {
         direction: Option<String>,
         datatype: Option<String>,
     },
-    Triple(Box<Self>, Box<Self>, Box<Self>),
+    // The cache excludes this inline node and includes every child box/payload.
+    // It lets refusal cleanup release its grant without allocating a census walk.
+    Triple(Nested<Self>, Nested<Self>, Nested<Self>, usize),
+}
+
+impl Dismantle for Node {
+    fn dismantle(node: Box<Self>) {
+        purrdf_lex::walk::dismantle_tree(node);
+    }
+}
+
+impl DismantleTree for Node {
+    fn next_child(&mut self) -> Option<&mut Nested<Self>> {
+        match self {
+            Self::Triple(s, p, o, _) => [s, p, o].into_iter().find(|child| !child.is_taken()),
+            _ => None,
+        }
+    }
+
+    fn last_child(&mut self) -> Option<&mut Nested<Self>> {
+        match self {
+            Self::Triple(s, p, o, _) => [s, p, o].into_iter().rev().find(|child| child.is_taken()),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Debug for Node {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use purrdf_lex::walk::{Tok, write_debug};
+        write_debug::<_, &dyn core::fmt::Debug, 16>(f, self, |node, pending| match node {
+            Self::Iri(iri) => pending.extend([
+                Tok::Tuple("Iri"),
+                Tok::Leaf(iri as &dyn core::fmt::Debug),
+                Tok::EndTuple,
+            ]),
+            Self::Bnode(label) => {
+                pending.extend([
+                    Tok::Tuple("Bnode"),
+                    Tok::Leaf(label as &dyn core::fmt::Debug),
+                    Tok::EndTuple,
+                ]);
+            }
+            Self::Literal {
+                value,
+                lang,
+                direction,
+                datatype,
+            } => pending.extend([
+                Tok::Struct("Literal"),
+                Tok::Field("value"),
+                Tok::Leaf(value as &dyn core::fmt::Debug),
+                Tok::Field("lang"),
+                Tok::Leaf(lang as &dyn core::fmt::Debug),
+                Tok::Field("direction"),
+                Tok::Leaf(direction as &dyn core::fmt::Debug),
+                Tok::Field("datatype"),
+                Tok::Leaf(datatype as &dyn core::fmt::Debug),
+                Tok::EndStruct,
+            ]),
+            Self::Triple(s, p, o, _) => pending.extend([
+                Tok::Tuple("Triple"),
+                Tok::Node(&**s),
+                Tok::Node(&**p),
+                Tok::Node(&**o),
+                Tok::EndTuple,
+            ]),
+        })
+    }
+}
+
+#[cfg(test)]
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        use core::ops::ControlFlow;
+        purrdf_core::ir::visit_nested((self, other), |(left, right)| {
+            let equal = match (left, right) {
+                (Self::Triple(ls, lp, lo, _), Self::Triple(rs, rp, ro, _)) => {
+                    return ControlFlow::Continue(Some([
+                        (&**ls, &**rs),
+                        (&**lp, &**rp),
+                        (&**lo, &**ro),
+                    ]));
+                }
+                (Self::Iri(left), Self::Iri(right)) => left == right,
+                (Self::Bnode(left), Self::Bnode(right)) => left == right,
+                (
+                    Self::Literal {
+                        value: lv,
+                        lang: ll,
+                        direction: ld,
+                        datatype: lt,
+                    },
+                    Self::Literal {
+                        value: rv,
+                        lang: rl,
+                        direction: rd,
+                        datatype: rt,
+                    },
+                ) => (lv, ll, ld, lt) == (rv, rl, rd, rt),
+                _ => false,
+            };
+            if equal {
+                ControlFlow::Continue(None)
+            } else {
+                ControlFlow::Break(())
+            }
+        })
+        .is_continue()
+    }
+}
+
+fn triple_node_with_memory<A: Admission + ?Sized>(
+    s: Node,
+    p: Node,
+    o: Node,
+    memory: &mut Memory<'_, A>,
+) -> Result<Node, StorageError> {
+    let boxes = size_of::<Node>()
+        .checked_mul(3)
+        .ok_or(StorageError::SizeOverflow)?;
+    let payload = [&s, &p, &o].into_iter().try_fold(0usize, |bytes, node| {
+        bytes
+            .checked_add(node_owned_bytes(node)?)
+            .ok_or(StorageError::SizeOverflow)
+    })?;
+    let bytes = boxes
+        .checked_add(payload)
+        .ok_or(StorageError::SizeOverflow)?;
+    memory.consuming_scope(payload, |memory| {
+        Ok(Node::Triple(
+            memory.boxed(s)?.into(),
+            memory.boxed(p)?.into(),
+            memory.boxed(o)?.into(),
+            bytes,
+        ))
+    })
+}
+
+fn push_source_origin_with_memory<A: Admission + ?Sized>(
+    source: &mut SourceOccurrences,
+    kind: SourceOriginKind,
+    components: Option<[SourceOriginId; 3]>,
+    memory: &mut Memory<'_, A>,
+) -> Result<SourceOriginId, StorageError> {
+    let id = SourceOriginId(source.origins.len());
+    memory.push(
+        &mut source.origins,
+        SourceTermOrigin {
+            kind,
+            components,
+            semantic: None,
+            native_term: None,
+        },
+    )?;
+    Ok(id)
 }
 
 struct DocNode {
@@ -242,6 +397,32 @@ struct DocNodeRef<'a> {
     origin: Option<SourceOriginId>,
     inherited: bool,
 }
+#[derive(Clone, Copy)]
+enum TermMode {
+    Any,
+    QuotedComponent,
+    Predicate,
+    ReifiesObject,
+}
+
+#[derive(Clone, Copy)]
+enum TermStep<'a> {
+    Read(TermMode, Option<DocNodeRef<'a>>),
+    Quoted {
+        start: usize,
+        parenthesized: bool,
+    },
+    Reifying {
+        start: usize,
+        opening: (usize, usize),
+        graph: Option<DocNodeRef<'a>>,
+    },
+    Reified {
+        start: usize,
+        graph: Option<DocNodeRef<'a>>,
+    },
+}
+
 impl DocNode {
     fn as_ref(&self) -> DocNodeRef<'_> {
         DocNodeRef {
@@ -292,13 +473,7 @@ fn node_owned_bytes(node: &Node) -> Result<usize, StorageError> {
                 .checked_add(text.capacity())
                 .ok_or(StorageError::SizeOverflow)
         }),
-        Node::Triple(s, p, o) => [s, p, o].into_iter().try_fold(0usize, |bytes, node| {
-            let owned = node_owned_bytes(node)?;
-            bytes
-                .checked_add(size_of::<Node>())
-                .and_then(|bytes| bytes.checked_add(owned))
-                .ok_or(StorageError::SizeOverflow)
-        }),
+        Node::Triple(_, _, _, bytes) => Ok(*bytes),
     }
 }
 
@@ -360,46 +535,55 @@ fn take_text_with_memory<A: Admission + ?Sized>(
     }
 }
 
-/// Clone the native syntax value through the same physical account at each
-/// owned string/box birth. The syntax nesting limit bounds recursive depth.
+/// Clone a native syntax value bottom-up under its original physical account.
 fn clone_node_with_memory<A: Admission + ?Sized>(
     node: &Node,
     memory: &mut Memory<'_, A>,
 ) -> Result<Node, StorageError> {
-    memory.admission_mut().checkpoint(1)?;
-    Ok(match node {
-        Node::Iri(iri) => Node::Iri(iri.clone_with_memory(memory)?),
-        Node::Bnode(label) => Node::Bnode(memory.string_with_progress(label)?),
-        Node::Literal {
-            value,
-            lang,
-            direction,
-            datatype,
-        } => Node::Literal {
-            value: memory.string_with_progress(value)?,
-            lang: lang
-                .as_deref()
-                .map(|text| memory.string_with_progress(text))
-                .transpose()?,
-            direction: direction
-                .as_deref()
-                .map(|text| memory.string_with_progress(text))
-                .transpose()?,
-            datatype: datatype
-                .as_deref()
-                .map(|text| memory.string_with_progress(text))
-                .transpose()?,
+    purrdf_core::ir::try_fold_nested_with_memory(
+        node,
+        &mut (),
+        |(), node, memory| {
+            memory.admission_mut().checkpoint(1)?;
+            if let Node::Triple(s, p, o, _) = node {
+                return Ok(purrdf_core::ir::Nested::Triple(&**s, &**p, &**o));
+            }
+            let cloned = memory.scope(|memory| {
+                Ok(match node {
+                    Node::Iri(iri) => Node::Iri(iri.clone_with_memory(memory)?),
+                    Node::Bnode(label) => Node::Bnode(memory.string_with_progress(label)?),
+                    Node::Literal {
+                        value,
+                        lang,
+                        direction,
+                        datatype,
+                    } => Node::Literal {
+                        value: memory.string_with_progress(value)?,
+                        lang: lang
+                            .as_deref()
+                            .map(|text| memory.string_with_progress(text))
+                            .transpose()?,
+                        direction: direction
+                            .as_deref()
+                            .map(|text| memory.string_with_progress(text))
+                            .transpose()?,
+                        datatype: datatype
+                            .as_deref()
+                            .map(|text| memory.string_with_progress(text))
+                            .transpose()?,
+                    },
+                    Node::Triple(..) => unreachable!("triple components are folded"),
+                })
+            })?;
+            Ok(purrdf_core::ir::Nested::Leaf(cloned))
         },
-        Node::Triple(s, p, o) => {
-            let s = clone_node_with_memory(s, memory)?;
-            let s = memory.boxed(s)?;
-            let p = clone_node_with_memory(p, memory)?;
-            let p = memory.boxed(p)?;
-            let o = clone_node_with_memory(o, memory)?;
-            let o = memory.boxed(o)?;
-            Node::Triple(s, p, o)
-        }
-    })
+        |(), _, s, p, o, memory| triple_node_with_memory(s, p, o, memory),
+        |(), node, memory| {
+            let _ = release_node_with_memory(node, memory);
+        },
+        |cause, _| cause,
+        memory,
+    )
 }
 
 /// Line-family execution mode: `Auto` routes N-Triples/N-Quads inputs at or above
@@ -1193,7 +1377,7 @@ fn parse_one_line(
     // A well-formed line holds three or four terms: reserve once, no regrowth.
     let mut nodes = Vec::with_capacity(4);
     while !cursor.at_statement_end() {
-        nodes.push(cursor.term(0)?);
+        nodes.push(cursor.term()?);
     }
     cursor.expect_dot()?;
     cursor.expect_exhausted()?;
@@ -1372,15 +1556,62 @@ impl<'a> TokenCursor<'a> {
         }
     }
 
-    /// Parse one term in N-Triples/N-Quads syntax. The lexer admits `<<( … )>>` in every
-    /// position; positional validity is checked later by [`validate_statement`], exactly as
-    /// the purrdf-gts parser does.
-    ///
-    /// `depth` is how many quoted-triple terms this one is already nested inside — 0 at a
-    /// statement's top level — and is what [`MAX_PARSE_NESTING_DEPTH`] is checked against.
-    fn term(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
+    /// Parse nested quoted terms with admitted continuation storage.
+    fn term(&mut self) -> Result<Node, RdfDiagnostic> {
+        #[derive(Clone, Copy)]
+        enum Step {
+            Enter,
+            Close,
+        }
+        let mut steps: WorkList<Step, 16> = WorkList::new();
+        let mut answers = Vec::new();
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let result = (|| {
+            steps.try_push_admitted(Step::Enter, &mut memory)?;
+            while let Some(step) = steps.pop() {
+                let node = match step {
+                    Step::Enter if self.peek() == Some(&Token::TripleOpen) => {
+                        self.expect(&Token::TripleOpen)?;
+                        self.expect(&Token::LParen)?;
+                        steps.try_push_admitted(Step::Close, &mut memory)?;
+                        for _ in 0..3 {
+                            steps.try_push_admitted(Step::Enter, &mut memory)?;
+                        }
+                        continue;
+                    }
+                    Step::Enter => {
+                        let node = self.atomic_term()?;
+                        // This cursor is the resident convenience lane. Register
+                        // its resident scalar ownership before consuming it below.
+                        memory.add_bytes(node_owned_bytes(&node)?)?;
+                        node
+                    }
+                    Step::Close => {
+                        self.expect(&Token::RParen)?;
+                        self.expect(&Token::TripleClose)?;
+                        let o = answers.pop().expect("quoted object was parsed");
+                        let p = answers.pop().expect("quoted predicate was parsed");
+                        let s = answers.pop().expect("quoted subject was parsed");
+                        triple_node_with_memory(s, p, o, &mut memory)?
+                    }
+                };
+                memory.push(&mut answers, node)?;
+            }
+            Ok(answers.pop().expect("the complete term was parsed"))
+        })();
+        let frames = steps.release_admitted(&mut memory);
+        let nodes = release_nodes_with_memory(answers, &mut memory);
+        let cleanup = frames.and(nodes);
+        match (result, cleanup) {
+            (Err(original), _) => Err(original),
+            (Ok(node), Ok(())) => Ok(node),
+            (Ok(_), Err(cause)) => Err(cause.into()),
+        }
+    }
+
+    fn atomic_term(&mut self) -> Result<Node, RdfDiagnostic> {
         match self.peek() {
-            Some(Token::TripleOpen) => self.quoted_triple(depth),
             Some(Token::Iri(_)) => {
                 let col = self.col();
                 let Some(Token::Iri(value)) = self.bump() else {
@@ -1406,28 +1637,6 @@ impl<'a> TokenCursor<'a> {
                 self.col(),
             )),
         }
-    }
-
-    /// `<<( s p o )>>` quoted-triple term (the only triple form N-Triples/N-Quads
-    /// admit). The purrdf-gts N-Quads parser requires the parenthesized form.
-    ///
-    /// The ONE recursion in the line grammar, so this is where the nesting bound is
-    /// decided. It is refused BEFORE the `<<(` is consumed and before the level's `Node` is
-    /// built, so the diagnostic points at the offending token and the partially built term
-    /// that is dropped on the way out is itself no deeper than the bound.
-    fn quoted_triple(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
-        if depth >= MAX_PARSE_NESTING_DEPTH {
-            return Err(nesting_too_deep(self.lineno, self.col()));
-        }
-        let depth = depth + 1;
-        self.expect(&Token::TripleOpen)?;
-        self.expect(&Token::LParen)?;
-        let s = self.term(depth)?;
-        let p = self.term(depth)?;
-        let o = self.term(depth)?;
-        self.expect(&Token::RParen)?;
-        self.expect(&Token::TripleClose)?;
-        Ok(Node::Triple(Box::new(s), Box::new(p), Box::new(o)))
     }
 
     /// A string literal with an optional `@lang[--dir]` tag or `^^<datatype>`.
@@ -1724,26 +1933,17 @@ fn validate_predicate(node: &Node, line_no: u64, column: u32) -> Result<(), RdfD
 /// An object position — asserted, or nested inside a triple term — admits every term
 /// kind, and a triple term there carries the term model down into its own components.
 /// This is the ONLY position RDF 1.2 nests a triple term in.
-fn validate_object(node: &Node, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
+fn validate_object(mut node: &Node, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
+    while let Node::Triple(s, p, o, _) = node {
+        validate_subject(s, line_no, column)?;
+        validate_predicate(p, line_no, column)?;
+        node = o;
+    }
     if node_is(node, &[is_iri, is_bnode, is_literal]) {
-        return Ok(());
+        Ok(())
+    } else {
+        Err(err_at("invalid object term", line_no, column))
     }
-    if let Node::Triple(s, p, o) = node {
-        return validate_triple(s, p, o, line_no, column);
-    }
-    Err(err_at("invalid object term", line_no, column))
-}
-
-fn validate_triple(
-    s: &Node,
-    p: &Node,
-    o: &Node,
-    line_no: u64,
-    column: u32,
-) -> Result<(), RdfDiagnostic> {
-    validate_subject(s, line_no, column)?;
-    validate_predicate(p, line_no, column)?;
-    validate_object(o, line_no, column)
 }
 
 fn validate_statement(nodes: &[Node], line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
@@ -1952,19 +2152,11 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         if !S::ENABLED {
             return Ok(None);
         }
-        let id = SourceOriginId(self.source.origins.len());
-        self.context.memory(|memory| {
-            memory.push(
-                &mut self.source.origins,
-                SourceTermOrigin {
-                    kind,
-                    components,
-                    semantic: None,
-                    native_term: None,
-                },
-            )
-        })?;
-        Ok(Some(id))
+        self.context
+            .memory(|memory| {
+                push_source_origin_with_memory(&mut self.source, kind, components, memory)
+            })
+            .map(Some)
     }
 
     fn source_reference(
@@ -1984,26 +2176,39 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         &mut self,
         origin: SourceOriginId,
     ) -> Result<SourceOriginId, TextError<C::Error>> {
-        let original = self
-            .source
-            .origins
-            .get(origin.0)
-            .ok_or_else(|| {
-                ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
-            })?
-            .clone();
-        let components = match original.components {
-            Some([s, p, o]) => Some([
-                self.inherited_origin(s)?,
-                self.inherited_origin(p)?,
-                self.inherited_origin(o)?,
-            ]),
-            None => None,
-        };
-        self.source_origin(SourceOriginKind::Inherited { from: origin }, components)?
-            .ok_or_else(|| {
-                ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
-            })
+        self.context.memory(|memory| {
+            purrdf_core::ir::try_fold_nested_with_memory(
+                origin,
+                &mut self.source,
+                |source, origin, memory| {
+                    let components = source
+                        .origins
+                        .get(origin.0)
+                        .ok_or(StorageError::SizeOverflow)?
+                        .components;
+                    Ok(match components {
+                        Some([s, p, o]) => purrdf_core::ir::Nested::Triple(s, p, o),
+                        None => purrdf_core::ir::Nested::Leaf(push_source_origin_with_memory(
+                            source,
+                            SourceOriginKind::Inherited { from: origin },
+                            None,
+                            memory,
+                        )?),
+                    })
+                },
+                |source, origin, s, p, o, memory| {
+                    push_source_origin_with_memory(
+                        source,
+                        SourceOriginKind::Inherited { from: origin },
+                        Some([s, p, o]),
+                        memory,
+                    )
+                },
+                |_, _, _| {},
+                |cause, _| cause,
+                memory,
+            )
+        })
     }
 
     fn written_node(&mut self, value: Node, start: usize) -> Result<DocNode, TextError<C::Error>> {
@@ -2063,13 +2268,9 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
             (Some(s), Some(p), Some(o)) => Some([s, p, o]),
             _ => None,
         };
-        let value = self.context.memory(|memory| {
-            Ok(Node::Triple(
-                memory.boxed(s.value)?,
-                memory.boxed(p.value)?,
-                memory.boxed(o.value)?,
-            ))
-        })?;
+        let value = self
+            .context
+            .memory(|memory| triple_node_with_memory(s.value, p.value, o.value, memory))?;
         let origin = self.source_origin(kind, components)?;
         Ok(DocNode { value, origin })
     }
@@ -2374,16 +2575,8 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         }
     }
 
-    /// Enter one level of syntactic nesting, or refuse the document.
-    ///
-    /// Turtle/TriG nest through many constructs — quoted and reifying triples, blank-node
-    /// property lists, collections, annotation blocks — and each one is a recursive-descent
-    /// frame, so an input's nesting depth is an instruction about how much stack to burn.
-    /// [`MAX_PARSE_NESTING_DEPTH`] is the ceiling, and this is the single place it is
-    /// enforced: EVERY cycle in this parser's call graph passes through
-    /// [`term`](Self::term) or [`predicate_object_list`](Self::predicate_object_list), and
-    /// both of them descend here on entry, so no nesting construct can be reached without
-    /// paying a level. The location is the token that would have opened the level too many.
+    /// Bound the remaining recursive document productions. Iterative quoted and
+    /// reifying term frames carry the enclosing document depth unchanged.
     fn descend(&mut self, depth: usize) -> Result<usize, TextError<C::Error>> {
         if depth >= MAX_PARSE_NESTING_DEPTH {
             let (line, column) = self.loc()?;
@@ -2399,16 +2592,188 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         graph: Option<DocNodeRef<'_>>,
         depth: usize,
     ) -> Result<DocNode, TextError<C::Error>> {
+        self.term_with_mode(graph, depth, TermMode::Any)
+    }
+
+    /// Quoted and reifying term continuations spend admitted heap storage. Only
+    /// the scalar/non-term grammar below consumes the independent document guard.
+    fn term_with_mode(
+        &mut self,
+        graph: Option<DocNodeRef<'_>>,
+        depth: usize,
+        mode: TermMode,
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let mut pending: WorkList<TermStep<'_>, 16> = WorkList::new();
+        let mut answers: Vec<DocNode> = Vec::new();
+        let result = (|| {
+            self.context
+                .memory(|memory| pending.try_push_admitted(TermStep::Read(mode, graph), memory))?;
+            while let Some(step) = pending.pop() {
+                match step {
+                    TermStep::Read(mode, mut graph) => {
+                        if matches!(mode, TermMode::Predicate) {
+                            graph = None;
+                        }
+                        if matches!(mode, TermMode::QuotedComponent) {
+                            self.check_quoted_component()?;
+                        }
+                        if self.peek() == Some(&Token::TripleOpen) {
+                            let start = self.cur_off();
+                            let opening = self
+                                .tokens
+                                .get(self.pos)
+                                .map_or((start, start), |token| (token.start, token.end));
+                            self.expect(&Token::TripleOpen)?;
+                            let parenthesized = self.eat(&Token::LParen);
+                            let finish = if parenthesized || matches!(mode, TermMode::ReifiesObject)
+                            {
+                                TermStep::Quoted {
+                                    start,
+                                    parenthesized,
+                                }
+                            } else {
+                                TermStep::Reifying {
+                                    start,
+                                    opening,
+                                    graph,
+                                }
+                            };
+                            self.context.memory(|memory| {
+                                pending.try_push_admitted(finish, memory)?;
+                                pending.try_push_admitted(
+                                    TermStep::Read(TermMode::QuotedComponent, graph),
+                                    memory,
+                                )?;
+                                pending.try_push_admitted(
+                                    TermStep::Read(TermMode::Predicate, None),
+                                    memory,
+                                )?;
+                                pending.try_push_admitted(
+                                    TermStep::Read(TermMode::QuotedComponent, graph),
+                                    memory,
+                                )
+                            })?;
+                            continue;
+                        }
+                        self.context
+                            .memory(|memory| memory.reserve_for_push(&mut answers))?;
+                        let node = if matches!(mode, TermMode::Predicate)
+                            && matches!(self.peek(), Some(Token::Word(word)) if *word == "a")
+                        {
+                            let start = self.cur_off();
+                            self.pos += 1;
+                            let iri = self
+                                .context
+                                .memory(|memory| self.rdf_type.clone_with_memory(memory))?;
+                            self.written_node(Node::Iri(iri), start)?
+                        } else {
+                            self.atomic_term(graph, depth)?
+                        };
+                        answers.push(node);
+                    }
+                    TermStep::Quoted {
+                        start,
+                        parenthesized,
+                    } => {
+                        if parenthesized {
+                            self.expect(&Token::RParen)?;
+                        }
+                        self.expect(&Token::TripleClose)?;
+                        let o = answers.pop().expect("quoted object was parsed");
+                        let p = answers.pop().expect("quoted predicate was parsed");
+                        let s = answers.pop().expect("quoted subject was parsed");
+                        let node = self.triple_node(
+                            s,
+                            p,
+                            o,
+                            SourceOriginKind::Written(start..self.previous_end()),
+                        )?;
+                        answers.push(node);
+                    }
+                    TermStep::Reifying {
+                        start,
+                        opening,
+                        graph,
+                    } => {
+                        let explicit = self.eat(&Token::Tilde) && self.at_reifier_id();
+                        self.context.memory(|memory| {
+                            pending.try_push_admitted(TermStep::Reified { start, graph }, memory)
+                        })?;
+                        if explicit {
+                            self.context.memory(|memory| {
+                                pending
+                                    .try_push_admitted(TermStep::Read(TermMode::Any, graph), memory)
+                            })?;
+                        } else {
+                            self.context
+                                .memory(|memory| memory.reserve_for_push(&mut answers))?;
+                            let n = answers.len();
+                            let inputs = [
+                                answers[n - 3].origin,
+                                answers[n - 2].origin,
+                                answers[n - 1].origin,
+                                None,
+                            ];
+                            let reifier =
+                                self.next_bnode(SourceRule::Reifier, opening.0..opening.1, inputs)?;
+                            answers.push(reifier);
+                        }
+                    }
+                    TermStep::Reified { start, graph } => {
+                        self.expect(&Token::TripleClose)?;
+                        let reifier = answers.pop().expect("reifier was parsed or generated");
+                        let o = answers.pop().expect("reified object was parsed");
+                        let p = answers.pop().expect("reified predicate was parsed");
+                        let s = answers.pop().expect("reified subject was parsed");
+                        let anchor = start..self.previous_end();
+                        self.emit_reifies(
+                            reifier.as_ref(),
+                            s.as_ref(),
+                            p.as_ref(),
+                            o.as_ref(),
+                            graph,
+                            anchor.clone(),
+                        )?;
+                        let inputs = [s.origin, p.origin, o.origin, reifier.origin];
+                        self.release_node(s)?;
+                        self.release_node(p)?;
+                        self.release_node(o)?;
+                        let node = self.generated_node(
+                            reifier.value,
+                            SourceRule::ReifierReference,
+                            anchor,
+                            inputs,
+                        )?;
+                        answers.push(node);
+                    }
+                }
+            }
+            Ok(answers.pop().expect("the complete term was parsed"))
+        })();
+        let frames = self
+            .context
+            .release(|memory| pending.release_admitted(memory));
+        let nodes = self
+            .context
+            .release(|memory| release_doc_nodes_with_memory(answers, memory));
+        match (result, frames.and(nodes)) {
+            (Err(original), _) => Err(original),
+            (Ok(node), Ok(())) => Ok(node),
+            (Ok(node), Err(original)) => {
+                let _ = self.release_node(node);
+                Err(original)
+            }
+        }
+    }
+
+    fn atomic_term(
+        &mut self,
+        graph: Option<DocNodeRef<'_>>,
+        depth: usize,
+    ) -> Result<DocNode, TextError<C::Error>> {
         let start = self.cur_off();
         let depth = self.descend(depth)?;
         let value = match self.peek() {
-            Some(Token::TripleOpen) => {
-                return if self.peek2() == Some(&Token::LParen) {
-                    self.parenthesized_quoted_triple(graph, depth)
-                } else {
-                    self.reifying_triple(graph, depth)
-                };
-            }
             Some(Token::Iri(_)) => {
                 let (l, c) = self.loc()?;
                 let Some(Token::Iri(raw)) = self.bump() else {
@@ -2494,149 +2859,34 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
     /// A subject/object inside a triple term. Non-empty `[ … ]` / `( … )` would emit
     /// extra triples that cannot live inside a triple term, so they are rejected
     /// (W3C-conformant); an empty `[]` / `()` is a plain term and is allowed.
-    fn quoted_component(
-        &mut self,
-        graph: Option<DocNodeRef<'_>>,
-        depth: usize,
-    ) -> Result<DocNode, TextError<C::Error>> {
-        match self.peek() {
+    fn check_quoted_component(&mut self) -> Result<(), TextError<C::Error>> {
+        let message = match self.peek() {
             Some(Token::LBracket) => {
-                let (l, c) = self.loc()?;
-                Err(parser_error(
-                    &mut self.context,
-                    "blank-node property list is not allowed inside a quoted triple",
-                    l,
-                    c,
-                ))
+                Some("blank-node property list is not allowed inside a quoted triple")
             }
-            Some(Token::LParen) => {
-                if self.peek2() == Some(&Token::RParen) {
-                    self.term(graph, depth)
-                } else {
-                    let (l, c) = self.loc()?;
-                    Err(parser_error(
-                        &mut self.context,
-                        "RDF collection is not allowed inside a quoted triple",
-                        l,
-                        c,
-                    ))
-                }
+            Some(Token::LParen) if self.peek2() != Some(&Token::RParen) => {
+                Some("RDF collection is not allowed inside a quoted triple")
             }
-            _ => self.term(graph, depth),
+            _ => None,
+        };
+        if let Some(message) = message {
+            let (line, column) = self.loc()?;
+            return Err(parser_error(&mut self.context, message, line, column));
         }
+        Ok(())
     }
 
     fn predicate(&mut self, depth: usize) -> Result<DocNode, TextError<C::Error>> {
-        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
-            let start = self.cur_off();
-            self.pos += 1;
-            let iri = self
-                .context
-                .memory(|memory| self.rdf_type.clone_with_memory(memory))?;
-            return self.written_node(Node::Iri(iri), start);
-        }
-        self.term(None, depth)
+        self.term_with_mode(None, depth, TermMode::Predicate)
     }
 
-    fn parenthesized_quoted_triple(
-        &mut self,
-        graph: Option<DocNodeRef<'_>>,
-        depth: usize,
-    ) -> Result<DocNode, TextError<C::Error>> {
-        let start = self.cur_off();
-        self.expect(&Token::TripleOpen)?;
-        self.expect(&Token::LParen)?;
-        let s = self.quoted_component(graph, depth)?;
-        let p = self.predicate(depth)?;
-        let o = self.quoted_component(graph, depth)?;
-        self.expect(&Token::RParen)?;
-        self.expect(&Token::TripleClose)?;
-        self.triple_node(
-            s,
-            p,
-            o,
-            SourceOriginKind::Written(start..self.previous_end()),
-        )
-    }
-
-    /// A triple TERM in `rdf:reifies` object position: `<<( s p o )>>` (canonical) or
-    /// the legacy non-parenthesized `<< s p o >>` (purrdf pre-0.9.11 triple-term
-    /// serialization). Always a [`Node::Triple`] — never a minted reifier — because the
-    /// object of `rdf:reifies` denotes the reified triple itself.
+    /// Legacy unparenthesized rdf:reifies objects denote triple terms directly.
     fn reifies_object_triple_term(
         &mut self,
         graph: Option<DocNodeRef<'_>>,
         depth: usize,
     ) -> Result<DocNode, TextError<C::Error>> {
-        let start = self.cur_off();
-        self.expect(&Token::TripleOpen)?;
-        let parenthesized = self.eat(&Token::LParen);
-        let s = self.quoted_component(graph, depth)?;
-        let p = self.predicate(depth)?;
-        let o = self.quoted_component(graph, depth)?;
-        if parenthesized {
-            self.expect(&Token::RParen)?;
-        }
-        self.expect(&Token::TripleClose)?;
-        self.triple_node(
-            s,
-            p,
-            o,
-            SourceOriginKind::Written(start..self.previous_end()),
-        )
-    }
-
-    /// RDF 1.2 reifying triple `<< s p o ~r? >>` in subject/object position: emits
-    /// `r rdf:reifies <<( s p o )>>` and returns the reifier `r`. With an explicit
-    /// `~ id`, `r` is that id; otherwise (`~` alone, or no reifier at all) a fresh
-    /// blank node is minted. The inner triple is NOT independently asserted here — the
-    /// reifiedTriple denotes its reifier, so only the `rdf:reifies` statement is emitted.
-    fn reifying_triple(
-        &mut self,
-        graph: Option<DocNodeRef<'_>>,
-        depth: usize,
-    ) -> Result<DocNode, TextError<C::Error>> {
-        let start = self.cur_off();
-        let opening = self
-            .tokens
-            .get(self.pos)
-            .map_or(start..start, |token| token.start..token.end);
-        self.expect(&Token::TripleOpen)?;
-        let s = self.quoted_component(graph, depth)?;
-        let p = self.predicate(depth)?;
-        let o = self.quoted_component(graph, depth)?;
-        let reifier = if self.eat(&Token::Tilde) {
-            if self.at_reifier_id() {
-                self.term(graph, depth)?
-            } else {
-                self.next_bnode(
-                    SourceRule::Reifier,
-                    opening,
-                    [s.origin, p.origin, o.origin, None],
-                )?
-            }
-        } else {
-            self.next_bnode(
-                SourceRule::Reifier,
-                opening,
-                [s.origin, p.origin, o.origin, None],
-            )?
-        };
-        self.expect(&Token::TripleClose)?;
-        let anchor = start..self.previous_end();
-        self.emit_reifies(
-            reifier.as_ref(),
-            s.as_ref(),
-            p.as_ref(),
-            o.as_ref(),
-            graph,
-            anchor.clone(),
-        )?;
-        let inputs = [s.origin, p.origin, o.origin, reifier.origin];
-        self.release_node(s)?;
-        self.release_node(p)?;
-        self.release_node(o)?;
-        self.generated_node(reifier.value, SourceRule::ReifierReference, anchor, inputs)
+        self.term_with_mode(graph, depth, TermMode::ReifiesObject)
     }
 
     /// `blankNodePropertyList ::= '[' predicateObjectList ']'` (Turtle 1.2 §6.5),
@@ -3033,7 +3283,7 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
             let mut predicate_ref = predicate.as_ref();
             loop {
                 // The object of `rdf:reifies` is a triple TERM. Parse `<<` here as a
-                // triple term whether or not it carries parens, tolerating purrdf's
+                // triple term whether or not it carries parens, tolerating PurRDF's
                 // legacy non-parenthesized `<< s p o >>` triple-term serialization in
                 // addition to the canonical `<<( s p o )>>` — in EVERY other position a
                 // bare `<< … >>` keeps its W3C reifying-triple meaning (`reifying_triple`).
@@ -3178,13 +3428,12 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         anchor: std::ops::Range<usize>,
     ) -> Result<(), TextError<C::Error>> {
         let triple_term = self.context.memory(|memory| {
-            let s = clone_node_with_memory(s.value, memory)?;
-            let s = memory.boxed(s)?;
-            let p = clone_node_with_memory(p.value, memory)?;
-            let p = memory.boxed(p)?;
-            let o = clone_node_with_memory(o.value, memory)?;
-            let o = memory.boxed(o)?;
-            Ok(Node::Triple(s, p, o))
+            memory.scope(|memory| {
+                let s = clone_node_with_memory(s.value, memory)?;
+                let p = clone_node_with_memory(p.value, memory)?;
+                let o = clone_node_with_memory(o.value, memory)?;
+                triple_node_with_memory(s, p, o, memory)
+            })
         })?;
         let components = match (
             self.source_reference(s)?,
@@ -3709,97 +3958,102 @@ impl Interner {
         source: &mut Option<&mut SourceOccurrences>,
         memory: &mut Memory<'_, A>,
     ) -> Result<usize, NativeParseError> {
-        let components = source
-            .as_deref()
-            .and_then(|source| source.components(origin));
-        let id = match node {
-            Node::Triple(s, p, o) => {
-                let s = self.node(
-                    s,
-                    reifiers,
-                    components.map(|origins| origins[0]),
-                    source,
-                    memory,
-                )?;
-                let p = self.node(
-                    p,
-                    reifiers,
-                    components.map(|origins| origins[1]),
-                    source,
-                    memory,
-                )?;
-                let o = self.node(
-                    o,
-                    reifiers,
-                    components.map(|origins| origins[2]),
-                    source,
-                    memory,
-                )?;
-                let key = (s, p, o);
-                memory.admission_mut().checkpoint(1)?;
-                let hash = purrdf_hash::fixed::hash_one(&key);
-                if let Some(&(_, id)) = self.triples.find_with_control(
-                    hash,
-                    |(stored, _), memory| {
-                        memory.admission_mut().checkpoint(1)?;
-                        Ok(*stored == key)
-                    },
-                    memory,
-                )? {
-                    if let Some(source) = source.as_deref_mut() {
-                        source.bind_native(origin, id, memory)?;
-                    }
-                    return Ok(id);
+        purrdf_core::ir::try_fold_nested_with_memory(
+            (node, origin),
+            &mut (self, reifiers, source),
+            |(interner, _, source), (node, origin), memory| {
+                if let Node::Triple(s, p, o, _) = node {
+                    let components = source
+                        .as_deref()
+                        .and_then(|source| source.components(origin));
+                    return Ok(purrdf_core::ir::Nested::Triple(
+                        (&**s, components.map(|origins| origins[0])),
+                        (&**p, components.map(|origins| origins[1])),
+                        (&**o, components.map(|origins| origins[2])),
+                    ));
                 }
-                let id = self.terms.len();
-                // A triple TERM is self-reifying: its reifier is its own id, matching
-                // the purrdf-gts shape so `dataset_from_ser_graph` recognizes the
-                // self-reifier sentinel (an inline quoted-triple object, NOT a statement
-                // reifier).
-                let required = self
-                    .triples
-                    .len()
-                    .checked_add(1)
-                    .ok_or(StorageError::SizeOverflow)?;
-                purrdf_core::hash::try_reserve_table_with_memory(
-                    &mut self.triples,
-                    required,
-                    |(key, _), memory| {
-                        memory.admission_mut().checkpoint(1)?;
-                        Ok(purrdf_hash::fixed::hash_one(key))
-                    },
-                    memory,
-                )?;
-                memory.push(
-                    &mut self.terms,
-                    SerTerm {
-                        kind: SerTermKind::Triple,
-                        value: None,
-                        datatype: None,
-                        lang: None,
-                        direction: None,
-                        reifier: Some(id),
-                    },
-                )?;
-                self.triples
-                    .try_insert_unique_with_control(
-                        hash,
-                        (key, id),
-                        |(key, _), memory| {
-                            memory.admission_mut().checkpoint(1)?;
-                            Ok(purrdf_hash::fixed::hash_one(key))
-                        },
-                        memory,
-                    )
-                    .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
-                push_lowering_row(reifiers, (id, (s, p, o), None), memory)?;
-                id
-            }
-            _ => self.atom(node, memory)?,
-        };
-        if let Some(source) = source.as_deref_mut() {
-            source.bind_native(origin, id, memory)?;
+                let id = interner.atom(node, memory)?;
+                if let Some(source) = source.as_deref_mut() {
+                    source.bind_native(origin, id, memory)?;
+                }
+                Ok(purrdf_core::ir::Nested::Leaf(id))
+            },
+            |(interner, reifiers, source), (_, origin), s, p, o, memory| {
+                let id = interner.triple(s, p, o, reifiers, memory)?;
+                if let Some(source) = source.as_deref_mut() {
+                    source.bind_native(origin, id, memory)?;
+                }
+                Ok(id)
+            },
+            |_, _, _| {},
+            |cause, _| NativeParseError::Storage(cause),
+            memory,
+        )
+    }
+
+    fn triple<A: Admission + ?Sized>(
+        &mut self,
+        s: usize,
+        p: usize,
+        o: usize,
+        reifiers: &mut Vec<SerReifierRow>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<usize, NativeParseError> {
+        let key = (s, p, o);
+        memory.admission_mut().checkpoint(1)?;
+        let hash = purrdf_hash::fixed::hash_one(&key);
+        if let Some(&(_, id)) = self.triples.find_with_control(
+            hash,
+            |(stored, _), memory| {
+                memory.admission_mut().checkpoint(1)?;
+                Ok(*stored == key)
+            },
+            memory,
+        )? {
+            return Ok(id);
         }
+        let id = self.terms.len();
+        // A triple TERM is self-reifying: its reifier is its own id, matching
+        // the purrdf-gts shape so `dataset_from_ser_graph` recognizes the
+        // self-reifier sentinel (an inline quoted-triple object, NOT a statement
+        // reifier).
+        let required = self
+            .triples
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        purrdf_core::hash::try_reserve_table_with_memory(
+            &mut self.triples,
+            required,
+            |(key, _), memory| {
+                memory.admission_mut().checkpoint(1)?;
+                Ok(purrdf_hash::fixed::hash_one(key))
+            },
+            memory,
+        )?;
+        memory.push(
+            &mut self.terms,
+            SerTerm {
+                kind: SerTermKind::Triple,
+                value: None,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: Some(id),
+            },
+        )?;
+        self.triples
+            .try_insert_unique_with_control(
+                hash,
+                (key, id),
+                |(key, _), memory| {
+                    memory.admission_mut().checkpoint(1)?;
+                    Ok(purrdf_hash::fixed::hash_one(key))
+                },
+                memory,
+            )
+            .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
+        push_lowering_row(reifiers, (id, (s, p, o), None), memory)?;
         Ok(id)
     }
 }
@@ -3873,8 +4127,12 @@ impl GraphAccumulator {
         memory: &mut Memory<'_, A>,
     ) -> Result<(), NativeParseError> {
         let (s, p, o, gname) = (&nodes[0], &nodes[1], &nodes[2], nodes.get(3));
-        if let (Node::Iri(_) | Node::Bnode(_), Node::Iri(predicate), Node::Triple(ts, tp, to), None) =
-            (s, p, o, gname)
+        if let (
+            Node::Iri(_) | Node::Bnode(_),
+            Node::Iri(predicate),
+            Node::Triple(ts, tp, to, _),
+            None,
+        ) = (s, p, o, gname)
             && predicate.as_str() == RDF_REIFIES
         {
             let rid = self.interner.atom(s, memory)?;
@@ -4718,100 +4976,116 @@ mod tests {
         );
     }
 
-    /// A rejected N-Quads line carries a 1-based `(line, column)` location and no
-    /// longer embeds the raw line text in the message.
-    /// A DEEP INPUT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
-    ///
-    /// Twenty thousand nested quoted triple terms in one N-Triples line used to abort the
-    /// `purrdf` binary with `SIGABRT`: the recursive descent ran out of stack, so nothing
-    /// unwound, no `Result` came back and an embedding host died with the library. Every
-    /// nesting construct in both grammars is checked, because each one is its own recursion
-    /// and a bound on only the reported one would have left the rest crashing.
-    ///
-    /// The depth is far past the limit on purpose — the guard has to fire on the way DOWN,
-    /// before the frames exist, and a guard that only noticed afterwards would still abort.
+    /// Recursive document constructs retain their separate grammar resource guard.
     #[test]
-    fn a_deeply_nested_input_is_refused_rather_than_overflowing_the_stack() {
-        const DEPTH: usize = 20_000;
-        let s = "<http://example.org/s>";
-        let p = "<http://example.org/p>";
-        let o = "<http://example.org/o>";
-        let triple = format!("{s} {p} {o}");
-
-        // Every construct that nests, in the grammar that admits it.
-        let quoted = format!(
-            "{s} {p} {}{triple}{} .",
-            "<<( ".repeat(DEPTH),
-            " )>>".repeat(DEPTH)
-        );
-        let reifying = format!(
-            "{s} {p} {}{triple}{} .",
-            "<< ".repeat(DEPTH),
-            " >>".repeat(DEPTH)
-        );
-        let bnpl = format!(
-            "{s} {p} {}{o}{} .",
-            format!("[ {p} ").repeat(DEPTH),
-            " ]".repeat(DEPTH)
-        );
-        let collection = format!("{s} {p} {}{o}{} .", "( ".repeat(DEPTH), " )".repeat(DEPTH));
-        let annotation = format!(
-            "{s} {p} {o} {}{o}{} .",
-            format!("{{| {p} {o} ").repeat(DEPTH - 1) + &format!("{{| {p} "),
-            " |}".repeat(DEPTH)
-        );
-
-        // The line family: N-Triples and N-Quads share one cursor, and the same line is a
-        // legal shape for both, so both are driven.
-        for allow_graph in [false, true] {
-            let error =
-                parse_lines_sequential(&quoted, allow_graph, 1, &BaseScope::empty(), &mut NoSpans)
-                    .expect_err("a 20 000-deep quoted triple term must be refused");
-            assert!(
-                error.message.contains("nesting exceeds the parser limit"),
-                "the refusal must name the limit, got: {}",
-                error.message
-            );
-            assert!(
-                error.location.as_ref().is_some_and(|l| l.column.is_some()),
-                "the refusal is located at the offending token"
-            );
-        }
-
-        // Turtle/TriG: five constructs, each its own recursion.
-        for (name, text) in [
-            ("quoted triple term", &quoted),
-            ("reifying triple", &reifying),
-            ("blank-node property list", &bnpl),
-            ("collection", &collection),
-            ("annotation block", &annotation),
-        ] {
-            let error = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
-                .expect("native parser initialization")
-                .parse()
-                .expect_err(&format!("{name}: a 20 000-deep document must be refused"));
-            assert!(
-                error.message.contains("nesting exceeds the parser limit"),
-                "{name}: the refusal must name the limit, got: {}",
-                error.message
-            );
-        }
+    fn recursive_document_nesting_is_refused_before_stack_exhaustion() {
+        purrdf_stack::on_stack(1024 * 1024, || {
+            const DEPTH: usize = 20_000;
+            let s = "<http://example.org/s>";
+            let p = "<http://example.org/p>";
+            let o = "<http://example.org/o>";
+            for (name, text) in [
+                (
+                    "blank-node property list",
+                    format!(
+                        "{s} {p} {}{o}{} .",
+                        format!("[ {p} ").repeat(DEPTH),
+                        " ]".repeat(DEPTH)
+                    ),
+                ),
+                (
+                    "collection",
+                    format!("{s} {p} {}{o}{} .", "( ".repeat(DEPTH), " )".repeat(DEPTH)),
+                ),
+                (
+                    "annotation block",
+                    format!(
+                        "{s} {p} {o} {}{o}{} .",
+                        format!("{{| {p} {o} ").repeat(DEPTH - 1) + &format!("{{| {p} "),
+                        " |}".repeat(DEPTH)
+                    ),
+                ),
+            ] {
+                let error = DocParser::new(&text, BaseScope::empty(), false, &mut NoSpans)
+                    .expect("native parser initialization")
+                    .parse()
+                    .expect_err("recursive document nesting is bounded");
+                assert!(
+                    error.message.contains("nesting exceeds the parser limit"),
+                    "{name}: {error}"
+                );
+            }
+        })
+        .expect("the thread starts");
     }
 
-    /// …AND THE BOUND DOES NOT COST ORDINARY RDF 1.2.
-    ///
-    /// The other half of the contract: a bound that refused the nesting real documents use
-    /// would be a worse defect than the crash it replaced. The IR itself refuses a
-    /// triple-term nesting past 16, so the deepest triple term that can exist round-trips
-    /// with the parser limit an order of magnitude away — and each syntactic construct is
-    /// exercised well past anything an author writes by hand.
+    /// Term parsing, cloning, lowering and malformed-input destruction all run on
+    /// a small native stack even when the terms exceed the old syntax ceiling.
+    #[test]
+    fn quoted_and_reifying_terms_parse_and_drop_on_a_small_stack() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            use purrdf_core::DatasetView;
+            const LEVELS: usize = 2048;
+            let s = "<http://example.org/s>";
+            let p = "<http://example.org/p>";
+            let o = "<http://example.org/o>";
+            let prefix = format!("<<( {s} {p} ").repeat(LEVELS);
+            let suffix = " )>>".repeat(LEVELS);
+            let term = format!("{prefix}{o}{suffix}");
+            let quoted = format!("{s} {p} {term} .");
+            let malformed = format!("{s} {p} {prefix}{o}{} .", " )>>".repeat(LEVELS - 1));
+            for media in [
+                "application/n-triples",
+                "application/n-quads",
+                "text/turtle",
+                "application/trig",
+            ] {
+                let dataset =
+                    crate::parse_dataset(quoted.as_bytes(), media, None).expect("deep quoted term");
+                assert_eq!(dataset.quad_count(), 1);
+                let root = dataset.quads().next().unwrap().o;
+                let value = DatasetView::term_value(dataset.as_ref(), root).unwrap();
+                let mut at = &value;
+                let mut levels = 0;
+                while let purrdf_core::TermValue::Triple { o, .. } = at {
+                    levels += 1;
+                    at = o;
+                }
+                assert_eq!(levels, LEVELS);
+                drop(value);
+                let error = crate::parse_dataset(malformed.as_bytes(), media, None).unwrap_err();
+                assert!(
+                    error.location.is_some(),
+                    "the malformed closing token is located"
+                );
+            }
+            // Reification clones the quoted operand through the same admitted
+            // constructor before the native first-seen interner lowers it.
+            let reifying = format!("<< {s} {p} {term} ~ <urn:r> >> <urn:a> <urn:v> .");
+            let dataset = crate::parse_dataset(reifying.as_bytes(), "text/turtle", None)
+                .expect("deep reified claim");
+            assert_eq!(dataset.reifiers().count(), 1);
+            assert_eq!(dataset.annotations().count(), 1);
+            let nested_reifiers = format!(
+                "{s} {p} {}{o}{} .",
+                format!("<< {s} {p} ").repeat(LEVELS),
+                " >>".repeat(LEVELS)
+            );
+            let dataset = crate::parse_dataset(nested_reifiers.as_bytes(), "text/turtle", None)
+                .expect("deep reifying grammar");
+            assert_eq!(dataset.reifiers().count(), LEVELS);
+        })
+        .expect("the thread starts");
+    }
+
+    /// Separate recursive document guards preserve ordinary syntactic nesting.
     #[test]
     fn ordinary_nesting_is_untouched_by_the_bound() {
         let s = "<http://example.org/s>";
         let p = "<http://example.org/p>";
         let o = "<http://example.org/o>";
 
-        // A 16-deep quoted triple term in object position — the deepest the IR will hold.
+        // Keep the former structural boundary as an ordinary accepted neighbour.
         let mut term = format!("<<( {s} {p} {o} )>>");
         for _ in 1..16 {
             term = format!("<<( {s} {p} {term} )>>");

@@ -119,8 +119,8 @@ impl ProjectionTerm {
     /// under `limits`, refused unless its canonical JSON fits the artifact
     /// bound, and cloned from the cache on every later request.
     ///
-    /// Every projection that reads terms from a dataset view resolves them
-    /// here, so a term is admitted by one law whichever projection meets it.
+    /// Profiles that expose the legacy owned term model share this bounded
+    /// admission path. Native profiles retain dictionary IDs instead.
     ///
     /// # Errors
     ///
@@ -432,50 +432,13 @@ impl ProjectionTerm {
         match self {
             Self::Iri { value } => validate_absolute_iri(value, "term IRI")
                 .map_err(|error| ProjectionError::term(error.message())),
-            Self::Blank { label, .. } => {
-                if label.is_empty() || label.chars().any(char::is_control) {
-                    Err(ProjectionError::term(
-                        "blank-node label must be non-empty and control-free",
-                    ))
-                } else {
-                    Ok(())
-                }
-            }
+            Self::Blank { label, .. } => validate_blank_label(label),
             Self::Literal {
                 datatype,
                 language,
                 direction,
                 ..
-            } => {
-                validate_absolute_iri(datatype, "literal datatype")
-                    .map_err(|error| ProjectionError::term(error.message()))?;
-                if direction.is_some() && language.is_none() {
-                    return Err(ProjectionError::term(
-                        "an RDF 1.2 literal direction requires a language tag",
-                    ));
-                }
-                if let Some(language) = language {
-                    validate_language_tag(language)?;
-                    if !langtag::is_identity_folded(language) {
-                        return Err(ProjectionError::term(
-                            "language tag must use lowercase canonical form",
-                        ));
-                    }
-                    let expected = RdfLiteral::language_datatype_iri(*direction);
-                    if datatype != expected {
-                        return Err(ProjectionError::term(format!(
-                            "language-tagged literals must use datatype {expected}"
-                        )));
-                    }
-                } else if datatype == RDF_LANG_STRING
-                    || datatype == RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr))
-                {
-                    return Err(ProjectionError::term(
-                        "language string datatypes require a language tag",
-                    ));
-                }
-                Ok(())
-            }
+            } => validate_literal_identity(datatype, language.as_deref(), *direction),
             Self::Triple {
                 subject,
                 predicate,
@@ -499,6 +462,51 @@ impl ProjectionTerm {
             }
         }
     }
+}
+
+pub(super) fn validate_blank_label(label: &str) -> Result<(), ProjectionError> {
+    if label.is_empty() || label.chars().any(char::is_control) {
+        Err(ProjectionError::term(
+            "blank-node label must be non-empty and control-free",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn validate_literal_identity(
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+) -> Result<(), ProjectionError> {
+    validate_absolute_iri(datatype, "literal datatype")
+        .map_err(|error| ProjectionError::term(error.message()))?;
+    if direction.is_some() && language.is_none() {
+        return Err(ProjectionError::term(
+            "an RDF 1.2 literal direction requires a language tag",
+        ));
+    }
+    if let Some(language) = language {
+        validate_language_tag(language)?;
+        if !langtag::is_identity_folded(language) {
+            return Err(ProjectionError::term(
+                "language tag must use lowercase canonical form",
+            ));
+        }
+        let expected = RdfLiteral::language_datatype_iri(direction);
+        if datatype != expected {
+            return Err(ProjectionError::term(format!(
+                "language-tagged literals must use datatype {expected}"
+            )));
+        }
+    } else if datatype == RDF_LANG_STRING
+        || datatype == RdfLiteral::language_datatype_iri(Some(RdfTextDirection::Ltr))
+    {
+        return Err(ProjectionError::term(
+            "language string datatypes require a language tag",
+        ));
+    }
+    Ok(())
 }
 
 /// The tag values of [`ProjectionTerm`]'s `kind` member.

@@ -361,7 +361,7 @@ fn parse_sources(
 /// Merge every parsed source under its OWN [`BlankScope`](purrdf_core::BlankScope)
 /// and freeze — the standardize-apart half of the merge documented on
 /// [`build_dataset`].
-fn freeze_sources(
+pub(crate) fn freeze_sources(
     sources: &[Source],
     graph_data: &[(String, std::path::PathBuf)],
 ) -> Result<Arc<RdfDataset>, String> {
@@ -662,7 +662,7 @@ pub fn query_dataset_sources(
         .with_base_iri(&case.base)
         .parse_query_with(query_text, &query_eval_parser_options())
         .map_err(|error| format!("parse dataset clauses for {}: {error}", case.iri))?;
-    let workspace = purrdf_testkit::paths::workspace_root();
+    let workspace = purrdf_testkit::paths::workspace_root!();
     query
         .dataset()
         .default

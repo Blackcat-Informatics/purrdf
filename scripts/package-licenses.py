@@ -356,7 +356,7 @@ def bundle(
         "",
         "This inventory preserves notices for the source material and resolved",
         "build inputs described below. Platform alternatives and build inputs",
-        "need not occur in every compiled binary. Test data is source-only.",
+        "need not occur in every compiled binary; material scopes are listed below.",
         "",
     ]
     for item in components:

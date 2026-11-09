@@ -63,7 +63,7 @@ fn assert_verdict(output: &Output, success: bool, diagnostic: &str) {
 
 #[test]
 fn external_inputs_and_content_selected_renamed_markdown() {
-    let source = purrdf_testkit::paths::workspace_root();
+    let source = purrdf_testkit::paths::workspace_root!();
     let fixture = TempDir::for_unit_test().unwrap();
     let root = fixture.path().join("repository");
     std::fs::create_dir(&root).unwrap();
@@ -123,7 +123,7 @@ fn external_inputs_and_content_selected_renamed_markdown() {
 
 #[test]
 fn production_parity_refuses_missing_native_glossary_callers() {
-    let source = purrdf_testkit::paths::workspace_root();
+    let source = purrdf_testkit::paths::workspace_root!();
     let fixture = TempDir::for_unit_test().unwrap();
     let root = fixture.path();
     let makefile = std::fs::read_to_string(source.join("Makefile")).unwrap();

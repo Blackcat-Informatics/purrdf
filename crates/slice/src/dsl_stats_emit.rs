@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn dsl_stats_matches_committed() {
-        let root = workspace_root();
+        let root = workspace_root!();
         // Committed-artifact parity: the committed stats were generated with the
         // blackcatinformatics purrdf namespace, so this cross-check must use it
         // (pure fixtures elsewhere use example.org).

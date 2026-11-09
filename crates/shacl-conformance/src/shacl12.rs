@@ -51,32 +51,29 @@ pub const SHACL12_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vector
 /// The `gh-pages` commit of `w3c/data-shapes` the vendored suite was taken from
 /// (`vectors/shacl12/PROVENANCE.md`, written by `scripts/vendor-shacl12.py`).
 /// Bump only together with that script's pin, on a deliberate re-vendor.
-pub const W3C12_SUITE_COMMIT: &str = "4cd469867a1cc6d2fff80e8a40723b26c695d67a";
+pub const W3C12_SUITE_COMMIT: &str = "40231dfb97c5b606d22ae733947c0d14b4f45c07";
+
+/// Independent SPARQL Rules corpus for the supported 2026-09-19 Working Draft.
+/// This root is outside the SHACL EARL and has its own vendor pin.
+pub const W3C12_SPARQL_RL_SUITE_COMMIT: &str = "4cd469867a1cc6d2fff80e8a40723b26c695d67a";
 
 /// Exact number of approved entries reachable from the SHACL root,
 /// `tests/manifest.ttl` (which includes `core/`, `sparql/`, `node-expr/` and
 /// `inference-rules/` but not `sparql-rl/`). These are the entries the Working
 /// Group's reports page collects, so they are the scope of a SHACL 1.2 EARL
 /// report. Bump only on a deliberate re-vendor.
-pub const W3C12_SHACL_ROOT_APPROVED: usize = 382;
+pub const W3C12_SHACL_ROOT_APPROVED: usize = 591;
 
 /// Entries the engine fails against their UNAMENDED expectation because the
 /// specification text contradicts that expectation: `(test id, the clause and the
 /// observable difference)`. Such an entry is graded, reported `earl:failed` with
 /// this rationale as its `earl:info`, and counted under its own scoreboard label. An entry that starts to
 /// pass is refused (`XPASS`), as is an id no discovered entry has.
-pub const SPEC_CONTRADICTED: &[(&str, &str)] = &[(
-    "node-expr/shnex-sparql/hasLang-example",
-    "SPARQL 1.2 Query, Grammar, rule [141] BuiltInCall: 'hasLANG' '(' Expression ')' takes \
-     exactly one argument (the function table, section 17.4.2.10, lists one parameter, `term`). \
-     The approved test evaluates `[ sparql:hasLang ( \"hello\"@en \"en\" ) ]`, two arguments, and \
-     expects `true`; a processor that applies the grammar's arity refuses the call and cannot \
-     produce that result.",
-)];
+pub const SPEC_CONTRADICTED: &[(&str, &str)] = &[];
 
 /// [`SPEC_CONTRADICTED`] pinned by count, so an entry cannot be added or dropped
 /// without this number moving with it.
-pub const SPEC_CONTRADICTED_COUNT: usize = 1;
+pub const SPEC_CONTRADICTED_COUNT: usize = 0;
 
 /// The conformance classes the SHACL root's entries use, which an implementation
 /// reporting on the root claims. Spelled through `purrdf_iri::vocab::sht`.
@@ -107,14 +104,14 @@ pub fn default_conformance_class(folder: &str) -> Option<&'static str> {
 ///
 /// The per-type split is pinned by [`W3C12_CASES_BY_TYPE`]; this is its sum.
 /// Bump only on a deliberate re-vendor (the corpus is byte-frozen).
-pub const W3C12_TOTAL_CASES: usize = 592;
+pub const W3C12_TOTAL_CASES: usize = 801;
 
 /// The discovered count of each test type, pinned so a walk that lost one kind
 /// of test while gaining another cannot keep the total.
 pub const W3C12_CASES_BY_TYPE: &[(&str, usize)] = &[
-    ("sht:Validate", 213),
-    ("sht:EvalNodeExpr", 143),
-    ("sht:Infer", 27),
+    ("sht:Validate", 274),
+    ("sht:EvalNodeExpr", 276),
+    ("sht:Infer", 42),
     ("srlt:RulesPositiveSyntaxTest", 111),
     ("srlt:RulesNegativeSyntaxTest", 30),
     ("srlt:RulesPositiveWellFormednessTest", 4),
@@ -293,10 +290,19 @@ pub struct NodeExprCase {
     pub focus: Option<Term>,
     /// Every `sht:scope-NAME value`, as `(NAME, value)`, in NAME order.
     pub scope: Vec<(String, Term)>,
-    /// The `mf:result` list, in list order.
-    pub expected: Vec<Term>,
+    /// The manifest's output list or declared evaluation failure.
+    pub expected: NodeExprExpected,
     /// `sht:ignoreOrder true`.
     pub ignore_order: bool,
+}
+
+/// What an `sht:EvalNodeExpr` entry expects.
+#[derive(Debug)]
+pub enum NodeExprExpected {
+    /// Evaluation must fail; processor and fixture failures do not qualify.
+    Failure,
+    /// The `mf:result` list, in list order.
+    Terms(Vec<Term>),
 }
 
 /// What an `sht:Infer` entry expects.
@@ -564,7 +570,7 @@ fn parse_case(
             .unwrap_or_else(|| panic!("{id}: sht:Validate entry was not parsed"));
         tc.id.clone_from(&id);
         tc.section.clone_from(&section);
-        tc.profile = purrdf_shapes::profile::ShaclProfile::ED_20261016;
+        tc.profile = purrdf_shapes::profile::ShaclProfile::ED_20261106;
         Body::Validate(tc)
     } else if ty == sht12::EVAL_NODE_EXPR {
         Body::NodeExpr(parse_node_expr_case(g, entry, manifest_path, &id))
@@ -683,10 +689,12 @@ fn parse_node_expr_case(
     let expr = expr.unwrap_or_else(|| panic!("{id}: no sht:nodeExpr"));
 
     let result = exactly_one(g, entry, mf::RESULT, id);
-    let is_list = matches!(&result, Term::BlankNode(_))
-        || matches!(&result, Term::NamedNode(n) if n.as_str() == RDF_NIL);
-    assert!(is_list, "{id}: mf:result must be an RDF list, got {result}");
-    let expected = list_items(g, &result);
+    let expected = match &result {
+        Term::NamedNode(n) if n.as_str() == sht::FAILURE => NodeExprExpected::Failure,
+        Term::BlankNode(_) => NodeExprExpected::Terms(list_items(g, &result)),
+        Term::NamedNode(n) if n.as_str() == RDF_NIL => NodeExprExpected::Terms(Vec::new()),
+        _ => panic!("{id}: mf:result must be an RDF list or sht:Failure, got {result}"),
+    };
 
     NodeExprCase {
         file: manifest_path.to_path_buf(),

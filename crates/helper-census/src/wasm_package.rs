@@ -139,7 +139,7 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
     if args != ["--wasm-package-hosts"] {
         return Err("usage: helper-census --wasm-package-hosts".to_owned());
     }
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     let inventory = std::fs::read_to_string(root.join("docs/WASM_TESTING.md"))
         .map_err(|error| format!("cannot read WASM execution inventory: {error}"))?;
     let inventory = inventory.split_whitespace().collect::<Vec<_>>().join(" ");

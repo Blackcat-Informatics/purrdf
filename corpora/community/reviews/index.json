@@ -1554,6 +1554,442 @@
           "blake3": "e651905bf83c8effacc78ad80b4ad15356af3f5f3c05594a3e4cf3a7e9afc1e9"
         }
       ]
+    },
+    {
+      "id": "mixed-predicate-inverse-sequence",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        },
+        {
+          "path": "sparql/interactions/mixed-predicate-inverse-sequence.rq",
+          "blake3": "ddd4d56cbb75329adb2e3b9a14bfdef14c9bd4283d36a7faa5f7fa95f306ffef"
+        },
+        {
+          "path": "sparql/interactions/mixed-predicate-inverse-sequence.srj",
+          "blake3": "1306e87fe00d32991f934ba5f79769e2a22929d70dab28c34664737129371cef"
+        }
+      ]
+    },
+    {
+      "id": "mixed-equivalent-union",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        },
+        {
+          "path": "sparql/interactions/mixed-equivalent-union.rq",
+          "blake3": "a54aa56b541aa7d0076a3ec50f716101de371b4d92e5fdf440f8f4947d9c9ef3"
+        },
+        {
+          "path": "sparql/interactions/mixed-equivalent-union.srj",
+          "blake3": "1306e87fe00d32991f934ba5f79769e2a22929d70dab28c34664737129371cef"
+        }
+      ]
+    },
+    {
+      "id": "mixed-permuted-union",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        },
+        {
+          "path": "sparql/interactions/mixed-permuted-union.rq",
+          "blake3": "ec9dd240258e1ecb53df7a644848809da044916fc4802ba6b831d39cb50493c5"
+        },
+        {
+          "path": "sparql/interactions/mixed-permuted-union.srj",
+          "blake3": "1306e87fe00d32991f934ba5f79769e2a22929d70dab28c34664737129371cef"
+        }
+      ]
+    },
+    {
+      "id": "mixed-overlapping-arm",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        },
+        {
+          "path": "sparql/interactions/mixed-overlapping-arm.rq",
+          "blake3": "6781c6adffa656fc9ed697aac629fb33a370280d9886bd6d6f409caac3a4c8ed"
+        },
+        {
+          "path": "sparql/interactions/mixed-overlapping-arm.srj",
+          "blake3": "1f4a75c0b7e8982759ab293133f385681212cbea6a08b05f836507e320ed98bd"
+        }
+      ]
+    },
+    {
+      "id": "all-unbound-visible-rows",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/all-unbound-visible-rows.rq",
+          "blake3": "4ec2e93f9564c92895c1e99e51f8ec62364b4ca709327736e7c065f4b592b340"
+        },
+        {
+          "path": "sparql/interactions/all-unbound-visible-rows.srj",
+          "blake3": "c569fce804246f0f4d78b116f26127c93a5d3d18eac76746330da3d6503566c4"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        }
+      ]
+    },
+    {
+      "id": "duplicate-unbound-rows",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/duplicate-unbound-rows.rq",
+          "blake3": "a912cc09ae5e6978665784bd8d38af13ba885f60d61a52e6d23a34697fe2967d"
+        },
+        {
+          "path": "sparql/interactions/duplicate-unbound-rows.srj",
+          "blake3": "8b4b68fc750475950d0cc778df4351fcc8ecd31e0938f2df2d4903d9188f503a"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        }
+      ]
+    },
+    {
+      "id": "bnode-fresh-per-call",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/bnode-fresh-per-call.rq",
+          "blake3": "963dce179a680791627babe0003ba536da9b9011828233ccd69a4a288fc847b5"
+        },
+        {
+          "path": "sparql/interactions/bnode-fresh-per-call.srj",
+          "blake3": "a358995c1b9b146fee25d1f13d574352ef981146f1f9c95f0fb2bc2f19e4ac4c"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        }
+      ]
+    },
+    {
+      "id": "bnode-string-memo",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/bnode-string-memo.rq",
+          "blake3": "d8033a46e34f0a81b43e3e66eed344da6e72da4b8beeb3775675058693bc31a8"
+        },
+        {
+          "path": "sparql/interactions/bnode-string-memo.srj",
+          "blake3": "1321784923411c0e8db85de166be91c7364d53e8e0254ab9f6c60e6d4e829bac"
+        },
+        {
+          "path": "sparql/interactions/data.ttl",
+          "blake3": "a73355c6920436d6eab89bedc3b92f995b79f6a8fd27b9ba725200778d4fcaba"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        }
+      ]
+    },
+    {
+      "id": "global-blank-cycle",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/blank-cycle.ttl",
+          "blake3": "5b897f8fd9f23a4324cad356d221eee2a211725454b56f3e122eb833902b9200"
+        },
+        {
+          "path": "sparql/interactions/global-blank-cycle.rq",
+          "blake3": "6522ea8d5cdcba2a38006123f1b2aebb2314994d0efd434cfc89400ee0427522"
+        },
+        {
+          "path": "sparql/interactions/global-blank-cycle.srj",
+          "blake3": "5cd597664057a23d1290a50380553f8289d81e654a753da4d72f48808c9bbe2a"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        }
+      ]
+    },
+    {
+      "id": "separate-source-blank-scopes",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/interactions/manifest.ttl",
+          "blake3": "429a4b8209899c5d792a2a2dbf5a8ac334888d47aa5819c07c36195e259248d4"
+        },
+        {
+          "path": "sparql/interactions/scope1.ttl",
+          "blake3": "e360585ba4a3e60b07333afb3523ca4b14c77436700340a90d67a37c41451a88"
+        },
+        {
+          "path": "sparql/interactions/scope2.ttl",
+          "blake3": "fe7e4ef095922709ec1e8fcfbf17daaebdda1c2940b1b710eb464e89294a5374"
+        },
+        {
+          "path": "sparql/interactions/separate-source-blank-scopes.rq",
+          "blake3": "0d28a7778483bbce47456ebeb34bf0eea6c7d6bb5fe782c17f7ff4f337486d70"
+        },
+        {
+          "path": "sparql/interactions/separate-source-blank-scopes.srj",
+          "blake3": "6f05c66abbf557284a0c3dfce8d17159b7d8fe33aba3e84b27add30715263f55"
+        }
+      ]
+    },
+    {
+      "id": "service-bnode-distinct",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/service/endpoint-a.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/local.ttl",
+          "blake3": "992cd03e211287b5e64dd9582fc84c2e3c090aa76df2c42b5856b3170e5bee10"
+        },
+        {
+          "path": "sparql/service/manifest.ttl",
+          "blake3": "0849df6e0dcc0235ea30dc99c4089770bed8c270cebb241b5e163a172351a55c"
+        },
+        {
+          "path": "sparql/service/service-bnode-distinct.rq",
+          "blake3": "13ba2c9556150a6f2b87cfe7f407f6125e74a0681302bec8f923a4952ef5a0b3"
+        },
+        {
+          "path": "sparql/service/service-bnode-distinct.srj",
+          "blake3": "e65ad7412aa610295219500a804f422a56f32526b482c33a4887f4db724e585f"
+        }
+      ]
+    },
+    {
+      "id": "service-bnode-collision",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/service/endpoint-a.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/local.ttl",
+          "blake3": "992cd03e211287b5e64dd9582fc84c2e3c090aa76df2c42b5856b3170e5bee10"
+        },
+        {
+          "path": "sparql/service/manifest.ttl",
+          "blake3": "0849df6e0dcc0235ea30dc99c4089770bed8c270cebb241b5e163a172351a55c"
+        },
+        {
+          "path": "sparql/service/service-bnode-collision.rq",
+          "blake3": "21ffd9c560b65fbecd5307a345f3536a339b0ab7387c1d38db8358bda0d6ab00"
+        },
+        {
+          "path": "sparql/service/service-bnode-collision.srj",
+          "blake3": "c7b9e6de8b6d940a906ae00e160c484eb771831b18e3c54229151728172e37d0"
+        }
+      ]
+    },
+    {
+      "id": "service-response-shared",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/service/endpoint-a.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/manifest.ttl",
+          "blake3": "0849df6e0dcc0235ea30dc99c4089770bed8c270cebb241b5e163a172351a55c"
+        },
+        {
+          "path": "sparql/service/service-response-shared.rq",
+          "blake3": "0b22b0960d50892e063deaa71600727a290834dd174d9a0e9f7d599fad730ec3"
+        },
+        {
+          "path": "sparql/service/service-response-shared.srj",
+          "blake3": "efc7b5f40195b0122d43ef9c191f633e42d5836df004031c1926462b10393fe3"
+        }
+      ]
+    },
+    {
+      "id": "service-responses-distinct",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/service/endpoint-a.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/endpoint-b.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/manifest.ttl",
+          "blake3": "0849df6e0dcc0235ea30dc99c4089770bed8c270cebb241b5e163a172351a55c"
+        },
+        {
+          "path": "sparql/service/service-responses-distinct.rq",
+          "blake3": "51f86f70aeafcb8d9b3f61cde5d187a207260de1ab169a0e496a72178ae9bb0a"
+        },
+        {
+          "path": "sparql/service/service-responses-distinct.srj",
+          "blake3": "6780dfa426e6753462f921856c5a6faec6b9cc93d3072cfe5ba5439a03760ee6"
+        }
+      ]
+    },
+    {
+      "id": "service-all-unbound-duplicates",
+      "status": "accepted",
+      "reviewer": "independent normative source review",
+      "derivation": "reviews/queries.md",
+      "payloads": [
+        {
+          "path": "reviews/queries.md",
+          "blake3": "0fc4567299dd8143d6b6fc916bfd19982fbc37342ce4b41c7570e0bf1ecb5f15"
+        },
+        {
+          "path": "sparql/service/endpoint-a.ttl",
+          "blake3": "70dcbd667f749161d54627b58aac58e4dfb5b7598abc30014e42e597cee53851"
+        },
+        {
+          "path": "sparql/service/manifest.ttl",
+          "blake3": "0849df6e0dcc0235ea30dc99c4089770bed8c270cebb241b5e163a172351a55c"
+        },
+        {
+          "path": "sparql/service/service-all-unbound-duplicates.rq",
+          "blake3": "95542b243221b164eb2c415f72a693964bf58e1951f6f2bd1f2178c6192297ac"
+        },
+        {
+          "path": "sparql/service/service-all-unbound-duplicates.srj",
+          "blake3": "8b4b68fc750475950d0cc778df4351fcc8ecd31e0938f2df2d4903d9188f503a"
+        }
+      ]
     }
   ]
 }

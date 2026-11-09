@@ -110,7 +110,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Every corpus file, as `(relative path with '/' separators, absolute path)`, sorted.
 fn corpus_files() -> Vec<(String, PathBuf)> {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut files = Vec::new();
     for corpus in CORPORA {
         let mut found = Vec::new();

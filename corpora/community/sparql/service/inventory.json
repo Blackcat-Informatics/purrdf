@@ -1,0 +1,196 @@
+{
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profiles": {
+    "sparql11-query-over-rdf12": "SPARQL 1.1 query semantics over the applicable RDF 1.2 term subset; no SHACL admission claim."
+  },
+  "cases": [
+    {
+      "id": "service-bnode-distinct",
+      "iri": "http://example.org/community/sparql/service/manifest.ttl#service-bnode-distinct",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "manifest": "manifest.ttl",
+      "query": "service-bnode-distinct.rq",
+      "expected": "service-bnode-distinct.srj",
+      "data": [
+        {
+          "path": "local.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "services": [
+        {
+          "endpoint": "http://example.org/service/a",
+          "data": {
+            "path": "endpoint-a.ttl",
+            "mediaType": "text/turtle"
+          }
+        }
+      ],
+      "categories": [
+        "SERVICE",
+        "response-identity",
+        "global-blank-bijection"
+      ],
+      "requires": [
+        "sparql11-service"
+      ],
+      "rationale": "The endpoint group yields one newly generated remote blank. The local p edge yields one existing blank; one local BNODE() invocation yields a fresh blank. The three identity classes are distinct, so the inequality filter preserves exactly one row with three distinct blanks.",
+      "specifications": [
+        "https://www.w3.org/TR/2013/REC-sparql11-query-20130321/#func-bnode",
+        "https://www.w3.org/TR/2013/REC-sparql11-federated-query-20130321/",
+        "https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/#select-encoding"
+      ],
+      "family": "service-identity"
+    },
+    {
+      "id": "service-bnode-collision",
+      "iri": "http://example.org/community/sparql/service/manifest.ttl#service-bnode-collision",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "manifest": "manifest.ttl",
+      "query": "service-bnode-collision.rq",
+      "expected": "service-bnode-collision.srj",
+      "data": [
+        {
+          "path": "local.ttl",
+          "mediaType": "text/turtle"
+        }
+      ],
+      "services": [
+        {
+          "endpoint": "http://example.org/service/a",
+          "data": {
+            "path": "endpoint-a.ttl",
+            "mediaType": "text/turtle"
+          }
+        }
+      ],
+      "categories": [
+        "SERVICE",
+        "response-identity",
+        "global-blank-bijection"
+      ],
+      "requires": [
+        "sparql11-service"
+      ],
+      "rationale": "The same one candidate mapping has three pairwise distinct blank identities. No equality disjunct holds, so the exact result bag is empty while the existing/local/remote header remains.",
+      "specifications": [
+        "https://www.w3.org/TR/2013/REC-sparql11-query-20130321/#func-bnode",
+        "https://www.w3.org/TR/2013/REC-sparql11-federated-query-20130321/",
+        "https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/#select-encoding"
+      ],
+      "family": "service-identity"
+    },
+    {
+      "id": "service-response-shared",
+      "iri": "http://example.org/community/sparql/service/manifest.ttl#service-response-shared",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "manifest": "manifest.ttl",
+      "query": "service-response-shared.rq",
+      "expected": "service-response-shared.srj",
+      "data": [],
+      "services": [
+        {
+          "endpoint": "http://example.org/service/a",
+          "data": {
+            "path": "endpoint-a.ttl",
+            "mediaType": "text/turtle"
+          }
+        }
+      ],
+      "categories": [
+        "SERVICE",
+        "response-identity",
+        "global-blank-bijection"
+      ],
+      "requires": [
+        "sparql11-service"
+      ],
+      "rationale": "The endpoint contains one p subject and two distinct tag literals. There are exactly two mappings; both remote and copy denote that one subject in both rows. The result has one global blank class, not one independently renamed class per row.",
+      "specifications": [
+        "https://www.w3.org/TR/2013/REC-sparql11-query-20130321/#func-bnode",
+        "https://www.w3.org/TR/2013/REC-sparql11-federated-query-20130321/",
+        "https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/#select-encoding"
+      ],
+      "family": "service-identity"
+    },
+    {
+      "id": "service-responses-distinct",
+      "iri": "http://example.org/community/sparql/service/manifest.ttl#service-responses-distinct",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "manifest": "manifest.ttl",
+      "query": "service-responses-distinct.rq",
+      "expected": "service-responses-distinct.srj",
+      "data": [],
+      "services": [
+        {
+          "endpoint": "http://example.org/service/a",
+          "data": {
+            "path": "endpoint-a.ttl",
+            "mediaType": "text/turtle"
+          }
+        },
+        {
+          "endpoint": "http://example.org/service/b",
+          "data": {
+            "path": "endpoint-b.ttl",
+            "mediaType": "text/turtle"
+          }
+        }
+      ],
+      "categories": [
+        "SERVICE",
+        "response-identity",
+        "global-blank-bijection"
+      ],
+      "requires": [
+        "sparql11-service"
+      ],
+      "rationale": "The a and b endpoint files are separate RDF source documents independently parsed into distinct endpoint datasets. Each has one p subject. Each independently evaluated subquery yields one mapping; the join yields one pair of distinct source blanks, which passes the inequality filter.",
+      "specifications": [
+        "https://www.w3.org/TR/2013/REC-sparql11-query-20130321/#func-bnode",
+        "https://www.w3.org/TR/2013/REC-sparql11-federated-query-20130321/",
+        "https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/#select-encoding"
+      ],
+      "family": "service-identity"
+    },
+    {
+      "id": "service-all-unbound-duplicates",
+      "iri": "http://example.org/community/sparql/service/manifest.ttl#service-all-unbound-duplicates",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "manifest": "manifest.ttl",
+      "query": "service-all-unbound-duplicates.rq",
+      "expected": "service-all-unbound-duplicates.srj",
+      "data": [],
+      "services": [
+        {
+          "endpoint": "http://example.org/service/a",
+          "data": {
+            "path": "endpoint-a.ttl",
+            "mediaType": "text/turtle"
+          }
+        }
+      ],
+      "categories": [
+        "SERVICE",
+        "unbound",
+        "bag"
+      ],
+      "requires": [
+        "sparql11-service"
+      ],
+      "rationale": "The remote explicit SELECT projects a and b over a VALUES multiset containing two empty mappings. Projection preserves both mappings and both unbound header variables. The outer SERVICE join/projection therefore returns exactly two empty binding objects.",
+      "specifications": [
+        "https://www.w3.org/TR/2013/REC-sparql11-query-20130321/#func-bnode",
+        "https://www.w3.org/TR/2013/REC-sparql11-federated-query-20130321/",
+        "https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/#select-encoding"
+      ],
+      "family": "service-identity"
+    }
+  ]
+}

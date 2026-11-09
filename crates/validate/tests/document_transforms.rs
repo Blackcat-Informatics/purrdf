@@ -309,7 +309,7 @@ fn compaction_and_context_aware_flattening_preserve_structure_and_independent_ba
     }
 
     // Reuse unchanged pinned local-context compaction and Flatten 0044 expectations.
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests");
     let manifest =
         json::read(&std::fs::read_to_string(root.join("manifest.jsonld")).unwrap()).unwrap();
     for id in [

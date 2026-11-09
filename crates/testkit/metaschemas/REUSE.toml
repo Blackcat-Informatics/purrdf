@@ -5,7 +5,7 @@ version = 1
 
 # The JSON Schema draft 2020-12, draft 2019-09 and draft-07 meta-schemas,
 # vendored verbatim from the json-schema-org/json-schema-spec `2020-12`,
-# `2019-09` and `draft-07` branches (see crates/jsonschema/PROVENANCE.md). The
+# `2019-09` and `draft-07` branches (see ../PROVENANCE.md). The
 # upstream project licenses its material under BSD-3-Clause or AFL-3.0, as its
 # LICENSE file (added in 51326f809003) specifies, with the copyright held by
 # the JSON Schema Specification Authors; the files carry no per-file notice.

@@ -3370,7 +3370,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             r"\| SHACL 1\.2 \| W3C `shacl12-test-suite` \(`vectors/shacl12/`\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · "
             r"(?P<ledgered>\d+) ledgered expected failures, (?P<spec>\d+) "
-            r"spec-contradicted \(`hasLang-example`\); (?P<unlisted>\d+) unlisted vendored files "
+            r"spec-contradicted; (?P<unlisted>\d+) unlisted vendored files? "
             r"graded apart \|",
             {
                 "passed": passed,
@@ -3387,8 +3387,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             r"\| SHACL 1\.2 \| W3C `shacl12-test-suite`, `vectors/shacl12/tests/` \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass as approved · "
             r"(?P<ledgered>\d+) "
-            r"ledgered expected failures, (?P<spec>\d+) spec-contradicted "
-            r"\(`node-expr/shnex-sparql/hasLang-example`\), "
+            r"ledgered expected failures, (?P<spec>\d+) spec-contradicted, "
             r"of the (?P<listed>\d+) an upstream manifest lists; "
             r"(?P<discovered>\d+) discovered: "
             r"(?P<validate>\d+) `sht:Validate`, (?P<evalnodeexpr>\d+) `sht:EvalNodeExpr`, "
@@ -3407,7 +3406,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
         Claim(
             "the SHACL 1.2 unlisted-files per-engine scoreboard row",
             _CONFORMANCE,
-            r"\| SHACL 1\.2 unlisted vendored files \| the (?P<files>\d+) files of "
+            r"\| SHACL 1\.2 unlisted vendored files \| the (?P<files>\d+) files? of "
             r"`vectors/shacl12/tests/` no upstream manifest includes \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* graded apart from the approved "
             r"suite: (?P<exact>\d+) exactly as written · (?P<delta>\d+) with a proven "

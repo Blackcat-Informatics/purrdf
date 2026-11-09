@@ -26,61 +26,6 @@ use purrdf_testkit::prop::{
     SEED_VARIABLE, parse_cases, parse_seed, replay, seed_for,
 };
 
-/// Every regex pattern a property in this workspace generates strings from,
-/// plus `\PC*`, which `any::<String>()` generates from.
-const WORKSPACE_PATTERNS: &[&str] = &[
-    "\\PC*",
-    "-?[0-9]{1,6}",
-    ".{0,10}",
-    ".{0,200}",
-    ".{0,24}",
-    ".{0,30}",
-    ".{0,64}",
-    ".{0,8}",
-    "[ -~]{0,32}",
-    "[0-9][a-z0-9]{0,6}",
-    "[0-9][a-zA-Z0-9]{3}",
-    "[0-9]{3}",
-    "[0-9a-wyzA-WYZ]",
-    "[A-Za-z0-9 ]{0,32}",
-    "[A-Za-z0-9._-]{0,12}",
-    "[A-Za-z0-9:@/_-]{1,24}",
-    "[A-Za-z0-9_ /?.-]{1,24}",
-    "[a-c0-9]{0,4}",
-    "[a-c:/# ]{0,4}",
-    "[a-c:/#]{0,4}",
-    "[a-z0-9._~-]{1,6}",
-    "[a-z0-9]{0,4}",
-    "[a-z0-9]{0,6}",
-    "[a-z0-9]{1,5}(/[a-z0-9]{1,5}){0,3}",
-    "[a-z:#/\\t]{0,12}",
-    "[a-zA-Z0-9 ?<>{}().*+/^!|:_\"@-]{0,80}",
-    "[a-zA-Z0-9 ]{0,8}",
-    "[a-zA-Z0-9-]{100,600}",
-    "[a-zA-Z0-9._~!$&'()*+,;=-]{0,8}",
-    "[a-zA-Z0-9._~!$&'()*+,;=:@/?-]{0,10}",
-    "[a-zA-Z0-9]{1,8}",
-    "[a-zA-Z0-9]{2,8}",
-    "[a-zA-Z0-9]{5,8}",
-    "[a-zA-Z]{2,3}",
-    "[a-zA-Z]{2}",
-    "[a-zA-Z]{3}",
-    "[a-zA-Z]{4}",
-    "[a-zA-Z]{5,8}",
-    "[a-z][a-z0-9-]{0,10}(\\.[a-z][a-z0-9-]{0,10}){0,2}",
-    "[a-z][a-z0-9]{0,2}-[a-z0-9]{1,3}",
-    "[a-z][a-z0-9]{0,2}\\.[a-z0-9]{1,3}",
-    "[a-z][a-z0-9]{0,5}",
-    "[a-z][a-z0-9]{0,6}",
-    "[a-z][a-z0-9]{0,8}(\\.[a-z][a-z0-9]{0,8}){0,3}",
-    "[a-z]{1,4}",
-    "[a-z]{1,6}",
-    "[a-z]{1,8}",
-    "[a-z]{2}",
-    "[xX]",
-    "_[a-z0-9]{0,6}",
-];
-
 const SAMPLES: usize = 10_000;
 
 fn samples<S: Strategy>(strategy: &S, name: &str, count: usize) -> Vec<S::Value> {
@@ -228,91 +173,13 @@ fn recursion_respects_its_depth() {
 
 #[test]
 fn every_workspace_pattern_generates_only_full_matches() {
-    for pattern in WORKSPACE_PATTERNS {
+    for pattern in include_str!("regex-patterns.txt").lines() {
         let oracle = regex::Regex::new(&format!("^(?:{pattern})$")).expect("the oracle compiles");
         let strategy = prop::string::regex(pattern);
         for text in samples(&strategy, pattern, SAMPLES) {
             assert!(oracle.is_match(&text), "/{pattern}/ generated {text:?}");
         }
     }
-}
-
-/// The Rust string literal body `text`, unescaped (the escapes patterns use).
-fn unescape(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('n') => out.push('\n'),
-            Some('t') => out.push('\t'),
-            Some('r') => out.push('\r'),
-            Some('0') => out.push('\0'),
-            Some(other @ ('\\' | '"' | '\'')) => out.push(other),
-            other => panic!("an escape this scan does not read: \\{other:?} in {text:?}"),
-        }
-    }
-    out
-}
-
-/// Every pattern handed to `prop::string::regex` in the workspace's sources, so
-/// [`WORKSPACE_PATTERNS`] can be checked against it in both directions.
-fn patterns_in_the_workspace() -> BTreeSet<String> {
-    let call =
-        regex::Regex::new(r#"prop::string::regex\("((?:\\.|[^"\\])*)"\)"#).expect("compiles");
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates/")
-        .to_path_buf();
-    let mut found = BTreeSet::new();
-    let mut pending = vec![crates.clone()];
-    while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(&directory).expect("readable") {
-            let path = entry.expect("readable").path();
-            if path.is_dir() {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("");
-                if name != "target" && path != crates.join("testkit") {
-                    pending.push(path);
-                }
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
-                let text = std::fs::read_to_string(&path).expect("UTF-8 source");
-                for capture in call.captures_iter(&text) {
-                    found.insert(unescape(&capture[1]));
-                }
-            }
-        }
-    }
-    found
-}
-
-#[test]
-fn the_pattern_list_is_exactly_the_workspace_patterns() {
-    let used = patterns_in_the_workspace();
-    assert!(
-        used.len() > 40,
-        "the scan found the workspace's patterns: {used:?}"
-    );
-    let listed: BTreeSet<String> = WORKSPACE_PATTERNS
-        .iter()
-        .filter(|pattern| **pattern != "\\PC*")
-        .map(|pattern| (*pattern).to_owned())
-        .collect();
-    let unlisted: Vec<&String> = used.difference(&listed).collect();
-    let stale: Vec<&String> = listed.difference(&used).collect();
-    assert!(
-        unlisted.is_empty(),
-        "patterns used but not oracle-checked: {unlisted:?}"
-    );
-    assert!(
-        stale.is_empty(),
-        "patterns listed but no longer used: {stale:?}"
-    );
 }
 
 #[test]

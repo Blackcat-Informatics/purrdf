@@ -1249,9 +1249,9 @@ fn conforms_to_shape_still_refuses_a_named_shape_that_does_not_exist() {
 }
 
 /// A computed shape argument producing more than one IRI has no single shape to
-/// check against, and one producing none has no shape at all.
+/// check against; an empty shape result instead yields the empty list.
 #[test]
-fn a_computed_shape_argument_must_produce_exactly_one_iri() {
+fn a_computed_shape_argument_admits_empty_and_rejects_multiple_iris() {
     let expr = turtle::expression_of(
         PREFIXES,
         "ex:Real a sh:NodeShape ; sh:nodeKind sh:IRI .
@@ -1270,8 +1270,13 @@ fn a_computed_shape_argument_must_produce_exactly_one_iri() {
             "http://example.org/ns#a",
         ));
         let mut guard = RecursionGuard::default();
-        let err = eval_node_expr(&store, &focus, &expr, &mut guard)
-            .expect_err("a shape argument that is not exactly one IRI must be an error")
+        let actual = eval_node_expr(&store, &focus, &expr, &mut guard);
+        if count == 0 {
+            assert_eq!(actual.unwrap(), [] as [Term; 0]);
+            continue;
+        }
+        let err = actual
+            .expect_err("multiple shape IRIs must be an error")
             .to_string();
         assert!(
             err.contains("must produce exactly one shape IRI"),

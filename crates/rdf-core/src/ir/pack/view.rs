@@ -177,10 +177,9 @@ impl DatasetView for PackView<'_> {
         Some(Ok(crate::NoopReservation::owned()))
     }
 
-    /// A pack's dictionary is admitted only when no triple term in it nests past
-    /// the decoder's fixed triple-term depth limit of 128, so that limit is the bound.
+    /// Dictionary admission proves acyclicity without imposing a depth ceiling.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(super::dict::MAX_TRIPLE_TERM_DEPTH)
+        None
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds<PackId>> + '_ {

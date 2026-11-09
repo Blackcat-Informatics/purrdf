@@ -13,7 +13,7 @@
 //! supplies.
 //!
 //! Every registry starts from one [`Metaschemas`] set holding the vendored
-//! meta-schemas of all three drafts (`tests/metaschemas/`, supplied through
+//! meta-schemas of all three drafts (packaged by the shared test support through
 //! `purrdf_testkit::jsonschema_metaschemas`): this crate carries none. The
 //! remotes are registered as the suite's README directs, each under
 //! `http://localhost:1234/` plus its path below `remotes/` — the

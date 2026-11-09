@@ -364,6 +364,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/modifier.rs",
+        name: "ORDER_WINDOW_WORK",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/modifier/value_order/qualification.rs",
         name: "VALUE_ORDER_WORK",
         safety: Safety::NotCompiledIn,
@@ -553,7 +559,7 @@ mod tests {
     #[test]
     fn every_entry_names_a_declared_static() {
         for ThreadLocal { file, name, .. } in LEDGER {
-            let source = std::fs::read_to_string(workspace_root().join(file))
+            let source = std::fs::read_to_string(workspace_root!().join(file))
                 .unwrap_or_else(|error| panic!("{file} is listed but cannot be read: {error}"));
             let declared = source.lines().any(|line| {
                 let trimmed = line.trim_start();
