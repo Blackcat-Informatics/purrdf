@@ -1126,18 +1126,13 @@ fn deep_terms_respect_kernel_admission_without_stack_recursion() {
     };
     let variables = ["direct".into(), "quoted".into()];
     let deep = [nested("source", BlankScope(11), 100_000)];
-    assert!(matches!(
-        bag::canonical_solutions(
-            &variables,
-            &deep,
-            false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
-        ),
-        Err(purrdf_conformance_kit::GradeError::Malformed(_))
-    ));
+    bag::canonical_solutions(
+        &variables,
+        &deep,
+        false,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("finite deep terms admitted by the kernel canonicalize");
     let expected = [nested("source", BlankScope(11), 16)];
     let mut actual = [nested("renamed", BlankScope(2), 16)];
     bag::compare_solutions(
