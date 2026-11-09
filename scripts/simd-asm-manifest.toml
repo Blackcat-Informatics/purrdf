@@ -6920,6 +6920,30 @@ summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consum
   forbid_relaxed = true
 
 [[site]]
+id = "hash.xxh64"
+summary = "Native seeded XXH64, inlined into the production long-distance match producer and direct frame decoder. Whole-symbol counts include surrounding match/decode work. The leave policy records the emitted shape without a SIMD claim."
+
+  # The integer-exact leave policy imposes no vector floor or mnemonic claim.
+  # Every selected production symbol must still exist on every configuration.
+  [[site.measure]]
+  label = "oneshot-ldm"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_zstd"
+  symbol = "<purrdf_zstd::encoding::ldm::LdmProducer>::generate_into"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "stream-decoder"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_zstd"
+  symbol = "<purrdf_zstd::decoding::frame_decoder::FrameDecoder>::run_direct_decode"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
 id = "hash.fixed-compress"
 summary = "Fixed-key table hashing: the portable engine uses folded multiplies; the AES engine keeps a full-width accumulator. Short AES byte updates inline into the public Hasher wrapper, while the longer four-lane compression remains out of line to preserve the short-string caller inline budget. Only aarch64-neoverse-v1 enables AES among the seven audited configurations. Portable Engine<Portable>::try_bytes retains the complete short/long folded-multiply byte update and is instantiated by downstream callers and attributed to its originating purrdf_hash crate"
 
