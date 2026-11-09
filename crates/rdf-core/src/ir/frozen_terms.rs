@@ -73,7 +73,8 @@ impl FrozenTerms {
         let mut current = Some(id);
         while let Some(id) = current {
             memory.admission_mut().checkpoint(1)?;
-            let node = match self.resolve(id) {
+            let term = self.resolve(id);
+            let node = match term {
                 TermRef::Iri(iri) => CanonicalNode::Iri(iri),
                 TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
                 TermRef::Literal {
@@ -96,7 +97,7 @@ impl FrozenTerms {
             };
             node.try_visit_bytes(&mut |bytes| output(bytes, memory))
                 .map_err(OwnedTermFoldError::Visitor)?;
-            if let TermRef::Triple { s, p, o } = self.resolve(id) {
+            if let TermRef::Triple { s, p, o } = term {
                 for child in [o, p, s] {
                     memory.push_copy_with_progress(pending, child)?;
                 }

@@ -216,6 +216,7 @@ impl StatisticsBuilder {
             dictionary.term_id_by_iri_with_memory(purrdf_iri::vocab::rdf::TYPE, memory)?;
         let mut ordinals = Vec::new();
         let mut pending = Vec::new();
+        let mut source_row = crate::source::SourceRowHasher::default();
         let result = (|| {
             memory.admission_mut().checkpoint(0)?;
             memory.reserve(&mut ordinals, count)?;
@@ -308,6 +309,7 @@ impl StatisticsBuilder {
                                 row(ordinal),
                                 dictionary,
                                 &mut pending,
+                                &mut source_row,
                                 memory,
                             )?;
                             let stream = match relation {
@@ -401,7 +403,9 @@ impl StatisticsBuilder {
                             })?
                             .end
                         } else {
-                            ordinals[next..end].partition_point(|&index| row(index).o == object)
+                            purrdf_lex::walk::partition_prefix(&ordinals[next..end], |&index| {
+                                row(index).o == object
+                            })
                         };
                         let stop = next.checked_add(run).ok_or(StorageError::SizeOverflow)?;
                         let rows = (stop - next) as u64;
@@ -1680,6 +1684,34 @@ mod tests {
 
     #[test]
     fn sealed_source_rows_match_independent_owned_projection_and_codec() {
+        // Frozen with independent `b3sum` 1.8.7 over the published length
+        // frame, domain, relation byte and this exact thirty-two-byte row.
+        for (relation, expected) in [
+            (
+                Relation::Asserted,
+                "d7034bfde2887c2cb8f099f512181649878cb0d346c2266d2ed0f0b7bc4c9b7b",
+            ),
+            (
+                Relation::Reifiers,
+                "2205757d7a96ded46ae6d705303291ef62bcedba2d7a2986d272246d4b897405",
+            ),
+            (
+                Relation::Annotations,
+                "dc415b3ace2210576784975db57755b148f65f655594bfbf96a93a71e7a0746b",
+            ),
+            (
+                Relation::Targets,
+                "8a4678deb41a4103fd2bed9af99cbd5bc0d031cd2060727c716c734bfaee3243",
+            ),
+        ] {
+            assert_eq!(
+                purrdf_hash::hex::encode(&crate::source::record_hash(
+                    relation,
+                    *b"0123456789abcdefghijklmnopqrstuv",
+                )),
+                expected,
+            );
+        }
         for named in [false, true] {
             let (dataset, _, _) = fixture(named);
             let statistics = dataset.predicate_statistics();
@@ -1755,6 +1787,8 @@ mod tests {
         let mut builder = RdfDatasetBuilder::new();
         let subject = builder.intern_iri("urn:source:subject").unwrap();
         let predicate = builder.intern_iri("urn:source:predicate").unwrap();
+        let graph = builder.intern_iri("urn:source:graph").unwrap();
+        let short_object = builder.intern_literal(RdfLiteral::simple("short")).unwrap();
         let literal_object = builder
             .intern_literal(RdfLiteral::simple(&lexical))
             .unwrap();
@@ -1764,30 +1798,38 @@ mod tests {
                 .intern_triple(subject, predicate, nested_object)
                 .unwrap();
         }
-        for object in [literal_object, nested_object] {
+        let rows = [
+            (literal_object, None),
+            (nested_object, Some(graph)),
+            (short_object, None),
+            (literal_object, Some(graph)),
+            (short_object, None),
+        ];
+        // The triple fixture supplies the dictionary; the row projection below
+        // independently selects its named or default graph from those terms.
+        for (object, _) in rows {
             builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let dataset = builder.freeze().unwrap();
         let subject_value = dataset.term_value(subject).unwrap();
         let predicate_value = dataset.term_value(predicate).unwrap();
-        let object_values = [
-            dataset.term_value(literal_object).unwrap(),
-            dataset.term_value(nested_object).unwrap(),
-        ];
+        let graph_value = dataset.term_value(graph).unwrap();
+        let object_values: Vec<_> = rows
+            .iter()
+            .map(|&(object, _)| dataset.term_value(object).unwrap())
+            .collect();
         let dataset = Arc::try_unwrap(dataset)
             .unwrap_or_else(|_| panic!("fixture dataset must have one owner"));
         let native = TripleDataset::try_from(dataset).unwrap();
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        for (object, object_value) in [literal_object, nested_object]
-            .into_iter()
-            .zip(&object_values)
-        {
+        let mut source_row = crate::source::SourceRowHasher::default();
+        for ((object, graph), object_value) in rows.into_iter().zip(&object_values) {
             let quad = QuadIds {
                 s: subject,
                 p: predicate,
                 o: object,
-                g: None,
+                g: graph,
             };
             let mut pending = Vec::new();
             let mut expected = SourceSummary::default();
@@ -1797,6 +1839,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory,
                 )
                 .unwrap();
@@ -1813,7 +1856,7 @@ mod tests {
                 subject: &subject_value,
                 predicate: &predicate_value,
                 object: object_value,
-                graph: None,
+                graph: graph.map(|_| &graph_value),
             }
             .hashes(&mut controlled)
             .unwrap();
@@ -1821,7 +1864,7 @@ mod tests {
                 let literal = crate::source::LiteralSourceRow {
                     subject: &subject_value,
                     predicate: &predicate_value,
-                    graph: None,
+                    graph: graph.map(|_| &graph_value),
                     lexical: &lexical,
                     datatype: purrdf_xsd::datatype::XSD_STRING,
                     language: None,
@@ -1856,6 +1899,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory,
                 );
                 let calls = memory.admission().calls;
@@ -1904,6 +1948,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory
                 ),
                 Err(StorageError::SizeOverflow)
