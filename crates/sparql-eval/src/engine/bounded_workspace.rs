@@ -90,9 +90,25 @@ pub(super) fn reserve_reporting<D: DatasetView>(
     D,
     ReportingWorkspace<impl WorkspaceReservation<Error = D::ReadError> + '_, D::ReadError>,
 > {
+    reserve_reporting_with(view, || view.reserve_workspace(0))
+}
+
+/// Preserve the original reporting permit while a cursor moves between workers.
+pub(super) fn reserve_cursor_reporting<D: purrdf_core::CursorDatasetView>(
+    view: &D,
+) -> AdmissionResult<
+    D,
+    ReportingWorkspace<impl WorkspaceReservation<Error = D::ReadError> + Send + '_, D::ReadError>,
+> {
+    reserve_reporting_with(view, || view.cursor_reserve_workspace(0))
+}
+
+fn reserve_reporting_with<D: DatasetView, R>(
+    view: &D,
+    reserve: impl FnOnce() -> Result<R, D::ReadError>,
+) -> AdmissionResult<D, ReportingWorkspace<R, D::ReadError>> {
     if view.storage_live_budget().is_none() {
-        return view
-            .reserve_workspace(0)
+        return reserve()
             .map(|reservation| ReportingWorkspace::Resident {
                 _reservation: reservation,
             })
@@ -119,7 +135,7 @@ pub(super) fn reserve_reporting<D: DatasetView>(
 /// meaning and remains alive until the final checkpoint.
 pub(super) struct ExecutionWorkspace<R, E> {
     owner: QueryWorkspace<E>,
-    _reservation: Option<R>,
+    reservation: Option<R>,
 }
 
 impl<R, E> std::ops::Deref for ExecutionWorkspace<R, E> {
@@ -139,18 +155,47 @@ pub(super) fn reserve_execution<D: DatasetView>(
     D,
     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + '_, D::ReadError>,
 > {
-    let reservation = if view.storage_live_budget().is_none() {
-        Some(
-            view.reserve_workspace(0)
-                .map_err(AdmissionError::Operational)?,
-        )
-    } else {
-        None
-    };
-    Ok(ExecutionWorkspace {
-        owner,
-        _reservation: reservation,
-    })
+    reserve_execution_with(view, owner, || view.reserve_workspace(0))
+}
+
+fn reserve_execution_with<D: DatasetView, R>(
+    view: &D,
+    owner: QueryWorkspace<D::ReadError>,
+    reserve: impl FnOnce() -> Result<R, D::ReadError>,
+) -> AdmissionResult<D, ExecutionWorkspace<R, D::ReadError>> {
+    let reservation = view
+        .storage_live_budget()
+        .is_none()
+        .then(reserve)
+        .transpose()
+        .map_err(AdmissionError::Operational)?;
+    Ok(ExecutionWorkspace { owner, reservation })
+}
+
+impl<R, E> ExecutionWorkspace<R, E> {
+    pub(super) fn into_parts(self) -> (QueryWorkspace<E>, Option<R>) {
+        (self.owner, self.reservation)
+    }
+}
+
+/// The original admission account with a transferable operational permit.
+pub(super) fn reserve_cursor<D: purrdf_core::CursorDatasetView>(
+    view: &D,
+) -> AdmissionResult<
+    D,
+    ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + Send + '_, D::ReadError>,
+> {
+    reserve_cursor_execution(view, reserve_owner(view)?)
+}
+
+pub(super) fn reserve_cursor_execution<D: purrdf_core::CursorDatasetView>(
+    view: &D,
+    owner: QueryWorkspace<D::ReadError>,
+) -> AdmissionResult<
+    D,
+    ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + Send + '_, D::ReadError>,
+> {
+    reserve_execution_with(view, owner, || view.cursor_reserve_workspace(0))
 }
 
 /// Admit before converting even a query constant to an owned lookup key. Every
@@ -179,8 +224,12 @@ pub(super) fn reserve_with_error<'a, D: DatasetView>(
     D,
     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + 'a, D::ReadError>,
 > {
+    reserve_execution(view, reserve_owner(view)?)
+}
+
+fn reserve_owner<D: DatasetView>(view: &D) -> AdmissionResult<D, QueryWorkspace<D::ReadError>> {
     if view.storage_live_budget().is_none() {
-        return reserve_execution(view, QueryWorkspace::resident());
+        return Ok(QueryWorkspace::resident());
     }
     let controls = QueryWorkspace::<D::ReadError>::control_bytes()?;
     let reservation = view
@@ -189,5 +238,5 @@ pub(super) fn reserve_with_error<'a, D: DatasetView>(
             "a view without owned workspace admission",
         ))?
         .map_err(AdmissionError::Operational)?;
-    reserve_execution(view, QueryWorkspace::owned(reservation, 0)?)
+    QueryWorkspace::owned(reservation, 0).map_err(AdmissionError::from)
 }

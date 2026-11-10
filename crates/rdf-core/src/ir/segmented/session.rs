@@ -1711,14 +1711,14 @@ impl SegmentedSession {
         table: usize,
         pattern: Pattern,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        self.stream_range(table, pattern, None)
+        self.stream_range(table, pattern, None::<crate::AnnotationValueRange<'_>>)
     }
 
-    pub(super) fn stream_range<'a>(
+    pub(super) fn stream_range<'a, R: crate::AnnotationRangeSource + 'a>(
         &'a self,
         table: usize,
         pattern: Pattern,
-        values: Option<&'a crate::AnnotationValueRange<'a>>,
+        values: Option<R>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         QuadIter {
             session: self,
@@ -1729,6 +1729,16 @@ impl SegmentedSession {
             pattern,
             values,
         }
+    }
+
+    pub(crate) fn annotation_quads_for_range_owned<'a, R: crate::AnnotationRangeSource + 'a>(
+        &'a self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+        range: R,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + Send + 'a {
+        self.stream_range(2, (None, predicate, object, graph), Some(range))
     }
 
     fn summary_values_may_match(
@@ -1915,7 +1925,7 @@ type Pattern = (
     Option<GlobalTermId>,
     GraphMatch<GlobalTermId>,
 );
-struct QuadIter<'a> {
+struct QuadIter<'a, R: crate::AnnotationRangeSource> {
     session: &'a SegmentedSession,
     table: usize,
     summaries: Option<core::ops::Range<u64>>,
@@ -1924,14 +1934,15 @@ struct QuadIter<'a> {
     rows: Option<Arc<CachedBlock>>,
     row: core::ops::Range<usize>,
     pattern: Pattern,
-    values: Option<&'a crate::AnnotationValueRange<'a>>,
+    values: Option<R>,
 }
-impl Iterator for QuadIter<'_> {
+impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
     type Item = QuadIds<GlobalTermId>;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if self.values.is_some_and(|range| {
-                range
+            if self.values.as_ref().is_some_and(|source| {
+                source
+                    .value_range()
                     .workspace
                     .is_some_and(crate::AnnotationRangeWorkspace::stopped)
             }) {
@@ -1993,11 +2004,12 @@ impl Iterator for QuadIter<'_> {
             }
             let page =
                 crate::bytes::read_u64_le(&summary, 0).expect("certified summary block position");
-            if let Some(values) = self.values {
-                match self
-                    .session
-                    .summary_values_may_match(&summary, self.pattern.1, *values)
-                {
+            if let Some(values) = &self.values {
+                match self.session.summary_values_may_match(
+                    &summary,
+                    self.pattern.1,
+                    values.value_range(),
+                ) {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(error) => {
@@ -2279,7 +2291,7 @@ impl DatasetView for SegmentedSession {
         graph: GraphMatch<Self::Id>,
         range: &'a crate::AnnotationValueRange<'a>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
-        self.stream_range(2, (None, predicate, object, graph), Some(range))
+        self.annotation_quads_for_range_owned(predicate, object, graph, range)
     }
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
         (0..self.header.graphs.rows).map_while(move |index| self.named_graph_at(index))

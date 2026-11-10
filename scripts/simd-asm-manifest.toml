@@ -2838,7 +2838,7 @@ summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (
 
 [[site]]
 id = "eval.solution-compatible"
-summary = "`solution::compatible` and `bgp::bind_row`, the solution-row join checks"
+summary = "`solution::compatible` and BGP expansion's inlined `bind_row`, the solution-row join checks"
 
   [[site.measure]]
   label = "compatible"
@@ -2853,7 +2853,7 @@ summary = "`solution::compatible` and `bgp::bind_row`, the solution-row join che
   label = "bind_row"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>"
+  symbol = "<purrdf_sparql_eval::bgp::expansion::Expansion<purrdf_core::ir::term::TermId>>::candidate::<purrdf_core::ir::dataset::RdfDataset>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2872,12 +2872,12 @@ summary = "`bgp::cost_order_dp_costs_from`, the shared f64 BGP cost planner"
 
 [[site]]
 id = "eval.bgp-join-probe"
-summary = "`bgp::eval_compiled_bgp`, the shared index-nested-loop join probe loop"
+summary = "`bgp::prepare_compiled_bgp`, the shared indexed preparation and eager join probe loop"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "purrdf_sparql_eval::bgp::eval_compiled_bgp::<purrdf_core::ir::dataset::RdfDataset>"
+  symbol = "purrdf_sparql_eval::bgp::prepare_compiled_bgp::<purrdf_core::ir::dataset::RdfDataset>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

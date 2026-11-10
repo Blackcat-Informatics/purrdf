@@ -51,20 +51,22 @@
 //! solution order is the dataset's `TermId` order over the frozen dataset — the
 //! same canonical discipline the rest of the evaluator follows.
 
-use std::cell::{Cell, RefCell};
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::rc::Rc;
 #[cfg(test)]
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(test)]
 use purrdf_core::TermValue;
 use purrdf_core::{DatasetView, TermId, TermRef, ViewTermId};
-use purrdf_sparql_algebra::{
-    NamedNode, NegatedPathElement, PropertyPathExpression, TermPattern, Variable,
-};
+use purrdf_sparql_algebra::{NegatedPathElement, PropertyPathExpression, TermPattern, Variable};
 
 #[cfg(test)]
 use crate::convert::named_node_to_value;
@@ -82,8 +84,8 @@ use crate::{DetHashMap, DetHashSet};
 /// callback cannot allocate; the machine checks this channel before publication.
 struct PathStorage {
     workspace: crate::WorkspaceCapability,
-    error: RefCell<Option<EvalError>>,
-    failed: Cell<bool>,
+    error: Mutex<Option<EvalError>>,
+    failed: AtomicBool,
     _control: crate::WorkspaceAllocation,
 }
 
@@ -94,8 +96,8 @@ impl PathStorage {
         let control = workspace.charge(crate::workspace::shared_layout::<Self>()?)?;
         purrdf_core::small::Shared::try_new(Self {
             workspace: workspace.clone(),
-            error: RefCell::new(None),
-            failed: Cell::new(false),
+            error: Mutex::new(None),
+            failed: AtomicBool::new(false),
             _control: control,
         })
         .map_err(|_| EvalError::AllocationFailed {
@@ -104,19 +106,30 @@ impl PathStorage {
     }
 
     fn fail(&self, error: EvalError) {
-        if !self.failed.replace(true) {
-            *self.error.borrow_mut() = Some(error);
+        if let Ok(mut stored) = self.error.lock() {
+            if !self.failed.load(Ordering::Relaxed) {
+                *stored = Some(error);
+                self.failed.store(true, Ordering::Release);
+            }
+        } else {
+            // The poisoned channel remains terminal; check reports it before publication.
+            self.failed.store(true, Ordering::Release);
         }
     }
 
     fn check(&self) -> Result<(), EvalError> {
-        if let Some(error) = self.error.borrow_mut().take() {
+        if !self.failed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let error = self
+            .error
+            .lock()
+            .map_err(|_| EvalError::internal("poisoned property-path failure channel"))?
+            .take();
+        if let Some(error) = error {
             return Err(error);
         }
-        if self.failed.get() {
-            return Err(EvalError::WorkspaceStopped);
-        }
-        Ok(())
+        Err(EvalError::WorkspaceStopped)
     }
 }
 
@@ -138,7 +151,7 @@ impl<T> PathVec<T> {
         result
     }
     fn push(&mut self, value: T) {
-        if self.storage.failed.get() {
+        if self.storage.failed.load(Ordering::Acquire) {
             return;
         }
         if let Err(error) = self.values.push(value) {
@@ -148,7 +161,7 @@ impl<T> PathVec<T> {
     fn extend(&mut self, values: impl IntoIterator<Item = T>) {
         for value in values {
             self.push(value);
-            if self.storage.failed.get() {
+            if self.storage.failed.load(Ordering::Acquire) {
                 break;
             }
         }
@@ -212,7 +225,7 @@ impl<I: ViewTermId> PathSet<I> {
         value: I,
         evidence: Option<crate::evidence_exec::RowEvidence>,
     ) -> bool {
-        if self.values.storage.failed.get() {
+        if self.values.storage.failed.load(Ordering::Acquire) {
             return false;
         }
         let Err(index) = self.values.binary_search(&value) else {
@@ -232,21 +245,21 @@ impl<I: ViewTermId> PathSet<I> {
                 Ok(merged) => {
                     let changed = !original.same_attachment(&merged);
                     self.retain_evidence(value, merged);
-                    return changed && !self.values.storage.failed.get();
+                    return changed && !self.values.storage.failed.load(Ordering::Acquire);
                 }
                 Err(error) => self.values.storage.fail(error),
             }
             return false;
         };
         self.values.push(value);
-        if self.values.storage.failed.get() {
+        if self.values.storage.failed.load(Ordering::Acquire) {
             return false;
         }
         self.values[index..].rotate_right(1);
         if let Some(evidence) = evidence {
             self.retain_evidence(value, evidence);
         }
-        !self.values.storage.failed.get()
+        !self.values.storage.failed.load(Ordering::Acquire)
     }
     fn evidence_of(&self, value: I) -> crate::evidence_exec::RowEvidence {
         self.evidence.get(&value).cloned().unwrap_or_default()
@@ -273,7 +286,7 @@ impl<I: ViewTermId> PathSet<I> {
         }
         for &value in other.iter() {
             self.insert_evidence(value, other.evidence_of(value));
-            if self.values.storage.failed.get() {
+            if self.values.storage.failed.load(Ordering::Acquire) {
                 break;
             }
         }
@@ -301,7 +314,7 @@ impl<I: ViewTermId> PathSet<I> {
     fn extend(&mut self, values: impl IntoIterator<Item = I>) {
         for value in values {
             self.insert(value);
-            if self.values.storage.failed.get() {
+            if self.values.storage.failed.load(Ordering::Acquire) {
                 break;
             }
         }
@@ -348,7 +361,7 @@ enum SetRef<I: ViewTermId> {
 impl<I: ViewTermId> SetRef<I> {
     fn new(set: PathSet<I>) -> Self {
         let storage = set.values.storage.clone();
-        if storage.failed.get() {
+        if storage.failed.load(Ordering::Acquire) {
             return Self::Empty(PathSet::new(&storage));
         }
         let control = match crate::workspace::shared_layout::<SetPayload<I>>()
@@ -410,7 +423,7 @@ impl<K: Eq + std::hash::Hash, V> PathMap<K, V> {
         self.entries.get(key)
     }
     fn insert(&mut self, key: K, value: V) {
-        if self.storage.failed.get() {
+        if self.storage.failed.load(Ordering::Acquire) {
             return;
         }
         if let Err(error) = self
@@ -431,11 +444,11 @@ impl<I: ViewTermId> Visited<I> {
         self.0.get(node).is_some()
     }
     fn insert(&mut self, node: I) -> bool {
-        if self.0.storage.failed.get() || self.contains(&node) {
+        if self.0.storage.failed.load(Ordering::Acquire) || self.contains(&node) {
             return false;
         }
         self.0.insert(node, ());
-        !self.0.storage.failed.get()
+        !self.0.storage.failed.load(Ordering::Acquire)
     }
 }
 
@@ -451,7 +464,7 @@ impl<I: ViewTermId> std::ops::Deref for PowerMemo<I> {
     }
 }
 fn power_memo<I: ViewTermId>(storage: &PathStorageOwner) -> Option<PowerMemoOwner<I>> {
-    if storage.failed.get() {
+    if storage.failed.load(Ordering::Acquire) {
         return None;
     }
     let control = match crate::workspace::shared_layout::<PowerMemo<I>>()
@@ -526,7 +539,7 @@ fn resolve_negated<D: DatasetView + Sync>(
 /// One node of a compiled path expression ([`PathProgram`]): the operator, with its
 /// children named by their index in the program and its leaf payload resolved against
 /// the dataset.
-enum PathOp<'p, I: ViewTermId = TermId> {
+enum PathOp<I: ViewTermId = TermId> {
     /// A single predicate: its dataset id, or `None` when the dataset has no such term
     /// (the hop then reaches nothing).
     Predicate(Option<I>),
@@ -551,7 +564,7 @@ enum PathOp<'p, I: ViewTermId = TermId> {
     /// `!(…)`, its excluded predicates resolved per direction.
     Negated(NegatedSets<I>),
     /// `<any>` / `<any:ns>`, with the namespace prefix when one is written.
-    Wildcard(Option<&'p NamedNode>),
+    Wildcard(Option<purrdf_lex::allocation::SharedText>),
 }
 
 /// The index of a program's root op: the first entered, so the first numbered.
@@ -561,8 +574,8 @@ const ROOT_OP: usize = 0;
 /// pre-order (the root is [`ROOT_OP`]), with each node's two static properties —
 /// whether it admits the zero-length identity and whether a repetition operator occurs
 /// in it — folded up beside it.
-struct PathProgram<'p, I: ViewTermId = TermId> {
-    ops: crate::AdmittedVec<PathOp<'p, I>>,
+struct PathProgram<I: ViewTermId = TermId> {
+    ops: crate::AdmittedVec<PathOp<I>>,
     /// Per op, whether `reach(op, n, …)` contains `n` for every `n` regardless of the
     /// graph: `*` and `?` unconditionally, `{min,…}` when `min == 0`, `^inner` as its
     /// inner, a sequence when every element is, an alternative when any element is.
@@ -572,7 +585,14 @@ struct PathProgram<'p, I: ViewTermId = TermId> {
     repetition: crate::AdmittedVec<bool>,
 }
 
-impl<'p, I: ViewTermId> PathProgram<'p, I> {
+impl<I: ViewTermId> PathProgram<I> {
+    fn normalize_direction(&self, mut op: usize, mut forward: bool) -> (usize, bool) {
+        while let PathOp::Reverse(inner) = &self.ops[op] {
+            op = *inner;
+            forward = !forward;
+        }
+        (op, forward)
+    }
     /// Compile `path`, consulting `dataset` for every predicate IRI and negated set in
     /// pre-order.
     ///
@@ -580,10 +600,7 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
     /// a leaf's payload; exiting it, after its children, links the children's indices
     /// and folds their static properties.
     #[cfg(test)]
-    fn compile<D: DatasetView<Id = I> + Sync>(
-        path: &'p PropertyPathExpression,
-        dataset: &D,
-    ) -> Self {
+    fn compile<D: DatasetView<Id = I> + Sync>(path: &PropertyPathExpression, dataset: &D) -> Self {
         Self::compile_admitted(
             path,
             dataset,
@@ -596,7 +613,7 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
     /// Compile the same program while each buffer retains its actual capacity
     /// admission. Lookup failures remain typed at the query's source checkpoint.
     fn compile_admitted<D: DatasetView<Id = I> + Sync>(
-        path: &'p PropertyPathExpression,
+        path: &PropertyPathExpression,
         dataset: &D,
         workspace: &crate::WorkspaceCapability,
         source_error: impl Fn(D::ReadError) -> EvalError,
@@ -631,7 +648,12 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
                             workspace,
                             &source_error,
                         )?),
-                        P::Wildcard { namespace } => PathOp::Wildcard(namespace.as_ref()),
+                        P::Wildcard { namespace } => PathOp::Wildcard(
+                            namespace
+                                .as_ref()
+                                .map(|namespace| workspace.authored_text(namespace.as_str()))
+                                .transpose()?,
+                        ),
                         P::Reverse(_)
                         | P::Sequence(_)
                         | P::Alternative(_)
@@ -784,7 +806,8 @@ struct PathCtx<'a, D: DatasetView + Sync> {
     dataset: &'a D,
     evidence_input: Option<crate::evidence_exec::EvidenceInput<'a, D::Id>>,
     scope: GraphScope<D::Id>,
-    program: PathProgram<'a, D::Id>,
+    program: PathProgram<D::Id>,
+    workspace: crate::workspace::QueryWorkspace<D::ReadError>,
     growth: crate::WorkspaceCapability,
     storage: PathStorageOwner,
     reach_cache: ReachCache<D::Id>,
@@ -838,7 +861,7 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
     /// already proven reachable, which is a sound lower bound.
     #[inline]
     fn charge_candidate(&self) -> bool {
-        if self.storage.failed.get() {
+        if self.storage.failed.load(Ordering::Acquire) {
             return false;
         }
         let Some(state) = self.governors.as_ref() else {
@@ -866,7 +889,7 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
     /// ask for a budget — and one write-once cell read on a governed one.
     #[inline]
     fn stopped(&self) -> bool {
-        self.storage.failed.get()
+        self.storage.failed.load(Ordering::Acquire)
             || self
                 .governors
                 .as_ref()
@@ -879,7 +902,7 @@ impl<'a, D: DatasetView + Sync> PathCtx<'a, D> {
     fn resident(
         dataset: &'a D,
         scope: GraphScope<D::Id>,
-        program: PathProgram<'a, D::Id>,
+        program: PathProgram<D::Id>,
         governors: Option<crate::workspace::SharedWorkspace<crate::GovernorState>>,
     ) -> Self {
         let growth = crate::WorkspaceCapability::default();
@@ -894,317 +917,13 @@ impl<'a, D: DatasetView + Sync> PathCtx<'a, D> {
             governors,
             ledger: None,
             evidence_input: None,
+            workspace: crate::workspace::QueryWorkspace::resident(),
         }
     }
 }
 
-/// Evaluate a property-path constraint `subject path object` to a multiset of
-/// solutions over its variable endpoint(s).
-///
-/// The result schema is the variable endpoints in subject-then-object order
-/// (deduplicated, so `?x p+ ?x` is a single column). A blank-node endpoint is an
-/// anonymous variable that is projected away (like BGP, SPARQL §4.1.4).
-///
-/// A ground endpoint absent from the dataset (it is never the subject or object
-/// of any quad — e.g. the whole graph is empty) is NOT automatically an empty
-/// result: SPARQL 1.1's zero-length-path identity (`?`, `*`, `{0,…}`) matches a
-/// node to itself regardless of whether that node happens to appear in any
-/// triple, so `:o :p* :o` and `?s :p* :o` both still admit the trivial
-/// self-pairing (W3C `property-path/zero_or_more_set_start` /
-/// `zero_or_more_set_end`). A non-reflexive path cannot connect an absent node
-/// to anything else (it has no edges to traverse), so it correctly stays empty.
-/// # A leaf of the partial-lift channel
-///
-/// A property path has no sub-pattern, so there is no child truncation to compose: like a
-/// basic graph pattern, it is where a truncation ORIGINATES rather than somewhere one
-/// passes through, and the dispatch in [`crate::eval::eval`] wraps its result directly.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_path<D: DatasetView + Sync>(
-    subject: &TermPattern,
-    path: &PropertyPathExpression,
-    object: &TermPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let dataset = ctx.dataset;
-    let scope = ctx.active_dataset.scope_for(ctx.active_graph);
-
-    // The output schema is fixed by which endpoints are *visible* variables, and is
-    // independent of whether a ground endpoint happens to be absent — so an empty
-    // result still carries the right columns for downstream joins.
-    let schema = path_schema(subject, object, &ctx.growth)?;
-    let width = schema.len();
-    let s_col = visible_var(subject).and_then(|v| schema.index_of(&v));
-    let o_col = visible_var(object).and_then(|v| schema.index_of(&v));
-
-    let s_end = resolve_end(subject, dataset, &ctx.growth, |error| {
-        ctx.workspace.source_error(error)
-    })?;
-    let o_end = resolve_end(object, dataset, &ctx.growth, |error| {
-        ctx.workspace.source_error(error)
-    })?;
-
-    // The path compiled once for this evaluation: every predicate IRI and every
-    // negated set resolved to ids, so no traversal step repeats a lookup.
-    let storage = PathStorage::new(&ctx.growth)?;
-    let pctx = PathCtx {
-        dataset,
-        evidence_input: ctx.evidence_input.clone(),
-        scope,
-        program: PathProgram::compile_admitted(path, dataset, &ctx.growth, |error| {
-            ctx.workspace.source_error(error)
-        })?,
-        growth: ctx.growth.clone(),
-        reach_cache: RefCell::new(PathMap::new(&storage)),
-        storage,
-        governors: ctx.governor_state().cloned(),
-        ledger: ctx
-            .charge_ledger()
-            .map(|ledger| (ledger.clone(), ctx.ledger_node)),
-    };
-
-    // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
-    // anywhere in its tree evaluates as if unrolled into a BGP — each distinct
-    // combination of matching triples is its own solution, so a node reachable
-    // by several derivations (e.g. `pp11`'s `:p1/:p2` through two different
-    // intermediates) surfaces as that many DUPLICATE result rows (a MULTISET).
-    // A path containing repetition anywhere instead uses the ALP fixpoint
-    // semantics (`reach`), which is a SET of reachable nodes — no duplicates, and
-    // required for termination on cyclic/infinite graphs. Both shapes are unified
-    // behind `node_reach`, which returns a `Vec` either way (with genuine
-    // duplicates in the bag case, and none in the set case).
-    let bag = !pctx.program.has_repetition();
-    let node_reach = |node: D::Id, forward: bool| -> Result<PathBag<D::Id>, EvalError> {
-        if bag {
-            bag_reach(ROOT_OP, node, forward, &pctx)
-        } else {
-            let reached = reach(ROOT_OP, node, forward, &pctx)?;
-            let mut nodes = PathBag::new(&pctx.growth);
-            for &node in reached.iter() {
-                nodes.push(node, reached.evidence.get(&node).cloned(), &pctx.growth)?;
-            }
-            Ok(nodes)
-        }
-    };
-
-    // The answer-cap / `LIMIT` pushdown's verdict for this path node: the number of output
-    // rows past which nothing it produces can reach the query's answer. A path's emission
-    // order is the traversal order below, and the loops that can be stopped are stopped at
-    // the top of an iteration — so what is skipped is whole `node_reach` traversals, which
-    // is where a path's cost lives, not merely the row that would have been pushed.
-    let semantic_ceiling = ctx.row_ceiling();
-    let cell_ceiling = ctx.cell_row_ceiling(width);
-
-    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
-    let push_pair = |ctx: &EvalCtx<'_, D>,
-                     rows: &mut crate::solution::RowsBuilder<D::Id>,
-                     s_id: Option<SolutionTerm<D::Id>>,
-                     o_id: Option<SolutionTerm<D::Id>>,
-                     evidence: Option<crate::evidence_exec::RowEvidence>|
-     -> Result<bool, EvalError> {
-        // LIMIT / answer-cap pushdown proves rows at and beyond this point irrelevant to
-        // the query and may stop exactly at its bound. A cell ceiling is inclusive and
-        // therefore stops only when a further qualifying row exists; record that attempted
-        // row before constructing its `SmallVec`, then decline the allocation.
-        if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            return Ok(false);
-        }
-        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
-            return Ok(false);
-        }
-        let row = crate::solution::RetainedRow::try_build(width, &ctx.growth, |row| {
-            if let (Some(c), Some(id)) = (s_col, s_id) {
-                row[c] = Some(id);
-            }
-            if let (Some(c), Some(id)) = (o_col, o_id) {
-                row[c] = Some(id);
-            }
-            Ok(())
-        })?;
-        let evidence = match &ctx.evidence_input {
-            Some(input) => Some(input.found_witness(&evidence.unwrap_or_default(), &ctx.growth)?),
-            None => evidence,
-        };
-        rows.push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
-        Ok(true)
-    };
-
-    match (s_end, o_end) {
-        // Both ground: an ASK-shaped membership test. The schema is empty, so
-        // each derivation reaching `oid` is its own unit solution (one empty
-        // row) — for a SET path (`bag == false`) that count is always 0 or 1.
-        (Endpoint::Bound(sid), Endpoint::Bound(oid)) => {
-            // SET case: the reach set is a `BTreeSet` (elements unique), so the
-            // derivation count is a single O(log n) membership probe on the memoized
-            // set — no O(n) collect-into-`Vec` + filter pass. The BAG case keeps its
-            // multiset walk, where duplicates ARE the answer.
-            if bag {
-                let reached = node_reach(sid, true)?;
-                for (position, &target) in reached.iter().enumerate() {
-                    if target == oid
-                        && !push_pair(
-                            ctx,
-                            &mut rows,
-                            None,
-                            None,
-                            reached.evidence.get(&position).cloned(),
-                        )?
-                    {
-                        break;
-                    }
-                }
-            } else {
-                let reached = reach(ROOT_OP, sid, true, &pctx)?;
-                if reached.contains(&oid) {
-                    let _ = push_pair(
-                        ctx,
-                        &mut rows,
-                        None,
-                        None,
-                        reached.evidence.get(&oid).cloned(),
-                    )?;
-                }
-            }
-        }
-        // Both ground but absent from the dataset entirely: the only way they can
-        // ever connect is the reflexive zero-length identity, when they are the
-        // SAME term (an absent node has no edges to traverse for anything else).
-        (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
-            if ctx.growth.terms_equal(&sval, &oval)? && pctx.program.is_reflexive() {
-                let _ = push_pair(ctx, &mut rows, None, None, None)?;
-            }
-        }
-        // One side present in the dataset, the other absent: they cannot be the
-        // same term (an equal value would have resolved to the same `TermId` on
-        // both sides), and an absent node has no edges — so no path connects them.
-        (Endpoint::Bound(_), Endpoint::BoundAbsent(_))
-        | (Endpoint::BoundAbsent(_), Endpoint::Bound(_)) => {}
-        // Subject ground, object variable: walk forward from the subject.
-        (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
-            let reached = node_reach(sid, true)?;
-            for (position, &y) in reached.iter().enumerate() {
-                if !push_pair(
-                    ctx,
-                    &mut rows,
-                    Some(SolutionTerm::Existing(sid)),
-                    Some(SolutionTerm::Existing(y)),
-                    reached.evidence.get(&position).cloned(),
-                )? {
-                    break;
-                }
-            }
-        }
-        // Subject ground but absent from the dataset, object variable: only the
-        // zero-length reflexive pair (subject bound to itself) can ever match.
-        (Endpoint::BoundAbsent(sval), Endpoint::Free { .. }) => {
-            if pctx.program.is_reflexive() {
-                // The PLAIN door, deliberately. SPARQL 1.1 §18.5.1 makes the
-                // zero-length pair `(x, x)` a solution for a ground `x` whether
-                // or not `x` occurs in the graph, so this row is REQUIRED — and
-                // there is no binding to give up short of deleting the whole
-                // row, which no refusal in this crate is allowed to cost. A path
-                // endpoint is an algebra ground term, gated before it arrives:
-                // query text by the SPARQL parser, a hand-built `Query` by
-                // `purrdf_sparql_algebra`'s algebra validator on this same
-                // profile. See `ScratchInterner::intern`.
-                let term = ctx.intern_workspace_term(sval)?;
-                let _ = push_pair(ctx, &mut rows, term, term, None)?;
-            }
-        }
-        // Object ground, subject variable: walk backward from the object.
-        (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
-            let reached = node_reach(oid, false)?;
-            for (position, &x) in reached.iter().enumerate() {
-                if !push_pair(
-                    ctx,
-                    &mut rows,
-                    Some(SolutionTerm::Existing(x)),
-                    Some(SolutionTerm::Existing(oid)),
-                    reached.evidence.get(&position).cloned(),
-                )? {
-                    break;
-                }
-            }
-        }
-        // Object ground but absent from the dataset, subject variable: symmetric
-        // to the subject-absent case above.
-        (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
-            if pctx.program.is_reflexive() {
-                let term = ctx.intern_workspace_term(oval)?;
-                let _ = push_pair(ctx, &mut rows, term, term, None)?;
-            }
-        }
-        // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
-        // pairs isolated nodes with themselves) and walk forward from each. When the
-        // two endpoints are the *same* variable, keep only the reflexive pairs.
-        (Endpoint::Free { var: sv }, Endpoint::Free { var: ov }) => {
-            let same = sv == ov;
-            if same {
-                // Reflexive paths (p*, p?, p{0,m}) admit the zero-length identity, so
-                // every node trivially reaches itself — skip the reach call entirely
-                // (and note `reflexive` is only ever true for a repetition path, i.e.
-                // `bag == false`, so the multiset-count branch below never double-
-                // counts a reflexive path's zero-length step). Non-reflexive paths
-                // require an actual traversal to discover whether x cycles back to
-                // itself — and for a bag path, count EACH derivation as its own row.
-                let reflexive = pctx.program.is_reflexive();
-                'nodes: for x in node_universe(&pctx)? {
-                    if reflexive && ctx.evidence_input.is_none() {
-                        if !push_pair(
-                            ctx,
-                            &mut rows,
-                            Some(SolutionTerm::Existing(x)),
-                            Some(SolutionTerm::Existing(x)),
-                            None,
-                        )? {
-                            break;
-                        }
-                    } else {
-                        let reached = node_reach(x, true)?;
-                        for (position, &target) in reached.iter().enumerate() {
-                            if target != x {
-                                continue;
-                            }
-                            if !push_pair(
-                                ctx,
-                                &mut rows,
-                                Some(SolutionTerm::Existing(x)),
-                                Some(SolutionTerm::Existing(x)),
-                                reached.evidence.get(&position).cloned(),
-                            )? {
-                                break 'nodes;
-                            }
-                        }
-                    }
-                }
-            } else {
-                // PINNED: spec-mandated distinct-var enumeration — enumerate every node
-                // in the universe and materialise all forward reachability. DO NOT alter.
-                'nodes: for x in node_universe(&pctx)? {
-                    let reached = node_reach(x, true)?;
-                    for (position, &y) in reached.iter().enumerate() {
-                        if !push_pair(
-                            ctx,
-                            &mut rows,
-                            Some(SolutionTerm::Existing(x)),
-                            Some(SolutionTerm::Existing(y)),
-                            reached.evidence.get(&position).cloned(),
-                        )? {
-                            break 'nodes;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pctx.storage.check()?;
-    Ok(SolutionSeq {
-        schema: schema.shared_admitted(&ctx.growth)?,
-        rows: rows.finish()?,
-    })
-}
+mod cursor;
+pub(crate) use cursor::{PathRows, eval_path};
 
 /// A resolved path endpoint: a ground dataset id, a ground term absent from the
 /// dataset, or a free (variable / blank) position.
@@ -1488,7 +1207,7 @@ impl<I: ViewTermId> Frame<I> {
 }
 
 /// The elements of the sequence or alternative op `op`.
-fn elements_of<'a, I: ViewTermId>(program: &'a PathProgram<'_, I>, op: usize) -> &'a [usize] {
+fn elements_of<I: ViewTermId>(program: &PathProgram<I>, op: usize) -> &[usize] {
     match &program.ops[op] {
         PathOp::Sequence(elements) | PathOp::Alternative(elements) => elements,
         PathOp::Predicate(_)
@@ -1557,10 +1276,7 @@ impl<I: ViewTermId> ReachFrame<I> {
         // `^inner` only flips the direction flag: its reach set IS `inner`'s set for the
         // opposite direction, so that memoized owner is shared instead of deep-cloning
         // endpoint storage into a second entry under the `Reverse` op's own key.
-        while let PathOp::Reverse(inner) = &ctx.program.ops[self.op] {
-            self.op = *inner;
-            self.forward = !self.forward;
-        }
+        (self.op, self.forward) = ctx.program.normalize_direction(self.op, self.forward);
         if let Some(cached) = ctx.reach_cache.borrow().get(&self.key()) {
             return Step::Return(Value::Reach(Clone::clone(cached)));
         }
@@ -1572,9 +1288,17 @@ impl<I: ViewTermId> ReachFrame<I> {
             PathOp::Negated(sets) => {
                 self.finish(step_negated(sets, self.node, self.forward, ctx), ctx)
             }
-            PathOp::Wildcard(namespace) => {
-                self.finish(step_wildcard(*namespace, self.node, self.forward, ctx), ctx)
-            }
+            PathOp::Wildcard(namespace) => self.finish(
+                step_wildcard(
+                    namespace
+                        .as_ref()
+                        .map(purrdf_lex::allocation::SharedText::as_str),
+                    self.node,
+                    self.forward,
+                    ctx,
+                ),
+                ctx,
+            ),
             PathOp::Sequence(_) => {
                 Step::Call(FrameRequest::Sequence(self.op, self.node, self.forward))
             }
@@ -2644,14 +2368,18 @@ impl<I: ViewTermId> BagFrame<I> {
         forward: &mut bool,
         ctx: &PathCtx<'_, D>,
     ) -> Result<BagStep<I>, EvalError> {
-        while let PathOp::Reverse(inner) = &ctx.program.ops[*op] {
-            *op = *inner;
-            *forward = !*forward;
-        }
+        (*op, *forward) = ctx.program.normalize_direction(*op, *forward);
         let leaf = match &ctx.program.ops[*op] {
             PathOp::Predicate(predicate) => Some(step_predicate(*predicate, node, *forward, ctx)),
             PathOp::Negated(sets) => Some(step_negated(sets, node, *forward, ctx)),
-            PathOp::Wildcard(namespace) => Some(step_wildcard(*namespace, node, *forward, ctx)),
+            PathOp::Wildcard(namespace) => Some(step_wildcard(
+                namespace
+                    .as_ref()
+                    .map(purrdf_lex::allocation::SharedText::as_str),
+                node,
+                *forward,
+                ctx,
+            )),
             _ => None,
         };
         if let Some(leaf) = leaf {
@@ -2811,22 +2539,24 @@ fn step_excluding<D: DatasetView + Sync>(
 /// `<any>` / `<any:ns>`: one hop along any predicate, optionally restricted to
 /// predicates whose IRI begins with the namespace prefix.
 fn step_wildcard<D: DatasetView + Sync>(
-    namespace: Option<&NamedNode>,
+    prefix: Option<&str>,
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
 ) -> PathSet<D::Id> {
-    let prefix = namespace.map(NamedNode::as_str);
     let pred_ok = |pid: D::Id| -> bool {
         match prefix {
             None => true,
-            Some(pfx) => ctx
-                .dataset
-                .with_term(
-                    pid,
-                    |term| matches!(term, TermRef::Iri(iri) if iri.starts_with(pfx)),
-                )
-                .unwrap_or(false),
+            Some(pfx) => match ctx.dataset.with_term(
+                pid,
+                |term| matches!(term, TermRef::Iri(iri) if iri.starts_with(pfx)),
+            ) {
+                Ok(matched) => matched,
+                Err(error) => {
+                    ctx.storage.fail(ctx.workspace.source_error(error));
+                    false
+                }
+            },
         }
     };
     let mut out = PathSet::new(&ctx.storage);
@@ -3954,7 +3684,7 @@ mod recursion_free_tests {
     use super::*;
     use crate::governor::{GovernorState, QueryGovernors};
     use purrdf_core::{GraphMatch, RdfDataset, RdfDatasetBuilder, TrippedGovernor};
-    use purrdf_sparql_algebra::{Chain, Child};
+    use purrdf_sparql_algebra::{Chain, Child, NamedNode};
     use purrdf_testkit::rng::SplitMix64;
 
     const EX: &str = "http://example.org/";
@@ -4110,9 +3840,14 @@ mod recursion_free_tests {
                 reference_range_reach(inner, node, forward, *min, *max, ctx)
             }
             P::NegatedPropertySet(elems) => reference_step_negated(elems, node, forward, ctx),
-            P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx.base)
-                .into_iter()
-                .collect(),
+            P::Wildcard { namespace } => step_wildcard(
+                namespace.as_ref().map(NamedNode::as_str),
+                node,
+                forward,
+                ctx.base,
+            )
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -4204,9 +3939,14 @@ mod recursion_free_tests {
             P::NegatedPropertySet(elems) => reference_step_negated(elems, node, forward, ctx)
                 .into_iter()
                 .collect(),
-            P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx.base)
-                .into_iter()
-                .collect(),
+            P::Wildcard { namespace } => step_wildcard(
+                namespace.as_ref().map(NamedNode::as_str),
+                node,
+                forward,
+                ctx.base,
+            )
+            .into_iter()
+            .collect(),
             P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => {
                 unreachable!("the reference bag is asked only of a repetition-free path")
             }

@@ -432,10 +432,15 @@ impl<'dataset> PagedQueryView<'dataset> {
         g: GraphMatch<GlobalTermId>,
         range: std::ops::Range<usize>,
     ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + '_ {
-        self.stream_pattern_value_range(stream, (s, p, o, g), range, None)
+        self.stream_pattern_value_range(
+            stream,
+            (s, p, o, g),
+            range,
+            None::<crate::AnnotationValueRange<'_>>,
+        )
     }
 
-    pub(super) fn stream_pattern_value_range<'a>(
+    pub(super) fn stream_pattern_value_range<'a, R: crate::AnnotationRangeSource + 'a>(
         &'a self,
         stream: PageStream,
         (s, p, o, g): (
@@ -445,8 +450,9 @@ impl<'dataset> PagedQueryView<'dataset> {
             GraphMatch<GlobalTermId>,
         ),
         range: std::ops::Range<usize>,
-        values: Option<&'a crate::AnnotationValueRange<'a>>,
+        values: Option<R>,
     ) -> impl Iterator<Item = (PageId, QuadIds<GlobalTermId>)> + 'a {
+        let stopping = values.clone();
         admission::candidate_pages_for_stream_in_range(
             self.dataset.graph_index(),
             self.dataset.page_count(),
@@ -457,8 +463,11 @@ impl<'dataset> PagedQueryView<'dataset> {
         .map(move |id| &self.dataset.pages[id.0 as usize])
         .take_while(move |_| {
             !self.failed()
-                && values.is_none_or(|range| {
-                    range.workspace.is_none_or(|workspace| !workspace.stopped())
+                && stopping.as_ref().is_none_or(|range| {
+                    range
+                        .value_range()
+                        .workspace
+                        .is_none_or(|workspace| !workspace.stopped())
                 })
         })
         .filter(move |slot| stream_admitted(slot, stream, s, p, o, g))
@@ -466,8 +475,11 @@ impl<'dataset> PagedQueryView<'dataset> {
             if self.failed() {
                 return false;
             }
-            values.is_none_or(|values| {
-                match self.dataset.range_may_match(slot, stream, p, *values) {
+            values.as_ref().is_none_or(|values| {
+                match self
+                    .dataset
+                    .range_may_match(slot, stream, p, values.value_range())
+                {
                     Ok(matches) => matches,
                     Err(error) => {
                         lock_read_state(&self.state)
@@ -896,6 +908,24 @@ impl FallibleDatasetView for PagedQueryView<'_> {
     }
 }
 
+impl PagedQueryView<'_> {
+    pub(crate) fn annotation_quads_for_range_owned<'a, R: crate::AnnotationRangeSource + 'a>(
+        &'a self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+        range: R,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + Send + 'a {
+        self.stream_pattern_value_range(
+            PageStream::Annotation,
+            (None, predicate, object, graph),
+            0..self.dataset.pages.len(),
+            Some(range),
+        )
+        .map(|(_, row)| row)
+    }
+}
+
 impl DatasetView for PagedQueryView<'_> {
     type Id = GlobalTermId;
     type ReadError = PagedQueryError;
@@ -1241,13 +1271,7 @@ impl DatasetView for PagedQueryView<'_> {
         graph: GraphMatch<Self::Id>,
         range: &'a crate::AnnotationValueRange<'a>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
-        self.stream_pattern_value_range(
-            PageStream::Annotation,
-            (None, predicate, object, graph),
-            0..self.dataset.pages.len(),
-            Some(range),
-        )
-        .map(|(_, row)| row)
+        self.annotation_quads_for_range_owned(predicate, object, graph, range)
     }
 
     /// Every named graph any page declares, including ones a page leaves empty or
