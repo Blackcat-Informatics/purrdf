@@ -444,97 +444,131 @@ fn indexed_rdf_keeps_missing_corrupt_dependency_and_warm_diagnostic_refusals() {
 #[test]
 fn explicit_reference_preparation_keeps_unrelated_reifier_terms_out_of_raw_admission() {
     use purrdf_gts::reader::indexed::IndexedError;
-    let directory = purrdf_testkit::temp_dir!().expect("independent reifier source blocks");
-    let mut writer = Writer::new("rdf12");
-    writer.add_terms(&[
-        Term::iri("urn:s"),
-        Term::iri("urn:p"),
-        Term::iri("urn:o"),
-        Term::iri("urn:r1"),
-        Term {
-            kind: purrdf_gts::model::TermKind::Triple,
-            value: None,
-            datatype: None,
-            lang: None,
-            direction: None,
-            reifier: Some(3),
-            triple: None,
-        },
-    ]);
-    writer.add_terms(&[
-        Term::iri("urn:other-s"),
-        Term::iri("urn:other-p"),
-        Term::lang_literal("unrelated lexical defect", "invalid_tag"),
-        Term::iri("urn:r2"),
-    ]);
-    writer.add_reifies(&[(3, (0, 1, 2), None)]);
-    writer.add_reifies(&[(8, (5, 6, 7), None)]);
-    writer.add_index();
-    let bytes = writer.into_bytes();
+    let mut identity_work = Vec::new();
+    for population in [8usize, 32] {
+        let directory = purrdf_testkit::temp_dir!().expect("independent reifier source blocks");
+        let mut writer = Writer::new("rdf12");
+        writer.add_terms(&[
+            Term::iri("urn:s"),
+            Term::iri("urn:p"),
+            Term::iri("urn:o"),
+            Term::iri("urn:r1"),
+            Term {
+                kind: purrdf_gts::model::TermKind::Triple,
+                value: None,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: Some(3),
+                triple: None,
+            },
+        ]);
+        let mut unrelated = vec![
+            Term::iri("urn:other-s"),
+            Term::iri("urn:other-p"),
+            Term::lang_literal("unrelated lexical defect", "invalid_tag"),
+            Term::iri("urn:r2"),
+        ];
+        unrelated.extend((0..population).map(|id| Term::iri(format!("urn:unused:{id}"))));
+        writer.add_frame(
+            "terms",
+            Some(purrdf_lex::cbor::Value::Array(
+                unrelated
+                    .iter()
+                    .map(purrdf_gts::writer::term_to_wire)
+                    .collect(),
+            )),
+            None,
+            Some(&["gzip".into()]),
+            None,
+        );
+        writer.add_reifies(&[(3, (0, 1, 2), None)]);
+        writer.add_reifies(&vec![(8, (5, 6, 7), None); population]);
+        writer.add_index();
+        let bytes = writer.into_bytes();
+        assert!(
+            import_gts_events(&bytes).is_err(),
+            "full import owns the unrelated malformed term too"
+        );
+        let mut files = storage::Files::new(directory.path());
+        let mut indexed = indexed_files(bytes, &mut files);
+        let key = TermKey {
+            segment: 0,
+            term: 4,
+        };
+        let failure = import_gts_indexed_term(&mut indexed, key)
+            .expect_err("indirect lookup must not silently prepare all references");
+        assert!(source_chain_has(&failure, |cause| matches!(
+            cause.downcast_ref::<IndexedError>(),
+            Some(IndexedError::ReferencePreparationRequired(0))
+        )));
+        indexed
+            .prepare_reference_access(0)
+            .expect("caller explicitly authenticates current-wire reference contributors");
+        let prepared = indexed.work();
+        assert_eq!(prepared.reference_projections, (9 + population) as u128);
+        indexed
+            .prepare_reference_access(0)
+            .expect("same-bound preparation proof is reusable");
+        assert_eq!(indexed.work().verified_frames, prepared.verified_frames);
+        assert_eq!(indexed.work().decoded_payloads, prepared.decoded_payloads);
+        assert_eq!(
+            indexed.work().reference_projections,
+            prepared.reference_projections
+        );
+        let (owner, id) = import_gts_indexed_term(&mut indexed, key)
+            .expect("independent R2 row requires metadata, not unrelated raw terms");
+        assert_eq!(
+            owner.term_count(),
+            4,
+            "only selected triple and its three IRI children are resolved"
+        );
+        assert!(matches!(
+            owner.resolve(id),
+            purrdf_rdf::TermRef::Triple { .. }
+        ));
+        assert!(
+            indexed.work().decoded_payloads - prepared.decoded_payloads <= 2,
+            "only binding payloads may be decoded after already-admitted R1 raw terms; R2 term block stays encoded"
+        );
+        let cold = indexed.work();
+        assert_eq!(cold.reference_projections, prepared.reference_projections);
+        identity_work.push(cold.identity_checks - prepared.identity_checks);
+        eprintln!(
+            "prepared reference population {population}: preparation {prepared:?}, selected {cold:?}"
+        );
+        let (warm_owner, warm_id) = import_gts_indexed_term(&mut indexed, key)
+            .expect("same-source prepared warm indirect lookup");
+        assert_eq!(warm_owner.term_value(warm_id), owner.term_value(id));
+        assert_eq!(indexed.work().read_bytes, cold.read_bytes);
+        assert_eq!(indexed.work().decoded_payloads, cold.decoded_payloads);
+        assert_eq!(
+            indexed.work().reference_projections,
+            cold.reference_projections
+        );
+        drop(indexed);
+        assert!(
+            files
+                .get(TermKey {
+                    segment: 0,
+                    term: 5
+                })
+                .expect("inspect unrelated raw key")
+                .is_none()
+        );
+        assert!(
+            files
+                .get(TermKey {
+                    segment: 0,
+                    term: 7
+                })
+                .expect("inspect unrelated malformed raw key")
+                .is_none()
+        );
+    }
     assert!(
-        import_gts_events(&bytes).is_err(),
-        "full import owns the unrelated malformed term too"
-    );
-    let mut files = storage::Files::new(directory.path());
-    let mut indexed = indexed_files(bytes, &mut files);
-    let key = TermKey {
-        segment: 0,
-        term: 4,
-    };
-    let failure = import_gts_indexed_term(&mut indexed, key)
-        .expect_err("indirect lookup must not silently prepare all references");
-    assert!(source_chain_has(&failure, |cause| matches!(
-        cause.downcast_ref::<IndexedError>(),
-        Some(IndexedError::ReferencePreparationRequired(0))
-    )));
-    indexed
-        .prepare_reference_access(0)
-        .expect("caller explicitly authenticates current-wire reference contributors");
-    let prepared = indexed.work();
-    indexed
-        .prepare_reference_access(0)
-        .expect("same-bound preparation proof is reusable");
-    assert_eq!(indexed.work().verified_frames, prepared.verified_frames);
-    assert_eq!(indexed.work().decoded_payloads, prepared.decoded_payloads);
-    let (owner, id) = import_gts_indexed_term(&mut indexed, key)
-        .expect("independent R2 row requires metadata, not unrelated raw terms");
-    assert_eq!(
-        owner.term_count(),
-        4,
-        "only selected triple and its three IRI children are resolved"
-    );
-    assert!(matches!(
-        owner.resolve(id),
-        purrdf_rdf::TermRef::Triple { .. }
-    ));
-    assert!(
-        indexed.work().decoded_payloads - prepared.decoded_payloads <= 2,
-        "only binding payloads may be decoded after already-admitted R1 raw terms; R2 term block stays encoded"
-    );
-    let cold = indexed.work();
-    let (warm_owner, warm_id) = import_gts_indexed_term(&mut indexed, key)
-        .expect("same-source prepared warm indirect lookup");
-    assert_eq!(warm_owner.term_value(warm_id), owner.term_value(id));
-    assert_eq!(indexed.work().read_bytes, cold.read_bytes);
-    assert_eq!(indexed.work().decoded_payloads, cold.decoded_payloads);
-    drop(indexed);
-    assert!(
-        files
-            .get(TermKey {
-                segment: 0,
-                term: 5
-            })
-            .expect("inspect unrelated raw key")
-            .is_none()
-    );
-    assert!(
-        files
-            .get(TermKey {
-                segment: 0,
-                term: 7
-            })
-            .expect("inspect unrelated malformed raw key")
-            .is_none()
+        identity_work[1] <= identity_work[0] * 5,
+        "quadrupling fixed-arity rows and unrelated terms must retain linear source checks: {identity_work:?}"
     );
 }
 

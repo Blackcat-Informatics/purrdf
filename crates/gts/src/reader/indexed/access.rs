@@ -264,6 +264,9 @@ pub struct IndexedWork {
     /// pass-through and transformed predecessors needed for row counts.
     /// Encoded CBOR admission and frame hashing do not increment this counter.
     pub decoded_payloads: u128,
+    /// Numeric term-reference projections visited while explicitly preparing
+    /// dictionary contributors. Reusing retained projections adds no visits.
+    pub reference_projections: u128,
     /// Bytes actually returned by the underlying source, including prefetch.
     pub read_bytes: u128,
     /// Calls to the underlying Read implementation, including EOF and failures.

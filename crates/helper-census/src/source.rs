@@ -975,7 +975,7 @@ pub(crate) fn is_test_only(attrs: &[syn::Attribute]) -> bool {
 
 fn predicate_needs_test(meta: &syn::Meta) -> bool {
     match meta {
-        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::Path(_) => helper_census::is_test_predicate(meta),
         syn::Meta::List(list) => {
             let Ok(children) = list.parse_args_with(
                 syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,

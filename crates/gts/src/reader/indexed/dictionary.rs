@@ -38,6 +38,24 @@ struct AdmittedBinding {
     triple: Option<Triple3>,
     diagnostics: Vec<Diagnostic>,
 }
+struct PreparedSegment {
+    segment: u64,
+    blocks: Vec<TermBlock>,
+    references: Vec<TermReferences>,
+}
+impl PreparedSegment {
+    fn entries(&self) -> usize {
+        1usize
+            .saturating_add(self.blocks.len())
+            .saturating_add(self.references.len())
+    }
+    fn block(&self, term: usize) -> Option<&TermBlock> {
+        let position = self.blocks.partition_point(|block| block.end <= term);
+        self.blocks
+            .get(position)
+            .filter(|block| (block.first..block.end).contains(&term))
+    }
+}
 
 /// Source-ordered first binding and the diagnostics encountered admitting it.
 #[derive(Clone, Debug)]
@@ -58,7 +76,8 @@ pub struct IndexedDictionary<R: Read + Seek, C, S> {
     catalogs: Vec<SegmentCatalog>,
     admitted: Vec<AdmittedBlock>,
     bindings: Vec<AdmittedBinding>,
-    prepared_segments: Vec<u64>,
+    prepared_segments: Vec<PreparedSegment>,
+    reference_projections: u128,
     resolution_entries: usize,
     binding_entries: usize,
     failure: Option<IndexedError>,
@@ -107,6 +126,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
             admitted: Vec::new(),
             bindings: Vec::new(),
             prepared_segments: Vec::new(),
+            reference_projections: 0,
             resolution_entries: 0,
             binding_entries: 0,
             failure: None,
@@ -114,7 +134,10 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
     }
     /// Actual transport observations, including cold catalog/range discovery.
     pub fn work(&self) -> super::IndexedWork {
-        self.source.work()
+        super::IndexedWork {
+            reference_projections: self.reference_projections,
+            ..self.source.work()
+        }
     }
     /// Actual settled reader-side metadata. Raw term allocations and escaped
     /// pins remain under caller storage; each returned lease reports its actual
@@ -200,7 +223,13 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                 self.admitted
                     .len()
                     .saturating_add(self.bindings.len())
-                    .saturating_add(self.prepared_segments.len())
+                    .saturating_add(
+                        self.prepared_segments
+                            .iter()
+                            .fold(0usize, |count, prepared| {
+                                count.saturating_add(prepared.entries())
+                            }),
+                    )
                     .saturating_add(self.resolution_entries)
                     .saturating_add(self.binding_entries),
                 |count, catalog| count.saturating_add(catalog.metadata_entries()),
@@ -244,7 +273,9 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
     /// Explicitly authenticate the complete observed dictionary/snapshot frame
     /// set for indirect reference access. Encoded admission verifies each frame
     /// hash and predecessor with one bounded frame owner, without folding RDF
-    /// rows or admitting raw terms. This can read every dictionary frame's bytes;
+    /// rows or admitting raw terms. Retained contributor intervals and numeric
+    /// reference projections share the reader's combined metadata ceiling.
+    /// This can read every dictionary frame's bytes;
     /// it is separate from ordinary open/fetch and from global trust verification.
     /// A successful proof is reused only by this same bound session.
     /// # Errors
@@ -257,17 +288,82 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
         let result: Result<(), IndexedError> = (|| {
             self.source.check_current()?;
             self.storage.checkpoint(1)?;
-            if self.prepared_segments.contains(&segment) {
+            if self
+                .prepared_segments
+                .iter()
+                .any(|prepared| prepared.segment == segment)
+            {
                 self.source.check_current()?;
                 return Ok(());
             }
             let index = self.retain_catalog(segment)?;
             self.source
                 .verify_reference_contributors(&self.catalogs[index])?;
-            self.admit(1)?;
-            self.observe_metadata(1)?;
+            let mut prepared = PreparedSegment {
+                segment,
+                blocks: Vec::new(),
+                references: Vec::new(),
+            };
+            for position in 0..self.catalogs[index].frame_count() {
+                if !matches!(
+                    self.catalogs[index].frame_kind(position),
+                    Some("terms" | "snapshot")
+                ) {
+                    continue;
+                }
+                // The temporary complete-segment cache is charged before each
+                // retained entry, although it is not published until success.
+                self.admit(prepared.entries().saturating_add(1))?;
+                self.observe_metadata(prepared.entries().saturating_add(1))?;
+                self.source.check_current()?;
+                let settled = self.entries();
+                let usage = self.metadata();
+                let limit = self.source.limits().metadata_entries;
+                let storage = &mut self.storage;
+                let projections = &mut self.reference_projections;
+                let block = self
+                    .source
+                    .reference_rows(
+                        &self.catalogs[index],
+                        position,
+                        prepared.references.len(),
+                        |term, references, _diagnostics| {
+                            *projections = projections.checked_add(1).ok_or(
+                                IndexedError::Overflow("reference projection observations"),
+                            )?;
+                            if term != prepared.references.len() {
+                                return Err(DictionaryError::Corrupt(
+                                    "prepared references are not contiguous",
+                                )
+                                .into());
+                            }
+                            let required =
+                                settled.saturating_add(prepared.entries()).saturating_add(2);
+                            if required > limit {
+                                return Err(DictionaryError::Limit {
+                                    resource: "indexed-metadata-entries",
+                                    required,
+                                    limit,
+                                }
+                                .into());
+                            }
+                            storage.checkpoint(1)?;
+                            storage.reader_metadata(ReaderMetadata {
+                                entries: required,
+                                ..usage
+                            })?;
+                            prepared.references.push(references);
+                            Ok(())
+                        },
+                    )?
+                    .ok_or(DictionaryError::Corrupt("prepared contributor is absent"))?;
+                self.source.check_current()?;
+                prepared.blocks.push(block);
+            }
+            self.admit(prepared.entries())?;
+            self.observe_metadata(prepared.entries())?;
             self.source.check_current()?;
-            self.prepared_segments.push(segment);
+            self.prepared_segments.push(prepared);
             Ok(())
         })();
         if let Err(cause) = &result {
@@ -311,7 +407,19 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
         }
         let catalog = self.retain_catalog(key.segment)?;
         let catalog = &self.catalogs[catalog];
-        let block = self.source.locate_term(catalog, key.term)?;
+        let block = if let Some(prepared) = self
+            .prepared_segments
+            .iter()
+            .find(|prepared| prepared.segment == key.segment)
+        {
+            self.source.check_current()?;
+            prepared
+                .block(key.term)
+                .cloned()
+                .ok_or(DictionaryError::Missing(key))?
+        } else {
+            self.source.locate_term(catalog, key.term)?
+        };
         let payload = self.source.block_payload(catalog, &block)?;
         let rows = if block.snapshot {
             ValueRef::Owned(&payload)
@@ -398,7 +506,11 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
             return Err(cause.clone());
         }
         let result = self.source.check_current().and_then(|()| {
-            if !self.prepared_segments.contains(&key.segment) {
+            if !self
+                .prepared_segments
+                .iter()
+                .any(|prepared| prepared.segment == key.segment)
+            {
                 return Err(IndexedError::ReferencePreparationRequired(key.segment));
             }
             self.first_binding_inner(key)
@@ -444,12 +556,18 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
             .iter()
             .position(|catalog| catalog.segment() == key.segment)
             .expect("selected term retains its segment catalog");
+        let prepared = self
+            .prepared_segments
+            .iter()
+            .position(|prepared| prepared.segment == key.segment)
+            .expect("binding access requires prepared references");
         let mut reifiers = ReifierIndex::default();
         let mut indirect = FastSet::default();
         let mut rebound = Vec::new();
         let mut diagnostics = selected.diagnostics;
         let mut graph = Graph::default();
         let mut terms = 0usize;
+        let mut contributor = 0usize;
         let limit = self.source.limits().metadata_entries;
         for position in 0..self.catalogs[catalog].frame_count() {
             let base = TermIdBase(terms);
@@ -458,11 +576,21 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                 .entries()
                 .saturating_sub(self.binding_entries)
                 .saturating_add(rebound.len());
-            terms = self.source.reference_rows(
-                &self.catalogs[catalog],
-                position,
-                terms,
-                |term_id, references, _diagnostics| {
+            let block = self.prepared_segments[prepared]
+                .blocks
+                .get(contributor)
+                .filter(|block| block.frame == position);
+            if let Some(block) = block {
+                let end = block.end;
+                for (offset, references) in self.prepared_segments[prepared].references[terms..end]
+                    .iter()
+                    .copied()
+                    .enumerate()
+                {
+                    self.source.check_current()?;
+                    self.storage.checkpoint(1)?;
+                    self.source.check_current()?;
+                    let term_id = terms + offset;
                     let anchor_entries = references.anchor(term_id).map_or(0usize, |rid| {
                         1usize.saturating_add(usize::from(reifiers.anchors(rid).is_empty()))
                     });
@@ -491,12 +619,10 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                         indirect.insert(rid);
                     }
                     reifiers.observe_references(term_id, references);
-                    // These are authenticated navigation projections, not raw
-                    // term admission or global semantic diagnostics. Required
-                    // RDF terms still enter the original raw decoder below.
-                    Ok(())
-                },
-            )?;
+                }
+                terms = end;
+                contributor += 1;
+            }
             self.binding_checkpoint(
                 reifiers
                     .retained_entries()
@@ -558,6 +684,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                     let view = MetadataTerms {
                         dictionary: RefCell::new(&mut *self),
                         segment: key.segment,
+                        prepared,
                         count: terms,
                         traversal_limit: remaining,
                     };
@@ -676,6 +803,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
 struct MetadataTerms<'a, R: Read + Seek, C, S> {
     dictionary: RefCell<&'a mut IndexedDictionary<R, C, S>>,
     segment: u64,
+    prepared: usize,
     count: usize,
     traversal_limit: usize,
 }
@@ -713,18 +841,18 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage> 
             .check_current()
             .map_err(dictionary_failure)?;
         dictionary.storage.checkpoint(1)?;
-        let catalog = dictionary
-            .catalogs
-            .iter()
-            .position(|catalog| catalog.segment() == self.segment)
-            .ok_or(DictionaryError::Corrupt(
-                "prepared reference catalog is absent",
-            ))?;
         dictionary
             .source
-            .references_at(&dictionary.catalogs[catalog], id)
+            .check_current()
+            .map_err(dictionary_failure)?;
+        dictionary
+            .prepared_segments
+            .get(self.prepared)
+            .filter(|prepared| prepared.segment == self.segment)
+            .and_then(|prepared| prepared.references.get(id))
+            .copied()
             .map(Some)
-            .map_err(dictionary_failure)
+            .ok_or(DictionaryError::Corrupt("prepared reference row is absent"))
     }
     fn traversal_limit(self) -> Option<usize> {
         Some(self.traversal_limit)

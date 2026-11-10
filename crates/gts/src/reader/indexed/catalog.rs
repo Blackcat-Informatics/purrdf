@@ -548,7 +548,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
         position: usize,
         first: usize,
         mut visit: impl FnMut(usize, TermReferences, Vec<TermDiagnostic>) -> Result<(), IndexedError>,
-    ) -> Result<usize, IndexedError> {
+    ) -> Result<Option<TermBlock>, IndexedError> {
         self.input.check_current()?;
         let location = catalog
             .frames
@@ -556,7 +556,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             .ok_or_else(|| contradiction(position, "reference-frame-position"))?;
         let snapshot = location.kind.as_deref() == Some("snapshot");
         if !snapshot && location.kind.as_deref() != Some("terms") {
-            return Ok(first);
+            return Ok(None);
         }
         let base = TermIdBase(if snapshot { first } else { 0 });
         let transformed = match location.transforms.as_ref() {
@@ -636,30 +636,13 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
                 }
             }
         }
-        Ok(next)
-    }
-
-    pub(super) fn references_at(
-        &mut self,
-        catalog: &SegmentCatalog,
-        term: usize,
-    ) -> Result<TermReferences, IndexedError> {
-        let block = self.locate_term(catalog, term)?;
-        let mut selected = None;
-        self.reference_rows(
-            catalog,
-            block.frame,
-            block.first,
-            |term_id, references, _diagnostics| {
-                if term_id == term {
-                    selected = Some(references);
-                }
-                Ok(())
-            },
-        )?;
-        selected.ok_or_else(|| {
-            DictionaryError::Corrupt("located reference row is absent from its source block").into()
-        })
+        Ok(Some(TermBlock {
+            frame: position,
+            first,
+            end: next,
+            snapshot,
+            range: catalog.frames[position].range.clone(),
+        }))
     }
 
     /// Locate a term by counting source map rows in preceding contributors.

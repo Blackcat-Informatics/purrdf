@@ -109,6 +109,14 @@ it admits no raw terms, performs no RDF row fold and verifies no global trust
 policy. An unprepared indirect lookup returns `ReferencePreparationRequired`
 without poisoning the session, so the caller may prepare and retry.
 
+Preparation retains contributor intervals and numeric term-reference projections
+under the same combined metadata ceiling as catalogs and active resolution.
+Each contributor is projected once; transformed contributors use the original
+bounded payload decoder. Binding and cycle checks then read the retained
+projections with the original source-prefix visibility and snapshot rebasing.
+They do not rescan term bodies for every reifier row. Preparation can refuse
+when this retained metadata would exceed the caller's ceiling.
+
 Prepared indirect lookup inspects numeric reference projections and binding rows
 in source order, including later legacy ambiguity. Row-position and recursion
 checks use that metadata without loading unrelated raw term blocks or treating
@@ -120,7 +128,10 @@ operations can require more work than the selected block alone. Buffered
 prefetch may read unselected bytes, particularly for short adjacent values.
 `work()` reports actual source reads, bytes, seeks, identity checks, frame hashes
 and logical payload/capability decoder calls rather than an inferred selected-byte
-count. Encoded CBOR admission during preparation contributes its actual bytes and
+count. `reference_projections` counts source term projections visited during
+explicit preparation, including a visit refused by its metadata admission;
+reading the retained projections does not add visits.
+Encoded CBOR admission during preparation contributes its actual bytes and
 hashes; it is separate from the logical payload-decoder call counter.
 
 `purrdf_rdf::import_gts_indexed_term` resolves a selected term and its dependency

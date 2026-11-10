@@ -34,6 +34,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use helper_census::is_cfg_test;
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use purrdf_testkit::paths::{collect_rs, workspace_root};
 use syn::parse::Parser;
@@ -140,15 +141,6 @@ fn expression_path(expr: &syn::ExprPath) -> Vec<String> {
 
 fn is_writer(path: &[String]) -> bool {
     path == ["purrdf_gts", "writer", "Writer"] || path == ["purrdf", "gts", "writer", "Writer"]
-}
-
-fn test_scope(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<syn::Path>()
-                .is_ok_and(|path| path.is_ident("test"))
-    })
 }
 
 fn module_path(relative: &str) -> Vec<String> {
@@ -273,7 +265,7 @@ impl<'a> Census<'a> {
                 syn::Item::Enum(item) => Some(&item.ident),
                 syn::Item::Union(item) => Some(&item.ident),
                 syn::Item::Trait(item) => Some(&item.ident),
-                syn::Item::Mod(item) if !test_scope(&item.attrs) => Some(&item.ident),
+                syn::Item::Mod(item) if !is_cfg_test(&item.attrs) => Some(&item.ident),
                 syn::Item::Type(item) => {
                     if let syn::Type::Path(ty) = item.ty.as_ref() {
                         aliases.push((item.ident.to_string(), path_names(&ty.path)));
@@ -436,7 +428,7 @@ impl<'a> Census<'a> {
 
 impl<'ast> Visit<'ast> for Census<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
-        if test_scope(&file.attrs) {
+        if is_cfg_test(&file.attrs) {
             return;
         }
         self.declare(&file.items.iter().collect::<Vec<_>>(), false);
@@ -445,7 +437,7 @@ impl<'ast> Visit<'ast> for Census<'_> {
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if test_scope(&module.attrs) {
+        if is_cfg_test(&module.attrs) {
             return;
         }
         let Some((_, items)) = &module.content else {
