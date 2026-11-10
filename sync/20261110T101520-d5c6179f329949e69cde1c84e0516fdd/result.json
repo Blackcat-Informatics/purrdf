@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1215-use-gts-dictionary-index-locators-for",
+  "branch": "paudley/1215-use-gts-dictionary-index-locators-for",
+  "base_ref": "origin/main",
+  "head": "b5bbdd211d3756ebb8203bf7829805f54f2e162f",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1215-use-gts-dictionary-index-locators-for/.stage/use-gts-dictionary-index-locators-for/sync/20261110T101520-d5c6179f329949e69cde1c84e0516fdd",
+  "conflicts": [],
+  "status": "completed",
+  "base": "60bf2a78f7de12b6393166ad1b715b5baaf7a8e6",
+  "merge_bases": [
+    "ce97c3aa404a358af822396812a5a54a941cb2c6"
+  ],
+  "merge_index": "741308e0ed78c1b270c386f97c55f7e12d080a4f1ce8db1c3072b0728425dc31",
+  "candidate_tree": "98f77e62f0ef036363010089be8a35e4f8f147dd",
+  "candidate_patch": "candidate-36a4d4d6fdf44e8392a85866198d3d0f.patch",
+  "validation_records": [],
+  "commit": "a6a6b141978b3e84239abb1a4d7fdd4394c11eb3",
+  "tree": "98f77e62f0ef036363010089be8a35e4f8f147dd"
+}

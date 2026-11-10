@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1215-use-gts-dictionary-index-locators-for",
+  "branch": "paudley/1215-use-gts-dictionary-index-locators-for",
+  "base_ref": "ef81f8ee31e90aa4c863114b905a830032d0f57f",
+  "head": "b5bbdd211d3756ebb8203bf7829805f54f2e162f",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1215-use-gts-dictionary-index-locators-for/.stage/use-gts-dictionary-index-locators-for/sync/20261110T101506-2cbf5257abb94395b462e058e4442670",
+  "conflicts": [],
+  "status": "noop",
+  "base": "ef81f8ee31e90aa4c863114b905a830032d0f57f",
+  "merge_bases": [
+    "ef81f8ee31e90aa4c863114b905a830032d0f57f"
+  ],
+  "commit": "b5bbdd211d3756ebb8203bf7829805f54f2e162f"
+}
