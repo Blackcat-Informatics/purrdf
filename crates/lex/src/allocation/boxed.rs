@@ -10,7 +10,7 @@ pub(super) fn try_shrink_to_fit<T>(values: &mut Vec<T>) -> Result<(), super::Sto
         return Ok(());
     }
     if values.is_empty() {
-        *values = Vec::new();
+        drop(core::mem::take(values));
         return Ok(());
     }
     let old = core::alloc::Layout::array::<T>(values.capacity())
