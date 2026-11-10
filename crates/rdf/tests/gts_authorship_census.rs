@@ -27,12 +27,14 @@
 //!
 //! The `tests` module below proves the detector is not vacuous: a synthetic
 //! source carrying a constructor reference MUST be flagged. Comments and calls
-//! inside `#[cfg(test)]` modules MUST NOT be flagged. A `#[cfg(test)]` function
+//! inside `#[cfg(test)]` modules or `#![cfg(test)]` files MUST NOT be flagged.
+//! A `#[cfg(test)]` function
 //! at file scope is still counted, preferring a loud row over a silent omission.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use helper_census::is_cfg_test;
 use proc_macro2::{Delimiter, Group, TokenStream, TokenTree};
 use purrdf_testkit::paths::{collect_rs, workspace_root};
 use syn::parse::Parser;
@@ -139,15 +141,6 @@ fn expression_path(expr: &syn::ExprPath) -> Vec<String> {
 
 fn is_writer(path: &[String]) -> bool {
     path == ["purrdf_gts", "writer", "Writer"] || path == ["purrdf", "gts", "writer", "Writer"]
-}
-
-fn test_module(module: &syn::ItemMod) -> bool {
-    module.attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<syn::Path>()
-                .is_ok_and(|path| path.is_ident("test"))
-    })
 }
 
 fn module_path(relative: &str) -> Vec<String> {
@@ -272,7 +265,7 @@ impl<'a> Census<'a> {
                 syn::Item::Enum(item) => Some(&item.ident),
                 syn::Item::Union(item) => Some(&item.ident),
                 syn::Item::Trait(item) => Some(&item.ident),
-                syn::Item::Mod(item) if !test_module(item) => Some(&item.ident),
+                syn::Item::Mod(item) if !is_cfg_test(&item.attrs) => Some(&item.ident),
                 syn::Item::Type(item) => {
                     if let syn::Type::Path(ty) = item.ty.as_ref() {
                         aliases.push((item.ident.to_string(), path_names(&ty.path)));
@@ -435,13 +428,16 @@ impl<'a> Census<'a> {
 
 impl<'ast> Visit<'ast> for Census<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
+        if is_cfg_test(&file.attrs) {
+            return;
+        }
         self.declare(&file.items.iter().collect::<Vec<_>>(), false);
         self.modules.insert(self.module.clone(), self.names.clone());
         visit::visit_file(self, file);
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if test_module(module) {
+        if is_cfg_test(&module.attrs) {
             return;
         }
         let Some((_, items)) = &module.content else {
@@ -737,6 +733,22 @@ mod detector_self_tests {
 
     #[test]
     fn cfg_test_modules_are_excluded_without_hiding_later_code() {
+        assert_eq!(
+            sites(
+                r#"#![cfg(test)]
+            fn fixture() { purrdf_gts::writer::Writer::new("test"); }
+        "#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            sites(
+                r#"#![cfg(unix)]
+            fn production() { purrdf_gts::writer::Writer::new("real"); }
+        "#
+            ),
+            ["production"]
+        );
         assert_eq!(
             sites(
                 r#"

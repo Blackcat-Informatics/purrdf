@@ -245,9 +245,23 @@ struct StoredTerms {
     refuse_reads: Option<Arc<std::sync::atomic::AtomicBool>>,
     refused_reads: usize,
     omit_read: bool,
+    metadata: purrdf_gts::dictionary::ReaderMetadata,
+    refuse_metadata: bool,
+    epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
+    advance_epoch: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl TermStorage for StoredTerms {
+    fn reader_metadata(
+        &mut self,
+        usage: purrdf_gts::dictionary::ReaderMetadata,
+    ) -> Result<(), DictionaryError> {
+        if self.refuse_metadata {
+            return Err(DictionaryError::Corrupt("original metadata refusal"));
+        }
+        self.metadata = usage;
+        Ok(())
+    }
     fn limits(&mut self) -> Result<purrdf_gts::dictionary::DictionaryLimits, DictionaryError> {
         Ok(purrdf_gts::dictionary::DictionaryLimits {
             encoded_frame_bytes: 4096,
@@ -308,6 +322,17 @@ impl TermStorage for StoredTerms {
     }
 
     fn checkpoint(&mut self, _units: u64) -> Result<(), DictionaryError> {
+        if self
+            .advance_epoch
+            .as_ref()
+            .is_some_and(|advance| advance.swap(false, std::sync::atomic::Ordering::SeqCst))
+        {
+            let epoch = self
+                .epoch
+                .as_ref()
+                .ok_or(DictionaryError::Corrupt("checkpoint epoch owner is absent"))?;
+            epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         Ok(())
     }
     fn commit(&mut self) -> Result<(), DictionaryError> {
@@ -329,6 +354,278 @@ impl TermStorage for StoredTerms {
         self.bindings.entry(key).or_insert(triple);
         Ok(())
     }
+}
+
+type IndexedIdentity = Box<
+    dyn FnMut(
+        &std::io::Cursor<Vec<u8>>,
+    ) -> std::io::Result<purrdf_gts::reader::indexed::AccessBinding>,
+>;
+type IndexedTestDictionary<'a> = purrdf_gts::reader::indexed::IndexedDictionary<
+    std::io::Cursor<Vec<u8>>,
+    IndexedIdentity,
+    &'a mut StoredTerms,
+>;
+fn indexed_dictionary(bytes: Vec<u8>, storage: &mut StoredTerms) -> IndexedTestDictionary<'_> {
+    use purrdf_gts::reader::indexed::{
+        AccessBinding, AccessOwner, DecodeCapabilities, IndexedCatalog, IndexedDictionary,
+        IndexedInput, LookupPolicy,
+    };
+    let capabilities = DecodeCapabilities::new(Arc::new(|_: &str| None));
+    let limits = storage.limits().expect("host limits");
+    let epoch = storage.epoch.clone();
+    let policy = Arc::new(LookupPolicy {
+        allow_segments: true,
+        expected_head: None,
+        limits,
+    });
+    let binding = AccessBinding {
+        source: AccessOwner::from_owner(Arc::new(())),
+        generation: 0,
+        length: bytes.len() as u64,
+        capabilities: capabilities.owner().clone(),
+        capability_generation: 0,
+        policy: policy.owner(),
+    };
+    let current: IndexedIdentity = Box::new(move |_| {
+        let mut current = binding.clone();
+        if let Some(epoch) = &epoch {
+            current.generation = epoch.load(std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(current)
+    });
+    let input =
+        IndexedInput::new(std::io::Cursor::new(bytes), current, limits).expect("bound input");
+    let catalog =
+        IndexedCatalog::new(input, capabilities, policy).expect("concrete decoder and policy");
+    IndexedDictionary::new(catalog, storage).expect("matching host admission")
+}
+
+#[test]
+fn indexed_raw_terms_match_full_reader_and_preserve_warm_diagnostics_and_pins() {
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[Term::iri("urn:first")]);
+    let snapshot = purrdf_lex::cbor::Value::Map(vec![(
+        "terms".into(),
+        purrdf_lex::cbor::Value::Array(vec![
+            purrdf_gts::writer::term_to_wire(&Term::iri("urn:datatype")),
+            purrdf_lex::cbor::Value::Map(vec![
+                ("k".into(), 1.into()),
+                ("v".into(), "value".into()),
+                ("dt".into(), 0.into()),
+                ("l".into(), "invalid_tag".into()),
+            ]),
+        ]),
+    )]);
+    writer.add_frame("snapshot", Some(snapshot), None, None, None);
+    writer.add_index();
+    writer.add_terms(&[Term::iri("urn:tail")]);
+    let bytes = writer.into_bytes();
+    let expected = purrdf_gts::reader::read(&bytes, false, None);
+    assert_eq!(expected.diagnostics.len(), 1);
+    let mut storage = StoredTerms::default();
+    let dropped = Arc::clone(&storage.dropped);
+    let mut indexed = indexed_dictionary(bytes, &mut storage);
+    assert_eq!(indexed.work().read_bytes, 0, "opening performs no scan");
+    let key = TermKey {
+        segment: 0,
+        term: 2,
+    };
+    let selected = indexed.get(key).expect("selected snapshot block");
+    assert_eq!(*selected.term, expected.terms[2]);
+    assert_eq!(selected.diagnostics, expected.diagnostics);
+    let cold = indexed.work();
+    let cold_retained = selected.term.retained_bytes();
+    let warm = indexed.get(key).expect("warm admitted descriptor");
+    assert_eq!(*warm.term, *selected.term);
+    assert_eq!(warm.diagnostics, selected.diagnostics);
+    assert_eq!(
+        indexed.work().read_bytes,
+        cold.read_bytes,
+        "warm lookup performs no source read"
+    );
+    let warm_retained = warm.term.retained_bytes();
+    assert!(cold_retained > 0);
+    assert_eq!(
+        warm_retained, cold_retained,
+        "warm lease pins the same admitted owner"
+    );
+    eprintln!(
+        "selected shared raw owner: cold work {cold:?}, retained bytes {cold_retained}; warm work {:?}, retained bytes {warm_retained} (same owner, not additive)",
+        indexed.work()
+    );
+    for (term, expected) in expected.terms.iter().enumerate() {
+        assert_eq!(
+            *indexed
+                .get(TermKey { segment: 0, term })
+                .expect("full-reader raw parity")
+                .term,
+            *expected
+        );
+    }
+    assert!(indexed.metadata().entries > indexed.metadata().frame_ids);
+    drop(indexed);
+    assert_eq!(storage.terms.len(), 4);
+    assert!(storage.metadata.entries > storage.metadata.frame_ids);
+    drop(storage);
+    assert_eq!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "escaped selected owner stays pinned"
+    );
+    drop(selected);
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 3);
+    drop(warm);
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 4);
+}
+
+#[test]
+fn indexed_raw_lookup_rejects_unproven_bindings_and_original_metadata_refusal() {
+    use purrdf_gts::reader::indexed::IndexedError;
+    let term = Term::iri("urn:original");
+    let key = TermKey {
+        segment: 0,
+        term: 0,
+    };
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(std::slice::from_ref(&term));
+    writer.add_index();
+    let bytes = writer.into_bytes();
+    let mut storage = StoredTerms::default();
+    storage.put(key, &term).expect("unproven prepopulation");
+    storage
+        .bind_first(key, (0, 0, 0))
+        .expect("unproven future binding");
+    let mut indexed = indexed_dictionary(bytes.clone(), &mut storage);
+    assert!(matches!(
+        indexed.get(key),
+        Err(IndexedError::Dictionary(DictionaryError::Corrupt(
+            "new source term already has a stored first binding"
+        )))
+    ));
+    drop(indexed);
+    let mut storage = StoredTerms {
+        refuse_metadata: true,
+        ..StoredTerms::default()
+    };
+    let mut indexed = indexed_dictionary(bytes, &mut storage);
+    for _ in 0..2 {
+        assert!(matches!(
+            indexed.get(key),
+            Err(IndexedError::Dictionary(DictionaryError::Corrupt(
+                "original metadata refusal"
+            )))
+        ));
+    }
+    drop(indexed);
+    assert!(
+        storage.terms.is_empty(),
+        "metadata refusal cannot publish a partial dictionary"
+    );
+}
+
+#[test]
+fn indexed_binding_preserves_source_order_late_ambiguity_and_warm_bound_terms() {
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[
+        Term::iri("urn:s"),
+        Term::iri("urn:p"),
+        Term::iri("urn:o"),
+        Term::iri("urn:r"),
+    ]);
+    writer.add_reifies(&[(3, (0, 1, 2), None), (3, (0, 1, 0), None)]);
+    writer.add_terms(&[Term {
+        kind: purrdf_gts::model::TermKind::Triple,
+        value: None,
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: Some(3),
+        triple: None,
+    }]);
+    writer.add_index();
+    let bytes = writer.into_bytes();
+    let expected = purrdf_gts::reader::read(&bytes, false, None);
+    let advance = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut storage = StoredTerms {
+        epoch: Some(Arc::new(std::sync::atomic::AtomicU64::new(0))),
+        advance_epoch: Some(Arc::clone(&advance)),
+        ..StoredTerms::default()
+    };
+    let key = TermKey {
+        segment: 0,
+        term: 3,
+    };
+    let mut indexed = indexed_dictionary(bytes, &mut storage);
+    indexed
+        .prepare_reference_access(0)
+        .expect("explicit authenticated reference preparation");
+    let selected = indexed.first_binding(key).expect("source-ordered binding");
+    assert_eq!(selected.triple, expected.reifier(3));
+    assert_eq!(selected.diagnostics, expected.diagnostics);
+    assert_eq!(selected.diagnostics[0].code, "ConflictingReifier");
+    let cold = indexed.work().read_bytes;
+    let warm = indexed
+        .first_binding(key)
+        .expect("warm already-bound original term");
+    assert_eq!(warm.triple, selected.triple);
+    assert_eq!(warm.diagnostics, selected.diagnostics);
+    assert_eq!(indexed.work().read_bytes, cold);
+    advance.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        matches!(
+            indexed.prepare_reference_access(0),
+            Err(purrdf_gts::reader::indexed::IndexedError::BindingChanged(_))
+        ),
+        "cached preparation must check source again after the host checkpoint"
+    );
+    drop(indexed);
+    assert_eq!(
+        storage.terms.len(),
+        4,
+        "late anchor metadata must not admit its unrelated descriptor"
+    );
+}
+
+#[test]
+fn indexed_binding_uses_original_recursive_row_refusal_before_accepting_a_neighbor() {
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[
+        Term::iri("urn:s"),
+        Term::iri("urn:p"),
+        Term::iri("urn:o"),
+        Term::iri("urn:r"),
+        Term {
+            kind: purrdf_gts::model::TermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: Some(3),
+            triple: None,
+        },
+    ]);
+    writer.add_reifies(&[(3, (4, 1, 2), None), (3, (0, 1, 2), None)]);
+    writer.add_index();
+    let bytes = writer.into_bytes();
+    let expected = purrdf_gts::reader::read(&bytes, false, None);
+    let mut storage = StoredTerms::default();
+    let mut indexed = indexed_dictionary(bytes, &mut storage);
+    indexed
+        .prepare_reference_access(0)
+        .expect("explicit authenticated reference preparation");
+    let selected = indexed
+        .first_binding(TermKey {
+            segment: 0,
+            term: 3,
+        })
+        .expect("recursive row is isolated before its valid neighbor");
+    assert_eq!(selected.triple, expected.reifier(3));
+    assert_eq!(selected.diagnostics, expected.diagnostics);
+    assert_eq!(
+        selected.diagnostics[0].detail,
+        expected.diagnostics[0].detail
+    );
 }
 
 #[test]

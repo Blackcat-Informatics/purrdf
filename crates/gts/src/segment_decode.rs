@@ -438,17 +438,43 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         self.storage.counts().resolved
     }
 
+    /// Resolve one source term and its dependency closure through the original
+    /// iterative resolver. Caller-owned resolution storage may acquire missing
+    /// terms and first bindings on demand. This never advances a segment,
+    /// enumerates unrelated terms or flushes buffered RDF rows.
+    ///
+    /// Consumer identifiers remain owned by this resolver's sink. A new sink
+    /// must use fresh resolution state rather than reuse another sink's ids.
+    ///
+    /// # Errors
+    /// Returns the original storage, consumer, missing-reference or active-cycle
+    /// failure. A failed selection poisons this resolver before another call.
+    pub fn resolve_selected(&mut self, key: TermKey) -> Result<S::Id, S::Error> {
+        if self.failed {
+            return Err(self.previous_failure(key));
+        }
+        let result = self.resolve_term(key.segment, key.term, "selected term");
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
+
+    fn previous_failure(&mut self, key: TermKey) -> S::Error {
+        self.error.take().unwrap_or_else(|| {
+            self.sink
+                .err_dangling_term(key.segment, key.term, "previously failed resolution")
+        })
+    }
+
     /// Flush the final buffered segment, resolving its terms and pushing its
     /// rows. Call once after [`crate::reader::read_to_sink`] returns (and after
     /// checking [`Self::take_error`]).
     pub fn finish(&mut self) -> Result<(), S::Error> {
         if self.failed {
-            return Err(self.error.take().unwrap_or_else(|| {
-                self.sink.err_dangling_term(
-                    self.current_segment.unwrap_or_default(),
-                    0,
-                    "previously failed resolution",
-                )
+            return Err(self.previous_failure(TermKey {
+                segment: self.current_segment.unwrap_or_default(),
+                term: 0,
             }));
         }
         self.failed = true;

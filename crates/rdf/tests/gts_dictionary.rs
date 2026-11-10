@@ -20,7 +20,7 @@ use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Ceiling, Memory};
 use purrdf_rdf::{
     SerializeGraph, export_gts_rdf_nquads_with_dictionary, import_gts_events,
-    import_gts_events_with_dictionary, parse_dataset, serialize_dataset,
+    import_gts_events_with_dictionary, import_gts_indexed_term, parse_dataset, serialize_dataset,
 };
 
 #[global_allocator]
@@ -105,6 +105,471 @@ fn render(dataset: &purrdf_rdf::ir::RdfDataset) -> Vec<u8> {
     let mut lines: Vec<_> = text.lines().collect();
     lines.sort_unstable();
     lines.join("\n").into_bytes()
+}
+
+type IndexedIdentity = Box<
+    dyn FnMut(
+        &std::io::Cursor<Vec<u8>>,
+    ) -> std::io::Result<purrdf_gts::reader::indexed::AccessBinding>,
+>;
+type IndexedFiles<'a> = purrdf_gts::reader::indexed::IndexedDictionary<
+    std::io::Cursor<Vec<u8>>,
+    IndexedIdentity,
+    &'a mut storage::Files,
+>;
+fn indexed_files(bytes: Vec<u8>, files: &mut storage::Files) -> IndexedFiles<'_> {
+    use purrdf_gts::reader::indexed::{
+        AccessBinding, AccessOwner, DecodeCapabilities, IndexedCatalog, IndexedDictionary,
+        IndexedInput, LookupPolicy,
+    };
+    let capabilities = DecodeCapabilities::new(std::sync::Arc::new(|_: &str| None));
+    let policy = std::sync::Arc::new(LookupPolicy {
+        allow_segments: true,
+        expected_head: None,
+        limits: files.limits,
+    });
+    let binding = AccessBinding {
+        source: AccessOwner::from_owner(std::sync::Arc::new(())),
+        generation: 0,
+        length: bytes.len() as u64,
+        capabilities: capabilities.owner().clone(),
+        capability_generation: 0,
+        policy: policy.owner(),
+    };
+    let current: IndexedIdentity = Box::new(move |_| Ok(binding.clone()));
+    let input = IndexedInput::new(std::io::Cursor::new(bytes), current, files.limits)
+        .expect("bound immutable source");
+    IndexedDictionary::new(
+        IndexedCatalog::new(input, capabilities, policy).expect("same actual decoder and policy"),
+        files,
+    )
+    .expect("native file-backed dictionary")
+}
+fn indexed_fixture(snapshot: bool) -> Vec<u8> {
+    use purrdf_lex::cbor::Value;
+    let original = fixture::source(1, snapshot);
+    let (items, torn) = purrdf_gts::wire::iter_items(&original);
+    assert!(torn.is_none());
+    let mut writer = Writer::new("rdf12");
+    for (_, frame) in items.iter().skip(1) {
+        let Value::Map(entries) = frame else {
+            panic!("shared fixture frame")
+        };
+        let kind = purrdf_gts::wire::map_get(entries, "t")
+            .and_then(Value::as_text)
+            .expect("shared frame kind");
+        writer.add_frame(
+            kind,
+            purrdf_gts::wire::map_get(entries, "d").cloned(),
+            None,
+            None,
+            None,
+        );
+    }
+    // Resolve both indirect and nested spellings against the shared fixture's
+    // existing statement-layer binding, including its snapshot-local rebasing.
+    writer.add_terms(&[
+        Term {
+            kind: purrdf_gts::model::TermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: Some(8),
+            triple: None,
+        },
+        Term {
+            kind: purrdf_gts::model::TermKind::Triple,
+            value: None,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: Some((1, 2, 10)),
+        },
+    ]);
+    writer.add_index_with_mmr();
+    writer.into_bytes()
+}
+
+#[test]
+fn indexed_real_consumer_matches_scoped_rdf_terms_and_complete_export() {
+    let directory = purrdf_testkit::temp_dir!().expect("indexed native storage");
+    let segments = [indexed_fixture(false), indexed_fixture(true)];
+    let bytes = segments.concat();
+    let expected = import_gts_events(&bytes).expect("existing full RDF importer");
+    let mut files = storage::Files::new(directory.path());
+    let mut indexed = indexed_files(bytes, &mut files);
+    assert_eq!(indexed.work().read_bytes, 0);
+    for segment in [0, 1] {
+        indexed
+            .prepare_reference_access(segment)
+            .expect("explicit preparation for the fixture's legacy indirect terms");
+    }
+    let mut assembled = purrdf_rdf::RdfDatasetBuilder::new();
+    for (segment, source) in segments.iter().enumerate() {
+        let raw = purrdf_gts::reader::read(source, false, None);
+        assert!(raw.diagnostics.is_empty(), "{:?}", raw.diagnostics);
+        let mut ids = Vec::new();
+        for term in 0..raw.terms.len() {
+            let key = TermKey {
+                segment: segment as u64,
+                term,
+            };
+            let (owner, id) =
+                import_gts_indexed_term(&mut indexed, key).expect("actual selective RDF consumer");
+            assert_eq!(
+                owner.quad_count(),
+                0,
+                "selected term operation imports no unrelated rows"
+            );
+            let value = owner.to_owned_term(id);
+            ids.push(
+                assembled
+                    .intern_owned_term(&value)
+                    .expect("collect exact selected term"),
+            );
+            let cold = indexed.work();
+            let (warm_owner, warm_id) = import_gts_indexed_term(&mut indexed, key)
+                .expect("fresh destination owner over warm source");
+            assert_eq!(warm_owner.term_value(warm_id), owner.term_value(id));
+            assert_eq!(indexed.work().read_bytes, cold.read_bytes);
+            assert_eq!(indexed.work().decoded_payloads, cold.decoded_payloads);
+        }
+        for (s, p, o, graph) in raw.quads {
+            assembled
+                .push_quad(ids[s], ids[p], ids[o], graph.map(|g| ids[g]))
+                .expect("selected quad terms");
+        }
+        for (reifier, (s, p, o), graph) in raw.reifiers {
+            let triple = assembled
+                .intern_triple(ids[s], ids[p], ids[o])
+                .expect("selected reification components");
+            assembled
+                .push_reifier_in_graph(ids[reifier], triple, graph.map(|g| ids[g]))
+                .expect("selected reifier terms");
+        }
+        for (reifier, predicate, object, graph) in raw.annotations {
+            assembled
+                .push_annotation_in_graph(
+                    ids[reifier],
+                    ids[predicate],
+                    ids[object],
+                    graph.map(|g| ids[g]),
+                )
+                .expect("selected annotation terms");
+        }
+    }
+    let actual = assembled
+        .freeze()
+        .expect("complete selected-result export owner");
+    assert_eq!(render(&actual), render(&expected.dataset));
+    assert_eq!(
+        actual.owned_reifiers().count(),
+        expected.dataset.owned_reifiers().count()
+    );
+    assert_eq!(
+        actual.owned_annotations().count(),
+        expected.dataset.owned_annotations().count()
+    );
+    eprintln!(
+        "indexed RDF source work {:?}; settled reader metadata {:?}",
+        indexed.work(),
+        indexed.metadata()
+    );
+}
+
+#[test]
+fn indexed_rdf_refuses_combined_metadata_budget_and_unindexed_input_explicitly() {
+    use purrdf_gts::reader::indexed::{CatalogError, IndexedError};
+    let directory = purrdf_testkit::temp_dir!().expect("indexed refusal storage");
+    let bytes = indexed_fixture(false);
+    let mut probe_files = storage::Files::new(&directory.path().join("probe"));
+    let mut probe = indexed_files(bytes.clone(), &mut probe_files);
+    probe
+        .prepare_reference_access(0)
+        .expect("explicit reference preparation");
+    for term in [0, 1, 10] {
+        probe
+            .get(TermKey { segment: 0, term })
+            .expect("admit exactly the three raw blocks");
+    }
+    let settled = probe.metadata().entries;
+    import_gts_indexed_term(
+        &mut probe,
+        TermKey {
+            segment: 0,
+            term: 11,
+        },
+    )
+    .expect("unbounded observation of combined live metadata");
+    drop(probe);
+    let combined_peak = probe_files.peak_metadata_entries;
+    assert!(
+        combined_peak > settled + 1,
+        "fixture must require consumer metadata in addition to raw evidence"
+    );
+    let mut files = storage::Files::new(&directory.path().join("bounded"));
+    files.limits.metadata_entries = combined_peak - 1;
+    let mut indexed = indexed_files(bytes, &mut files);
+    indexed
+        .prepare_reference_access(0)
+        .expect("explicit reference preparation fits the raw evidence budget");
+    for term in [0, 1, 10] {
+        indexed
+            .get(TermKey { segment: 0, term })
+            .expect("raw evidence fits the single combined budget");
+    }
+    let failure = import_gts_indexed_term(
+        &mut indexed,
+        TermKey {
+            segment: 0,
+            term: 11,
+        },
+    )
+    .expect_err("pending closure and raw evidence share one ceiling");
+    assert!(source_chain_has(
+        &failure,
+        |cause| matches!(cause.downcast_ref::<IndexedError>(), Some(IndexedError::Dictionary(DictionaryError::Limit { resource: "indexed-resolution-metadata" | "indexed-reifier-metadata" | "indexed-metadata-entries", required, limit })) if required > limit)
+    ));
+    let after = indexed.metadata().entries;
+    drop(indexed);
+    let committed_binding = files
+        .first_binding(TermKey {
+            segment: 0,
+            term: 8,
+        })
+        .expect("inspect surviving proven raw binding");
+    assert_eq!(
+        after,
+        settled + usize::from(committed_binding.is_some()),
+        "failed consumer destroys active resolution and binding workspace while preserving completed raw evidence"
+    );
+    let mut files = storage::Files::new(&directory.path().join("forward-only"));
+    let bytes = fixture::source(1, false);
+    import_gts_events(&bytes)
+        .expect("the existing explicit forward-only reader still accepts this input");
+    let mut indexed = indexed_files(bytes, &mut files);
+    let failure = import_gts_indexed_term(
+        &mut indexed,
+        TermKey {
+            segment: 0,
+            term: 0,
+        },
+    )
+    .expect_err("unindexed input cannot silently select the full reader");
+    assert!(source_chain_has(&failure, |cause| matches!(
+        cause.downcast_ref::<IndexedError>(),
+        Some(IndexedError::Catalog(CatalogError::IndexUnavailable(0)))
+    )));
+}
+
+#[test]
+fn indexed_rdf_keeps_missing_corrupt_dependency_and_warm_diagnostic_refusals() {
+    use purrdf_gts::reader::indexed::IndexedError;
+    let directory = purrdf_testkit::temp_dir!().expect("indexed error ownership");
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[Term::iri("urn:datatype")]);
+    writer.add_terms(&[Term {
+        kind: purrdf_gts::model::TermKind::Literal,
+        value: Some("typed".into()),
+        datatype: Some(0),
+        lang: None,
+        direction: None,
+        reifier: None,
+        triple: None,
+    }]);
+    writer.add_index();
+    let bytes = writer.into_bytes();
+    let missing = TermKey {
+        segment: 0,
+        term: 999,
+    };
+    let mut files = storage::Files::new(&directory.path().join("missing"));
+    let mut indexed = indexed_files(bytes.clone(), &mut files);
+    let failure = import_gts_indexed_term(&mut indexed, missing)
+        .expect_err("missing original term cannot resolve partially");
+    assert!(source_chain_has(
+        &failure,
+        |cause| matches!(cause.downcast_ref::<IndexedError>(), Some(IndexedError::Dictionary(DictionaryError::Missing(key))) if *key == missing)
+    ));
+    drop(indexed);
+    let mut corrupt = bytes;
+    let offset = corrupt
+        .windows(b"urn:datatype".len())
+        .position(|window| window == b"urn:datatype")
+        .expect("dependency lexical bytes");
+    corrupt[offset] = b'x';
+    let mut files = storage::Files::new(&directory.path().join("corrupt-dependency"));
+    let mut indexed = indexed_files(corrupt, &mut files);
+    let failure = import_gts_indexed_term(
+        &mut indexed,
+        TermKey {
+            segment: 0,
+            term: 1,
+        },
+    )
+    .expect_err("selected literal cannot hide corrupt datatype frame");
+    assert!(source_chain_has(&failure, |cause| {
+        match cause.downcast_ref::<IndexedError>() {
+            Some(IndexedError::Native(native)) => {
+                purrdf_testkit::error_capture::Capture::read(&***native).code
+                    == "gts-frame-self-hash"
+            }
+            _ => false,
+        }
+    }));
+    drop(indexed);
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[Term::lang_literal("broken", "invalid_tag")]);
+    writer.add_index();
+    let bytes = writer.into_bytes();
+    let expected = import_gts_events(&bytes)
+        .expect_err("original importer rejects the same lexical diagnostic");
+    let mut files = storage::Files::new(&directory.path().join("warm-diagnostic"));
+    let mut indexed = indexed_files(bytes, &mut files);
+    for _ in 0..2 {
+        let failure = import_gts_indexed_term(
+            &mut indexed,
+            TermKey {
+                segment: 0,
+                term: 0,
+            },
+        )
+        .expect_err("warm raw descriptor cannot erase original RDF fold refusal");
+        assert_eq!(failure.code, expected.code);
+    }
+}
+
+#[test]
+fn explicit_reference_preparation_keeps_unrelated_reifier_terms_out_of_raw_admission() {
+    use purrdf_gts::reader::indexed::IndexedError;
+    let mut identity_work = Vec::new();
+    for population in [8usize, 32] {
+        let directory = purrdf_testkit::temp_dir!().expect("independent reifier source blocks");
+        let mut writer = Writer::new("rdf12");
+        writer.add_terms(&[
+            Term::iri("urn:s"),
+            Term::iri("urn:p"),
+            Term::iri("urn:o"),
+            Term::iri("urn:r1"),
+            Term {
+                kind: purrdf_gts::model::TermKind::Triple,
+                value: None,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: Some(3),
+                triple: None,
+            },
+        ]);
+        let mut unrelated = vec![
+            Term::iri("urn:other-s"),
+            Term::iri("urn:other-p"),
+            Term::lang_literal("unrelated lexical defect", "invalid_tag"),
+            Term::iri("urn:r2"),
+        ];
+        unrelated.extend((0..population).map(|id| Term::iri(format!("urn:unused:{id}"))));
+        writer.add_frame(
+            "terms",
+            Some(purrdf_lex::cbor::Value::Array(
+                unrelated
+                    .iter()
+                    .map(purrdf_gts::writer::term_to_wire)
+                    .collect(),
+            )),
+            None,
+            Some(&["gzip".into()]),
+            None,
+        );
+        writer.add_reifies(&[(3, (0, 1, 2), None)]);
+        writer.add_reifies(&vec![(8, (5, 6, 7), None); population]);
+        writer.add_index();
+        let bytes = writer.into_bytes();
+        assert!(
+            import_gts_events(&bytes).is_err(),
+            "full import owns the unrelated malformed term too"
+        );
+        let mut files = storage::Files::new(directory.path());
+        let mut indexed = indexed_files(bytes, &mut files);
+        let key = TermKey {
+            segment: 0,
+            term: 4,
+        };
+        let failure = import_gts_indexed_term(&mut indexed, key)
+            .expect_err("indirect lookup must not silently prepare all references");
+        assert!(source_chain_has(&failure, |cause| matches!(
+            cause.downcast_ref::<IndexedError>(),
+            Some(IndexedError::ReferencePreparationRequired(0))
+        )));
+        indexed
+            .prepare_reference_access(0)
+            .expect("caller explicitly authenticates current-wire reference contributors");
+        let prepared = indexed.work();
+        assert_eq!(prepared.reference_projections, (9 + population) as u128);
+        indexed
+            .prepare_reference_access(0)
+            .expect("same-bound preparation proof is reusable");
+        assert_eq!(indexed.work().verified_frames, prepared.verified_frames);
+        assert_eq!(indexed.work().decoded_payloads, prepared.decoded_payloads);
+        assert_eq!(
+            indexed.work().reference_projections,
+            prepared.reference_projections
+        );
+        let (owner, id) = import_gts_indexed_term(&mut indexed, key)
+            .expect("independent R2 row requires metadata, not unrelated raw terms");
+        assert_eq!(
+            owner.term_count(),
+            4,
+            "only selected triple and its three IRI children are resolved"
+        );
+        assert!(matches!(
+            owner.resolve(id),
+            purrdf_rdf::TermRef::Triple { .. }
+        ));
+        assert!(
+            indexed.work().decoded_payloads - prepared.decoded_payloads <= 2,
+            "only binding payloads may be decoded after already-admitted R1 raw terms; R2 term block stays encoded"
+        );
+        let cold = indexed.work();
+        assert_eq!(cold.reference_projections, prepared.reference_projections);
+        identity_work.push(cold.identity_checks - prepared.identity_checks);
+        eprintln!(
+            "prepared reference population {population}: preparation {prepared:?}, selected {cold:?}"
+        );
+        let (warm_owner, warm_id) = import_gts_indexed_term(&mut indexed, key)
+            .expect("same-source prepared warm indirect lookup");
+        assert_eq!(warm_owner.term_value(warm_id), owner.term_value(id));
+        assert_eq!(indexed.work().read_bytes, cold.read_bytes);
+        assert_eq!(indexed.work().decoded_payloads, cold.decoded_payloads);
+        assert_eq!(
+            indexed.work().reference_projections,
+            cold.reference_projections
+        );
+        drop(indexed);
+        assert!(
+            files
+                .get(TermKey {
+                    segment: 0,
+                    term: 5
+                })
+                .expect("inspect unrelated raw key")
+                .is_none()
+        );
+        assert!(
+            files
+                .get(TermKey {
+                    segment: 0,
+                    term: 7
+                })
+                .expect("inspect unrelated malformed raw key")
+                .is_none()
+        );
+    }
+    assert!(
+        identity_work[1] <= identity_work[0] * 5,
+        "quadrupling fixed-arity rows and unrelated terms must retain linear source checks: {identity_work:?}"
+    );
 }
 
 #[test]

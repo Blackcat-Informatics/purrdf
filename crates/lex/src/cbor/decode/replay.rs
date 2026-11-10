@@ -6,9 +6,12 @@
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 use super::{
-    DecodeError, DecodeErrorKind, Limits, OwnedOutput, Source, SpanOutput, Stream, Value, argument,
-    decode_item_to, next_string_chunk,
+    DecodeError, DecodeErrorKind, Limits, OwnedOutput, Source, SpanOutput, Stream, Value,
+    WalkError, argument, decode_item_to, next_string_chunk,
 };
+
+mod structural;
+pub use structural::{StructuralCursor, StructuralError, StructuralRange};
 
 /// Caller-owned scratch storage. The codec opens no files or services.
 pub trait ReplayStorage: Read + Write + Seek {
@@ -24,6 +27,11 @@ pub struct ReplayBuffer<R: Read + Seek> {
 }
 
 impl<R: Read + Seek> ReplayBuffer<R> {
+    /// Inspect the original caller-owned storage without moving its position
+    /// or changing its bytes. This preserves the cached replay window.
+    pub fn get_ref(&self) -> &R {
+        self.inner.get_ref()
+    }
     /// Recover the caller-owned storage, discarding only the read buffer.
     pub fn into_inner(self) -> R {
         self.inner.into_inner()
@@ -57,7 +65,25 @@ impl<R: Read + Seek> Seek for ReplayBuffer<R> {
             && let Ok(delta) = i64::try_from(i128::from(target) - i128::from(self.position))
         {
             self.inner.seek_relative(delta)?;
-            self.position = target;
+            if self.inner.buffer().is_empty() {
+                // Underlying seeks discard the buffer. The empty boundary also
+                // includes an exhausted cached window, so verify raw position
+                // without BufReader's unchecked subtraction of unread bytes.
+                self.position = self.inner.get_mut().stream_position()?;
+                if self.position != target {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "buffered seek to byte {target} reached byte {}",
+                            self.position
+                        ),
+                    ));
+                }
+            } else {
+                // A nonempty buffer means seek_relative only moved its cursor;
+                // querying storage here would defeat cached row navigation.
+                self.position = target;
+            }
         } else {
             self.position = self.inner.seek(position)?;
         }
@@ -159,8 +185,9 @@ pub fn spool_item<R: Read + ?Sized, W: ReplayStorage + ?Sized>(
     )?;
     let length = source.pos;
     match source.byte() {
-        Err(error) if error.kind == DecodeErrorKind::Truncated && error.offset == length => {}
-        Err(error) => return Err(error),
+        Err(error) if error.kind == DecodeErrorKind::Truncated && error.offset == length as u64 => {
+        }
+        Err(error) => return Err(error.into()),
         Ok(_) => return Err(DecodeError::new(DecodeErrorKind::Trailing, length)),
     }
     let identity = purrdf_hash::hex::Digest32::new(*tee.hash.finalize().as_bytes());
@@ -200,15 +227,15 @@ impl<'a, R: Read + Seek + ?Sized> RangeSource<'a, R> {
     }
 }
 impl<R: Read + Seek + ?Sized> Source for RangeSource<'_, R> {
-    fn offset(&self) -> usize {
-        self.pos
+    fn offset(&self) -> u64 {
+        self.pos as u64
     }
     fn consumed(&self) -> Option<&[u8]> {
         None
     }
-    fn byte(&mut self) -> Result<u8, DecodeError> {
+    fn byte(&mut self) -> Result<u8, WalkError> {
         if self.pos == self.item.length {
-            return Err(DecodeError::new(DecodeErrorKind::Truncated, self.pos));
+            return Err(WalkError::new(DecodeErrorKind::Truncated, self.pos));
         }
         let mut source = Stream {
             reader: &mut *self.reader,
@@ -218,7 +245,7 @@ impl<R: Read + Seek + ?Sized> Source for RangeSource<'_, R> {
         self.pos = source.pos;
         result
     }
-    fn take(&mut self, len: u64, output: &mut Vec<u8>) -> Result<(), DecodeError> {
+    fn take(&mut self, len: u64, output: &mut Vec<u8>) -> Result<(), WalkError> {
         let mut bounded = (&mut *self.reader).take((self.item.length - self.pos) as u64);
         let mut source = Stream {
             reader: &mut bounded,
@@ -228,24 +255,21 @@ impl<R: Read + Seek + ?Sized> Source for RangeSource<'_, R> {
         self.pos = source.pos;
         result
     }
-    fn skip_bytes(&mut self, len: u64) -> Result<(), DecodeError> {
-        let length = usize::try_from(len)
-            .map_err(|_| DecodeError::new(DecodeErrorKind::TooLong, self.pos))?;
+    fn skip_bytes(&mut self, len: u64) -> Result<(), WalkError> {
+        let length =
+            usize::try_from(len).map_err(|_| WalkError::new(DecodeErrorKind::TooLong, self.pos))?;
         let end = self
             .pos
             .checked_add(length)
-            .ok_or_else(|| DecodeError::new(DecodeErrorKind::TooLong, self.pos))?;
+            .ok_or_else(|| WalkError::new(DecodeErrorKind::TooLong, self.pos))?;
         if end > self.item.length {
-            return Err(DecodeError::new(
-                DecodeErrorKind::Truncated,
-                self.item.length,
-            ));
+            return Err(WalkError::new(DecodeErrorKind::Truncated, self.item.length));
         }
         let target = self
             .item
             .start
             .checked_add(end as u64)
-            .ok_or_else(|| DecodeError::new(DecodeErrorKind::TooLong, self.pos))?;
+            .ok_or_else(|| WalkError::new(DecodeErrorKind::TooLong, self.pos))?;
         self.reader
             .seek(SeekFrom::Start(target))
             .map_err(|cause| io_error(cause, self.pos))?;
@@ -271,6 +295,7 @@ impl ItemRange {
             false,
             &mut OwnedOutput,
         )
+        .map_err(Into::into)
     }
     fn cursor<R: Read + Seek + ?Sized>(
         self,
@@ -478,6 +503,7 @@ impl<R: Read + Seek + ?Sized> Read for ByteRangeReader<'_, R> {
         Ok(count)
     }
 }
-fn native_io(error: DecodeError) -> io::Error {
+fn native_io(error: impl Into<DecodeError>) -> io::Error {
+    let error = error.into();
     purrdf_hash::error::io_error(io::ErrorKind::InvalidData, error)
 }

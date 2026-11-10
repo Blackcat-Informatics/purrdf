@@ -82,6 +82,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::str::FromStr as _;
 
+use helper_census::is_cfg_test;
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use purrdf_testkit::paths::{collect_rs, workspace_root};
 use syn::visit::{self, Visit};
@@ -593,16 +594,6 @@ fn render_expr(expr: &syn::Expr, out: &mut String) {
 }
 
 // ── The source scan ─────────────────────────────────────────────────────────────
-
-/// Whether `attrs` carries `#[cfg(test)]`.
-fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("cfg")
-            && attr
-                .parse_args::<syn::Path>()
-                .is_ok_and(|path| path.is_ident("test"))
-    })
-}
 
 fn fields_of(fields: &syn::Fields, always_public: bool) -> Vec<Field> {
     let collect = |index: usize, field: &syn::Field| {
