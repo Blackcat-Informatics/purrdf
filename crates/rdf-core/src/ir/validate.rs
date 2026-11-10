@@ -26,6 +26,8 @@
 //!
 //! [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
 
+use core::borrow::Borrow;
+
 use super::builder::NativeBuildError;
 use crate::RdfDiagnostic;
 use purrdf_lex::allocation::{Admission, Memory, Resident};
@@ -419,7 +421,7 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     memory.admission_mut().checkpoint(0)?;
     validate_rows_with_memory(
         builder,
-        builder.quad_rows().iter().copied(),
+        builder.quad_rows().iter(),
         builder.reifier_rows().iter().copied(),
         builder.annotation_rows().iter().copied(),
         memory,
@@ -428,9 +430,12 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
 
 /// Validate carrier rows through the original positional and lexical rules.
 /// Compact carriers project one row at a time; no quad table is built.
-pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
+pub(super) fn validate_rows_with_memory<
+    S: Admission + ?Sized,
+    Q: Borrow<super::dataset::QuadRow>,
+>(
     builder: &RdfDatasetBuilder,
-    quads: impl IntoIterator<Item = super::dataset::QuadRow>,
+    quads: impl IntoIterator<Item = Q>,
     reifiers: impl IntoIterator<Item = super::dataset::ReifierRow>,
     annotations: impl IntoIterator<Item = super::dataset::AnnotationRow>,
     memory: &mut Memory<'_, S>,
@@ -462,6 +467,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
+        let q = q.borrow();
         let subject = check_id_in_range_with_memory(
             q.s,
             terms,
