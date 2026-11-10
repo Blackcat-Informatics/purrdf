@@ -27,7 +27,8 @@
 //!
 //! The `tests` module below proves the detector is not vacuous: a synthetic
 //! source carrying a constructor reference MUST be flagged. Comments and calls
-//! inside `#[cfg(test)]` modules MUST NOT be flagged. A `#[cfg(test)]` function
+//! inside `#[cfg(test)]` modules or `#![cfg(test)]` files MUST NOT be flagged.
+//! A `#[cfg(test)]` function
 //! at file scope is still counted, preferring a loud row over a silent omission.
 
 use std::collections::BTreeMap;
@@ -141,8 +142,8 @@ fn is_writer(path: &[String]) -> bool {
     path == ["purrdf_gts", "writer", "Writer"] || path == ["purrdf", "gts", "writer", "Writer"]
 }
 
-fn test_module(module: &syn::ItemMod) -> bool {
-    module.attrs.iter().any(|attr| {
+fn test_scope(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
         attr.path().is_ident("cfg")
             && attr
                 .parse_args::<syn::Path>()
@@ -272,7 +273,7 @@ impl<'a> Census<'a> {
                 syn::Item::Enum(item) => Some(&item.ident),
                 syn::Item::Union(item) => Some(&item.ident),
                 syn::Item::Trait(item) => Some(&item.ident),
-                syn::Item::Mod(item) if !test_module(item) => Some(&item.ident),
+                syn::Item::Mod(item) if !test_scope(&item.attrs) => Some(&item.ident),
                 syn::Item::Type(item) => {
                     if let syn::Type::Path(ty) = item.ty.as_ref() {
                         aliases.push((item.ident.to_string(), path_names(&ty.path)));
@@ -435,13 +436,16 @@ impl<'a> Census<'a> {
 
 impl<'ast> Visit<'ast> for Census<'_> {
     fn visit_file(&mut self, file: &'ast syn::File) {
+        if test_scope(&file.attrs) {
+            return;
+        }
         self.declare(&file.items.iter().collect::<Vec<_>>(), false);
         self.modules.insert(self.module.clone(), self.names.clone());
         visit::visit_file(self, file);
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if test_module(module) {
+        if test_scope(&module.attrs) {
             return;
         }
         let Some((_, items)) = &module.content else {
@@ -737,6 +741,22 @@ mod detector_self_tests {
 
     #[test]
     fn cfg_test_modules_are_excluded_without_hiding_later_code() {
+        assert_eq!(
+            sites(
+                r#"#![cfg(test)]
+            fn fixture() { purrdf_gts::writer::Writer::new("test"); }
+        "#
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            sites(
+                r#"#![cfg(unix)]
+            fn production() { purrdf_gts::writer::Writer::new("real"); }
+        "#
+            ),
+            ["production"]
+        );
         assert_eq!(
             sites(
                 r#"
