@@ -9,6 +9,7 @@ struct Sparse {
     position: u64,
     length: u64,
     reads: Vec<u64>,
+    seeks: usize,
     wrong_seek: bool,
     report_low_position: bool,
 }
@@ -36,6 +37,7 @@ impl Read for Sparse {
 }
 impl Seek for Sparse {
     fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.seeks += 1;
         if self.report_low_position
             && !self.reads.is_empty()
             && matches!(position, SeekFrom::Current(0))
@@ -71,6 +73,7 @@ fn sparse_array() -> (Sparse, u64) {
             position: 0,
             length: last + 1,
             reads: Vec::new(),
+            seeks: 0,
             wrong_seek: false,
             report_low_position: false,
         },
@@ -217,6 +220,7 @@ fn buffered_navigation_checks_actual_relative_seek_and_preserves_cached_rewinds(
         position: 0,
         length: 3,
         reads: Vec::new(),
+        seeks: 0,
         wrong_seek: false,
         report_low_position: false,
     };
@@ -224,10 +228,26 @@ fn buffered_navigation_checks_actual_relative_seek_and_preserves_cached_rewinds(
     let range = StructuralRange::scan(&mut buffered, 0, 3, Limits::default())
         .expect("prefetched structure")
         .expect("array");
+    let seeks = buffered.get_ref().seeks;
+    assert_eq!(buffered.seek(SeekFrom::Start(0)).expect("cached rewind"), 0);
+    assert_eq!(buffered.stream_position().expect("cached position"), 0);
     let mut children = range
         .array(&mut buffered)
         .expect("cached rewind")
         .expect("array");
+    assert_eq!(
+        buffered.stream_position().expect("cached array position"),
+        1
+    );
+    assert_eq!(
+        buffered.get_ref().seeks,
+        seeks,
+        "cached rewinds and current-position queries must not seek storage"
+    );
+    eprintln!(
+        "cached replay underlying seeks: before {seeks}, after {}",
+        buffered.get_ref().seeks
+    );
     for expected in [1_u8, 2] {
         let child = children
             .next(&mut buffered)
@@ -248,10 +268,11 @@ fn buffered_navigation_checks_actual_relative_seek_and_preserves_cached_rewinds(
     let range = StructuralRange::scan(&mut buffered, 0, 3, Limits::default())
         .expect("prefetched structure")
         .expect("array");
-    let error = range
+    range
         .array(&mut buffered)
-        .expect_err("a physical position below unread bytes must fail without panicking");
-    assert!(
-        matches!(error.kind(), DecodeErrorKind::Io(cause) if cause.kind() == io::ErrorKind::InvalidData)
-    );
+        .expect("cached rewind needs no storage position");
+    let error = buffered
+        .seek(SeekFrom::Start(7))
+        .expect_err("lying storage position must fail at the underlying I/O boundary");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }

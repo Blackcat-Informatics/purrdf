@@ -434,16 +434,26 @@ fn indexed_raw_terms_match_full_reader_and_preserve_warm_diagnostics_and_pins() 
     let selected = indexed.get(key).expect("selected snapshot block");
     assert_eq!(*selected.term, expected.terms[2]);
     assert_eq!(selected.diagnostics, expected.diagnostics);
-    let cold_bytes = indexed.work().read_bytes;
+    let cold = indexed.work();
+    let cold_retained = selected.term.retained_bytes();
     let warm = indexed.get(key).expect("warm admitted descriptor");
     assert_eq!(*warm.term, *selected.term);
     assert_eq!(warm.diagnostics, selected.diagnostics);
     assert_eq!(
         indexed.work().read_bytes,
-        cold_bytes,
+        cold.read_bytes,
         "warm lookup performs no source read"
     );
-    assert!(warm.term.retained_bytes() > 0);
+    let warm_retained = warm.term.retained_bytes();
+    assert!(cold_retained > 0);
+    assert_eq!(
+        warm_retained, cold_retained,
+        "warm lease pins the same admitted owner"
+    );
+    eprintln!(
+        "selected shared raw owner: cold work {cold:?}, retained bytes {cold_retained}; warm work {:?}, retained bytes {warm_retained} (same owner, not additive)",
+        indexed.work()
+    );
     for (term, expected) in expected.terms.iter().enumerate() {
         assert_eq!(
             *indexed

@@ -65,22 +65,24 @@ impl<R: Read + Seek> Seek for ReplayBuffer<R> {
             && let Ok(delta) = i64::try_from(i128::from(target) - i128::from(self.position))
         {
             self.inner.seek_relative(delta)?;
-            let unread = self.inner.buffer().len() as u64;
-            let physical = self.inner.get_mut().stream_position()?;
-            self.position = physical.checked_sub(unread).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("buffered source position {physical} is below {unread} unread bytes"),
-                )
-            })?;
-            if self.position != target {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "buffered seek to byte {target} reached byte {}",
-                        self.position
-                    ),
-                ));
+            if self.inner.buffer().is_empty() {
+                // Underlying seeks discard the buffer. The empty boundary also
+                // includes an exhausted cached window, so verify raw position
+                // without BufReader's unchecked subtraction of unread bytes.
+                self.position = self.inner.get_mut().stream_position()?;
+                if self.position != target {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "buffered seek to byte {target} reached byte {}",
+                            self.position
+                        ),
+                    ));
+                }
+            } else {
+                // A nonempty buffer means seek_relative only moved its cursor;
+                // querying storage here would defeat cached row navigation.
+                self.position = target;
             }
         } else {
             self.position = self.inner.seek(position)?;
