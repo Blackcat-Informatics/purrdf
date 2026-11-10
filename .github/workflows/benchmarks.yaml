@@ -403,21 +403,29 @@ jobs:
       - name: Link and run eight counterbalanced full-size measurements
         run: |
           set -euo pipefail
-          deps="$EVIDENCE/candidate-target/release"
-          metadata=()
+          libraries=()
           for name in purrdf_lex purrdf_hash purrdf_testkit; do
-            mapfile -t files < <(jq -r --arg name "$name" \
-              'select(.reason == "compiler-artifact" and .target.name == $name) | .filenames[] | select(endswith(".rmeta"))' \
-              "$EVIDENCE/candidate-cargo.json")
-            [[ "${#files[@]}" == 1 ]]
-            metadata+=(--extern "$name=${files[0]}")
+            for extension in rlib rmeta; do
+              jq -r --arg name "$name" --arg suffix ".$extension" \
+                'select(.reason == "compiler-artifact" and .target.name == $name) | .filenames[] | select(endswith($suffix))' \
+                "$EVIDENCE/candidate-cargo.json" > "$EVIDENCE/bootstrap-$name-$extension.txt"
+              mapfile -t files < "$EVIDENCE/bootstrap-$name-$extension.txt"
+              [[ "${#files[@]}" == 1 && -f "${files[0]}" ]]
+              libraries+=(--extern "$name=${files[0]}")
+            done
+          done
+          jq -r \
+            'select(.reason == "compiler-artifact") | .filenames[] | select(test("\\.(rlib|rmeta|so)$")) | sub("/[^/]+$"; "")' \
+            "$EVIDENCE/candidate-cargo.json" | sort -u > "$EVIDENCE/bootstrap-directories.txt"
+          mapfile -t directories < "$EVIDENCE/bootstrap-directories.txt"
+          [[ "${#directories[@]}" -gt 0 ]]
+          search=()
+          for directory in "${directories[@]}"; do
+            [[ -d "$directory" ]]
+            search+=(-L "dependency=$directory")
           done
           rustc --edition=2024 -D warnings -C opt-level=3 \
-            -L "dependency=$deps/deps" \
-            --extern "purrdf_lex=$deps/libpurrdf_lex.rlib" \
-            --extern "purrdf_hash=$deps/libpurrdf_hash.rlib" \
-            --extern "purrdf_testkit=$deps/libpurrdf_testkit.rlib" \
-            "${metadata[@]}" \
+            "${search[@]}" "${libraries[@]}" \
             crates/rdf-core/examples/freeze_runtime_evidence.rs \
             -o "$EVIDENCE/freeze-runtime-evidence" > "$EVIDENCE/controller-build.log" 2>&1
           "$EVIDENCE/freeze-runtime-evidence" "$EVIDENCE" "$GITHUB_WORKSPACE" "$CANDIDATE_SHA" \

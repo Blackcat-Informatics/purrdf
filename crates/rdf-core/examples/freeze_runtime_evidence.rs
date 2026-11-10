@@ -160,12 +160,7 @@ fn library(
         path.starts_with(evidence.join(format!("{arm}-target")).canonicalize()?),
         "artifact outside private target",
     )?;
-    let hash = record(&path, receipt)?;
-    let alias = evidence.join(format!("{arm}-target/release/lib{crate_name}.rlib"));
-    require(
-        record(&alias, receipt)? == hash,
-        "rlib alias disagrees with Cargo artifact",
-    )?;
+    record(&path, receipt)?;
     let metadata: Vec<_> = array(field(artifact, "/filenames")?)?
         .iter()
         .filter_map(Value::as_str)
@@ -388,18 +383,37 @@ fn collect(evidence: &Path, checkout: &Path, candidate: &str) -> Result<()> {
         library(&current, evidence, "candidate", name, source, &mut receipt)?;
     }
     let mut identities = Vec::new();
+    let mut search_directories = std::collections::BTreeSet::new();
     // Preserve the complete transitive library identities, not only the direct rlibs.
     for arm in ARMS {
-        for entry in fs::read_dir(evidence.join(format!("{arm}-target/release/deps")))? {
-            let path = entry?.path();
-            if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("rlib" | "rmeta" | "so")
-            ) {
-                identities.push((path.clone(), record(&path, &mut receipt)?));
+        let target = evidence.join(format!("{arm}-target")).canonicalize()?;
+        for line in fs::read_to_string(evidence.join(format!("{arm}-cargo.json")))?.lines() {
+            let message = parse(line)?;
+            if message.get("reason").and_then(Value::as_str) != Some("compiler-artifact") {
+                continue;
+            }
+            for filename in array(field(&message, "/filenames")?)? {
+                let path = Path::new(filename.as_str().ok_or("non-string artifact filename")?);
+                if matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("rlib" | "rmeta" | "so")
+                ) {
+                    let path = path.canonicalize()?;
+                    require(
+                        path.starts_with(&target),
+                        "transitive artifact outside private target",
+                    )?;
+                    search_directories
+                        .insert(path.parent().ok_or("artifact has no parent")?.to_path_buf());
+                    identities.push((path.clone(), record(&path, &mut receipt)?));
+                }
             }
         }
     }
+    require(
+        !search_directories.is_empty(),
+        "no transitive library directories",
+    )?;
     for (index, arm) in ARMS.iter().enumerate() {
         let export = evidence.join(format!("{arm}-harness"));
         fs::create_dir_all(export.join("support"))?;
@@ -425,8 +439,14 @@ fn collect(evidence: &Path, checkout: &Path, candidate: &str) -> Result<()> {
             record(&export.join(source), &mut receipt)?;
         }
         let executable = evidence.join(format!("{arm}-freeze"));
+        let mut command = Command::new("rustc");
+        for directory in &search_directories {
+            command
+                .arg("-L")
+                .arg(format!("dependency={}", directory.display()));
+        }
         run(
-            Command::new("rustc")
+            command
                 .args([
                     "--edition=2024",
                     "-D",
@@ -445,18 +465,6 @@ fn collect(evidence: &Path, checkout: &Path, candidate: &str) -> Result<()> {
                     "target-cpu=native",
                 ])
                 .arg(export.join("freeze.rs"))
-                .arg("-L")
-                .arg(format!(
-                    "dependency={}",
-                    evidence
-                        .join(format!("{arm}-target/release/deps"))
-                        .display()
-                ))
-                .arg("-L")
-                .arg(format!(
-                    "dependency={}",
-                    evidence.join("candidate-target/release/deps").display()
-                ))
                 .arg("--extern")
                 .arg(format!("purrdf_core={}", libraries[index].rlib.display()))
                 .arg("--extern")
