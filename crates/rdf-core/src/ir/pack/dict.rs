@@ -199,6 +199,7 @@ impl From<PackBitsError> for PackDictError {
         match e {
             PackBitsError::Truncated { needed, found } => Self::Truncated { needed, found },
             PackBitsError::Malformed(reason) => Self::Malformed(reason),
+            PackBitsError::Storage(cause) => Self::Storage(cause),
         }
     }
 }

@@ -806,7 +806,7 @@ impl LocalStatistics {
 
 impl<I: StatisticsId> LocalStatistics<I> {
     /// Release a staged result after a later publication step refuses.
-    fn release_admitted<S: Admission + ?Sized>(
+    pub(crate) fn release_admitted<S: Admission + ?Sized>(
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
@@ -1297,7 +1297,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
     }
 }
 
-pub(super) fn relation(stream: crate::StatisticsStream) -> Relation {
+pub(crate) fn relation(stream: crate::StatisticsStream) -> Relation {
     match stream {
         crate::StatisticsStream::Asserted => Relation::Asserted,
         crate::StatisticsStream::Reifiers => Relation::Reifiers,
@@ -1415,7 +1415,9 @@ mod tests {
         let triple = builder.intern_triple(subject, predicate, object).unwrap();
         builder.push_reifier(reifier, triple).unwrap();
         let dataset = builder.freeze().unwrap();
-        let statistics = dataset.predicate_statistics();
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let statistics = dataset.prepare_statistics_with_memory(&mut memory).unwrap();
         assert!(statistics.effective_directory.is_none());
         assert!(std::ptr::eq(
             statistics.source_directory(),
@@ -1427,7 +1429,8 @@ mod tests {
         let (annotated, _, _) = fixture(false);
         assert!(
             annotated
-                .predicate_statistics()
+                .prepare_statistics_with_memory(&mut memory)
+                .unwrap()
                 .effective_directory
                 .is_some()
         );
@@ -1680,6 +1683,119 @@ mod tests {
                 Some(exact(expected))
             );
         }
+
+        // A live outer visitor owns the reserved buffer. Its nested operation
+        // must preserve a refused temporary checkout without corrupting the
+        // outer ordered domain, and the reservation must return afterward.
+        let expected: BTreeSet<_> = dataset
+            .quads()
+            .filter(|row| row.p == predicates[0])
+            .map(|row| row.o)
+            .collect();
+        let mut observed = Vec::new();
+        stats
+            .visit_distinct(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut |id| {
+                    if observed.is_empty() {
+                        let mut ceiling = purrdf_lex::allocation::Ceiling(0);
+                        let mut memory = Memory::new(&mut ceiling);
+                        let refused = dataset.visit_distinct_with_memory(
+                            predicates[0],
+                            GraphMatch::Any,
+                            StatisticsStream::Asserted,
+                            StatisticsPosition::Object,
+                            &mut memory,
+                            &mut |_| panic!("refusal precedes callbacks"),
+                        );
+                        assert_eq!(
+                            refused,
+                            Err(super::super::pack::bits::PackBitsError::Storage(
+                                StorageError::AdmissionFailed
+                            ))
+                        );
+                        assert_eq!(memory.admitted_bytes(), 0);
+                        let mut nested = None;
+                        stats
+                            .visit_distinct(
+                                predicates[0],
+                                GraphMatch::Any,
+                                StatisticsStream::Asserted,
+                                StatisticsPosition::Object,
+                                &mut |inner| {
+                                    nested = Some(inner);
+                                    ControlFlow::Break(())
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(nested, expected.first().copied());
+                        assert_eq!(
+                            stats
+                                .predicate(
+                                    predicates[0],
+                                    GraphMatch::Any,
+                                    StatisticsStream::Asserted
+                                )
+                                .unwrap()
+                                .objects,
+                            Some(exact(expected.len() as u64))
+                        );
+                    }
+                    observed.push(id);
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert_eq!(observed, expected.iter().copied().collect::<Vec<_>>());
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stats.visit_distinct(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut |_| panic!("visitor unwind"),
+            )
+        }));
+        assert!(unwind.is_err());
+        let mut ceiling = purrdf_lex::allocation::Ceiling(0);
+        let mut memory = Memory::new(&mut ceiling);
+        let mut reused = 0;
+        dataset
+            .visit_distinct_with_memory(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut memory,
+                &mut |_| {
+                    reused += 1;
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert_eq!(reused, expected.len());
+        assert_eq!(memory.admitted_bytes(), 0);
+
+        let invalid = TermId::from_index(u32::MAX - 1).unwrap();
+        assert_eq!(
+            stats
+                .predicate(invalid, GraphMatch::Any, StatisticsStream::Asserted)
+                .unwrap()
+                .rows,
+            exact(0)
+        );
+        assert_eq!(
+            stats.predicate_object(
+                predicates[0],
+                invalid,
+                GraphMatch::Any,
+                StatisticsStream::Asserted
+            ),
+            Some(exact(0))
+        );
     }
 
     #[test]
@@ -1714,7 +1830,9 @@ mod tests {
         }
         for named in [false, true] {
             let (dataset, _, _) = fixture(named);
-            let statistics = dataset.predicate_statistics();
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let statistics = dataset.prepare_statistics_with_memory(&mut memory).unwrap();
             for (index, entry) in statistics.predicates.iter().enumerate() {
                 let rows: Vec<_> = match entry.key.0 {
                     Relation::Asserted => dataset.quads().collect(),
@@ -2056,11 +2174,13 @@ mod tests {
         let base = u64::from(u32::MAX) + 100;
         let translate = |id: TermId| GlobalTermId::from_index(base - id.index() as u64).unwrap();
         let mut admission = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut admission);
+        let source = native.prepare_statistics_with_memory(&mut memory).unwrap();
         let merged = LocalStatistics::<GlobalTermId>::merge_translated(
-            [&native],
-            |source| source.predicate_statistics(),
+            [&*source],
+            |source| source,
             |_, id| translate(id),
-            &mut Memory::new(&mut admission),
+            &mut memory,
         )
         .unwrap();
         for predicate in predicates {

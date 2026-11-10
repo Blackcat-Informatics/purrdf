@@ -58,7 +58,7 @@ impl SourceSummary {
 
     /// The record kind participates in whole-source identity. Literal source
     /// projections deliberately preserve occurrences across physical layers.
-    pub(super) fn add_row<S: Admission + ?Sized>(
+    pub(crate) fn add_row<S: Admission + ?Sized>(
         &mut self,
         relation: Relation,
         quad: QuadIds,

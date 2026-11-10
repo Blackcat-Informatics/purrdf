@@ -682,6 +682,24 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
             .map_err(|_| StorageError::SizeOverflow)?
             .size();
         self.add(next)?;
+        if !self.storage.progress_enabled() {
+            // The allocator may grow this buffer in place. Admission still
+            // covers both layouts, including an allocator that must move it.
+            if values.try_reserve_exact(required - values.len()).is_err() {
+                let _ = self.release_bytes(next);
+                return Err(StorageError::AllocationFailed);
+            }
+            if size_of::<T>() != 0 && values.capacity() != required {
+                // A broken capacity certificate is a hard invariant failure.
+                // Destroy the mutated buffer before independently refunding
+                // the two layouts we charged, preserving the original error.
+                drop(core::mem::take(values));
+                let _ = self.release_bytes(next);
+                let _ = self.release_bytes(old);
+                return Err(StorageError::SizeOverflow);
+            }
+            return self.remove(old);
+        }
         let mut replacement = Vec::new();
         if replacement.try_reserve_exact(required).is_err() {
             drop(replacement);
@@ -767,24 +785,34 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
                 self.storage.checkpoint(0)?;
             }
             if size_of::<T>() != 0 && values.capacity() != values.len() {
+                if !progress {
+                    let old = Layout::array::<T>(values.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size();
+                    let next = Layout::array::<T>(values.len())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size();
+                    self.add(next)?;
+                    if let Err(cause) = boxed::try_shrink_to_fit(&mut values) {
+                        let _ = self.release_bytes(next);
+                        return Err(cause);
+                    }
+                    return self.remove(old);
+                }
                 let mut replacement = Vec::new();
                 let moved = (|| {
                     self.reserve(&mut replacement, values.len())?;
-                    if progress {
-                        let count = values.len();
-                        #[expect(
-                            clippy::iter_with_drain,
-                            reason = "Drain retains the original Vec allocation until release_vec destroys and refunds it through the same account."
-                        )]
-                        let mut pending = values.drain(..);
-                        for _ in 0..count {
-                            self.storage.checkpoint(1)?;
-                            // The drain spans exactly the recorded original
-                            // length; each iteration consumes one element.
-                            replacement.push(pending.next().expect("recorded drain length"));
-                        }
-                    } else {
-                        replacement.append(&mut values);
+                    let count = values.len();
+                    #[expect(
+                        clippy::iter_with_drain,
+                        reason = "Drain retains the original Vec allocation until release_vec destroys and refunds it through the same account."
+                    )]
+                    let mut pending = values.drain(..);
+                    for _ in 0..count {
+                        self.storage.checkpoint(1)?;
+                        // The drain spans exactly the recorded original
+                        // length; each iteration consumes one element.
+                        replacement.push(pending.next().expect("recorded drain length"));
                     }
                     Ok::<_, StorageError>(())
                 })();

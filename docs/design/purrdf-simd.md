@@ -911,16 +911,24 @@ Its mapped sites identify the shared canonical CBOR and hashing code exercised;
 the probe makes no SIMD throughput claim. Input construction and output verification
 remain outside its measured allocation window.
 
-`freeze` times complete public freeze and validated materialization, including
-source statistics and directories. Its mapped site identifies the shared
-single-block hashing used by source identities. Fixture construction, validation
-for the materialization case, and output destruction remain outside timing.
+`freeze` times complete ordinary freeze and validated materialization, including
+bounded statistics scratch. Its shared fixed-hasher mapping covers the small
+vocabulary lookups. Fixture construction, validation for the materialization
+case, and output destruction remain outside timing. Exact source identity and
+directory preparation have separate first-use and explicit publication boundaries.
 
 `freeze_alloc` uses the same fixture in a separate counting-allocator process.
 It reports allocation count, requested bytes, retained live-byte change and peak
 working span for freeze, validated materialization and build plus freeze. The
 combined case exposes costs shifted into ingestion. Verification, reporting and
 output destruction remain outside each measurement window.
+
+`native_first_query` reuses the evaluator's row-loop fixture: two default-graph
+literal rows per subject, an integer modulo 100 and a shared composite list.
+It reports first prepared ASK and SELECT calls on fresh engines and datasets,
+warm calls after observation, and build plus freeze plus first query. Preparation
+and output destruction remain outside timing; first-use identity and statistics
+work stay inside the cold query. Its source distribution differs from `freeze`.
 
 <!-- simd-asm:benches:begin -->
 | bench | sites |
@@ -969,8 +977,8 @@ output destruction remain outside each measurement window.
 | `crates/rdf-core/benches/csv.rs` | core.csv-field |
 | `crates/rdf-core/benches/dataset_state_digest.rs` | blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf-core/benches/distance.rs` | distance.exact.dot, distance.exact.sqeuclid, distance.reassociated.dot, distance.reassociated.sqeuclid |
-| `crates/rdf-core/benches/freeze.rs` | blake3.single-block |
-| `crates/rdf-core/benches/freeze_alloc.rs` | blake3.single-block |
+| `crates/rdf-core/benches/freeze.rs` | hash.fixed-terminal |
+| `crates/rdf-core/benches/freeze_alloc.rs` | core.intern, hash.fixed-terminal |
 | `crates/rdf-core/benches/intern_absoluteness.rs` | core.intern, iri.delimiter-scan |
 | `crates/rdf-core/benches/intern_content_id.rs` | core.intern, hash.hex-decode, hash.hex-lower, hash.fixed-terminal |
 | `crates/rdf-core/benches/ir_layout.rs` | core.dataset-scan-filter, core.intern |
@@ -1025,6 +1033,7 @@ output destruction remain outside each measurement window.
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/sparql-eval/benches/lateral_service.rs` | eval.solution-compatible |
 | `crates/sparql-eval/benches/lateral_substitution.rs` | eval.solution-compatible |
+| `crates/sparql-eval/benches/native_first_query.rs` | blake3.hash-many-dispatch, blake3.single-block, eval.bgp-join-probe |
 | `crates/sparql-eval/benches/numeric_eval.rs` | eval.bgp-join-probe, eval.aggregate-fold, xsd.exact-arith |
 | `crates/sparql-eval/benches/paged_cross_page_bgp.rs` | core.paged-map-quad, eval.bgp-join-probe |
 | `crates/sparql-eval/benches/path_range.rs` | eval.bgp-join-probe, core.dataset-scan-filter |

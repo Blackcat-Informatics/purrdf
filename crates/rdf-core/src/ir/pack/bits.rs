@@ -39,6 +39,8 @@ pub enum PackBitsError {
     /// disagrees with one derived from another header field), or a value fell
     /// outside its documented domain (e.g. an `IntVector` width `> 64`).
     Malformed(&'static str),
+    /// Operation-local workspace admission or physical allocation refused.
+    Storage(purrdf_lex::allocation::StorageError),
 }
 
 impl purrdf_hash::error::StructuredError for PackBitsError {
@@ -48,6 +50,7 @@ impl purrdf_hash::error::StructuredError for PackBitsError {
             "found" => ByteCount(*found as u128),
         },
         Malformed(message) => "pack-bits-malformed" { "message" => Text(message) },
+        Storage(cause) => "pack-bits-storage" { "cause" => Cause(cause) },
     }
 }
 
@@ -59,11 +62,12 @@ impl fmt::Display for PackBitsError {
                 "pack: truncated input: needed at least {needed} bytes, found {found}"
             ),
             Self::Malformed(reason) => write!(f, "pack: malformed input: {reason}"),
+            Self::Storage(cause) => cause.fmt(f),
         }
     }
 }
 
-impl std::error::Error for PackBitsError {}
+purrdf_lex::error_source!(PackBitsError { Storage });
 
 // ---------------------------------------------------------------------------
 // Small byte-header helpers shared by every pack codec.

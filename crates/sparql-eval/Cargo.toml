@@ -157,6 +157,10 @@ name = "query_eval"
 harness = false
 
 [[bench]]
+name = "native_first_query"
+harness = false
+
+[[bench]]
 name = "prepared_reuse"
 harness = false
 

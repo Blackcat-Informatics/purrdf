@@ -67,44 +67,53 @@ impl FrozenTerms {
     where
         S: purrdf_lex::allocation::Admission + ?Sized,
     {
-        use super::term::CanonicalNode;
         use super::term_walk::OwnedTermFoldError;
         pending.clear();
-        let mut current = Some(id);
-        while let Some(id) = current {
+        let mut current = id;
+        loop {
             memory.admission_mut().checkpoint(1)?;
-            let term = self.resolve(id);
-            let node = match term {
-                TermRef::Iri(iri) => CanonicalNode::Iri(iri),
-                TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
-                TermRef::Literal {
+            self.canonical_node(current)
+                .try_visit_bytes(&mut |bytes| output(bytes, memory))
+                .map_err(OwnedTermFoldError::Visitor)?;
+            let TermRef::Triple { s, p, o } = self.resolve(current) else {
+                return Ok(());
+            };
+            // The builder checks every dictionary triple before acyclicity:
+            // subject and predicate are leaves, and only the object may nest.
+            // Keep the published preorder bytes without a pending allocation.
+            for child in [s, p] {
+                memory.admission_mut().checkpoint(1)?;
+                self.canonical_node(child)
+                    .try_visit_bytes(&mut |bytes| output(bytes, memory))
+                    .map_err(OwnedTermFoldError::Visitor)?;
+            }
+            current = o;
+        }
+    }
+
+    fn canonical_node(&self, id: TermId) -> super::term::CanonicalNode<'_> {
+        use super::term::CanonicalNode;
+        match self.resolve(id) {
+            TermRef::Iri(iri) => CanonicalNode::Iri(iri),
+            TermRef::Blank { label, scope } => CanonicalNode::Blank { label, scope },
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                    unreachable!("validated literal datatype is an IRI")
+                };
+                CanonicalNode::Literal {
                     lexical,
                     datatype,
                     language,
                     direction,
-                } => {
-                    let TermRef::Iri(datatype) = self.resolve(datatype) else {
-                        unreachable!("validated literal datatype is an IRI")
-                    };
-                    CanonicalNode::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => CanonicalNode::Triple,
-            };
-            node.try_visit_bytes(&mut |bytes| output(bytes, memory))
-                .map_err(OwnedTermFoldError::Visitor)?;
-            if let TermRef::Triple { s, p, o } = term {
-                for child in [o, p, s] {
-                    memory.push_copy_with_progress(pending, child)?;
                 }
             }
-            current = pending.pop();
+            TermRef::Triple { .. } => CanonicalNode::Triple,
         }
-        Ok(())
     }
 
     /// Bind every retained lexical owner, including unused blank names consulted

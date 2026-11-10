@@ -475,21 +475,17 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        check_id_in_range_with_memory(q.s, term_count, &QuadContext(i, "subject"), memory)?;
-        check_id_in_range_with_memory(q.p, term_count, &QuadContext(i, "predicate"), memory)?;
+        let subject_context = QuadContext(i, "subject");
+        let predicate_context = QuadContext(i, "predicate");
+        check_id_in_range_with_memory(q.s, term_count, &subject_context, memory)?;
+        check_id_in_range_with_memory(q.p, term_count, &predicate_context, memory)?;
         check_id_in_range_with_memory(q.o, term_count, &QuadContext(i, "object"), memory)?;
         if let Some(g) = q.g {
             check_id_in_range_with_memory(g, term_count, &QuadContext(i, "graph"), memory)?;
         }
 
-        require_subject_with_memory(
-            builder,
-            q.s,
-            &QuadContext(i, "subject"),
-            ASSERTED_SUBJECT,
-            memory,
-        )?;
-        require_iri_predicate_with_memory(builder, q.p, &QuadContext(i, "predicate"), memory)?;
+        require_subject_with_memory(builder, q.s, &subject_context, ASSERTED_SUBJECT, memory)?;
+        require_iri_predicate_with_memory(builder, q.p, &predicate_context, memory)?;
         if let Some(g) = q.g {
             require_graph_name_with_memory(builder, g, &QuadContext(i, "graph"), memory)?;
         }
