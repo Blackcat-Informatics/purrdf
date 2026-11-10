@@ -415,32 +415,30 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// reads each as a sequence into its own vector. The seam shapes graph carries one
 /// of each: two allocations, once per restore, whatever the data.
 ///
-/// # Sealed predicate statistics on the carried shapes graph
+/// # Deferred statistics on the carried shapes graph
 ///
 /// Product admission restores its own fixed shapes graph through `restore_pack`,
-/// which freezes the native RDF tables and their predicate/domain metadata.
-/// Predicate/domain metadata adds fifteen allocations for this product. Its
-/// independent source metadata adds one more: a source-record buffer reserved
-/// once for the fixed carried graph's sixteen asserted rows. There are no
-/// annotations, so normalized keys reuse that same directory. A directory below
-/// 32 rows needs no checkpoint, and scalar term hashing needs no pending buffer.
-/// This replaces eleven source allocations from two growing record vectors,
-/// traversal scratch and two resized checkpoint vectors. The measured restore
-/// retains its complete original definition domain once. A graph with no function
-/// class needs no function parser or prefix-map copies, and an edgeless strong
-/// ownership graph needs no SCC scratch. Identity refresh hashes the canonical
-/// framing directly, without serialization buffers. Scalar-registry fingerprints
+/// which freezes the native RDF tables with deferred predicate/domain and source
+/// metadata. This replaces fifteen eager predicate/domain allocations and one
+/// source-record allocation for the fixed carried graph's sixteen asserted rows
+/// with two nonempty bitset allocations, one for scalar statistics and one for
+/// distinct-domain visitors. No source directory is retained by ordinary freeze.
+/// The measured restore retains its complete original definition domain once.
+/// A graph with no function class needs no function parser or prefix-map copies,
+/// and an edgeless strong ownership graph needs no SCC scratch. Identity refresh
+/// hashes the canonical framing directly, without serialization buffers.
+/// Scalar-registry fingerprints
 /// now stream into SHA-256 too. Admission fingerprints these empty populations
 /// five times: once for host admission, twice when checking installed declarations,
 /// and twice when checking the restored identity. Each previously allocated a
 /// domain frame and then grew its buffer for the population frame. Streaming
 /// removes those ten allocations; the resident capability and empty declaration
-/// ordering allocate nothing. The measured restore is therefore 220 for both
-/// instance sizes. This is work
-/// on the carried product rather than a scan or copy of the instance dataset. The
-/// equality across sizes and the live restored-validator checks below remain
+/// ordering allocate nothing. The measured restore is therefore 206 for both
+/// instance sizes. This is work on the carried product rather than a scan or copy
+/// of the instance dataset. The equality across sizes and the live restored-validator
+/// checks below remain
 /// part of the contract.
-const ADMIT_ALLOC_CONST: u64 = 220;
+const ADMIT_ALLOC_CONST: u64 = 206;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;
