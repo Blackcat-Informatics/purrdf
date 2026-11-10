@@ -43,6 +43,20 @@ pub(crate) enum TermsRef<'a> {
 }
 
 impl<'a> TermsRef<'a> {
+    pub(crate) fn from_sources(
+        stored: Option<&'a dyn StoredTerms>,
+        shared: Option<&'a [Arc<Term>]>,
+        owned: &'a [Term],
+    ) -> Self {
+        if let Some(terms) = stored {
+            Self::Stored(terms)
+        } else if let Some(terms) = shared {
+            Self::Shared(terms)
+        } else {
+            Self::Owned(owned)
+        }
+    }
+
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Owned(terms) => terms.len(),

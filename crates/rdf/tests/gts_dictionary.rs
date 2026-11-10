@@ -215,6 +215,42 @@ fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
             "failed output releases its own scratch"
         );
     }
+    // Byte-exact stored output shares the resident RDF language identity fold.
+    let mut writer = Writer::new("rdf12");
+    let mut directional = Term::lang_literal("directional", "FR");
+    directional.direction = Some("rtl".to_owned());
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
+        Term::lang_literal("ordinary", "FR"),
+        directional,
+    ]);
+    writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None)]);
+    let bytes = writer.into_bytes();
+    let resident = import_gts_events(&bytes).unwrap();
+    let mut files = storage::Files::new(&root.join("language-fold"));
+    let replay = files.replay();
+    let mut state = storage::Resolution::new(&root.join("language-fold-state"));
+    let mut output = WriterDrain(Vec::new());
+    let mut ceiling = Ceiling(128 * 1024);
+    let mut memory = Memory::new(&mut ceiling);
+    export_gts_rdf_nquads_with_dictionary(
+        &bytes,
+        &mut files,
+        &mut state,
+        replay,
+        &mut output,
+        &mut memory,
+    )
+    .unwrap();
+    assert_eq!(output.0, b"<https://example.org/s> <https://example.org/p> \"ordinary\"@fr .\n<https://example.org/s> <https://example.org/p> \"directional\"@fr--rtl .\n");
+    let reparsed = parse_dataset(&output.0, "application/n-quads", None).unwrap();
+    assert_eq!(render(&reparsed), render(&resident.dataset));
+    assert_eq!(
+        memory.admitted_bytes(),
+        0,
+        "folded language scratch is refunded after destruction"
+    );
 }
 
 fn has_original_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
@@ -306,14 +342,19 @@ fn native_records_refuse_corruption_cancellation_and_frame_limits() {
         cause = error.source();
     }
     assert!(original);
-    files.cancel_after = None;
+    // Frame-admission neighbours use their own source namespace, independent
+    // of the deliberately corrupted record exercised above.
+    let mut files = storage::Files::new(&root.join("frame-limits"));
     files.limits.encoded_frame_bytes = 16;
     let bytes = fixture::source(1, false);
     let replay = files.replay();
     let mut resolution = storage::Resolution::new(&root.join("resolution"));
-    assert!(
-        import_gts_events_with_dictionary(&bytes, &mut files, &mut resolution, replay).is_err()
-    );
+    let error = import_gts_events_with_dictionary(&bytes, &mut files, &mut resolution, replay)
+        .expect_err("the encoded source window must refuse its own ceiling");
+    assert!(source_chain_has(
+        &error,
+        |cause| matches!(cause.downcast_ref::<DictionaryError>(), Some(DictionaryError::Limit { resource: "encoded-frame-bytes", limit: 16, required }) if *required > 16)
+    ));
     files.limits.encoded_frame_bytes = 8192;
     let mut writer = Writer::new("rdf12");
     writer.add_frame(
@@ -457,6 +498,149 @@ fn native_spill_commits_before_refund_and_never_falls_back_after_failure() {
             .value,
         pin.value
     );
+
+    // Destination reuse is permitted only for the exact admitted source prefix.
+    for mode in [
+        "matching",
+        "term",
+        "binding",
+        "extra-binding",
+        "lost-term",
+        "lost-binding",
+    ] {
+        let term = Term::iri("https://example.org/prefix");
+        let mut resident = storage::Resident::default();
+        resident.put(first, &term).unwrap();
+        if mode != "extra-binding" {
+            resident.bind_first(first, (0, 0, 0)).unwrap();
+        }
+        let bytes = resident.retained_bytes();
+        let mut external = storage::Files::new(&root.join(format!("prefix-{mode}")));
+        if !mode.starts_with("lost-") {
+            external
+                .put(
+                    first,
+                    &if mode == "term" {
+                        Term::iri("https://example.org/other")
+                    } else {
+                        term.clone()
+                    },
+                )
+                .unwrap();
+            external
+                .bind_first(
+                    first,
+                    if mode == "binding" {
+                        (1, 1, 1)
+                    } else {
+                        (0, 0, 0)
+                    },
+                )
+                .unwrap();
+        }
+        external.discard_writes = match mode {
+            "lost-term" => Some("term"),
+            "lost-binding" => Some("binding"),
+            _ => None,
+        };
+        let mut coordinator = SpillingDictionary::new(resident, external, SpillPolicy::AtBytes(0));
+        let result = coordinator.get(first);
+        if mode == "matching" {
+            assert_eq!(result.unwrap().unwrap().value, term.value);
+            assert_eq!(coordinator.transitions(), 1);
+        } else {
+            assert!(
+                matches!(
+                    result,
+                    Err(DictionaryError::Corrupt(_) | DictionaryError::Missing(_))
+                ),
+                "{mode}"
+            );
+            assert_eq!(coordinator.residence(), DictionaryResidence::Failed);
+            assert_eq!(
+                coordinator.retained_resident_bytes(),
+                bytes,
+                "{mode}: no refund before verified commit"
+            );
+            assert!(coordinator.commit().is_err());
+        }
+        let (mut resident, external) = coordinator.into_parts();
+        assert_eq!(external.commits, usize::from(mode == "matching"), "{mode}");
+        if mode != "matching" {
+            assert_eq!(resident.get(first).unwrap().unwrap().value, term.value);
+        }
+    }
+    // A newly introduced source key cannot import an unrelated future binding,
+    // even when its raw term matches and insertion would trigger migration.
+    for future_binding in [false, true] {
+        let mut resident = storage::Resident::default();
+        resident
+            .put(first, &Term::iri("https://example.org/first"))
+            .unwrap();
+        let retained = resident.retained_bytes();
+        let next = TermKey {
+            segment: 0,
+            term: 1,
+        };
+        let term = Term::literal("x".repeat(2048), None);
+        let mut external = storage::Files::new(&root.join(format!("future-{future_binding}")));
+        external.put(next, &term).unwrap();
+        if future_binding {
+            external.bind_first(next, (1, 1, 1)).unwrap();
+        }
+        let mut coordinator =
+            SpillingDictionary::new(resident, external, SpillPolicy::AtBytes(retained + 1));
+        let result = coordinator.introduce(next, &term);
+        if future_binding {
+            assert!(matches!(result, Err(DictionaryError::Corrupt(_))));
+            assert_eq!(coordinator.residence(), DictionaryResidence::Failed);
+            assert_eq!(coordinator.retained_resident_bytes(), retained);
+        } else {
+            assert_eq!(result.unwrap().value, term.value);
+        }
+        let (_, external) = coordinator.into_parts();
+        assert_eq!(external.commits, usize::from(!future_binding));
+    }
+    // Generic idempotent persistence remains distinct from fresh introduction.
+    let mut generic = SpillingDictionary::new(
+        storage::Resident::default(),
+        storage::Files::new(&root.join("idempotent")),
+        SpillPolicy::External,
+    );
+    let term = Term::iri("https://example.org/same");
+    generic.put(first, &term).unwrap();
+    generic.bind_first(first, (0, 0, 0)).unwrap();
+    generic.put(first, &term).unwrap();
+    generic.bind_first(first, (1, 1, 1)).unwrap();
+    assert_eq!(generic.first_binding(first).unwrap(), Some((0, 0, 0)));
+    assert!(matches!(
+        generic.introduce(first, &term),
+        Err(DictionaryError::Corrupt(_))
+    ));
+    assert_eq!(generic.residence(), DictionaryResidence::Failed);
+    let (_, mut reopened) = generic.into_parts();
+    assert_eq!(reopened.get(first).unwrap().unwrap().value, term.value);
+    assert_eq!(reopened.first_binding(first).unwrap(), Some((0, 0, 0)));
+    // An initially over-limit prefix must not commit before detecting a
+    // conflicting incoming key in the destination.
+    let mut resident = storage::Resident::default();
+    resident.put(first, &term).unwrap();
+    let next = TermKey {
+        segment: 0,
+        term: 1,
+    };
+    let mut external = storage::Files::new(&root.join("initial-conflict"));
+    external
+        .put(next, &Term::iri("https://example.org/old"))
+        .unwrap();
+    let mut coordinator = SpillingDictionary::new(resident, external, SpillPolicy::AtBytes(0));
+    assert!(matches!(
+        coordinator.put(next, &Term::iri("https://example.org/new")),
+        Err(DictionaryError::Corrupt(_))
+    ));
+    let (mut resident, external) = coordinator.into_parts();
+    assert!(resident.get(first).unwrap().is_some());
+    assert_eq!(external.commits, 0);
     let path = root.join("reopened-resolution");
     let mut state = storage::Resolution::<TermKey>::new(&path);
     state

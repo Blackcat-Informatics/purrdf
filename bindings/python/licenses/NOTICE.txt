@@ -147,6 +147,19 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/either-1.19.0/LICENSE-APACHE
 Notice: dependencies/either-1.19.0/LICENSE-MIT
 
+gb18030-mapping-data: Unicode-3.0
+Scope: original GB 18030 mapping data, source explanation and generated native tables; original Unicode and IBM notices retained; converter and generator independently written
+Source: https://github.com/unicode-org/icu-data
+Evidence: crates/lex/data/gb18030/PROVENANCE.md
+Evidence: docs/GB18030.md
+Notice: third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA
+
+gb18030-reference-2005: Unicode-DFS-2016 AND ICU
+Scope: source-only independent pre-2022 mapping reference for generator and native qualification, with original notices; no converter code adopted
+Source: https://github.com/unicode-org/icu/blob/release-71-1/icu4c/source/data/mappings/gb18030.ucm
+Evidence: crates/lex/data/gb18030/PROVENANCE.md
+Notice: third-party/gb18030-reference-2005/0-LICENSE-ICU-71
+
 getrandom-0.4.3: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index

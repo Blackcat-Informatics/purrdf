@@ -218,6 +218,14 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             direction,
                         );
                         let baseline = self.memory.admitted_bytes();
+                        let language = term
+                            .lang
+                            .as_deref()
+                            .filter(|tag| !purrdf_iri::langtag::is_identity_folded(tag))
+                            .map(|tag| {
+                                purrdf_iri::langtag::identity_fold_with_memory(tag, self.memory)
+                            })
+                            .transpose()?;
                         let lexical = purrdf_core::cdt_blank::bind_cdt_blank_labels_with_memory(
                             term.value.as_deref().unwrap_or_default(),
                             datatype,
@@ -230,11 +238,12 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                         term_syntax::write_literal(
                             &lexical,
                             datatype,
-                            term.lang.as_deref(),
+                            language.as_deref().or(term.lang.as_deref()),
                             term.direction.as_deref(),
                             &mut self.output,
                         );
                         drop(lexical);
+                        drop(language);
                         self.memory
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }

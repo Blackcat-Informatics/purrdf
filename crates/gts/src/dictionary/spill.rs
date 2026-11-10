@@ -4,6 +4,7 @@
 //! Deterministic migration before a resident dictionary exceeds its allowance.
 
 use super::{DictionaryError, DictionaryLimits, Term, TermKey, TermLease, TermStorage, Triple3};
+use super::{compatible_introduction, compatible_term, introduce_term};
 
 /// Explicit ownership policy selected before a dictionary drive starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +156,51 @@ impl<R: ResidentTermStorage, E: TermStorage> SpillingDictionary<R, E> {
         Ok(())
     }
 
+    fn check_migration(&mut self, complete: bool) -> Result<(), DictionaryError> {
+        let mut previous = None;
+        while let Some(key) = self.resident.next_key(previous) {
+            if previous.is_some_and(|previous| key <= previous) {
+                return Err(DictionaryError::Corrupt(
+                    "unordered resident term migration",
+                ));
+            }
+            self.resident.checkpoint(1)?;
+            let term = self
+                .resident
+                .get(key)?
+                .ok_or(DictionaryError::Missing(key))?;
+            if !compatible_term(&mut self.external, key, &term)? && complete {
+                return Err(DictionaryError::Missing(key));
+            }
+            self.external.checkpoint(1)?;
+            let actual = self.external.first_binding(key)?;
+            let expected = self.resident.first_binding(key)?;
+            if actual != expected && (complete || actual.is_some()) {
+                return Err(DictionaryError::Corrupt(
+                    "source first binding differs during migration",
+                ));
+            }
+            previous = Some(key);
+        }
+        let mut previous = None;
+        while let Some((key, expected)) = self.resident.next_binding(previous) {
+            if previous.is_some_and(|previous| key <= previous) {
+                return Err(DictionaryError::Corrupt(
+                    "unordered resident binding migration",
+                ));
+            }
+            self.external.checkpoint(1)?;
+            let actual = self.external.first_binding(key)?;
+            if actual != Some(expected) && (complete || actual.is_some()) {
+                return Err(DictionaryError::Corrupt(
+                    "source first binding differs during migration",
+                ));
+            }
+            previous = Some(key);
+        }
+        Ok(())
+    }
+
     fn migrate_if_needed(&mut self, required: usize) -> Result<(), DictionaryError> {
         let SpillPolicy::AtBytes(limit) = self.policy else {
             return Ok(());
@@ -163,6 +209,7 @@ impl<R: ResidentTermStorage, E: TermStorage> SpillingDictionary<R, E> {
             return Ok(());
         }
         let result = (|| {
+            self.check_migration(false)?;
             let mut previous = None;
             while let Some(key) = self.resident.next_key(previous) {
                 if previous.is_some_and(|previous| key <= previous) {
@@ -189,6 +236,7 @@ impl<R: ResidentTermStorage, E: TermStorage> SpillingDictionary<R, E> {
                 self.external.bind_first(key, triple)?;
                 previous = Some(key);
             }
+            self.check_migration(true)?;
             self.external.commit()?;
             self.resident.release_entries()?;
             self.transitions = self
@@ -233,16 +281,69 @@ impl<R: ResidentTermStorage, E: TermStorage> TermStorage for SpillingDictionary<
         self.checked(result)
     }
     fn put(&mut self, key: TermKey, term: &Term) -> Result<(), DictionaryError> {
+        self.healthy()?;
+        // Check immutable overlap before any transition can release its owner.
+        let existing = match self.residence {
+            DictionaryResidence::Resident => compatible_term(&mut self.resident, key, term),
+            _ => compatible_term(&mut self.external, key, term),
+        };
+        let existing = self.checked(existing)?;
+        if self.residence == DictionaryResidence::Resident
+            && matches!(self.policy, SpillPolicy::AtBytes(limit) if self.resident.retained_bytes() > limit)
+        {
+            let overlap = compatible_term(&mut self.external, key, term);
+            self.checked(overlap)?;
+        }
         self.prepare()?;
+        if existing {
+            return Ok(());
+        }
         if self.residence == DictionaryResidence::Resident {
             let required = self.resident.required_term_bytes(key, term);
             let required = self.checked(required)?;
+            if matches!(self.policy, SpillPolicy::AtBytes(limit) if required > limit) {
+                let overlap = compatible_term(&mut self.external, key, term);
+                self.checked(overlap)?;
+            }
             self.migrate_if_needed(required)?;
         }
-        let result = match self.residence {
-            DictionaryResidence::Resident => self.resident.put(key, term),
-            _ => self.external.put(key, term),
-        };
+        let result = (|| {
+            let storage: &mut dyn TermStorage = match self.residence {
+                DictionaryResidence::Resident => &mut self.resident,
+                _ => &mut self.external,
+            };
+            if !compatible_term(storage, key, term)? {
+                storage.put(key, term)?;
+            }
+            storage.checkpoint(1)?;
+            let stored = storage.get(key)?.ok_or(DictionaryError::Missing(key))?;
+            if *stored != *term {
+                return Err(DictionaryError::Corrupt(
+                    "stored term differs after insertion",
+                ));
+            }
+            Ok(())
+        })();
+        self.checked(result)
+    }
+    fn introduce(&mut self, key: TermKey, term: &Term) -> Result<TermLease, DictionaryError> {
+        self.healthy()?;
+        let result = (|| {
+            if self.residence == DictionaryResidence::Resident {
+                let present = compatible_introduction(&mut self.resident, key, term)?;
+                let required = if present {
+                    self.resident.retained_bytes()
+                } else {
+                    self.resident.required_term_bytes(key, term)?
+                };
+                if matches!(self.policy, SpillPolicy::AtBytes(limit) if required > limit) {
+                    // New-key compatibility must hold before migration commits
+                    // and releases any already-admitted resident prefix.
+                    compatible_introduction(&mut self.external, key, term)?;
+                }
+            }
+            introduce_term(self, key, term)
+        })();
         self.checked(result)
     }
     fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {

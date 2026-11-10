@@ -1,6 +1,39 @@
 {
   "components": [
     {
+      "id": "gb18030-mapping-data",
+      "license": "Unicode-3.0",
+      "notices": [
+        "third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA"
+      ],
+      "paths": [
+        "crates/lex/data/gb18030/gbkuni30.txt",
+        "crates/lex/data/gb18030/gb18030-source.html",
+        "crates/lex/src/gb18030/tables.rs"
+      ],
+      "provenance": [
+        "crates/lex/data/gb18030/PROVENANCE.md",
+        "docs/GB18030.md"
+      ],
+      "scope": "original GB 18030 mapping data, source explanation and generated native tables; original Unicode and IBM notices retained; converter and generator independently written",
+      "source": "https://github.com/unicode-org/icu-data"
+    },
+    {
+      "id": "gb18030-reference-2005",
+      "license": "Unicode-DFS-2016 AND ICU",
+      "notices": [
+        "third-party/gb18030-reference-2005/0-LICENSE-ICU-71"
+      ],
+      "paths": [
+        "crates/lex/data/gb18030/gb18030-2005.ucm"
+      ],
+      "provenance": [
+        "crates/lex/data/gb18030/PROVENANCE.md"
+      ],
+      "scope": "source-only independent pre-2022 mapping reference for generator and native qualification, with original notices; no converter code adopted",
+      "source": "https://github.com/unicode-org/icu/blob/release-71-1/icu4c/source/data/mappings/gb18030.ucm"
+    },
+    {
       "id": "libyaml-emitter",
       "license": "MIT",
       "notices": [
@@ -86,7 +119,9 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "e205dcd4276c805e162d6c6be91165c195d426f5662c799cdba0203701b3ce5a",
+    "NOTICE.txt": "4161aaa443f16872e764ba84c49ab509d7883f711f96357803bc7f7b4428d095",
+    "third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA": "f72db45707e93c90c4bf400edfa5d38ce44fe692789e385548e627459c1bf6c9",
+    "third-party/gb18030-reference-2005/0-LICENSE-ICU-71": "af3e84c401f1a35e8d32d6eb1a33fe587c3981aa5cd206033d9527c1855b57a2",
     "third-party/libyaml-emitter/0-unsafe-libyaml-0.2.11-MIT.txt": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
     "third-party/libyaml-emitter/1-libyaml-COPYRIGHT-MIT.txt": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
@@ -96,7 +131,7 @@
     "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND MIT AND Unicode-3.0 AND BSD-3-Clause AND Unicode-DFS-2016 AND ICU",
   "profile": "purrdf-lex",
   "schema": 1
 }

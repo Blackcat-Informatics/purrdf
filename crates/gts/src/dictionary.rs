@@ -213,6 +213,61 @@ impl Deref for TermLease {
     }
 }
 
+/// Check immutable-key overlap without copying or escaping either payload.
+pub(crate) fn compatible_term<S: TermStorage + ?Sized>(
+    storage: &mut S,
+    key: TermKey,
+    term: &Term,
+) -> Result<bool, DictionaryError> {
+    storage.checkpoint(1)?;
+    match storage.get(key)? {
+        Some(existing) if *existing != *term => Err(DictionaryError::Corrupt(
+            "source key already contains another term",
+        )),
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+pub(crate) fn compatible_introduction<S: TermStorage + ?Sized>(
+    storage: &mut S,
+    key: TermKey,
+    term: &Term,
+) -> Result<bool, DictionaryError> {
+    let present = compatible_term(storage, key, term)?;
+    storage.checkpoint(1)?;
+    if storage.first_binding(key)?.is_some() {
+        return Err(DictionaryError::Corrupt(
+            "new source term already has a stored first binding",
+        ));
+    }
+    Ok(present)
+}
+
+pub(crate) fn introduce_term<S: TermStorage + ?Sized>(
+    storage: &mut S,
+    key: TermKey,
+    term: &Term,
+) -> Result<TermLease, DictionaryError> {
+    if !compatible_introduction(storage, key, term)? {
+        storage.put(key, term)?;
+    }
+    storage.checkpoint(1)?;
+    let lease = storage.get(key)?.ok_or(DictionaryError::Missing(key))?;
+    if *lease != *term {
+        return Err(DictionaryError::Corrupt(
+            "introduced term differs after storage",
+        ));
+    }
+    storage.checkpoint(1)?;
+    if storage.first_binding(key)?.is_some() {
+        return Err(DictionaryError::Corrupt(
+            "introduced term acquired an old first binding",
+        ));
+    }
+    Ok(lease)
+}
+
 /// Caller-owned persistent term storage, independent of a reader's cache.
 ///
 /// Every operation is fallible. A write failure must never select resident
@@ -220,6 +275,12 @@ impl Deref for TermLease {
 /// grants in returned leases, and preserve keys across eviction and reopening.
 /// Multiple handles may share the same store so validation and resolution use
 /// one persisted dictionary without retaining its complete decoded contents.
+///
+/// One writable namespace belongs to one admitted source prefix and has an
+/// exclusive writer. Read-only reopening preserves that source's immutable keys
+/// and first bindings. Starting another stream is a new introduction: existing
+/// terms must agree and must not carry bindings from later or unrelated input.
+/// Migration may reuse a matching admitted prefix; overlapping future state is refused.
 pub trait TermStorage {
     /// Observe settled reader tables after each provisional frame folds.
     /// These cardinalities/capacities are not allocator-byte or RSS estimates.
@@ -238,6 +299,17 @@ pub trait TermStorage {
     /// # Errors
     /// Returns the original storage, admission or cancellation refusal.
     fn put(&mut self, key: TermKey, term: &Term) -> Result<(), DictionaryError>;
+
+    /// Introduce one append-order term in the current source prefix and pin it.
+    /// Matching unbound persisted terms may be reused. Existing first bindings
+    /// at a newly introduced key are future or unrelated state, not current rows.
+    /// Generic [`Self::put`] remains available for an already admitted entry.
+    ///
+    /// # Errors
+    /// Returns original storage/admission failures or incompatible source state.
+    fn introduce(&mut self, key: TermKey, term: &Term) -> Result<TermLease, DictionaryError> {
+        introduce_term(self, key, term)
+    }
 
     /// Read and pin one original accepted term, admitting its decoded storage.
     ///
@@ -282,6 +354,9 @@ impl<S: TermStorage + ?Sized> TermStorage for &mut S {
     fn put(&mut self, key: TermKey, term: &Term) -> Result<(), DictionaryError> {
         (**self).put(key, term)
     }
+    fn introduce(&mut self, key: TermKey, term: &Term) -> Result<TermLease, DictionaryError> {
+        (**self).introduce(key, term)
+    }
     fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {
         (**self).get(key)
     }
@@ -314,6 +389,11 @@ impl<S: TermStorage> TermStorage for &std::cell::RefCell<S> {
         self.try_borrow_mut()
             .map_err(|_| DictionaryError::Corrupt("dictionary callback reentered"))?
             .put(key, term)
+    }
+    fn introduce(&mut self, key: TermKey, term: &Term) -> Result<TermLease, DictionaryError> {
+        self.try_borrow_mut()
+            .map_err(|_| DictionaryError::Corrupt("dictionary callback reentered"))?
+            .introduce(key, term)
     }
     fn get(&mut self, key: TermKey) -> Result<Option<TermLease>, DictionaryError> {
         self.try_borrow_mut()

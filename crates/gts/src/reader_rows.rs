@@ -52,21 +52,47 @@ pub(crate) enum RowDecode<T> {
     Row(T),
     Damaged(Box<RowError>),
     Position(Box<RowError>),
-    Storage(DictionaryError),
+    Storage,
 }
 
 pub(crate) enum RowCheckError {
     Position(Box<RowError>),
-    Storage(DictionaryError),
+    Storage,
 }
 
-purrdf_lex::variant_from!(RowCheckError { Storage(DictionaryError) });
+/// Keep cold storage failures in the folder's existing first-cause owner.
+/// Successful row returns never carry or allocate an error-sized payload.
+fn required_kind(
+    terms: TermsRef<'_>,
+    id: usize,
+    failure: &mut Option<DictionaryError>,
+) -> Option<TermKind> {
+    match terms.required(id) {
+        Ok(term) => Some(term.kind),
+        Err(error) => {
+            failure.get_or_insert(error);
+            None
+        }
+    }
+}
+
+pub(crate) fn take_storage_failure(failure: &mut Option<DictionaryError>) -> DictionaryError {
+    // Both decoder entry points and position checks signal Storage only after
+    // retaining a failure here, or on finding an already retained first cause.
+    failure
+        .take()
+        .expect("a row storage refusal retains its original failure")
+}
 
 pub(crate) fn decode_reifier_row(
     row: Option<NumericRow<5>>,
     terms: TermsRef<'_>,
     base: TermIdBase,
+    failure: &mut Option<DictionaryError>,
 ) -> RowDecode<ReifierRow> {
+    if failure.is_some() {
+        return RowDecode::Storage;
+    }
     let Some(row) = row else {
         return RowDecode::Skip;
     };
@@ -100,10 +126,12 @@ pub(crate) fn decode_reifier_row(
         return RowDecode::Skip;
     };
     let triple = (s, p, o);
-    if let Err(detail) = check_statement_positions(terms, triple, graph_slot, "reifier row") {
+    if let Err(detail) =
+        check_statement_positions(terms, triple, graph_slot, "reifier row", failure)
+    {
         return match detail {
             RowCheckError::Position(detail) => RowDecode::Position(detail),
-            RowCheckError::Storage(error) => RowDecode::Storage(error),
+            RowCheckError::Storage => RowDecode::Storage,
         };
     }
     RowDecode::Row((rid, triple, graph_slot))
@@ -113,7 +141,11 @@ pub(crate) fn decode_annotation_row(
     row: Option<NumericRow<4>>,
     terms: TermsRef<'_>,
     base: TermIdBase,
+    failure: &mut Option<DictionaryError>,
 ) -> RowDecode<AnnotationRow> {
+    if failure.is_some() {
+        return RowDecode::Storage;
+    }
     let Some(row) = row else {
         return RowDecode::Skip;
     };
@@ -147,9 +179,8 @@ pub(crate) fn decode_annotation_row(
     let (Some(reifier), Some(predicate), Some(value)) = (reifier, predicate, value) else {
         return RowDecode::Skip;
     };
-    let predicate_kind = match terms.required(predicate) {
-        Ok(term) => term.kind,
-        Err(error) => return RowDecode::Storage(error),
+    let Some(predicate_kind) = required_kind(terms, predicate, failure) else {
+        return RowDecode::Storage;
     };
     if predicate_kind != TermKind::Iri {
         return RowDecode::Position(Box::new(RowError::AnnotationPredicate {
@@ -158,9 +189,8 @@ pub(crate) fn decode_annotation_row(
         }));
     }
     if let Some(graph_name) = graph_slot {
-        let kind = match terms.required(graph_name) {
-            Ok(term) => term.kind,
-            Err(error) => return RowDecode::Storage(error),
+        let Some(kind) = required_kind(terms, graph_name, failure) else {
+            return RowDecode::Storage;
         };
         if matches!(kind, TermKind::Literal | TermKind::Triple) {
             return RowDecode::Position(Box::new(RowError::AnnotationGraph {
@@ -178,8 +208,9 @@ pub(crate) fn check_quad_positions(
     p: usize,
     o: usize,
     graph_slot: Option<usize>,
+    failure: &mut Option<DictionaryError>,
 ) -> Result<(), RowCheckError> {
-    check_statement_positions(terms, (s, p, o), graph_slot, "quad")
+    check_statement_positions(terms, (s, p, o), graph_slot, "quad", failure)
 }
 
 fn check_statement_positions(
@@ -187,7 +218,11 @@ fn check_statement_positions(
     (s, p, o): Triple3,
     graph_slot: Option<usize>,
     context: &'static str,
+    failure: &mut Option<DictionaryError>,
 ) -> Result<(), RowCheckError> {
+    if failure.is_some() {
+        return Err(RowCheckError::Storage);
+    }
     let n = terms.len();
     if !(s < n && p < n && o < n && graph_slot.is_none_or(|gv| gv < n)) {
         return Err(RowCheckError::Position(Box::new(RowError::Bounds {
@@ -202,10 +237,10 @@ fn check_statement_positions(
 
     // A well-formed quad: predicate is an IRI, subject is not a literal, and any
     // graph name is neither a literal nor a quoted triple.
-    let predicate_kind = terms.required(p)?.kind;
-    let subject_kind = terms.required(s)?.kind;
+    let predicate_kind = required_kind(terms, p, failure).ok_or(RowCheckError::Storage)?;
+    let subject_kind = required_kind(terms, s, failure).ok_or(RowCheckError::Storage)?;
     let graph_kind = graph_slot
-        .map(|graph_name| terms.required(graph_name).map(|term| term.kind))
+        .map(|graph_name| required_kind(terms, graph_name, failure).ok_or(RowCheckError::Storage))
         .transpose()?;
     let ok = predicate_kind == TermKind::Iri
         && subject_kind != TermKind::Literal
@@ -254,6 +289,31 @@ pub(crate) fn numeric_row<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_validation_preserves_an_already_retained_failure() {
+        let key = crate::dictionary::TermKey {
+            segment: 7,
+            term: 11,
+        };
+        let mut failure = Some(DictionaryError::Missing(key));
+        let terms = TermsRef::Owned(&[]);
+        assert!(matches!(
+            decode_reifier_row(None, terms, TermIdBase(0), &mut failure),
+            RowDecode::Storage
+        ));
+        assert!(matches!(
+            decode_annotation_row(None, terms, TermIdBase(0), &mut failure),
+            RowDecode::Storage
+        ));
+        assert!(matches!(
+            check_quad_positions(terms, 0, 1, 2, None, &mut failure),
+            Err(RowCheckError::Storage)
+        ));
+        assert!(
+            matches!(take_storage_failure(&mut failure), DictionaryError::Missing(original) if original == key)
+        );
+    }
 
     #[test]
     fn successful_row_decode_layout_is_unchanged() {
