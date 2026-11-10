@@ -537,9 +537,9 @@ crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
 `purrdf-envelope-probe`, `purrdf-bench`, `wasm-link`, `helper-census`, and
 `purrdf-python` (PyPI via maturin instead). The published development libraries
 `purrdf-alloc-probe`, `purrdf-testkit` and `purrdf-conformance-kit` retain explicit
-versions and precede their consumers in publication order. Only the
-checkout-bound `purrdf-shacl-conformance` remains a path-only, versionless
-dev-dependency that Cargo strips from published manifests.
+versions and precede their consumers in publication order. The checkout-bound
+`purrdf-shacl-conformance` and host-only `helper-census` remain path-only,
+versionless development dependencies that Cargo strips from published manifests.
 
 ## 7. Provenance
 

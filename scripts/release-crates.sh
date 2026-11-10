@@ -18,8 +18,8 @@
 # `helper-census` are deliberately NOT here — see docs/RELEASE.md.
 #
 # Published development libraries carry versions and precede every published
-# consumer. Only checkout-bound SHACL fixtures remain a versionless path-only
-# development dependency, which Cargo removes from packaged manifests.
+# consumer. Checkout-bound SHACL fixtures and the host-only helper census remain
+# versionless path-only development dependencies, removed from packaged manifests.
 #
 # ORDERING CONTRACT, enforced by scripts/check-publish-order.py on every
 # `make check`. This list must be a topological order of BOTH edge kinds:
