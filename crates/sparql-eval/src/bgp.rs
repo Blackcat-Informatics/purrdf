@@ -5597,6 +5597,7 @@ mod tests {
         supplied_statistics: bool,
         statistics_accuracy: purrdf_core::StatisticsAccuracy,
         cacheable_statistics: bool,
+        statistics_owner: Option<purrdf_core::StatisticsOwnerToken>,
         statistics_reads: std::sync::atomic::AtomicUsize,
         failure: Option<E>,
         failed: std::sync::atomic::AtomicBool,
@@ -5619,6 +5620,7 @@ mod tests {
                 supplied_statistics: false,
                 statistics_accuracy: purrdf_core::StatisticsAccuracy::Exact,
                 cacheable_statistics: false,
+                statistics_owner: purrdf_core::StatisticsOwnerToken::try_new(),
                 statistics_reads: std::sync::atomic::AtomicUsize::new(0),
                 failure: None,
                 failed: std::sync::atomic::AtomicBool::new(false),
@@ -5636,6 +5638,7 @@ mod tests {
                 supplied_statistics: self.supplied_statistics,
                 statistics_accuracy: self.statistics_accuracy,
                 cacheable_statistics: self.cacheable_statistics,
+                statistics_owner: self.statistics_owner,
                 statistics_reads: self.statistics_reads,
                 first_probe: self.first_probe,
                 failure: Some(error),
@@ -5770,17 +5773,10 @@ mod tests {
             ))
         }
 
-        fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
-            if !self.cacheable_statistics {
-                return None;
-            }
-            const DOMAIN: purrdf_hash::Domain =
-                purrdf_hash::Domain::new(b"purrdf-sparql-eval/test-host-statistics/v1");
-            let mut hash = purrdf_hash::blake3::Hasher::new();
-            hash.update(DOMAIN.as_bytes());
-            hash.update(purrdf_core::SnapshotStatistics::cache_identity(self.inner)?.as_ref());
-            hash.update(&purrdf_core::SnapshotStatistics::fingerprint(self).to_le_bytes());
-            Some((*hash.finalize().as_bytes()).into())
+        fn cache_identity(&self) -> Option<purrdf_core::StatisticsOwnerToken> {
+            self.cacheable_statistics
+                .then_some(self.statistics_owner)
+                .flatten()
         }
 
         fn predicate(
@@ -5892,6 +5888,15 @@ mod tests {
             first,
             "warm UNION planning must not rescan provider statistics"
         );
+        let mut other_owner = HostCost::over(&graph, false);
+        other_owner.supplied_statistics = true;
+        other_owner.cacheable_statistics = true;
+        let other_first = execute(&other_owner);
+        assert!(
+            other_first > 0,
+            "equal statistics from another owner must not reuse retained forecasts"
+        );
+        assert_eq!(execute(&other_owner), other_first);
         view.measured = HostCost::over(&graph, true).measured;
         let changed_work = execute(&view);
         assert!(
@@ -5903,6 +5908,7 @@ mod tests {
         let changed_cardinality = execute(&view);
         assert!(changed_cardinality > changed_work);
         view.statistics_accuracy = purrdf_core::StatisticsAccuracy::UpperBound;
+        view.statistics_owner = purrdf_core::StatisticsOwnerToken::try_new();
         let changed_source = execute(&view);
         assert!(
             changed_source > changed_cardinality,

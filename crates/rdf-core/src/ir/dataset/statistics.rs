@@ -14,7 +14,7 @@ use crate::ir::pack::bits::PackBitsError;
 use crate::ir::statistics::{LocalStatistics, Relation, exact, relation};
 use crate::{
     GraphMatch, PredicateStatistics, RdfTermKind, SnapshotStatistics, StatisticCount,
-    StatisticsPosition, StatisticsStream,
+    StatisticsOwnerToken, StatisticsPosition, StatisticsStream,
 };
 
 #[derive(Debug)]
@@ -22,7 +22,7 @@ pub(super) struct NativeStatistics {
     scalar: Mutex<Vec<u64>>,
     visitor: Mutex<Option<Vec<u64>>>,
     fingerprint: OnceLock<u64>,
-    cache_identity: OnceLock<purrdf_hash::hex::Digest32>,
+    cache_identity: OnceLock<Option<StatisticsOwnerToken>>,
     rdf_type: Option<TermId>,
 }
 
@@ -69,7 +69,7 @@ impl Clone for NativeStatistics {
             scalar: Mutex::new(vec![0; scalar.len()]),
             visitor: Mutex::new(Some(vec![0; scalar.len()])),
             fingerprint: self.fingerprint.clone(),
-            cache_identity: self.cache_identity.clone(),
+            cache_identity: OnceLock::new(),
             rdf_type: self.rdf_type,
         }
     }
@@ -264,66 +264,11 @@ impl SnapshotStatistics<TermId> for RdfDataset {
         "native-frozen-predicate-domains-v1"
     }
 
-    fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
-        Some(*self.native_statistics.cache_identity.get_or_init(|| {
-            const DOMAIN: purrdf_hash::Domain =
-                purrdf_hash::Domain::new(b"purrdf-core/native-statistics-representation/v1");
-            let mut hash = purrdf_hash::blake3::Hasher::new();
-            hash.update(DOMAIN.as_bytes());
-            // Eager and deferred providers may expose different metadata choices.
-            hash.update(&[u8::from(self.statistics.is_some())]);
-            let id = |id: Option<TermId>| id.map_or(u32::MAX, |id| id.index() as u32);
-            hash.update(&id(self.native_statistics.rdf_type).to_le_bytes());
-            hash.update(&(self.dictionary.terms.len() as u64).to_le_bytes());
-            for term in &self.dictionary.terms {
-                use super::super::term::InternedTerm;
-                match term {
-                    InternedTerm::Iri(_) => {
-                        hash.update(&[0]);
-                    }
-                    InternedTerm::Blank { .. } => {
-                        hash.update(&[1]);
-                    }
-                    InternedTerm::Literal(literal) => {
-                        hash.update(&[2]);
-                        hash.update(&id(Some(literal.datatype)).to_le_bytes());
-                    }
-                    InternedTerm::Triple { s, p, o } => {
-                        hash.update(&[3]);
-                        for term in [s, p, o] {
-                            hash.update(&id(Some(*term)).to_le_bytes());
-                        }
-                    }
-                }
-            }
-            hash.update(&(self.named_graphs.len() as u64).to_le_bytes());
-            for graph in &self.named_graphs {
-                hash.update(&id(Some(*graph)).to_le_bytes());
-            }
-            for (tag, relation) in [
-                Relation::Asserted,
-                Relation::Reifiers,
-                Relation::Annotations,
-                Relation::Targets,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                hash.update(&[tag as u8]);
-                let count = match relation {
-                    Relation::Asserted => self.quads.len(),
-                    Relation::Annotations => self.annotations.len(),
-                    Relation::Reifiers | Relation::Targets => self.reifiers.len(),
-                };
-                hash.update(&(count as u64).to_le_bytes());
-                for row in self.statistic_rows(relation) {
-                    for term in [Some(row.s), Some(row.p), Some(row.o), row.g] {
-                        hash.update(&id(term).to_le_bytes());
-                    }
-                }
-            }
-            (*hash.finalize().as_bytes()).into()
-        }))
+    fn cache_identity(&self) -> Option<StatisticsOwnerToken> {
+        *self
+            .native_statistics
+            .cache_identity
+            .get_or_init(StatisticsOwnerToken::try_new)
     }
 
     fn fingerprint(&self) -> u64 {

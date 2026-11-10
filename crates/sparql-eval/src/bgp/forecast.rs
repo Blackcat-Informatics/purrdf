@@ -12,11 +12,15 @@ use std::any::{Any, TypeId};
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ForecastKey(AdmittedVec<u8>);
+pub(crate) struct ForecastKey {
+    owner: purrdf_core::StatisticsOwnerToken,
+    fields: AdmittedVec<u8>,
+}
 
 impl Hash for ForecastKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_slice().hash(state);
+        self.owner.hash(state);
+        self.fields.as_slice().hash(state);
     }
 }
 
@@ -24,7 +28,7 @@ impl ForecastKey {
     fn field(&mut self, bytes: &[u8]) -> Result<(), EvalError> {
         purrdf_hash::frame::try_frame_le_with(bytes, |part| {
             for &byte in part {
-                self.0.push(byte)?;
+                self.fields.push(byte)?;
             }
             Ok(())
         })
@@ -195,11 +199,13 @@ pub(super) fn prepare<'a, D: DatasetView>(
     let Some(identity) = statistics.cache_identity() else {
         return Ok(None);
     };
-    let mut key = ForecastKey(AdmittedVec::new(workspace));
+    let mut key = ForecastKey {
+        owner: identity,
+        fields: AdmittedVec::new(workspace),
+    };
     const DOMAIN: purrdf_hash::Domain =
         purrdf_hash::Domain::new(b"purrdf-sparql-eval/numeric-forecast-key/v1");
     key.field(DOMAIN.as_bytes())?;
-    key.field(identity.as_ref())?;
     key.field(statistics.source().as_bytes())?;
     key.number(statistics.fingerprint())?;
     key.number(dataset.term_count())?;
@@ -266,13 +272,17 @@ pub(super) fn prepare<'a, D: DatasetView>(
         }
         inputs.push_reserved(probes);
     }
-    let (values, allocation) = key.0.into_parts();
+    let ForecastKey { owner, fields } = key;
+    let (values, allocation) = fields.into_parts();
     let bytes = values
         .capacity()
         .checked_add(SharedWorkspace::<ForecastKey>::control_bytes())
         .and_then(|bytes| bytes.checked_add(3 * size_of::<OrderKey>()))
         .ok_or(EvalError::WorkspaceBoundOverflow)?;
-    let key = ForecastKey(AdmittedVec::from_parts(values, allocation, workspace));
+    let key = ForecastKey {
+        owner,
+        fields: AdmittedVec::from_parts(values, allocation, workspace),
+    };
     let key = OrderKey::Forecast(SharedWorkspace::new_admitted(key, workspace)?);
     Ok(Some(Preparation {
         cache,

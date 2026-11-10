@@ -592,7 +592,6 @@ source on every run.
 | `b"purrdf-core/evidence-frame/v1"` | `FRAME_DOMAIN` | `crates/rdf-core/src/evidence/frame.rs` |
 | `b"purrdf-core/evidence-reason/v1"` | `REASON_DOMAIN` | `crates/rdf-core/src/evidence/reason.rs` |
 | `b"purrdf-core/evidence-record/v1"` | `RECORD_DOMAIN` | `crates/rdf-core/src/evidence/record.rs` |
-| `b"purrdf-core/native-statistics-representation/v1"` | `(inline)` | `crates/rdf-core/src/ir/dataset/statistics.rs` |
 | `b"purrdf-core/paged-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/mod.rs` |
 | `b"purrdf-core/paged-stack-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/stack.rs` |
 | `b"purrdf-core/residue-snapshot/v1"` | `RESIDUE` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |

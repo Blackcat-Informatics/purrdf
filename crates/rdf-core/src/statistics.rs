@@ -8,8 +8,44 @@
 //! identity space as their DatasetView and do not translate IDs numerically.
 
 use crate::{GraphMatch, ProbePattern, RdfTermKind, ViewTermId};
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) mod layered;
+
+/// Opaque process-local identity of one immutable statistics owner or revision.
+///
+/// This token is not a content fingerprint, a persisted identity or a proof of
+/// dictionary compatibility. An owner retains its token while its statistical
+/// answers remain immutable; a different owner or revision obtains a fresh one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StatisticsOwnerToken(NonZeroUsize);
+
+purrdf_hash::debug_non_exhaustive!(StatisticsOwnerToken {});
+
+impl StatisticsOwnerToken {
+    /// Issue a token that has never named another owner in this process.
+    ///
+    /// Returns `None` permanently once the checked issuer is exhausted. Providers
+    /// then report no cache identity and planning continues without retention.
+    #[must_use]
+    pub fn try_new() -> Option<Self> {
+        static NEXT: AtomicUsize = AtomicUsize::new(1);
+        Self::issue(&NEXT)
+    }
+
+    fn issue(next: &AtomicUsize) -> Option<Self> {
+        let value = next
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .ok()?;
+        // The private production issuer starts at one and never wraps or resets.
+        Some(Self(
+            NonZeroUsize::new(value).expect("nonzero statistics owner issuer"),
+        ))
+    }
+}
 
 /// The evidence behind one statistical count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,17 +112,15 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
     /// A host must change it whenever any returned count or exactness changes.
     fn fingerprint(&self) -> u64;
 
-    /// Identity of the complete immutable numeric statistics representation.
-    /// Equal identities certify equal answers, including availability, exactness
-    /// and ordered distinct-ID sequences, for every identical numeric request
-    /// across provider instances. Consumers compile constants in the current view
-    /// and key the full numeric request together with all other planning inputs.
-    /// This identity does not certify ID-to-lexical mappings, RDF content or
-    /// cross-view dictionary compatibility. Combining distinct domains across
-    /// views requires a separate compatible-dictionary proof. Physical access
-    /// costs and cardinality models remain separate planning inputs.
-    /// Unknown providers retain no numeric forecast across operations.
-    fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
+    /// Process-local token for retaining forecasts of this immutable owner.
+    /// The same token may be shared only while the owner's statistical answers,
+    /// availability, exactness and ordered distinct-ID sequences are unchanged.
+    /// Consumers still key every numeric request and all other planning inputs.
+    /// Tokens do not certify equal content across owners or compatible dictionaries.
+    /// The deterministic fingerprint and physical access model remain separate.
+    /// Unknown providers and an exhausted token issuer return `None`, keeping the
+    /// original planning path without numeric forecast retention.
+    fn cache_identity(&self) -> Option<StatisticsOwnerToken> {
         None
     }
 
@@ -244,4 +278,20 @@ pub(crate) fn structural_count<I: ViewTermId, S: SnapshotStatistics<I> + ?Sized>
         value: total,
         accuracy: StatisticsAccuracy::UpperBound,
     })
+}
+
+#[cfg(test)]
+mod owner_token_tests {
+    use super::{AtomicUsize, Ordering, StatisticsOwnerToken};
+
+    #[test]
+    fn exhausted_issuer_never_wraps_or_reissues_owner_tokens() {
+        let next = AtomicUsize::new(usize::MAX - 2);
+        let previous = StatisticsOwnerToken::issue(&next).expect("penultimate owner");
+        let last = StatisticsOwnerToken::issue(&next).expect("last owner");
+        assert_ne!(previous, last);
+        assert!(StatisticsOwnerToken::issue(&next).is_none());
+        assert!(StatisticsOwnerToken::issue(&next).is_none());
+        assert_eq!(next.load(Ordering::Relaxed), usize::MAX);
+    }
 }

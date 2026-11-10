@@ -327,7 +327,7 @@ pub use sssom::{
 };
 pub use statistics::{
     PredicateStatistics, SnapshotStatistics, StatisticCount, StatisticsAccuracy,
-    StatisticsPosition, StatisticsStream,
+    StatisticsOwnerToken, StatisticsPosition, StatisticsStream,
 };
 pub use store::RdfStoreCapabilities;
 pub use term_writer::{write_term_value, write_term_value_with_memory};
