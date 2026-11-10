@@ -12,6 +12,19 @@ This inventory preserves notices for the source material and resolved
 build inputs described below. Platform alternatives and build inputs
 need not occur in every compiled binary; material scopes are listed below.
 
+gb18030-mapping-data: Unicode-3.0
+Scope: original GB 18030 mapping data, source explanation and generated native tables; original Unicode and IBM notices retained; converter and generator independently written
+Source: https://github.com/unicode-org/icu-data
+Evidence: crates/lex/data/gb18030/PROVENANCE.md
+Evidence: docs/GB18030.md
+Notice: third-party/gb18030-mapping-data/0-LICENSE-ICU-DATA
+
+gb18030-reference-2005: Unicode-DFS-2016 AND ICU
+Scope: source-only independent pre-2022 mapping reference for generator and native qualification, with original notices; no converter code adopted
+Source: https://github.com/unicode-org/icu/blob/release-71-1/icu4c/source/data/mappings/gb18030.ucm
+Evidence: crates/lex/data/gb18030/PROVENANCE.md
+Notice: third-party/gb18030-reference-2005/0-LICENSE-ICU-71
+
 libyaml-emitter: MIT
 Scope: emitter style/layout decisions reproduced from unsafe-libyaml 0.2.11; retained MIT permission notice
 Source: https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11

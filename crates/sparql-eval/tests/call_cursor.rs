@@ -32,6 +32,467 @@ const REL: &str = "https://example.org/rel/ranked";
 /// How many rows the fixture relation holds.
 const HOLDS: u64 = 12;
 
+#[test]
+fn ordinary_select_cursor_resumes_on_workers_in_completed_row_order() {
+    use purrdf_core::RdfDatasetBuilder;
+
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    for iri in [
+        "http://example.org/a",
+        "http://example.org/b",
+        "http://example.org/c",
+    ] {
+        let value = builder.intern_iri(iri).unwrap();
+        builder.push_quad(value, predicate, value, None).unwrap();
+    }
+    let dataset = builder.freeze().unwrap();
+    for (text, substitutions) in [
+        (
+            "SELECT ?value WHERE { VALUES ?value { <http://example.org/a> <http://example.org/b> <http://example.org/c> } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value WHERE { ?value <http://example.org/p> ?value }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?left ?right WHERE { { { ?left <http://example.org/p> ?left } UNION { ?left <http://example.org/p> ?left } } ?right <http://example.org/p> ?right }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value WHERE { { { ?value <http://example.org/p> ?value } UNION { ?value <http://example.org/p> ?value } } ?value <http://example.org/p> ?value }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?label WHERE { ?value <http://example.org/p> ?value FILTER(?value != <http://example.org/a>) BIND(STR(?value) AS ?label) } OFFSET 1 LIMIT 1",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value ?missing WHERE { ?value <http://example.org/p> ?value OPTIONAL { ?value <http://example.org/absent> ?missing } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value WHERE { { SELECT ?value WHERE { ?value <http://example.org/p> ?value } } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?left ?right WHERE { ?left <http://example.org/p>+ ?right }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value WHERE { ?value <http://example.org/p> ?value } ORDER BY DESC(?value)",
+            Vec::new(),
+        ),
+        (
+            "SELECT (COUNT(?value) AS ?count) WHERE { ?value <http://example.org/p> ?value }",
+            Vec::new(),
+        ),
+        (
+            "SELECT DISTINCT ?value WHERE { { ?value <http://example.org/p> ?value } UNION { ?value <http://example.org/p> ?value } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value ?draw ?blank WHERE { ?value <http://example.org/p> ?value BIND(RAND() AS ?draw) BIND(BNODE(STR(?value)) AS ?blank) }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?left ?right WHERE { { SELECT ?left WHERE { ?left <http://example.org/p> ?left } } { SELECT ?right WHERE { ?right <http://example.org/p> ?right } } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value WHERE { { SELECT ?value WHERE { ?value <http://example.org/p> ?value } } { SELECT ?value WHERE { ?value <http://example.org/p> ?value } } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?left ?right WHERE { { SELECT ?left ?shared WHERE { VALUES (?left ?shared) { (1 UNDEF) (2 10) } } } { SELECT ?right ?shared WHERE { VALUES (?right ?shared) { (4 UNDEF) (3 10) (5 20) } } } }",
+            Vec::new(),
+        ),
+        (
+            "SELECT ?value ?label WHERE { ?value <http://example.org/p> ?value BIND(STR(?value) AS ?label) }",
+            vec![("value".to_owned(), TermValue::iri("http://example.org/b"))],
+        ),
+    ] {
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine.prepare_query(text, None).unwrap();
+        let options = purrdf_sparql_eval::QueryOptions::EMPTY
+            .with_entropy_seed(67)
+            .with_bnode_mint_prefix(Some("cursor_"));
+        let SparqlResult::Solutions {
+            variables: names,
+            rows: expected,
+            ..
+        } = engine
+            .query_prepared_view(dataset.as_ref(), &prepared, &substitutions, &options)
+            .unwrap()
+        else {
+            panic!("SELECT solutions");
+        };
+        let mut cursor = engine
+            .open_select_cursor(dataset.as_ref(), &prepared, &substitutions, &options)
+            .unwrap();
+        assert_eq!(
+            cursor
+                .schema()
+                .vars()
+                .iter()
+                .map(purrdf_sparql_algebra::Variable::as_str)
+                .collect::<Vec<_>>(),
+            names.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        let mut actual = Vec::new();
+        loop {
+            let (returned, polled) = std::thread::scope(|scope| {
+                scope
+                    .spawn(move || {
+                        let polled = cursor.next_row().map(|row| {
+                            row.map(|row| {
+                                let cells = row
+                                    .cells()
+                                    .iter()
+                                    .map(|cell| {
+                                        cell.map(|term| {
+                                            row.context()
+                                                .scratch
+                                                .try_value_of(row.context().dataset, term)
+                                                .unwrap()
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                (
+                                    row.schema()
+                                        .vars()
+                                        .iter()
+                                        .map(|variable| variable.as_str().to_owned())
+                                        .collect::<Vec<_>>(),
+                                    cells,
+                                )
+                            })
+                        });
+                        (cursor, polled)
+                    })
+                    .join()
+                    .unwrap()
+            });
+            cursor = returned;
+            let Some((columns, cells)) = polled.unwrap() else {
+                break;
+            };
+            assert_eq!(columns, names);
+            actual.push(cells);
+            if actual.len() < expected.len() {
+                assert!(
+                    !cursor.is_complete(),
+                    "unread rows are not a complete delivered answer"
+                );
+            }
+        }
+        assert!(cursor.is_complete());
+        assert_eq!(actual, expected);
+        let settled = cursor.settle().unwrap();
+        assert!(matches!(
+            settled.completion,
+            purrdf_sparql_eval::eval::SelectCompletion::Complete
+        ));
+        assert_eq!(settled.delivered, expected.len());
+        assert_eq!(settled.established, expected.len());
+        assert_eq!(settled.undecided, 0);
+        let report = cursor.buffering_report();
+        use purrdf_sparql_eval::eval::CursorBufferReason;
+        if text.contains("ORDER BY") {
+            assert!(report.contains(CursorBufferReason::OrderedInput));
+        }
+        if text.contains("COUNT(") {
+            assert!(report.contains(CursorBufferReason::AggregateState));
+        }
+        if text.contains("DISTINCT") {
+            assert!(report.contains(CursorBufferReason::DistinctKeys));
+        }
+        if text.contains("RAND()") {
+            assert!(report.contains(CursorBufferReason::StatefulExpression));
+        }
+        if text == "SELECT ?value WHERE { ?value <http://example.org/p> ?value }" {
+            assert!(
+                report.is_empty(),
+                "one indexed BGP retains no answer relation: {report:?}"
+            );
+        }
+        assert!(cursor.next_row().unwrap().is_none());
+        assert_eq!(cursor.settle().unwrap().delivered, settled.delivered);
+    }
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(
+            "SELECT ?value WHERE { ?value <http://example.org/p> ?value } ORDER BY ?value LIMIT 2",
+            None,
+        )
+        .unwrap();
+    for early in [false, true] {
+        let governors = QueryGovernors::UNBOUNDED.with_fuel(u64::MAX - 2);
+        let mut cursor = engine
+            .open_select_cursor_governed_view(
+                dataset.as_ref(),
+                &prepared,
+                &[],
+                &purrdf_sparql_eval::QueryOptions::EMPTY,
+                &governors,
+            )
+            .unwrap();
+        assert!(cursor.next_row().unwrap().is_some());
+        assert!(!cursor.is_complete(), "one unread buffered row remains");
+        assert!(
+            cursor
+                .buffering_report()
+                .contains(purrdf_sparql_eval::eval::CursorBufferReason::GovernorSettlement)
+        );
+        if early {
+            assert!(matches!(
+                cursor.settle().unwrap().completion,
+                purrdf_sparql_eval::eval::SelectCompletion::ConsumerStopped
+            ));
+            assert!(!cursor.is_complete());
+        } else {
+            assert!(cursor.next_row().unwrap().is_some());
+            assert!(
+                !cursor.is_complete(),
+                "final operator acknowledgement is still pending"
+            );
+            assert!(cursor.next_row().unwrap().is_none());
+            assert!(cursor.is_complete());
+            assert!(matches!(
+                cursor.settle().unwrap().completion,
+                purrdf_sparql_eval::eval::SelectCompletion::Complete
+            ));
+        }
+        assert!(cursor.next_row().unwrap().is_none());
+    }
+    let governors = QueryGovernors::UNBOUNDED.with_max_intermediate_cells(0);
+    let GovernedOutcome::BudgetExhausted(expected) = engine
+        .query_prepared_governed_view(
+            dataset.as_ref(),
+            &prepared,
+            &[],
+            &purrdf_sparql_eval::QueryOptions::EMPTY,
+            &governors,
+        )
+        .unwrap()
+    else {
+        panic!("the original plan is refused before entering a context");
+    };
+    let mut cursor = engine
+        .open_select_cursor_governed_view(
+            dataset.as_ref(),
+            &prepared,
+            &[],
+            &purrdf_sparql_eval::QueryOptions::EMPTY,
+            &governors,
+        )
+        .unwrap();
+    assert_eq!(
+        cursor
+            .schema()
+            .vars()
+            .iter()
+            .map(purrdf_sparql_algebra::Variable::as_str)
+            .collect::<Vec<_>>(),
+        ["value"]
+    );
+    assert!(matches!(
+        cursor.coordinates(),
+        purrdf_sparql_eval::QueryCoordinates::NotStarted
+    ));
+    assert!(cursor.next_row().unwrap().is_none());
+    assert!(!cursor.is_complete());
+    let settled = cursor.settle().unwrap();
+    assert_eq!(settled.governors, Some(expected.evidence));
+    let purrdf_sparql_eval::eval::SelectCompletion::Truncated { tripped, answers } =
+        settled.completion
+    else {
+        panic!("admission refusal cannot masquerade as a complete empty answer");
+    };
+    assert_eq!(tripped, expected.tripped);
+    assert!(answers.is_certain());
+    assert_eq!(answers.result().unwrap().rows, 0);
+
+    // Trips preserve the original row bound and positional certificate, including
+    // path reach units and the absent endpoint's mandatory zero-length identity.
+    let governed_options = purrdf_sparql_eval::QueryOptions::EMPTY
+        .with_entropy_seed(67)
+        .with_bnode_mint_prefix(Some("cursor_"));
+    for text in [
+        "SELECT ?value WHERE { ?value <http://example.org/p> ?value }",
+        "SELECT ?value WHERE { ?value <http://example.org/p> ?value } ORDER BY ?value",
+        "SELECT ?left ?right WHERE { ?left <http://example.org/p>+ ?right }",
+        "SELECT ?value WHERE { <http://example.org/absent> <http://example.org/p>* ?value }",
+        "SELECT ?value WHERE { VALUES ?value { 1 2 3 } }",
+        "SELECT ?value WHERE { { SELECT ?value WHERE { ?value <http://example.org/p> ?value } } { SELECT ?value WHERE { ?value <http://example.org/p> ?value } } }",
+        "SELECT ?left ?right WHERE { { SELECT ?left WHERE { ?left <http://example.org/p> ?left } } { SELECT ?right WHERE { ?right <http://example.org/p> ?right } } }",
+        "SELECT ?value WHERE { ?value <http://example.org/p> ?value FILTER(?value != <http://example.org/b>) }",
+        "SELECT ?value ?draw ?blank WHERE { ?value <http://example.org/p> ?value BIND(RAND() AS ?draw) BIND(BNODE(STR(?value)) AS ?blank) }",
+        "SELECT ?value WHERE { { ?value <http://example.org/p> ?value } UNION { ?value <http://example.org/p> ?value } }",
+        "SELECT ?value ?missing WHERE { ?value <http://example.org/p> ?value OPTIONAL { ?value <http://example.org/absent> ?missing } }",
+    ] {
+        let prepared = engine.prepare_query(text, None).unwrap();
+        let baseline = engine
+            .query_prepared_governed_view(
+                dataset.as_ref(),
+                &prepared,
+                &[],
+                &governed_options,
+                &QueryGovernors::UNBOUNDED.with_fuel(u64::MAX - 2),
+            )
+            .unwrap();
+        let fuel = baseline
+            .evidence()
+            .consumed_in(purrdf_core::ResourceDimension::Fuel);
+        let GovernedOutcome::Complete {
+            result: SparqlResult::Solutions { rows, .. },
+            ..
+        } = &baseline
+        else {
+            panic!("non-tripping baseline");
+        };
+        let count = u64::try_from(rows.len()).unwrap();
+        for governors in [
+            QueryGovernors::UNBOUNDED.with_fuel(0),
+            QueryGovernors::UNBOUNDED.with_fuel(fuel.saturating_sub(1)),
+            QueryGovernors::UNBOUNDED.with_fuel(fuel),
+            QueryGovernors::UNBOUNDED.with_max_answers(0),
+            QueryGovernors::UNBOUNDED.with_max_answers(count.saturating_sub(1)),
+            QueryGovernors::UNBOUNDED.with_max_answers(count),
+            QueryGovernors::UNBOUNDED.with_fuel(1).with_max_answers(0),
+        ] {
+            assert_governed_cursor_matches(
+                &engine,
+                dataset.as_ref(),
+                &prepared,
+                text,
+                &governors,
+                &governors,
+            );
+        }
+    }
+    let text = "SELECT ?value WHERE { ?value <http://example.org/p> ?value }";
+    let prepared = engine.prepare_query(text, None).unwrap();
+    let baseline = support::PollCountdown::new(usize::MAX);
+    engine
+        .query_prepared_governed_view(
+            dataset.as_ref(),
+            &prepared,
+            &[],
+            &governed_options,
+            &QueryGovernors::UNBOUNDED
+                .with_fuel(u64::MAX - 2)
+                .with_max_answers(0)
+                .with_stop_signal(baseline.clone()),
+        )
+        .unwrap();
+    for quiet in [0, baseline.polls().saturating_sub(1), baseline.polls()] {
+        let expected = support::PollCountdown::new(quiet);
+        let actual = support::PollCountdown::new(quiet);
+        let (expected_receipt, actual_receipt) = assert_governed_cursor_matches(
+            &engine,
+            dataset.as_ref(),
+            &prepared,
+            text,
+            &QueryGovernors::UNBOUNDED
+                .with_fuel(u64::MAX - 2)
+                .with_max_answers(0)
+                .with_stop_signal(expected.clone()),
+            &QueryGovernors::UNBOUNDED
+                .with_fuel(u64::MAX - 2)
+                .with_max_answers(0)
+                .with_stop_signal(actual.clone()),
+        );
+        assert_eq!(
+            actual.polls(),
+            expected.polls(),
+            "original stop coordinates"
+        );
+        assert_eq!(
+            actual_receipt.consumed_in(purrdf_core::ResourceDimension::Fuel),
+            expected_receipt.consumed_in(purrdf_core::ResourceDimension::Fuel)
+        );
+    }
+}
+
+fn assert_governed_cursor_matches(
+    engine: &NativeSparqlEngine,
+    dataset: &purrdf_core::RdfDataset,
+    prepared: &purrdf_sparql_eval::engine::PreparedQuery,
+    text: &str,
+    expected_governors: &QueryGovernors,
+    actual_governors: &QueryGovernors,
+) -> (purrdf_core::GovernorEvidence, purrdf_core::GovernorEvidence) {
+    let options = purrdf_sparql_eval::QueryOptions::EMPTY
+        .with_entropy_seed(67)
+        .with_bnode_mint_prefix(Some("cursor_"));
+    let expected = engine
+        .query_prepared_governed_view(dataset, prepared, &[], &options, expected_governors)
+        .unwrap();
+    let mut cursor = engine
+        .open_select_cursor_governed_view(dataset, prepared, &[], &options, actual_governors)
+        .unwrap();
+    let mut actual = Vec::new();
+    while let Some(row) = cursor.next_row().unwrap() {
+        actual.push(
+            row.cells()
+                .iter()
+                .map(|cell| {
+                    cell.map(|term| {
+                        row.context()
+                            .scratch
+                            .try_value_of(row.context().dataset, term)
+                            .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    let settled = cursor.settle().unwrap();
+    let result = match (&expected, &settled.completion) {
+        (
+            GovernedOutcome::Complete { result, .. },
+            purrdf_sparql_eval::eval::SelectCompletion::Complete,
+        ) => Some(result),
+        (
+            GovernedOutcome::BudgetExhausted(expected),
+            purrdf_sparql_eval::eval::SelectCompletion::Truncated { tripped, answers },
+        ) => {
+            assert_eq!(*tripped, expected.tripped, "{text}");
+            assert_eq!(
+                answers.is_certain(),
+                expected.partial.is_certain(),
+                "{text}"
+            );
+            assert_eq!(answers.barrier(), expected.partial.barrier(), "{text}");
+            assert_eq!(
+                answers.result().map(|prefix| prefix.positional),
+                expected
+                    .partial
+                    .result()
+                    .map(purrdf_sparql_eval::PartialSparqlResult::is_positional_prefix),
+                "{text}"
+            );
+            expected
+                .partial
+                .result()
+                .map(purrdf_sparql_eval::PartialSparqlResult::result)
+        }
+        _ => panic!("cursor completion differs from original governed answer: {text}"),
+    };
+    let rows = match result {
+        Some(SparqlResult::Solutions { rows, .. }) => rows.as_slice(),
+        None => &[],
+        _ => panic!("SELECT solutions"),
+    };
+    assert_eq!(actual, rows, "{text}");
+    assert_eq!(settled.delivered, actual.len());
+    assert_eq!(settled.established, actual.len());
+    assert_eq!(settled.undecided, 0);
+    (expected.evidence().clone(), settled.governors.unwrap())
+}
+
 fn ex(local: &str) -> String {
     format!("https://example.org/d/{local}")
 }

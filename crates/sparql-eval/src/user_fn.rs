@@ -1898,16 +1898,10 @@ pub(crate) fn eval_user_function_evidence<'d, D: DatasetView + Sync>(
     Ok(value)
 }
 
-/// The immutable substituted body owns the original native AST grants.
-pub(crate) struct InvocationQuery {
-    pub(crate) query: purrdf_sparql_algebra::Query,
-    _frame: crate::workspace::LexicalFrame,
-}
-
 /// One actual invocation, ready to move into the query driver's admitted stack.
 pub(crate) struct UserInvocation<'f, 'd, D: DatasetView + Sync> {
     pub(crate) child: EvalCtx<'d, D>,
-    pub(crate) query: crate::workspace::NativeSharedWorkspace<InvocationQuery>,
+    pub(crate) query: crate::workspace::NativeSharedWorkspace<crate::expr::AdmittedQuery>,
     func: &'f UserFunction,
 }
 
@@ -1962,7 +1956,7 @@ pub(crate) fn prepare_user_function<'f, 'd, D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    if let Some(admission) = ctx.user_function_admission {
+    if let Some(admission) = &ctx.user_function_admission {
         admission
             .admit(func, body.query())
             .map_err(|refusal| EvalError::FunctionAdmission(refusal.with_observer(admission)))?;
@@ -2019,7 +2013,7 @@ pub(crate) fn prepare_user_function<'f, 'd, D: DatasetView + Sync>(
         .map_err(crate::substitute::GroundFailure::into_eval_error)?
     };
     let query = crate::workspace::NativeSharedWorkspace::new_admitted(
-        InvocationQuery {
+        crate::expr::AdmittedQuery {
             query,
             _frame: frame,
         },

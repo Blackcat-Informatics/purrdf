@@ -87,7 +87,10 @@ pub use source_occurrence::{
     SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind, SourceTermOrigin,
 };
 pub use span::{ParseOptions, SpanTable};
-pub use stream::parse_dataset_from_reader;
+pub use stream::{
+    EncodedReadError, EncodedReadOptions, EncodedReadOutcome, parse_dataset_from_encoded_reader,
+    parse_dataset_from_reader,
+};
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;
 // hidden, unstable, not public API.
 #[doc(hidden)]

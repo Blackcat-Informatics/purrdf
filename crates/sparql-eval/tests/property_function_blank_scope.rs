@@ -296,6 +296,126 @@ fn a_shared_blank_is_never_a_column_of_the_answer() {
     assert_eq!(variables, vec!["s".to_owned()], "SELECT * names no blank");
     assert_eq!(answer, vec![vec![S1.to_owned()]]);
 
+    // Public algebra need not carry the parser's final projection. Shared blank
+    // join slots still cannot escape either cursor entry, including empty headers.
+    let mut query = purrdf_sparql_algebra::SparqlParser::new()
+        .parse_query(&format!(
+            "SELECT * WHERE {{ ?s <{EX}p> _:r . _:r <{EX}q>+ ?o }}"
+        ))
+        .unwrap();
+    let purrdf_sparql_algebra::Query::Select { pattern, .. } = &mut query else {
+        panic!("SELECT");
+    };
+    let bare = match pattern {
+        purrdf_sparql_algebra::GraphPattern::Project { inner, .. }
+        | purrdf_sparql_algebra::GraphPattern::ProjectStar { inner, .. } => (**inner).clone(),
+        _ => panic!("parsed projection"),
+    };
+    *pattern = bare;
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_algebra(query, &QueryOptions::EMPTY).unwrap();
+    for data in [dataset(), RdfDatasetBuilder::new().freeze().unwrap()] {
+        let SparqlResult::Solutions {
+            variables, rows, ..
+        } = engine
+            .query_prepared_view(data.as_ref(), &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap()
+        else {
+            panic!("SELECT solutions");
+        };
+        assert!(variables.iter().all(|variable| !variable.starts_with('\0')));
+        let mut cursor = engine
+            .open_select_cursor(data.as_ref(), &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap();
+        assert_eq!(
+            cursor
+                .schema()
+                .vars()
+                .iter()
+                .map(purrdf_sparql_algebra::Variable::as_str)
+                .collect::<Vec<_>>(),
+            variables.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        let mut index = 0;
+        while let Some(row) = cursor.next_row().unwrap() {
+            assert_blank_cursor_row(&row, &rows[index]);
+            index += 1;
+        }
+        assert_eq!(index, rows.len());
+        assert!(matches!(
+            cursor.settle().unwrap().completion,
+            purrdf_sparql_eval::eval::SelectCompletion::Complete
+        ));
+        let mut context = purrdf_sparql_eval::eval::EvalCtx::new(data.as_ref());
+        let purrdf_sparql_eval::eval::Outcome::Solutions(raw) =
+            purrdf_sparql_eval::eval::evaluate_query(prepared.query(), &mut context).unwrap()
+        else {
+            panic!("SELECT solutions");
+        };
+        let raw_names = raw
+            .schema
+            .vars()
+            .iter()
+            .map(purrdf_sparql_algebra::Variable::as_str)
+            .collect::<Vec<_>>();
+        let raw_rows = raw
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| {
+                        cell.map(|term| {
+                            context.scratch.try_value_of(context.dataset, term).unwrap()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut cursor = purrdf_sparql_eval::eval::SelectCursor::from_context(
+            prepared.query(),
+            purrdf_sparql_eval::eval::EvalCtx::new(data.as_ref()),
+        )
+        .unwrap();
+        assert_eq!(
+            cursor
+                .schema()
+                .vars()
+                .iter()
+                .map(purrdf_sparql_algebra::Variable::as_str)
+                .collect::<Vec<_>>(),
+            raw_names
+        );
+        let mut index = 0;
+        while let Some(row) = cursor.next_row().unwrap() {
+            assert_blank_cursor_row(&row, &raw_rows[index]);
+            index += 1;
+        }
+        assert_eq!(index, raw_rows.len());
+        assert!(matches!(
+            cursor.settle().unwrap().completion,
+            purrdf_sparql_eval::eval::SelectCompletion::Complete
+        ));
+        let mut refused = engine
+            .open_select_cursor_governed_view(
+                data.as_ref(),
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_max_intermediate_cells(0),
+            )
+            .unwrap();
+        assert_eq!(
+            refused
+                .schema()
+                .vars()
+                .iter()
+                .map(purrdf_sparql_algebra::Variable::as_str)
+                .collect::<Vec<_>>(),
+            variables.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+        assert!(refused.next_row().unwrap().is_none());
+    }
+
     // Two rows that differ only in the shared blank are one solution. `ex:r2 ex:w
     // ex:r1`, so the node between the two paths is either end: two matches, which
     // COUNT(*) counts, but one solution — it binds no variable at all — which
@@ -312,6 +432,30 @@ fn a_shared_blank_is_never_a_column_of_the_answer() {
         count("COUNT(DISTINCT *)", "_:r"),
         vec![vec!["1".to_owned()]],
         "a blank is not part of a solution, so the two matches are one solution"
+    );
+}
+
+fn assert_blank_cursor_row(
+    row: &purrdf_sparql_eval::eval::SelectRow<'_, '_, RdfDataset>,
+    expected: &[Option<TermValue>],
+) {
+    assert!(
+        row.schema()
+            .vars()
+            .iter()
+            .all(|variable| !variable.is_hidden())
+    );
+    assert_eq!(
+        row.cells()
+            .iter()
+            .map(|cell| cell.map(|term| {
+                row.context()
+                    .scratch
+                    .try_value_of(row.context().dataset, term)
+                    .unwrap()
+            }))
+            .collect::<Vec<_>>(),
+        expected
     );
 }
 

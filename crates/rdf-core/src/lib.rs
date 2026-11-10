@@ -73,7 +73,9 @@ pub use purrdf_lex::visual_fingerprint;
 pub mod cover;
 // The static, allocation-free read view over an RDF dataset:
 // `DatasetView` + `GraphMatch`. PyO3-free — pure kernel.
+pub mod dataset_cursor;
 pub mod dataset_view;
+pub use dataset_cursor::CursorDatasetView;
 pub mod describe;
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
 /// and the [`RdfDiagnostic`] record callers translate to their reporting layer.
@@ -161,7 +163,9 @@ pub mod turtle_render;
 pub mod xsd_regex;
 
 mod annotation_range;
-pub use annotation_range::{AnnotationRangeWorkspace, AnnotationValueBound, AnnotationValueRange};
+pub use annotation_range::{
+    AnnotationRangeSource, AnnotationRangeWorkspace, AnnotationValueBound, AnnotationValueRange,
+};
 
 pub use backend::{
     DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,

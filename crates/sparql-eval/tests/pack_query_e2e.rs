@@ -3,7 +3,7 @@
 
 //! Headline acceptance: a SPARQL query
 //! served DIRECTLY by the native evaluator over a [`PackView`] — the read-only
-//! succinct pack codec's [`DatasetView`] implementation, opened from
+//! succinct pack codec's [`purrdf_core::DatasetView`] implementation, opened from
 //! [`PackBuilder::build_bytes`]'s output — returns the IDENTICAL [`SparqlResult`] as
 //! the same prepared query evaluated over the production [`RdfDataset`] it was built
 //! from, through the engine's public generic entry point
@@ -28,7 +28,7 @@ use std::sync::Arc;
 use support::solutions;
 
 use purrdf_core::{
-    BlankScope, DatasetView, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
+    BlankScope, PackView, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection,
     SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
@@ -151,19 +151,62 @@ fn build_fixture() -> Arc<RdfDataset> {
 
 // ── engine harness ───────────────────────────────────────────────────────────────
 
-/// Prepare and evaluate `query` over any [`DatasetView`] backend through the
+/// Prepare and evaluate `query` over any [`purrdf_core::DatasetView`] backend through the
 /// engine's public generic entry point — the exact seam the SPARQL evaluator uses
 /// for a `PackView` (id type [`purrdf_core::PackId`]) as well as for the production
 /// `RdfDataset` (id type [`purrdf_core::TermId`]).
-fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+fn run<D: purrdf_core::CursorDatasetView<ReadError = std::convert::Infallible>>(
     dataset: &D,
     query: &str,
 ) -> SparqlResult {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(query, None).expect("prepare");
-    engine
+    let result = engine
         .query_prepared_view(dataset, &prepared, &[], &QueryOptions::EMPTY)
-        .expect("query")
+        .expect("query");
+    let mut cursor = engine
+        .open_select_cursor(dataset, &prepared, &[], &QueryOptions::EMPTY)
+        .unwrap();
+    let names = cursor
+        .schema()
+        .vars()
+        .iter()
+        .map(|name| name.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    while let Some(row) = cursor.next_row().unwrap() {
+        rows.push(
+            row.cells()
+                .iter()
+                .map(|cell| {
+                    cell.map(|term| {
+                        row.context()
+                            .scratch
+                            .try_value_of(row.context().dataset, term)
+                            .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert!(matches!(
+        cursor.settle().unwrap().completion,
+        purrdf_sparql_eval::eval::SelectCompletion::Complete
+    ));
+    let SparqlResult::Solutions {
+        variables,
+        rows: expected,
+        ..
+    } = &result
+    else {
+        panic!("the backend corpus contains SELECT queries");
+    };
+    assert_eq!(&names, variables);
+    assert_eq!(
+        &rows, expected,
+        "cursor preserves this backend's exact order: {query}"
+    );
+    result
 }
 
 /// A deterministic sort key for a solution row (`TermValue` is not `Ord`; its

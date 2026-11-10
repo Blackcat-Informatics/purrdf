@@ -64,6 +64,11 @@ use super::media_type::{NativeRdfFormat, classify};
 use super::text_parse::LineStreamParser;
 use crate::{RdfDataset, RdfDiagnostic};
 
+mod encoded;
+pub use encoded::{
+    EncodedReadError, EncodedReadOptions, EncodedReadOutcome, parse_dataset_from_encoded_reader,
+};
+
 /// The read buffer the line reader pulls through. Sized to amortize syscalls without
 /// making the "bounded" claim depend on a large constant: a 64 KiB window is the same
 /// order as `BufReader`'s own default and is dwarfed by any document worth streaming.

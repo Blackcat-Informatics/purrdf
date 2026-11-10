@@ -863,6 +863,7 @@ fn eval_call_over<D: DatasetView + Sync>(
     ceiling: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+    ctx.note_cursor_buffer(crate::eval::CursorBufferReason::HostInvocation);
     let relation = resolve(call, ctx)?;
     let plan = CallPlan::compile_admitted(call, &input.schema, &ctx.growth)?;
     let declared = crate::property_fn::declaration_contained_admitted(

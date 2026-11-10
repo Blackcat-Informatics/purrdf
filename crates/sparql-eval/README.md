@@ -69,6 +69,54 @@ evidence. A healthy governor trip carries certified partial answers; an
 operational failure discards them. Both entries have federation variants that
 accept a service resolver under the same governor.
 
+`open_select_cursor` opens an ordinary prepared SELECT over a
+`CursorDatasetView`; `open_select_cursor_fallible_view` retains typed backend
+failures and their operational evidence. The governed and evidence variants use
+the same prepared admission and options. `schema()` exposes the original header
+before any source read, including empty answers. `next_row()` borrows one row's
+interned cells, schema, evidence and evaluation context until that borrow ends.
+The owning cursor is `Send` and can move between worker requests. Dropping it
+releases its suspended execution and source reservations.
+
+Read until `next_row()` returns `None`, then call `settle()` for the completion,
+governor receipt and established/undecided counts. A consumer that settles early
+receives `ConsumerStopped`; requested semantic status reports `UnreadSuffix`
+until the required search or verdict completes. Source failures remain failures
+on subsequent reads and settlement. A governor trip retains its original typed
+trip, answer bound and positional certificate.
+Native admission refusal is already a settled operational outcome at open: it
+reports `NotStarted` and cannot claim a complete empty answer. Fallible cursors
+still require `settle()` before status or identity access so their final source
+checkpoint runs.
+
+`buffering_report()` records the retaining strategies execution has selected so
+far, with fixed storage independent of the answer size. Indexed BGP sources and
+VALUES yield rows directly; FILTER, BIND, UNION and slices forward compatible
+row units. Joins retain their selected factors and stream their product. Paths
+retain their universe, reachability caches and one completed reach unit so its
+evidence is coalesced before publication. ORDER BY, aggregation, evidence
+coalescing and stateful expressions retain their required operator units.
+Completed root path memos expire after their rows and evidence have been pinned;
+descendant memos remain available for later traversals.
+Under finite governors, pure projections and slices forward original committed
+operator units. BGP settles ordered driver charges before delivery; joins settle
+their factor certificates before streaming the final product. Charged scalar
+operators and UNION retain their original rollback units, reported as
+`GovernorSettlement`: a later expression barrier or unknown arm can withdraw
+earlier tentative rows. Answer-cap overflow rows are consumed and counted
+without publication, then the original final cap settlement establishes the
+receipt. Original source/node stop polls keep their work coordinates; explicit
+verdicts preserve original producer commit units. These strategies can compose
+in one query.
+Lazy execution charges the work it actually performs, so unused source work can
+make its cost counters differ from completed evaluation; rows, order, typed
+trips and answer certificates keep their original meaning.
+During an open read, `governor_evidence()` snapshots committed charges and can
+exclude a producer's pending ledger. `settle()` acknowledges a stopped producer
+without reading its suffix, then snapshots the work performed under the original
+governor schedule. Early settlement retains `ConsumerStopped` and an unread
+semantic suffix.
+
 The engine's prepared-plan and join-order caches each default to 4096 entries and
 64 MiB of charged payload. Configure them independently with
 `with_plan_cache_limits` and `with_order_cache_limits`; `PlanCache::with_limits`

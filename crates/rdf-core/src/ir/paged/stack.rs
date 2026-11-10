@@ -889,17 +889,17 @@ impl PagedStackQueryView<'_> {
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        self.logical_rows_range(kind, s, p, o, g, None)
+        self.logical_rows_range(kind, s, p, o, g, None::<crate::AnnotationValueRange<'_>>)
     }
 
-    fn logical_rows_range<'a>(
+    fn logical_rows_range<'a, R: crate::AnnotationRangeSource + 'a>(
         &'a self,
         kind: StatementKind,
         s: Option<GlobalTermId>,
         p: Option<GlobalTermId>,
         o: Option<GlobalTermId>,
         g: GraphMatch<GlobalTermId>,
-        values: Option<&'a crate::AnnotationValueRange<'a>>,
+        values: Option<R>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
         let mut seen = FastSet::default();
         self.snapshot
@@ -907,11 +907,17 @@ impl PagedStackQueryView<'_> {
             .iter()
             .rev()
             .flat_map(move |range| {
+                let values = values.clone();
                 [PageStream::Annotation, PageStream::Base]
                     .into_iter()
                     .flat_map(move |stream| {
                         self.physical
-                            .stream_pattern_value_range(stream, (s, p, o, g), range.clone(), values)
+                            .stream_pattern_value_range(
+                                stream,
+                                (s, p, o, g),
+                                range.clone(),
+                                values.clone(),
+                            )
                             .map(move |(page, row)| (stream, page, row))
                     })
             })
@@ -980,6 +986,25 @@ impl PagedStackQueryView<'_> {
         Ok(found)
     }
 }
+impl PagedStackQueryView<'_> {
+    pub(crate) fn annotation_quads_for_range_owned<'a, R: crate::AnnotationRangeSource + 'a>(
+        &'a self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+        range: R,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + Send + 'a {
+        self.logical_rows_range(
+            StatementKind::Annotation,
+            None,
+            predicate,
+            object,
+            graph,
+            Some(range),
+        )
+    }
+}
+
 impl DatasetView for PagedStackQueryView<'_> {
     type Id = GlobalTermId;
     type ReadError = PagedQueryError;
@@ -1087,14 +1112,7 @@ impl DatasetView for PagedStackQueryView<'_> {
         graph: GraphMatch<Self::Id>,
         range: &'a crate::AnnotationValueRange<'a>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
-        self.logical_rows_range(
-            StatementKind::Annotation,
-            None,
-            predicate,
-            object,
-            graph,
-            Some(range),
-        )
+        self.annotation_quads_for_range_owned(predicate, object, graph, range)
     }
     fn annotations_of_with_graph(
         &self,
