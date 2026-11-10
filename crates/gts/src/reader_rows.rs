@@ -6,7 +6,7 @@ use purrdf_lex::cbor::{DecodeError, Value, ValueRef};
 use crate::dictionary::DictionaryError;
 use crate::model::{AnnotationRow, ReifierRow, TermKind, Triple3};
 use crate::reader::as_i128;
-use crate::term_table::TermsRef;
+use crate::term_table::{TermMetadata, TermsRef};
 
 mod error;
 pub(crate) use error::RowError;
@@ -20,7 +20,7 @@ impl TermIdBase {
     pub(crate) fn integer(self, value: &Value) -> Result<Option<i128>, RowError> {
         self.integer_value(as_i128(value))
     }
-    fn integer_value(self, raw: Option<i128>) -> Result<Option<i128>, RowError> {
+    pub(crate) fn integer_value(self, raw: Option<i128>) -> Result<Option<i128>, RowError> {
         let Some(local) = raw.and_then(|id| usize::try_from(id).ok()) else {
             // Keep malformed and negative operands for the existing semantic
             // checks and their diagnostics, rather than coercing them to IDs.
@@ -63,12 +63,12 @@ pub(crate) enum RowCheckError {
 /// Keep cold storage failures in the folder's existing first-cause owner.
 /// Successful row returns never carry or allocate an error-sized payload.
 fn required_kind(
-    terms: TermsRef<'_>,
+    terms: impl TermMetadata,
     id: usize,
     failure: &mut Option<DictionaryError>,
 ) -> Option<TermKind> {
-    match terms.required(id) {
-        Ok(term) => Some(term.kind),
+    match terms.kind(id) {
+        Ok(kind) => Some(kind),
         Err(error) => {
             failure.get_or_insert(error);
             None
@@ -86,7 +86,7 @@ pub(crate) fn take_storage_failure(failure: &mut Option<DictionaryError>) -> Dic
 
 pub(crate) fn decode_reifier_row(
     row: Option<NumericRow<5>>,
-    terms: TermsRef<'_>,
+    terms: impl TermMetadata,
     base: TermIdBase,
     failure: &mut Option<DictionaryError>,
 ) -> RowDecode<ReifierRow> {
@@ -214,7 +214,7 @@ pub(crate) fn check_quad_positions(
 }
 
 fn check_statement_positions(
-    terms: TermsRef<'_>,
+    terms: impl TermMetadata,
     (s, p, o): Triple3,
     graph_slot: Option<usize>,
     context: &'static str,

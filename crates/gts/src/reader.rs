@@ -27,21 +27,21 @@ use fold_error::FoldError;
 mod append_error;
 pub use append_error::AppendError;
 
+mod payload;
 mod payload_error;
 use payload_error::{PayloadCause, PayloadError};
 
 mod reifier_index;
 use reifier_index::ReifierIndex;
 
-use purrdf_lex::cbor::{self, BorrowedItem, EncodedItem, Value, ValueRef};
+use purrdf_lex::cbor::{self, BorrowedItem, Value, ValueRef};
 mod encoded_frame;
+pub mod indexed;
 mod replay;
-mod term_decode;
+pub(crate) mod term_decode;
 use encoded_frame::{BlobBytes, Payload, StreamItem};
 
-use crate::codec::{
-    Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
-};
+use crate::codec::{Codec, CodecError};
 use crate::model::{
     AnnotationRow, BlobEntry, ByteRange, Diagnostic, Graph, OpaqueNode, Quad, ReifierRow,
     Signature, StreamableInfo, Suppression, Term,
@@ -745,88 +745,28 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn resolve_codecs(&self, ids: &[Value]) -> Result<Vec<Codec>, PayloadError> {
-        let mut chain = Vec::with_capacity(ids.len());
-        for cid in ids {
-            let codec = as_i128(cid).and_then(|c| self.catalog.get(&c));
-            match codec {
-                Some(c) => chain.push(c.clone()),
-                None => {
-                    return Err(PayloadError::Unavailable {
-                        reason: "unknown-codec",
-                        detail: PayloadCause::MissingCatalog(cid.clone()),
-                    });
-                }
-            }
-        }
-        Ok(chain)
-    }
-
-    /// Resolve a frame's logical payload (§6.1); error on missing capability.
+    /// Resolve a frame's logical payload through its original shared codec path.
     fn payload<'frame>(
         &self,
         frame: &'frame [(Value, Value)],
         blob: bool,
         data: Option<ValueRef<'frame>>,
     ) -> Result<Payload<'frame>, PayloadError> {
-        let d = data;
-        let bytes = d
-            .map(ValueRef::bytes)
-            .transpose()
-            .map(Option::flatten)
-            .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause)))?;
-        if blob
-            && let Some(bytes) = bytes.as_deref()
-            && let Some(limit) = self
-                .sink
-                .as_deref()
-                .and_then(StreamingSink::blob_encoded_limit)
-            && bytes.len() > limit
-        {
-            return Err(PayloadError::Budget(PayloadCause::EncodedBlobLimit {
-                actual: bytes.len(),
-                limit,
-            }));
+        payload::PayloadContext {
+            catalog: &self.catalog,
+            content_key: self.content_key,
         }
-        if let Some(Value::Array(ids)) = map_get(frame, "x")
-            && !ids.is_empty()
-        {
-            let Some(db) = bytes.as_deref() else {
-                return Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes));
-            };
-            let chain = self.resolve_codecs(ids)?;
-            // A blob frame is bounded by the blob ceiling; every other frame by
-            // the frame ceiling, which is what keeps an embedded snapshot blob
-            // map from decoding without limit.
-            let limit = self.decode_limit(blob);
-            let decoded = if let Some(content_key) = self.content_key {
-                let limit = limit.unwrap_or(usize::MAX);
-                let decrypt =
-                    |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key, limit);
-                decode_chain_with_decrypt_bounded(&chain, db, Some(&decrypt), limit)?
-            } else if let Some(limit) = limit {
-                decode_chain_bounded(&chain, db, limit)?
-            } else {
-                decode_chain(&chain, db)?
-            };
-            if blob {
-                return Ok(Payload::Blob(Cow::Owned(decoded)));
-            }
-            return EncodedItem::from_bytes(decoded, cbor::Limits::DEFAULT)
-                .map(Payload::Encoded)
-                .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
-        }
-        if blob
-            && let Some(bytes) = bytes.as_deref()
-            && let Some(limit) = self.decode_limit(true)
-            && bytes.len() > limit
-        {
-            return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
-                actual: bytes.len(),
-                limit,
-            }));
-        }
-        Ok(Payload::Value(d))
+        .decode(
+            frame,
+            blob,
+            data,
+            || self.decode_limit(blob),
+            || {
+                self.sink
+                    .as_deref()
+                    .and_then(StreamingSink::blob_encoded_limit)
+            },
+        )
     }
 
     /// Fold one already-verified frame into the graph.
@@ -951,9 +891,8 @@ impl Folder<'_, '_, '_> {
         base: TermIdBase,
     ) -> Result<(), PayloadError> {
         let term_id = self.terms().len();
-        let Some(term) = term_decode::decode(raw, term_id, base, |diagnostic| match diagnostic {
-            term_decode::TermDiagnostic::Fold(error) => self.diag(error, index),
-            term_decode::TermDiagnostic::Row(error) => self.damaged_row(error, index),
+        let Some(term) = term_decode::decode(raw, term_id, base, |diagnostic| {
+            push_diagnostic(self.g, &mut self.sink, diagnostic.into_diagnostic(index));
         }) else {
             return Ok(());
         };
@@ -1206,20 +1145,22 @@ impl Folder<'_, '_, '_> {
             .cloned();
         let encoded_len = d.map_or(0, cbor::ByteChunks::byte_len);
         let chain = match map_get(frame, "x") {
-            Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
-                Ok(chain) => chain,
-                Err(error) => {
-                    self.opaque(frame, "blob", error.opaque_reason());
-                    let detail = error.diagnostic_detail();
-                    self.diag_native(
-                        error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
-                        error,
-                        detail,
-                        index,
-                    );
-                    return;
+            Some(Value::Array(ids)) if !ids.is_empty() => {
+                match payload::resolve_codecs(&self.catalog, ids) {
+                    Ok(chain) => chain,
+                    Err(error) => {
+                        self.opaque(frame, "blob", error.opaque_reason());
+                        let detail = error.diagnostic_detail();
+                        self.diag_native(
+                            error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                            error,
+                            detail,
+                            index,
+                        );
+                        return;
+                    }
                 }
-            },
+            }
             _ => Vec::new(),
         };
 

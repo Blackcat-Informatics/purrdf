@@ -63,9 +63,9 @@ mod value_ref;
 pub use decode::{
     BorrowedChildren, BorrowedEntries, BorrowedItem, ByteChunks, ByteRangeReader, DecodeError,
     DecodeErrorKind, DecodedSequence, EncodedItem, ItemRange, Limits, MapRangeCursor, RangeCursor,
-    ReplayBuffer, ReplayStorage, SequenceError, SpooledItem, borrowed_prefix, decode,
-    decode_deterministic, decode_prefix, decode_sequence, decode_sequence_checked,
-    read_encoded_from, read_from, spool_item,
+    ReplayBuffer, ReplayStorage, SequenceError, SpooledItem, StructuralCursor, StructuralError,
+    StructuralRange, borrowed_prefix, decode, decode_deterministic, decode_prefix, decode_sequence,
+    decode_sequence_checked, read_encoded_from, read_from, spool_item,
 };
 pub use encode::{
     WriteError, canonical, canonical_into, encode, encode_into, encoded_len, write,

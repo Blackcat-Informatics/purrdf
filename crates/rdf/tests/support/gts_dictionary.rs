@@ -162,6 +162,7 @@ impl ResidentTermStorage for Resident {
 
 pub(super) struct Files {
     pub(super) metadata: purrdf_gts::dictionary::ReaderMetadata,
+    pub(super) peak_metadata_entries: usize,
     root: PathBuf,
     pub(super) reads: usize,
     pub(super) writes: usize,
@@ -176,6 +177,7 @@ impl Files {
         std::fs::create_dir_all(root).expect("create caller-owned native store");
         Self {
             metadata: purrdf_gts::dictionary::ReaderMetadata::default(),
+            peak_metadata_entries: 0,
             root: root.to_owned(),
             reads: 0,
             writes: 0,
@@ -324,6 +326,7 @@ impl TermStorage for Files {
         usage: purrdf_gts::dictionary::ReaderMetadata,
     ) -> Result<(), DictionaryError> {
         self.metadata = usage;
+        self.peak_metadata_entries = self.peak_metadata_entries.max(usage.entries);
         Ok(())
     }
     fn limits(&mut self) -> Result<DictionaryLimits, DictionaryError> {

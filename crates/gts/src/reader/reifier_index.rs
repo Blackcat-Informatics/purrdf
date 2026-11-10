@@ -11,9 +11,10 @@
 //! index beside the graph, fed by the same pushes, and each row costs what its
 //! own anchors cost.
 
+use super::term_decode::TermReferences;
 use crate::dictionary::DictionaryError;
 use crate::model::{Graph, ReifierRow, Term, TermKind, Triple3};
-use crate::term_table::TermsRef;
+use crate::term_table::TermMetadata;
 use crate::{FastMap, FastSet};
 
 /// Indexes kept in step with one segment's terms and accepted bindings.
@@ -43,13 +44,12 @@ impl ReifierIndex {
 
     /// Note a term the fold has just appended as `term_id`.
     pub(super) fn observe_term(&mut self, term_id: usize, term: &Term) {
-        if term.kind != TermKind::Triple {
+        self.observe_references(term_id, TermReferences::from_term(term));
+    }
+
+    pub(super) fn observe_references(&mut self, term_id: usize, references: TermReferences) {
+        let Some(anchored_on) = references.anchor(term_id) else {
             return;
-        }
-        let anchored_on = match (term.reifier, term.triple) {
-            (Some(rid), _) => rid,
-            (None, None) => term_id,
-            (None, Some(_)) => return,
         };
         self.anchors.entry(anchored_on).or_default().push(term_id);
         self.anchor_entries = self.anchor_entries.saturating_add(1);
@@ -85,7 +85,7 @@ impl ReifierIndex {
     /// the loop is recorded rather than refused.
     pub(super) fn binding_is_recursive(
         &self,
-        terms: TermsRef<'_>,
+        terms: impl TermMetadata,
         rid: usize,
         triple: Triple3,
     ) -> Result<bool, DictionaryError> {
@@ -105,7 +105,7 @@ impl ReifierIndex {
 
     fn depends_on_anchor(
         &self,
-        terms: TermsRef<'_>,
+        terms: impl TermMetadata,
         term_id: usize,
         anchor: usize,
         pending: (usize, Triple3),
@@ -120,9 +120,8 @@ impl ReifierIndex {
             if !seen.insert(term_id) {
                 continue;
             }
-            if let TermsRef::Stored(storage) = terms {
+            if let Some(limit) = terms.traversal_limit() {
                 let required = seen.len().saturating_add(work.len()).saturating_add(3);
-                let limit = storage.limits().metadata_entries;
                 if required > limit {
                     return Err(DictionaryError::Limit {
                         resource: "reifier-traversal-entries",
@@ -149,11 +148,11 @@ impl ReifierIndex {
     /// walker then dies on.
     fn pending_binding(
         &self,
-        terms: TermsRef<'_>,
+        terms: impl TermMetadata,
         term_id: usize,
         pending: (usize, Triple3),
     ) -> Result<Option<Triple3>, DictionaryError> {
-        let Some(term) = terms.get(term_id)? else {
+        let Some(term) = terms.references(term_id)? else {
             return Ok(None);
         };
         if term.kind != TermKind::Triple {

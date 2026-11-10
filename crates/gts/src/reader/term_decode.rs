@@ -12,6 +12,55 @@ pub(super) enum TermDiagnostic {
     Fold(FoldError),
     Row(RowError),
 }
+impl TermDiagnostic {
+    pub(super) fn into_diagnostic(self, index: u64) -> crate::model::Diagnostic {
+        match self {
+            Self::Fold(cause) => crate::model::Diagnostic {
+                code: cause.diagnostic_code().into(),
+                detail: cause.to_string(),
+                frame_index: Some(index),
+                cause: None,
+            }
+            .with_native_cause(cause),
+            Self::Row(cause) => crate::model::Diagnostic {
+                code: "DamagedFrame".into(),
+                detail: cause.to_string(),
+                frame_index: Some(index),
+                cause: None,
+            }
+            .with_native_cause(cause),
+        }
+    }
+}
+
+/// The admitted reference/anchor projection, independent of lexical bodies.
+#[derive(Clone, Copy)]
+pub(crate) struct TermReferences {
+    pub(crate) kind: TermKind,
+    pub(crate) datatype: Option<usize>,
+    pub(crate) reifier: Option<usize>,
+    pub(crate) triple: Option<crate::model::Triple3>,
+}
+impl TermReferences {
+    pub(crate) fn from_term(term: &Term) -> Self {
+        Self {
+            kind: term.kind,
+            datatype: term.datatype,
+            reifier: term.reifier,
+            triple: term.triple,
+        }
+    }
+    pub(super) fn anchor(self, term_id: usize) -> Option<usize> {
+        if self.kind != TermKind::Triple {
+            return None;
+        }
+        match (self.reifier, self.triple) {
+            (Some(reifier), _) => Some(reifier),
+            (None, None) => Some(term_id),
+            (None, Some(_)) => None,
+        }
+    }
+}
 
 fn reference(
     value: Option<&Value>,
@@ -141,6 +190,29 @@ pub(super) fn decode(
         }
         (_, direction) => direction,
     };
+    let references = decode_references(entries, term_id, kind, base, diagnose);
+    Some(Term {
+        kind,
+        value,
+        datatype: references.datatype,
+        lang,
+        direction,
+        reifier: references.reifier,
+        triple: references.triple,
+    })
+}
+
+/// Shared reference admission for the full row and its structural projection.
+/// The caller supplies only actual first-occurrence k/dt/rf/tt fields; no
+/// lexical value is needed to establish anchors or positional references.
+pub(super) fn decode_references(
+    entries: &[(Value, Value)],
+    term_id: usize,
+    kind: TermKind,
+    base: TermIdBase,
+    mut diagnose: impl FnMut(TermDiagnostic),
+) -> TermReferences {
+    let tid = term_id as i128;
     let dt_raw = reference(map_get(entries, "dt"), base, &mut diagnose);
     let rf_raw = reference(map_get(entries, "rf"), base, &mut diagnose);
     // Sanitise refs: dt MUST name an already-introduced term, and rf
@@ -189,13 +261,10 @@ pub(super) fn decode(
             triple: tt_raw,
         }));
     }
-    Some(Term {
+    TermReferences {
         kind,
-        value,
         datatype: dt,
-        lang,
-        direction,
         reifier: rf,
         triple: tt,
-    })
+    }
 }
