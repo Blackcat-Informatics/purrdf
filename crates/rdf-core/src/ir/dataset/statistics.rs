@@ -102,6 +102,27 @@ impl Drop for VisitorWorkspace<'_> {
     }
 }
 
+struct PreparedStatistics<'m, 'a, S: Admission + ?Sized> {
+    statistics: Option<LocalStatistics>,
+    memory: &'m mut Memory<'a, S>,
+}
+
+impl<S: Admission + ?Sized> PreparedStatistics<'_, '_, S> {
+    fn release(&mut self) -> Result<(), StorageError> {
+        self.statistics.take().map_or(Ok(()), |statistics| {
+            statistics.release_admitted(self.memory)
+        })
+    }
+}
+
+impl<S: Admission + ?Sized> Drop for PreparedStatistics<'_, '_, S> {
+    fn drop(&mut self) {
+        // A visitor's panic remains authoritative if its original account refuses
+        // shrink. Normal returns report cleanup failures through release instead.
+        let _ = self.release();
+    }
+}
+
 fn insert(words: &mut [u64], id: TermId) -> bool {
     let word = &mut words[id.index() / 64];
     let bit = 1 << (id.index() % 64);
@@ -136,12 +157,24 @@ impl RdfDataset {
         memory: &mut Memory<'_, S>,
         use_statistics: impl FnOnce(&LocalStatistics, &mut Memory<'_, S>) -> Result<T, E>,
     ) -> Result<T, E> {
-        let statistics = self.prepare_statistics_with_memory(memory)?;
-        let result = use_statistics(&statistics, memory);
-        let cleanup = match statistics {
-            std::borrow::Cow::Borrowed(_) => Ok(()),
-            std::borrow::Cow::Owned(statistics) => statistics.release_admitted(memory),
+        let statistics = match self.prepare_statistics_with_memory(memory)? {
+            std::borrow::Cow::Borrowed(statistics) => return use_statistics(statistics, memory),
+            std::borrow::Cow::Owned(statistics) => statistics,
         };
+        let mut prepared = PreparedStatistics {
+            statistics: Some(statistics),
+            memory,
+        };
+        // The summary is installed above and only release can take it, after the
+        // callback finishes or while the guard unwinds.
+        let result = use_statistics(
+            prepared
+                .statistics
+                .as_ref()
+                .expect("owned prepared summary"),
+            prepared.memory,
+        );
+        let cleanup = prepared.release();
         match result {
             Err(cause) => Err(cause),
             Ok(value) => cleanup.map(|()| value).map_err(E::from),

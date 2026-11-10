@@ -133,20 +133,49 @@ fn fixed_delta_directory_work_follows_prefixes_instead_of_source_population() {
 fn visitor_failure_keeps_its_admitted_output_owned_until_payload_drops() {
     let old = dataset(8, false, false);
     let next = dataset(8, true, true);
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let mut changes = Vec::new();
-    let result =
-        old.visit_source_changes_with_memory(&next, &mut memory, |side, stream, row, memory| {
-            memory.push(&mut changes, (side, stream, row))?;
-            Err::<(), _>(StorageError::SizeOverflow)
-        });
-    assert!(matches!(result, Err(StorageError::SizeOverflow)));
-    assert_eq!(changes.len(), 1);
-    assert_eq!(
-        memory.admitted_bytes(),
-        changes.capacity() * size_of::<(SourceSide, StatisticsStream, QuadIds)>()
-    );
-    memory.release_vec(changes).unwrap();
-    assert_eq!(memory.admitted_bytes(), 0);
+    for panics in [false, true] {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut changes = Vec::new();
+        let panic_payload = std::sync::Arc::new(());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            old.visit_source_changes_with_memory(&next, &mut memory, |side, stream, row, memory| {
+                memory.push(&mut changes, (side, stream, row))?;
+                if panics {
+                    std::panic::panic_any(std::sync::Arc::clone(&panic_payload));
+                }
+                Err::<(), _>(StorageError::SizeOverflow)
+            })
+        }));
+        if panics {
+            let original = result.expect_err("visitor panics");
+            assert!(std::sync::Arc::ptr_eq(
+                original.downcast_ref::<std::sync::Arc<()>>().unwrap(),
+                &panic_payload,
+            ));
+        } else {
+            assert!(matches!(result, Ok(Err(StorageError::SizeOverflow))));
+        }
+        assert_eq!(changes.len(), 1);
+        assert_eq!(
+            memory.admitted_bytes(),
+            changes.capacity() * size_of::<(SourceSide, StatisticsStream, QuadIds)>()
+        );
+        memory.release_vec(changes).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        let mut visited = 0;
+        let work = old
+            .visit_source_changes_with_memory(
+                &next,
+                &mut memory,
+                |_, _, _, _| -> Result<(), StorageError> {
+                    visited += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(visited, 6);
+        assert_eq!(work.changed, visited);
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 }
