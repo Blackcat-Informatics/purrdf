@@ -804,6 +804,7 @@ dependencies = [
 name = "purrdf-rdf"
 version = "4.0.1"
 dependencies = [
+ "helper-census",
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -860,6 +861,7 @@ dependencies = [
 name = "purrdf-shapes"
 version = "4.0.1"
 dependencies = [
+ "helper-census",
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-conformance-kit",

@@ -86,6 +86,8 @@ purrdf-slice = { workspace = true }
 purrdf-stack = { workspace = true }
 
 [dev-dependencies]
+# Shared host-side Rust scope inspection for the structural model census.
+helper-census = { path = "../helper-census" }
 # Shared corpus readers and graders stay outside the shipping API.
 purrdf-shacl-conformance = { workspace = true }
 purrdf-gts = { workspace = true }

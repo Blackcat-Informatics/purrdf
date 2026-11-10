@@ -50,7 +50,9 @@ use crate::{
 };
 
 mod export;
+mod indexed;
 pub use export::{GtsTextExport, export_gts_rdf_nquads_with_dictionary};
+pub use indexed::import_gts_indexed_term;
 
 /// The immutable-IR emit target for GTS ingestion: an [`RdfDatasetBuilder`] that
 /// interns each segment's blank nodes under a per-segment [`BlankScope`]. The
@@ -496,29 +498,33 @@ impl ResolvedSink for SinkImporter<'_> {
         // Any other reader diagnostic is a hard fold failure on the IR path (the
         // IR is the authority, no degraded fold). The `SegmentResolver` latches
         // the first one returned here.
-        let failure = RdfDiagnostic::error(
-            "rdf-ir-gts-fold-diagnostic",
-            format!(
-                "GTS fold diagnostic {}: {}",
-                diagnostic.code, diagnostic.detail
-            ),
-        )
-        .with_location({
-            let location = RdfLocation::logical("gts:sink");
-            match diagnostic.frame_index {
-                Some(frame_index) => location.with_gts_frame(frame_index),
-                None => location,
-            }
-        });
-        match &diagnostic.cause {
-            Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
-                let mut resident = purrdf_lex::allocation::Resident;
-                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-                Err(failure.with_native_cause(cause.clone(), &mut memory)?)
-            }
-            Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
-            None => Err(failure),
+        fold_diagnostic_failure(diagnostic)
+    }
+}
+
+fn fold_diagnostic_failure(diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+    let failure = RdfDiagnostic::error(
+        "rdf-ir-gts-fold-diagnostic",
+        format!(
+            "GTS fold diagnostic {}: {}",
+            diagnostic.code, diagnostic.detail
+        ),
+    )
+    .with_location({
+        let location = RdfLocation::logical("gts:sink");
+        match diagnostic.frame_index {
+            Some(frame_index) => location.with_gts_frame(frame_index),
+            None => location,
         }
+    });
+    match &diagnostic.cause {
+        Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+            Err(failure.with_native_cause(cause.clone(), &mut memory)?)
+        }
+        Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
+        None => Err(failure),
     }
 }
 

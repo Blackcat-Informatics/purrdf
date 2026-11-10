@@ -8,6 +8,17 @@ use std::sync::Arc;
 
 use crate::dictionary::{DictionaryError, TermLease};
 use crate::model::Term;
+use crate::model::TermKind;
+use crate::reader::term_decode::TermReferences;
+
+/// The same admitted kind/reference law over owned terms or a source-bound
+/// metadata projection. Navigation does not confer raw term ownership.
+pub(crate) trait TermMetadata: Copy {
+    fn len(self) -> usize;
+    fn kind(self, id: usize) -> Result<TermKind, DictionaryError>;
+    fn references(self, id: usize) -> Result<Option<TermReferences>, DictionaryError>;
+    fn traversal_limit(self) -> Option<usize>;
+}
 
 pub(crate) trait StoredTerms {
     fn limits(&self) -> crate::dictionary::DictionaryLimits;
@@ -40,6 +51,24 @@ pub(crate) enum TermsRef<'a> {
     Owned(&'a [Term]),
     Shared(&'a [Arc<Term>]),
     Stored(&'a dyn StoredTerms),
+}
+impl TermMetadata for TermsRef<'_> {
+    fn len(self) -> usize {
+        self.len()
+    }
+    fn kind(self, id: usize) -> Result<TermKind, DictionaryError> {
+        self.required(id).map(|term| term.kind)
+    }
+    fn references(self, id: usize) -> Result<Option<TermReferences>, DictionaryError> {
+        self.get(id)
+            .map(|term| term.map(|term| TermReferences::from_term(&term)))
+    }
+    fn traversal_limit(self) -> Option<usize> {
+        match self {
+            Self::Stored(storage) => Some(storage.limits().metadata_entries),
+            Self::Owned(_) | Self::Shared(_) => None,
+        }
+    }
 }
 
 impl<'a> TermsRef<'a> {

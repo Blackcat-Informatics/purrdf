@@ -69,7 +69,7 @@ impl Folder<'_, '_, '_> {
         let bytes = data
             .and_then(ValueRef::byte_chunks)
             .ok_or(PayloadError::Damaged(PayloadCause::TransformedNotBytes))?;
-        let codecs = self.resolve_codecs(ids)?;
+        let codecs = super::payload::resolve_codecs(&self.catalog, ids)?;
         let limit = self.decode_limit(false).unwrap_or(usize::MAX);
         let mut source = crate::codec::decode_chain_reader(&codecs, bytes, limit)?;
         let spooled = cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT)?;

@@ -108,6 +108,10 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on `wasm32`; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml`; also hosts the non-Rust ratchet (`--non-rust-ratchet`, see [Hard constraints](#2-hard-constraints-violating-these-fails-ci-or-review)) (`publish = false`, host tool) |
 
+The unpublished `helper-census` library also supplies exact Rust `cfg(test)`
+scope inspection to host-side structural gates. Its census consumers depend on
+it only through path-only development dependencies; it adds no shipping edge.
+
 ### Where each job lives
 
 Every job the workspace implements once has one home. `helpers-ledger.toml` is

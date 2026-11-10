@@ -12,7 +12,7 @@ use super::{Integer, Value};
 mod replay;
 pub use replay::{
     ByteRangeReader, ItemRange, MapRangeCursor, RangeCursor, ReplayBuffer, ReplayStorage,
-    SpooledItem, spool_item,
+    SpooledItem, StructuralCursor, StructuralError, StructuralRange, spool_item,
 };
 
 /// The resource bounds of one decode.
@@ -106,35 +106,43 @@ impl DecodeError {
 
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CBOR byte {}: ", self.offset)?;
-        match &self.kind {
-            DecodeErrorKind::Truncated => f.write_str("the input ends inside an item"),
-            DecodeErrorKind::Malformed(rule) => write!(f, "not well-formed: {rule}"),
-            DecodeErrorKind::InvalidUtf8 => f.write_str("a text string is not UTF-8"),
-            DecodeErrorKind::Depth { limit } => {
-                write!(f, "more than {limit} nested arrays, maps and tags")
-            }
-            DecodeErrorKind::TooLong => f.write_str("a length exceeds the address space"),
-            DecodeErrorKind::NotDeterministic(rule) => {
-                write!(f, "not deterministically encoded: {rule}")
-            }
-            DecodeErrorKind::Trailing => f.write_str("bytes follow the item"),
-            DecodeErrorKind::ReplayMismatch { .. } => {
-                f.write_str("replay storage differs from the admitted CBOR item")
-            }
-            DecodeErrorKind::Io(cause) => write!(f, "read failed: {}", cause.kind()),
-            DecodeErrorKind::ReadCount { actual, maximum } => write!(
-                f,
-                "reader returned {actual} bytes for a {maximum}-byte buffer"
-            ),
-            DecodeErrorKind::OffsetOverflow {
-                position,
-                additional,
-            } => write!(
-                f,
-                "read of {additional} bytes at {position} exceeds the address space"
-            ),
+        display_error(self.offset, &self.kind, f)
+    }
+}
+
+fn display_error(
+    offset: impl fmt::Display,
+    kind: &DecodeErrorKind,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    write!(f, "CBOR byte {offset}: ")?;
+    match kind {
+        DecodeErrorKind::Truncated => f.write_str("the input ends inside an item"),
+        DecodeErrorKind::Malformed(rule) => write!(f, "not well-formed: {rule}"),
+        DecodeErrorKind::InvalidUtf8 => f.write_str("a text string is not UTF-8"),
+        DecodeErrorKind::Depth { limit } => {
+            write!(f, "more than {limit} nested arrays, maps and tags")
         }
+        DecodeErrorKind::TooLong => f.write_str("a length exceeds the address space"),
+        DecodeErrorKind::NotDeterministic(rule) => {
+            write!(f, "not deterministically encoded: {rule}")
+        }
+        DecodeErrorKind::Trailing => f.write_str("bytes follow the item"),
+        DecodeErrorKind::ReplayMismatch { .. } => {
+            f.write_str("replay storage differs from the admitted CBOR item")
+        }
+        DecodeErrorKind::Io(cause) => write!(f, "read failed: {}", cause.kind()),
+        DecodeErrorKind::ReadCount { actual, maximum } => write!(
+            f,
+            "reader returned {actual} bytes for a {maximum}-byte buffer"
+        ),
+        DecodeErrorKind::OffsetOverflow {
+            position,
+            additional,
+        } => write!(
+            f,
+            "read of {additional} bytes at {position} exceeds the address space"
+        ),
     }
 }
 
@@ -169,16 +177,54 @@ impl purrdf_hash::error::StructuredError for DecodeError {
     }
 }
 
+/// Private wide walker failure. Legacy sources keep checked native positions;
+/// structural seek sources retain their original absolute byte positions.
+struct WalkError {
+    kind: DecodeErrorKind,
+    offset: u64,
+}
+
+impl WalkError {
+    fn new(kind: DecodeErrorKind, offset: impl TryInto<u64>) -> Self {
+        Self {
+            kind,
+            offset: offset.try_into().ok().expect("a decoder offset fits u64"),
+        }
+    }
+}
+
+impl From<DecodeError> for WalkError {
+    fn from(error: DecodeError) -> Self {
+        Self::new(error.kind, error.offset)
+    }
+}
+
+impl From<WalkError> for DecodeError {
+    fn from(error: WalkError) -> Self {
+        // Slice, Stream and admitted replay keep their checked usize cursor.
+        // Structural sources use their separate wide error boundary instead.
+        Self::new(error.kind, native_offset(error.offset))
+    }
+}
+
+fn native_offset(offset: u64) -> usize {
+    usize::try_from(offset).expect("a native decoder source keeps a checked usize extent")
+}
+
+fn native_span((start, end): WalkSpan) -> ItemSpan {
+    (native_offset(start), native_offset(end))
+}
+
 /// Where the decoder's bytes come from.
 trait Source {
     /// The offset of the next byte.
-    fn offset(&self) -> usize;
+    fn offset(&self) -> u64;
     /// The next byte.
-    fn byte(&mut self) -> Result<u8, DecodeError>;
+    fn byte(&mut self) -> Result<u8, WalkError>;
     /// Append the next `len` bytes to `out`.
-    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError>;
+    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), WalkError>;
     /// Consume uninterpreted bytes without retaining a complete string.
-    fn skip_bytes(&mut self, mut len: u64) -> Result<(), DecodeError> {
+    fn skip_bytes(&mut self, mut len: u64) -> Result<(), WalkError> {
         let mut scratch = Vec::new();
         while len != 0 {
             scratch.clear();
@@ -198,35 +244,35 @@ struct Slice<'a> {
 }
 
 impl Slice<'_> {
-    fn extent(&self, len: u64) -> Result<core::ops::Range<usize>, DecodeError> {
+    fn extent(&self, len: u64) -> Result<core::ops::Range<usize>, WalkError> {
         let available = self.bytes.len() - self.pos;
         let len = usize::try_from(len)
             .ok()
             .filter(|&len| len <= available)
-            .ok_or_else(|| DecodeError::new(DecodeErrorKind::Truncated, self.bytes.len()))?;
+            .ok_or_else(|| WalkError::new(DecodeErrorKind::Truncated, self.bytes.len()))?;
         Ok(self.pos..self.pos + len)
     }
 }
 
 impl Source for Slice<'_> {
-    fn skip_bytes(&mut self, len: u64) -> Result<(), DecodeError> {
+    fn skip_bytes(&mut self, len: u64) -> Result<(), WalkError> {
         self.pos = self.extent(len)?.end;
         Ok(())
     }
-    fn offset(&self) -> usize {
-        self.pos
+    fn offset(&self) -> u64 {
+        self.pos as u64
     }
 
-    fn byte(&mut self) -> Result<u8, DecodeError> {
+    fn byte(&mut self) -> Result<u8, WalkError> {
         let byte = *self
             .bytes
             .get(self.pos)
-            .ok_or_else(|| DecodeError::new(DecodeErrorKind::Truncated, self.pos))?;
+            .ok_or_else(|| WalkError::new(DecodeErrorKind::Truncated, self.pos))?;
         self.pos += 1;
         Ok(byte)
     }
 
-    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError> {
+    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), WalkError> {
         let extent = self.extent(len)?;
         out.extend_from_slice(&self.bytes[extent.clone()]);
         self.pos = extent.end;
@@ -244,33 +290,30 @@ struct Stream<'r, R: ?Sized> {
 }
 
 impl<R: Read + ?Sized> Source for Stream<'_, R> {
-    fn offset(&self) -> usize {
-        self.pos
+    fn offset(&self) -> u64 {
+        self.pos as u64
     }
 
-    fn byte(&mut self) -> Result<u8, DecodeError> {
+    fn byte(&mut self) -> Result<u8, WalkError> {
         let mut byte = [0_u8];
         loop {
             match self.reader.read(&mut byte) {
                 Ok(1) => break,
-                Ok(0) => return Err(DecodeError::new(DecodeErrorKind::Truncated, self.pos)),
+                Ok(0) => return Err(WalkError::new(DecodeErrorKind::Truncated, self.pos)),
                 Ok(actual) => {
-                    return Err(DecodeError::new(
+                    return Err(WalkError::new(
                         DecodeErrorKind::ReadCount { actual, maximum: 1 },
                         self.pos,
                     ));
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => {
-                    return Err(DecodeError::new(
-                        DecodeErrorKind::Io(error.into()),
-                        self.pos,
-                    ));
+                    return Err(WalkError::new(DecodeErrorKind::Io(error.into()), self.pos));
                 }
             }
         }
         self.pos = self.pos.checked_add(1).ok_or_else(|| {
-            DecodeError::new(
+            WalkError::new(
                 DecodeErrorKind::OffsetOverflow {
                     position: self.pos,
                     additional: 1,
@@ -281,16 +324,16 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
         Ok(byte[0])
     }
 
-    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError> {
+    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), WalkError> {
         // `take` + `read_to_end` grows the buffer as bytes arrive, so a
         // declared length the stream does not back allocates nothing extra.
         let before = out.len();
         let read = (&mut *self.reader)
             .take(len)
             .read_to_end(out)
-            .map_err(|error| DecodeError::new(DecodeErrorKind::Io(error.into()), self.pos))?;
+            .map_err(|error| WalkError::new(DecodeErrorKind::Io(error.into()), self.pos))?;
         self.pos = self.pos.checked_add(read).ok_or_else(|| {
-            DecodeError::new(
+            WalkError::new(
                 DecodeErrorKind::OffsetOverflow {
                     position: self.pos,
                     additional: read,
@@ -301,7 +344,7 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
         if (out.len() - before) as u64 == len {
             Ok(())
         } else {
-            Err(DecodeError::new(DecodeErrorKind::Truncated, self.pos))
+            Err(WalkError::new(DecodeErrorKind::Truncated, self.pos))
         }
     }
 
@@ -313,18 +356,20 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
 /// An array, map or tag whose items are still being read.
 /// One complete encoded CBOR item, relative to the current input slice.
 type ItemSpan = (usize, usize);
+type WalkSpan = (u64, u64);
 
 trait DecodeOutput {
+    const WIDE: bool = false;
     type Item;
     type Array: Default;
     type Map: Default;
 
-    fn scalar(&mut self, value: Value, span: ItemSpan, depth: usize) -> Self::Item;
+    fn scalar(&mut self, value: Value, span: WalkSpan, depth: usize) -> Self::Item;
     fn push_array(&mut self, array: &mut Self::Array, item: Self::Item);
     fn push_map(&mut self, map: &mut Self::Map, key: Self::Item, value: Self::Item);
-    fn array(&mut self, array: Self::Array, span: ItemSpan, depth: usize) -> Self::Item;
-    fn map(&mut self, map: Self::Map, span: ItemSpan, depth: usize) -> Self::Item;
-    fn tag(&mut self, tag: u64, item: Self::Item, span: ItemSpan, depth: usize) -> Self::Item;
+    fn array(&mut self, array: Self::Array, span: WalkSpan, depth: usize) -> Self::Item;
+    fn map(&mut self, map: Self::Map, span: WalkSpan, depth: usize) -> Self::Item;
+    fn tag(&mut self, tag: u64, item: Self::Item, span: WalkSpan, depth: usize) -> Self::Item;
 }
 
 struct OwnedOutput;
@@ -334,7 +379,7 @@ impl DecodeOutput for OwnedOutput {
     type Array = Vec<Value>;
     type Map = Vec<(Value, Value)>;
 
-    fn scalar(&mut self, value: Value, _: ItemSpan, _: usize) -> Value {
+    fn scalar(&mut self, value: Value, _: WalkSpan, _: usize) -> Value {
         value
     }
     fn push_array(&mut self, array: &mut Self::Array, item: Value) {
@@ -343,53 +388,56 @@ impl DecodeOutput for OwnedOutput {
     fn push_map(&mut self, map: &mut Self::Map, key: Value, value: Value) {
         map.push((key, value));
     }
-    fn array(&mut self, array: Self::Array, _: ItemSpan, _: usize) -> Value {
+    fn array(&mut self, array: Self::Array, _: WalkSpan, _: usize) -> Value {
         Value::Array(array)
     }
-    fn map(&mut self, map: Self::Map, _: ItemSpan, _: usize) -> Value {
+    fn map(&mut self, map: Self::Map, _: WalkSpan, _: usize) -> Value {
         Value::Map(map)
     }
-    fn tag(&mut self, tag: u64, item: Value, _: ItemSpan, _: usize) -> Value {
+    fn tag(&mut self, tag: u64, item: Value, _: WalkSpan, _: usize) -> Value {
         Value::Tag(tag, Box::new(item))
     }
 }
 
-struct SpanOutput<'a, F, const TRUSTED: bool> {
+struct SpanOutput<'a, F, const TRUSTED: bool, const WIDE: bool = false> {
     depth: usize,
     visit: &'a mut F,
 }
 
-impl<F: FnMut(ItemSpan), const TRUSTED: bool> SpanOutput<'_, F, TRUSTED> {
-    fn record(&mut self, span: ItemSpan, depth: usize) {
+impl<F: FnMut(WalkSpan), const TRUSTED: bool, const WIDE: bool> SpanOutput<'_, F, TRUSTED, WIDE> {
+    fn record(&mut self, span: WalkSpan, depth: usize) {
         if depth == self.depth {
             (self.visit)(span);
         }
     }
 }
 
-impl<F: FnMut(ItemSpan), const TRUSTED: bool> DecodeOutput for SpanOutput<'_, F, TRUSTED> {
+impl<F: FnMut(WalkSpan), const TRUSTED: bool, const WIDE: bool> DecodeOutput
+    for SpanOutput<'_, F, TRUSTED, WIDE>
+{
+    const WIDE: bool = WIDE;
     type Item = ();
     type Array = ();
     type Map = ();
 
-    fn scalar(&mut self, _: Value, span: ItemSpan, depth: usize) {
+    fn scalar(&mut self, _: Value, span: WalkSpan, depth: usize) {
         self.record(span, depth);
     }
     fn push_array(&mut self, (): &mut (), (): ()) {}
     fn push_map(&mut self, (): &mut (), (): (), (): ()) {}
-    fn array(&mut self, (): (), span: ItemSpan, depth: usize) {
+    fn array(&mut self, (): (), span: WalkSpan, depth: usize) {
         self.record(span, depth);
     }
-    fn map(&mut self, (): (), span: ItemSpan, depth: usize) {
+    fn map(&mut self, (): (), span: WalkSpan, depth: usize) {
         self.record(span, depth);
     }
-    fn tag(&mut self, _: u64, (): (), span: ItemSpan, depth: usize) {
+    fn tag(&mut self, _: u64, (): (), span: WalkSpan, depth: usize) {
         self.record(span, depth);
     }
 }
 
-/// String output is separate so trusted extent navigation can only use a slice.
-/// Initial admission and owned decoding always retain the validating policy.
+/// String output separates validating admission from trusted or explicitly
+/// structural extent navigation. Only the structural policy permits wide extents.
 trait DecodeString<S: Source>: DecodeOutput {
     fn string(
         &mut self,
@@ -397,9 +445,9 @@ trait DecodeString<S: Source>: DecodeOutput {
         major: u8,
         length: Option<u64>,
         deterministic: bool,
-        at: usize,
+        at: u64,
         depth: usize,
-    ) -> Result<Self::Item, DecodeError> {
+    ) -> Result<Self::Item, WalkError> {
         string_value(self, source, major, length, deterministic, at, depth)
     }
 }
@@ -410,32 +458,32 @@ fn string_value<S: Source, B: DecodeOutput + ?Sized>(
     major: u8,
     length: Option<u64>,
     deterministic: bool,
-    at: usize,
+    at: u64,
     depth: usize,
-) -> Result<B::Item, DecodeError> {
+) -> Result<B::Item, WalkError> {
     let bytes = string_bytes(source, major, length, deterministic, at)?;
     let value = if major == 2 {
         Value::Bytes(bytes)
     } else {
         Value::Text(
             String::from_utf8(bytes)
-                .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
+                .map_err(|_| WalkError::new(DecodeErrorKind::InvalidUtf8, at))?,
         )
     };
     Ok(output.scalar(value, (at, source.offset()), depth))
 }
 
 impl<S: Source> DecodeString<S> for OwnedOutput {}
-impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false> {
+impl<S: Source, F: FnMut(WalkSpan)> DecodeString<S> for SpanOutput<'_, F, false> {
     fn string(
         &mut self,
         source: &mut S,
         major: u8,
         length: Option<u64>,
         deterministic: bool,
-        at: usize,
+        at: u64,
         depth: usize,
-    ) -> Result<(), DecodeError> {
+    ) -> Result<(), WalkError> {
         if major != super::head::BYTES {
             return string_value(self, source, major, length, deterministic, at, depth);
         }
@@ -445,6 +493,7 @@ impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false>
             length,
             deterministic,
             at,
+            true,
             |source, len, _| source.skip_bytes(len),
         )?;
         self.record((at, source.offset()), depth);
@@ -452,26 +501,26 @@ impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false>
     }
 }
 
-impl<F: FnMut(ItemSpan)> DecodeString<Slice<'_>> for SpanOutput<'_, F, true> {
+impl<S: Source, F: FnMut(WalkSpan), const WIDE: bool> DecodeString<S>
+    for SpanOutput<'_, F, true, WIDE>
+{
     fn string(
         &mut self,
-        source: &mut Slice<'_>,
+        source: &mut S,
         major: u8,
         length: Option<u64>,
         deterministic: bool,
-        at: usize,
+        at: u64,
         depth: usize,
-    ) -> Result<(), DecodeError> {
+    ) -> Result<(), WalkError> {
         string_chunks(
             source,
             major,
             length,
             deterministic,
             at,
-            |source, len, _| {
-                source.pos = source.extent(len)?.end;
-                Ok(())
-            },
+            !WIDE,
+            |source, len, _| source.skip_bytes(len),
         )?;
         self.record((at, source.offset()), depth);
         Ok(())
@@ -480,19 +529,19 @@ impl<F: FnMut(ItemSpan)> DecodeString<Slice<'_>> for SpanOutput<'_, F, true> {
 
 enum Open<B: DecodeOutput> {
     Array {
-        start: usize,
+        start: u64,
         remaining: Option<u64>,
         items: B::Array,
     },
     Map {
-        start: usize,
+        start: u64,
         remaining: Option<u64>,
         entries: B::Map,
         key: Option<B::Item>,
-        last_key: Option<(usize, usize)>,
+        last_key: Option<WalkSpan>,
     },
     Tag {
-        start: usize,
+        start: u64,
         tag: u64,
     },
 }
@@ -503,7 +552,7 @@ fn decode_item<S: Source>(
     limits: Limits,
     deterministic: bool,
 ) -> Result<Value, DecodeError> {
-    decode_item_to(source, limits, deterministic, &mut OwnedOutput)
+    decode_item_to(source, limits, deterministic, &mut OwnedOutput).map_err(Into::into)
 }
 
 /// Visit complete item spans at `depth`, where the root has depth zero.
@@ -521,13 +570,14 @@ fn visit_prefix(
     mut visit: impl FnMut(ItemSpan),
 ) -> Result<usize, DecodeError> {
     let mut source = Slice { bytes, pos: 0 };
+    let mut record = |span| visit(native_span(span));
     decode_item_to(
         &mut source,
         limits,
         false,
         &mut SpanOutput::<_, false> {
             depth,
-            visit: &mut visit,
+            visit: &mut record,
         },
     )?;
     Ok(source.pos)
@@ -536,11 +586,11 @@ fn visit_prefix(
 fn attach_to<S: Source, B: DecodeOutput>(
     open: &mut Vec<Open<B>>,
     item: B::Item,
-    mut start: usize,
+    mut start: u64,
     source: &S,
     deterministic: bool,
     output: &mut B,
-) -> Result<Option<B::Item>, DecodeError> {
+) -> Result<Option<B::Item>, WalkError> {
     let mut item = Some(item);
     loop {
         let completed = match open.last_mut() {
@@ -581,9 +631,10 @@ fn attach_to<S: Source, B: DecodeOutput>(
                             .consumed()
                             .expect("the deterministic decoder reads a slice");
                         if let Some((from, to)) = *last_key
-                            && bytes[from..to] >= bytes[start..end]
+                            && bytes[native_offset(from)..native_offset(to)]
+                                >= bytes[native_offset(start)..native_offset(end)]
                         {
-                            return Err(DecodeError::new(
+                            return Err(WalkError::new(
                                 DecodeErrorKind::NotDeterministic(
                                     "map keys must be in strictly ascending bytewise order",
                                 ),
@@ -634,7 +685,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
     limits: Limits,
     deterministic: bool,
     output: &mut B,
-) -> Result<B::Item, DecodeError> {
+) -> Result<B::Item, WalkError> {
     let mut open: Vec<Open<B>> = Vec::new();
     loop {
         let at = source.offset();
@@ -661,7 +712,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
                     (output.map(entries, span, open.len()), start)
                 }
                 _ => {
-                    return Err(DecodeError::new(
+                    return Err(WalkError::new(
                         DecodeErrorKind::Malformed("a break outside an indefinite array or map"),
                         at,
                     ));
@@ -675,7 +726,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
         let argument = argument(source, initial, at, deterministic)?;
         let depth = open.len();
         let scalar =
-            |output: &mut B, value: Value, end: usize| output.scalar(value, (at, end), depth);
+            |output: &mut B, value: Value, end: u64| output.scalar(value, (at, end), depth);
         let value = match (major, argument) {
             (0, Some(n)) => scalar(output, Value::Integer(Integer::from(n)), source.offset()),
             (1, Some(n)) => scalar(
@@ -687,7 +738,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
             ),
             (2 | 3, length) => output.string(source, major, length, deterministic, at, depth)?,
             (4..=6, _) if open.len() >= limits.max_depth => {
-                return Err(DecodeError::new(
+                return Err(WalkError::new(
                     DecodeErrorKind::Depth {
                         limit: limits.max_depth,
                     },
@@ -695,7 +746,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
                 ));
             }
             (4 | 5, None) if deterministic => {
-                return Err(DecodeError::new(
+                return Err(WalkError::new(
                     DecodeErrorKind::NotDeterministic("a length must be definite"),
                     at,
                 ));
@@ -703,8 +754,8 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
             (4, Some(0)) => output.array(B::Array::default(), (at, source.offset()), depth),
             (5, Some(0)) => output.map(B::Map::default(), (at, source.offset()), depth),
             (4, remaining) => {
-                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
-                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
+                if !B::WIDE && remaining.is_some_and(|n| usize::try_from(n).is_err()) {
+                    return Err(WalkError::new(DecodeErrorKind::TooLong, at));
                 }
                 open.push(Open::Array {
                     start: at,
@@ -714,8 +765,8 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
                 continue;
             }
             (5, remaining) => {
-                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
-                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
+                if !B::WIDE && remaining.is_some_and(|n| usize::try_from(n).is_err()) {
+                    return Err(WalkError::new(DecodeErrorKind::TooLong, at));
                 }
                 open.push(Open::Map {
                     start: at,
@@ -736,7 +787,7 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
                 source.offset(),
             ),
             (0 | 1 | 6 | 7, None) => {
-                return Err(DecodeError::new(
+                return Err(WalkError::new(
                     DecodeErrorKind::Malformed(
                         "only strings, arrays and maps have an indefinite length",
                     ),
@@ -755,9 +806,9 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
 fn argument<S: Source>(
     source: &mut S,
     initial: u8,
-    at: usize,
+    at: u64,
     deterministic: bool,
-) -> Result<Option<u64>, DecodeError> {
+) -> Result<Option<u64>, WalkError> {
     let info = initial & 31;
     let width = match info {
         0..=23 => return Ok(Some(u64::from(info))),
@@ -767,7 +818,7 @@ fn argument<S: Source>(
         27 => 8,
         31 => return Ok(None),
         _ => {
-            return Err(DecodeError::new(
+            return Err(WalkError::new(
                 DecodeErrorKind::Malformed("additional information 28 to 30 is reserved"),
                 at,
             ));
@@ -787,7 +838,7 @@ fn argument<S: Source>(
             _ => value > 0xffff_ffff,
         };
         if !shortest {
-            return Err(DecodeError::new(
+            return Err(WalkError::new(
                 DecodeErrorKind::NotDeterministic("an argument must use its shortest form"),
                 at,
             ));
@@ -822,8 +873,8 @@ fn string_bytes<S: Source>(
     major: u8,
     length: Option<u64>,
     deterministic: bool,
-    at: usize,
-) -> Result<Vec<u8>, DecodeError> {
+    at: u64,
+) -> Result<Vec<u8>, WalkError> {
     let mut bytes = Vec::new();
     let indefinite = length.is_none();
     string_chunks(
@@ -832,11 +883,12 @@ fn string_bytes<S: Source>(
         length,
         deterministic,
         at,
+        true,
         |source, len, chunk_at| {
             let from = bytes.len();
             source.take(len, &mut bytes)?;
             if indefinite && major == 3 && core::str::from_utf8(&bytes[from..]).is_err() {
-                return Err(DecodeError::new(DecodeErrorKind::InvalidUtf8, chunk_at));
+                return Err(WalkError::new(DecodeErrorKind::InvalidUtf8, chunk_at));
             }
             Ok(())
         },
@@ -845,18 +897,19 @@ fn string_bytes<S: Source>(
 }
 
 /// The one definite/indefinite string grammar, shared by admission and extent
-/// navigation. Only admitted immutable slices may skip a chunk's bytes.
+/// navigation. Structural ranges skip bodies without granting admitted authority.
 fn string_chunks<S: Source>(
     source: &mut S,
     major: u8,
     length: Option<u64>,
     deterministic: bool,
-    at: usize,
-    mut chunk: impl FnMut(&mut S, u64, usize) -> Result<(), DecodeError>,
-) -> Result<(), DecodeError> {
+    at: u64,
+    local_lengths: bool,
+    mut chunk: impl FnMut(&mut S, u64, u64) -> Result<(), WalkError>,
+) -> Result<(), WalkError> {
     let Some(length) = length else {
         if deterministic {
-            return Err(DecodeError::new(
+            return Err(WalkError::new(
                 DecodeErrorKind::NotDeterministic("a length must be definite"),
                 at,
             ));
@@ -866,8 +919,8 @@ fn string_chunks<S: Source>(
         }
         return Ok(());
     };
-    if usize::try_from(length).is_err() {
-        return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
+    if local_lengths && usize::try_from(length).is_err() {
+        return Err(WalkError::new(DecodeErrorKind::TooLong, at));
     }
     chunk(source, length, at)
 }
@@ -875,14 +928,14 @@ fn string_chunks<S: Source>(
 fn next_string_chunk<S: Source>(
     source: &mut S,
     major: u8,
-) -> Result<Option<(u64, usize)>, DecodeError> {
+) -> Result<Option<(u64, u64)>, WalkError> {
     let at = source.offset();
     let initial = source.byte()?;
     if initial == 0xff {
         return Ok(None);
     }
     if initial >> 5 != major {
-        return Err(DecodeError::new(
+        return Err(WalkError::new(
             DecodeErrorKind::Malformed(
                 "an indefinite string's chunks must be strings of its own type",
             ),
@@ -890,7 +943,7 @@ fn next_string_chunk<S: Source>(
         ));
     }
     let length = argument(source, initial, at, false)?.ok_or_else(|| {
-        DecodeError::new(
+        WalkError::new(
             DecodeErrorKind::Malformed("an indefinite string's chunks must be definite"),
             at,
         )
@@ -902,9 +955,9 @@ fn next_string_chunk<S: Source>(
 fn simple_or_float(
     initial: u8,
     argument: u64,
-    at: usize,
+    at: u64,
     deterministic: bool,
-) -> Result<Value, DecodeError> {
+) -> Result<Value, WalkError> {
     let value = match initial & 31 {
         20 => Value::Bool(false),
         21 => Value::Bool(true),
@@ -912,7 +965,7 @@ fn simple_or_float(
         info @ (0..=19 | 23) => Value::Simple(info),
         24 => {
             if argument < 32 {
-                return Err(DecodeError::new(
+                return Err(WalkError::new(
                     DecodeErrorKind::Malformed("a two-byte simple value must be at least 32"),
                     at,
                 ));
@@ -931,7 +984,7 @@ fn simple_or_float(
             _ => 9,
         };
         if width != shortest {
-            return Err(DecodeError::new(
+            return Err(WalkError::new(
                 DecodeErrorKind::NotDeterministic("a float must use its shortest exact form"),
                 at,
             ));
@@ -1366,7 +1419,7 @@ impl<'a> Iterator for BorrowedChildren<'a> {
             }
             Err(error) => {
                 self.remaining = &[];
-                Some(Err(error))
+                Some(Err(error.into()))
             }
         }
     }
@@ -1435,17 +1488,17 @@ struct Capturing<S> {
 }
 
 impl<S: Source> Source for Capturing<S> {
-    fn offset(&self) -> usize {
+    fn offset(&self) -> u64 {
         self.source.offset()
     }
 
-    fn byte(&mut self) -> Result<u8, DecodeError> {
+    fn byte(&mut self) -> Result<u8, WalkError> {
         let byte = self.source.byte()?;
         self.encoded.push(byte);
         Ok(byte)
     }
 
-    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError> {
+    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), WalkError> {
         let start = out.len();
         // Keep the exact original result. A partial failed read can append
         // bytes, but its owner is never published as a validated item.
@@ -1485,7 +1538,7 @@ pub fn read_encoded_from<R: Read + ?Sized>(
             limits,
         })),
         Err(error) if error.kind == DecodeErrorKind::Truncated && error.offset == 0 => Ok(None),
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1536,8 +1589,10 @@ mod tests {
             reader: &mut cursor,
             pos: usize::MAX,
         };
+        let error = DecodeError::from(stream.byte().unwrap_err());
+        assert_eq!(error.offset(), usize::MAX);
         assert!(matches!(
-            stream.byte().unwrap_err().kind(),
+            error.kind(),
             DecodeErrorKind::OffsetOverflow {
                 position: usize::MAX,
                 additional: 1
@@ -1549,8 +1604,10 @@ mod tests {
             reader: &mut cursor,
             pos: usize::MAX,
         };
+        let error = DecodeError::from(stream.take(1, &mut Vec::new()).unwrap_err());
+        assert_eq!(error.offset(), usize::MAX);
         assert!(matches!(
-            stream.take(1, &mut Vec::new()).unwrap_err().kind(),
+            error.kind(),
             DecodeErrorKind::OffsetOverflow {
                 position: usize::MAX,
                 additional: 1
