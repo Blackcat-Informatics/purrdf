@@ -6,7 +6,25 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use purrdf_lex::allocation::{Memory, Resident};
+use crate::ir::statistics::LocalStatistics;
+use purrdf_lex::allocation::{Memory, Resident, Shared};
+
+#[derive(Debug, Clone)]
+pub(super) enum PreparedStatistics {
+    SourceOwned,
+    Prepared(Shared<LocalStatistics>),
+}
+
+impl PreparedStatistics {
+    fn borrow<'a>(&'a self, dataset: &'a RdfDataset) -> &'a LocalStatistics {
+        match self {
+            Self::SourceOwned => dataset
+                .prepared_statistics()
+                .expect("source-owned evidence was checked before descriptor publication"),
+            Self::Prepared(statistics) => statistics,
+        }
+    }
+}
 
 use crate::RdfDataset;
 
@@ -19,6 +37,7 @@ use super::{SegmentedError, SegmentedProvider, SegmentedReadLimits, SegmentedRec
 #[derive(Debug, Clone, Default)]
 pub struct SegmentedLayerMetadata {
     removals: Option<Arc<RdfDataset>>,
+    removal_statistics: Option<PreparedStatistics>,
     declarations: Option<Arc<RdfDataset>>,
     max_owned_term_bytes: u64,
     pub(super) statistics_revision: u64,
@@ -49,6 +68,10 @@ impl SegmentedLayerMetadata {
                 .try_fold(0, |widest, dataset| {
                     super::build::resident_owned_term_bound(dataset).map(|bound| widest.max(bound))
                 })?;
+        let removal_statistics = removals
+            .as_ref()
+            .map(|dataset| prepare_resident_statistics(dataset))
+            .transpose()?;
         Ok(Self {
             statistics_revision: purrdf_hash::fixed::hash_one(&(
                 removals
@@ -61,6 +84,7 @@ impl SegmentedLayerMetadata {
                     .transpose()?,
             )),
             removals,
+            removal_statistics,
             declarations,
             max_owned_term_bytes,
         })
@@ -70,6 +94,13 @@ impl SegmentedLayerMetadata {
     #[must_use]
     pub fn removals(&self) -> Option<&Arc<RdfDataset>> {
         self.removals.as_ref()
+    }
+
+    pub(super) fn removal_source(&self) -> Option<(&Arc<RdfDataset>, &LocalStatistics)> {
+        self.removals
+            .as_ref()
+            .zip(self.removal_statistics.as_ref())
+            .map(|(dataset, statistics)| (dataset, statistics.borrow(dataset)))
     }
 
     /// Original explicit graph declarations, distinct from implicit row presence.
@@ -139,6 +170,7 @@ impl SegmentedLayer {
 #[derive(Debug, Clone)]
 pub struct SegmentedResidentHead {
     pub(super) dataset: Arc<RdfDataset>,
+    statistics: PreparedStatistics,
     pub(super) metadata: SegmentedLayerMetadata,
     pub(super) max_owned_term_bytes: u64,
     pub(super) statistics_revision: u64,
@@ -156,12 +188,14 @@ impl SegmentedResidentHead {
     ) -> Result<Self, SegmentedError> {
         let max_owned_term_bytes =
             super::build::resident_owned_term_bound(&dataset)?.max(metadata.max_owned_term_bytes());
+        let statistics = prepare_resident_statistics(&dataset)?;
         Ok(Self {
             statistics_revision: purrdf_hash::fixed::hash_one(&(
                 resident_statistics_revision(&dataset)?,
                 metadata.statistics_revision,
             )),
             dataset,
+            statistics,
             metadata,
             max_owned_term_bytes,
         })
@@ -173,11 +207,32 @@ impl SegmentedResidentHead {
         &self.dataset
     }
 
+    pub(super) fn source(&self) -> (&Arc<RdfDataset>, &LocalStatistics) {
+        (&self.dataset, self.statistics())
+    }
+
+    pub(super) fn statistics(&self) -> &LocalStatistics {
+        self.statistics.borrow(&self.dataset)
+    }
+
     /// Current-batch removals and explicit declarations.
     #[must_use]
     pub const fn metadata(&self) -> &SegmentedLayerMetadata {
         &self.metadata
     }
+}
+
+fn prepare_resident_statistics(dataset: &RdfDataset) -> Result<PreparedStatistics, SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let statistics = match dataset.prepare_statistics_with_memory(&mut memory)? {
+        std::borrow::Cow::Borrowed(_) => return Ok(PreparedStatistics::SourceOwned),
+        std::borrow::Cow::Owned(statistics) => statistics,
+    };
+    memory.add_bytes(Shared::<LocalStatistics>::allocation_layout().size())?;
+    Shared::try_new(statistics)
+        .map(PreparedStatistics::Prepared)
+        .map_err(|_| SegmentedError::AllocationFailed("resident source statistics"))
 }
 
 fn resident_statistics_revision(dataset: &RdfDataset) -> Result<u64, SegmentedError> {

@@ -93,6 +93,7 @@ pub(crate) fn prepare_seeded_join<D: DatasetView + Sync>(
                 ctx.active_graph,
                 driven,
                 &seed,
+                ctx.bgp_order_cache,
                 &ctx.workspace,
             )?
             .expect("the driven relation was certified seed eligible"),
@@ -2135,6 +2136,7 @@ pub(crate) fn begin_seeded_optional<'e, D: DatasetView + Sync>(
         ctx.active_graph,
         right,
         &seed,
+        ctx.bgp_order_cache,
         &ctx.workspace,
     )?
     else {

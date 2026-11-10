@@ -688,6 +688,7 @@ source on every run.
 | `b"purrdf-sparql-eval/embedding-space-vectors-generation/v1"` | `VECTORS_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
 | `b"purrdf-sparql-eval/execution-coordinates/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/extension-env"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/extension_env.rs` |
+| `b"purrdf-sparql-eval/numeric-forecast-key/v1"` | `(inline)` | `crates/sparql-eval/src/bgp/forecast.rs` |
 | `b"purrdf-sparql-eval/property-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/property_fn_plan.rs` |
 | `b"purrdf-sparql-eval/update-context/v1"` | `(inline)` | `crates/sparql-eval/src/update.rs` |
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |

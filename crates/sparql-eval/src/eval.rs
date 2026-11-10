@@ -7358,6 +7358,7 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                         &runner.ctx.active_dataset,
                         runner.ctx.active_graph,
                         current_pattern,
+                        runner.ctx.bgp_order_cache,
                         &runner.ctx.workspace,
                     ) {
                         Ok(plan) => plan,

@@ -518,12 +518,16 @@ impl PageSummary {
     /// crate's accumulation loop, unreachable for a validly frozen `page`.
     pub(crate) fn seal(page: &RdfDataset) -> Result<Self, SummarySealError> {
         let counts = PageCounts::accumulate(page)?;
-        let source = page.predicate_statistics();
-        let digest = counts.digest(source);
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let source = page.prepare_statistics_with_memory(&mut memory)?;
+        let digest = counts.digest(&source);
         // This is the resident page-header constructor, independent of the
         // materialization's owner. Keep a fallible metadata copy, never its rows.
-        let mut admission = Resident;
-        let statistics = source.clone_admitted(&mut Memory::new(&mut admission))?;
+        let statistics = match source {
+            std::borrow::Cow::Borrowed(source) => source.clone_admitted(&mut memory)?,
+            std::borrow::Cow::Owned(source) => source,
+        };
         Ok(Self {
             snapshot_identity: page.frozen_snapshot_identity(),
             intervals: [
@@ -561,7 +565,11 @@ impl PageSummary {
     ///
     /// [`SummaryDefect`], exactly as [`seal`](Self::seal).
     pub(crate) fn digest_of(page: &RdfDataset) -> Result<u64, SummarySealError> {
-        Ok(PageCounts::accumulate(page)?.digest(page.predicate_statistics()))
+        let counts = PageCounts::accumulate(page)?;
+        let mut resident = Resident;
+        page.with_prepared_statistics(&mut Memory::new(&mut resident), |statistics, _| {
+            Ok(counts.digest(statistics))
+        })
     }
 
     /// This summary's sealed digest. Comparing two of these is `O(1)` and is a
@@ -718,6 +726,7 @@ impl PageSummary {
 /// `seal` expects.
 #[cfg(test)]
 mod tests {
+    use purrdf_lex::allocation::{Memory, Resident};
     use std::sync::Arc;
 
     use super::{PageCounts, PageStream, PageSummary};
@@ -980,7 +989,10 @@ mod tests {
         let page = b.freeze().expect("fixture freezes");
 
         let fresh = || PageCounts::accumulate(&page).expect("fixture accumulates");
-        let sealed = fresh().digest(page.predicate_statistics());
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let statistics = page.prepare_statistics_with_memory(&mut memory).unwrap();
+        let sealed = fresh().digest(&statistics);
 
         // The fixture really does hold a count of two everywhere a mutation below
         // decrements, so none of them silently wraps a zero into `u64::MAX` and
@@ -1005,7 +1017,7 @@ mod tests {
             let mut counts = fresh();
             mutate(&mut counts);
             assert_ne!(
-                counts.digest(page.predicate_statistics()),
+                counts.digest(&statistics),
                 sealed,
                 "under-reporting {field} must change the digest"
             );

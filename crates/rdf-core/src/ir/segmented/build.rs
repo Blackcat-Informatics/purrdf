@@ -496,6 +496,17 @@ fn encode_dataset(
     dataset: &RdfDataset,
     limits: SegmentedBuildLimits,
 ) -> Result<SegmentedImage, SegmentedError> {
+    let mut resident = Resident;
+    dataset.with_prepared_statistics(&mut Memory::new(&mut resident), |statistics, _| {
+        encode_prepared_dataset(dataset, statistics, limits)
+    })
+}
+
+fn encode_prepared_dataset(
+    dataset: &RdfDataset,
+    source_statistics: &LocalStatistics,
+    limits: SegmentedBuildLimits,
+) -> Result<SegmentedImage, SegmentedError> {
     let block_bytes =
         usize::try_from(limits.block_bytes).map_err(|_| SegmentedError::AddressExhausted)?;
     let records_per_block =
@@ -633,14 +644,19 @@ fn encode_dataset(
         format::VALUE_RANGE_BYTES,
         block_bytes,
     )?;
-    let statistics = append_statistics(dataset, limits.first_term_index, &mut blocks, block_bytes)?;
+    let statistics = append_statistics(
+        source_statistics,
+        limits.first_term_index,
+        &mut blocks,
+        block_bytes,
+    )?;
     let effective_directory = append_source_directory(
-        dataset.predicate_statistics().effective_source_directory(),
+        source_statistics.effective_source_directory(),
         format::SOURCE_DIRECTORY,
         &mut blocks,
         block_bytes,
     )?;
-    let directory = dataset.predicate_statistics().effective_source_directory();
+    let directory = source_statistics.effective_source_directory();
     let checkpoint_count = directory.checkpoint_sums().len();
     let per = (block_bytes - 9) / 32;
     let source_checkpoints = append_fixed(
@@ -686,7 +702,7 @@ fn encode_dataset(
         source_checkpoints,
         overflow,
         flags,
-        source_union: dataset.predicate_statistics().source_union(),
+        source_union: source_statistics.source_union(),
     };
     let encoded = header.encode();
     blocks[0][..encoded.len()].copy_from_slice(&encoded);
@@ -733,12 +749,12 @@ fn append_source_directory(
 }
 
 fn translated_statistics(
-    dataset: &RdfDataset,
+    source_statistics: &LocalStatistics,
     first: u64,
     memory: &mut Memory<'_, Resident>,
 ) -> Result<LocalStatistics<GlobalTermId>, SegmentedError> {
     LocalStatistics::merge_translated(
-        [dataset.predicate_statistics()],
+        [source_statistics],
         |statistics| statistics,
         |_, id| map_id(id, first),
         memory,
@@ -750,14 +766,14 @@ fn translated_statistics(
 }
 
 fn append_statistics(
-    dataset: &RdfDataset,
+    source_statistics: &LocalStatistics,
     first: u64,
     blocks: &mut Vec<Vec<u8>>,
     block_bytes: usize,
 ) -> Result<[Stream; 4], SegmentedError> {
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
-    let statistics = translated_statistics(dataset, first, &mut memory)?;
+    let statistics = translated_statistics(source_statistics, first, &mut memory)?;
     let mut streams = [Stream::default(); 4];
     for section in StatisticsSection::ALL {
         let width = section.width();
@@ -1362,14 +1378,26 @@ fn validate_statistics(
     header: &Header,
     dataset: &RdfDataset,
 ) -> Result<(), SegmentedError> {
-    if header.source_union != dataset.predicate_statistics().source_union() {
+    let mut resident = Resident;
+    dataset.with_prepared_statistics(&mut Memory::new(&mut resident), |statistics, _| {
+        validate_prepared_statistics(bytes, header, statistics)
+    })
+}
+
+fn validate_prepared_statistics(
+    bytes: &[u8],
+    header: &Header,
+    source_statistics: &LocalStatistics,
+) -> Result<(), SegmentedError> {
+    if header.source_union != source_statistics.source_union() {
         return Err(SegmentedError::Corrupt(
             "source union disagrees with RDF rows",
         ));
     }
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
-    let statistics = translated_statistics(dataset, header.first_term_index, &mut memory)?;
+    let statistics =
+        translated_statistics(source_statistics, header.first_term_index, &mut memory)?;
     for section in StatisticsSection::ALL {
         let stream = header.statistics[section.index()];
         if statistics.section_rows(section) as u64 != stream.rows {
@@ -1410,7 +1438,7 @@ fn validate_statistics(
     validate_source_directory(
         bytes,
         header,
-        dataset.predicate_statistics().effective_source_directory(),
+        source_statistics.effective_source_directory(),
         header.effective_directory,
         format::SOURCE_DIRECTORY,
     )

@@ -33,18 +33,21 @@ pub(crate) fn resident_snapshot(
 
 pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
     use crate::ir::statistics::Relation;
-    let mut record = RecordHasher::new();
+    let mut record = [0; size_of::<u64>() + RECORD.as_bytes().len() + 1 + 32];
+    let mut offset = 0;
     frame_le_with(RECORD.as_bytes(), &mut |bytes| {
-        record.update(bytes);
+        let end = offset + bytes.len();
+        record[offset..end].copy_from_slice(bytes);
+        offset = end;
     });
-    record.update(&[match relation {
+    record[offset] = match relation {
         Relation::Asserted => 0,
         Relation::Reifiers => 1,
         Relation::Annotations => 2,
         Relation::Targets => 3,
-    }]);
-    record.update(&row);
-    *record.finalize().as_bytes()
+    };
+    record[offset + 1..].copy_from_slice(&row);
+    *purrdf_hash::blake3::hash(&record).as_bytes()
 }
 
 /// Borrowed statement values supplied by a source owner. No field outlives its
@@ -253,6 +256,7 @@ impl LiteralSourceRow<'_> {
 /// the graph-aware state. Owned and native ID-based callers use this same law.
 /// Compact states keep source statistics usable on bounded-stack callers; the
 /// shared streaming engine preserves the same digest for every row length.
+#[derive(Default)]
 pub(crate) struct SourceRowHasher {
     graph: RecordHasher,
     triple: RecordHasher,
@@ -279,16 +283,35 @@ impl SourceRowHasher {
         named_graph: bool,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        let mut graph = RecordHasher::new();
-        purrdf_hash::frame::try_frame_le_with(ROW.as_bytes(), |bytes| {
-            source_hash_update(&mut graph, bytes, memory)
-        })?;
-        source_hash_update(&mut graph, &[u8::from(named_graph)], memory)?;
-        let mut triple = RecordHasher::new();
+        let mut row = Self::default();
+        row.reset(named_graph, memory)?;
+        Ok(row)
+    }
+
+    pub(crate) fn reset<S: Admission + ?Sized>(
+        &mut self,
+        named_graph: bool,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        self.reset_graph_only(named_graph, memory)?;
         purrdf_hash::frame::try_frame_le_with(TRIPLE_ROW.as_bytes(), |bytes| {
-            source_hash_update(&mut triple, bytes, memory)
+            source_hash_update(&mut self.triple, bytes, memory)
         })?;
-        Ok(Self { graph, triple })
+        Ok(())
+    }
+
+    pub(crate) fn reset_graph_only<S: Admission + ?Sized>(
+        &mut self,
+        named_graph: bool,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        self.graph.reset();
+        self.triple.reset();
+        purrdf_hash::frame::try_frame_le_with(ROW.as_bytes(), |bytes| {
+            source_hash_update(&mut self.graph, bytes, memory)
+        })?;
+        source_hash_update(&mut self.graph, &[u8::from(named_graph)], memory)?;
+        Ok(())
     }
 
     pub(crate) fn graph<S: Admission + ?Sized>(
@@ -309,12 +332,19 @@ impl SourceRowHasher {
     }
 
     pub(crate) fn finish<S: Admission + ?Sized>(
-        self,
+        &self,
         memory: &mut Memory<'_, S>,
     ) -> Result<[[u8; 32]; 2], StorageError> {
-        let graph = source_hash_finalize(&self.graph, memory)?;
+        let graph = self.finish_graph(memory)?;
         let triple = source_hash_finalize(&self.triple, memory)?;
         Ok([graph, triple])
+    }
+
+    pub(crate) fn finish_graph<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<[u8; 32], StorageError> {
+        source_hash_finalize(&self.graph, memory)
     }
 }
 

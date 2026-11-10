@@ -6,7 +6,8 @@
 use purrdf_hash::multiset::Multiset256;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
-use super::{FrozenTerms, QuadIds, Relation, TermId, TermRef};
+use super::{FrozenTerms, QuadIds, Relation, TermId};
+use crate::ir::term::InternedTerm;
 use crate::source::{SourceRowHasher, SourceSummary, record_hash, source_visit_error};
 
 impl SourceSummary {
@@ -57,15 +58,27 @@ impl SourceSummary {
 
     /// The record kind participates in whole-source identity. Literal source
     /// projections deliberately preserve occurrences across physical layers.
-    pub(super) fn add_row<S: Admission + ?Sized>(
+    pub(crate) fn add_row<S: Admission + ?Sized>(
         &mut self,
         relation: Relation,
         quad: QuadIds,
         dictionary: &FrozenTerms,
         pending: &mut Vec<TermId>,
+        row: &mut SourceRowHasher,
         memory: &mut Memory<'_, S>,
     ) -> Result<([u8; 32], [u8; 32]), StorageError> {
-        let mut row = SourceRowHasher::new(quad.g.is_some(), memory)?;
+        let literal = matches!(
+            dictionary.terms[quad.o.index()],
+            InternedTerm::Literal { .. }
+        );
+        // Only literal observations use the graph-free projection. Controlled
+        // work retains both projections and their original checkpoint sequence.
+        let graph_only = !literal && !memory.admission().progress_enabled();
+        if graph_only {
+            row.reset_graph_only(quad.g.is_some(), memory)?;
+        } else {
+            row.reset(quad.g.is_some(), memory)?;
+        }
         if let Some(graph) = quad.g {
             dictionary
                 .try_visit_canonical_bytes(graph, pending, memory, |bytes, memory| {
@@ -76,23 +89,32 @@ impl SourceSummary {
         for term in [quad.s, quad.p, quad.o] {
             dictionary
                 .try_visit_canonical_bytes(term, pending, memory, |bytes, memory| {
-                    row.term(bytes, memory)
+                    if graph_only {
+                        row.graph(bytes, memory)
+                    } else {
+                        row.term(bytes, memory)
+                    }
                 })
                 .map_err(|error| source_visit_error(&error))?;
         }
-        let hashes = row.finish(memory)?;
+        let (graph, literals) = if graph_only {
+            (row.finish_graph(memory)?, None)
+        } else {
+            let hashes = row.finish(memory)?;
+            (hashes[0], literal.then_some(hashes))
+        };
         // Each record hash is one bounded fixed-size operation, including its
         // finalizer. Finish every identity before changing any population.
         memory.admission_mut().checkpoint(128)?;
-        let identity = record_hash(relation, hashes[0]);
+        let identity = record_hash(relation, graph);
         let union = if relation == Relation::Annotations {
             memory.admission_mut().checkpoint(128)?;
-            record_hash(Relation::Asserted, hashes[0])
+            record_hash(Relation::Asserted, graph)
         } else {
             identity
         };
         let mut next = *self;
-        if matches!(dictionary.resolve(quad.o), TermRef::Literal { .. }) {
+        if let Some(hashes) = literals {
             for (summary, hash) in next.literals.iter_mut().zip(hashes) {
                 summary
                     .insert(hash)

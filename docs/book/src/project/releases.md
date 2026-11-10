@@ -108,8 +108,9 @@ suites), `purrdf-cli` (the command-line binary), `purrdf-envelope-probe`
 The reusable development libraries `purrdf-alloc-probe`, `purrdf-testkit` and
 `purrdf-conformance-kit` are published with the suite. Their versioned registry
 dependencies remain in packaged manifests and are verified in dependency order.
-The checkout-bound `purrdf-shacl-conformance` is the remaining path-only,
-versionless development dependency stripped from published crates.
+The checkout-bound `purrdf-shacl-conformance` and host-only `helper-census`
+remain path-only, versionless development dependencies stripped from published
+crates.
 
 ## Cutting a release
 

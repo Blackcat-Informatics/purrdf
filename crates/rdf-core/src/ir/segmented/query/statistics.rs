@@ -58,7 +58,8 @@ impl LayeredStatistics for SegmentedStackQuery<'_> {
                         None => combine(std::iter::empty(), false),
                     }
                 } else {
-                    let source = &**self.snapshot.head.as_ref()?.dataset();
+                    let head = self.snapshot.head.as_ref()?;
+                    let source = &**head.dataset();
                     let pattern = self
                         .translate_pattern(
                             source,
@@ -75,7 +76,7 @@ impl LayeredStatistics for SegmentedStackQuery<'_> {
                         .or_else(|error| self.operation.fail(error))
                         .ok()?;
                     match pattern {
-                        Some(pattern) => request.read(source.statistics()?, pattern, layered),
+                        Some(pattern) => request.read(head.statistics(), pattern, layered),
                         None => combine(std::iter::empty(), false),
                     }
                 }

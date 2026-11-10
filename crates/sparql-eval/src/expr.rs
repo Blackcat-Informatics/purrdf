@@ -3631,6 +3631,7 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
         ctx.active_graph,
         normalized,
         &seed,
+        ctx.bgp_order_cache,
         &ctx.workspace,
     )?
     else {

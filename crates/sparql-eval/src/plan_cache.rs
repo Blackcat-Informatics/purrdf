@@ -66,7 +66,19 @@ pub(crate) struct BoundedCache<K, V> {
     clock: u64,
 }
 
-pub(crate) type BoundedOrderCache = Mutex<BoundedCache<(u64, u64), crate::bgp::BgpOrder>>;
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum OrderKey {
+    Order((u64, u64)),
+    Forecast(crate::workspace::SharedWorkspace<crate::bgp::forecast::ForecastKey>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CachedBgp {
+    pub(crate) order: crate::bgp::BgpOrder,
+    pub(crate) forecast: Option<(u64, u64)>,
+}
+
+pub(crate) type BoundedOrderCache = Mutex<BoundedCache<OrderKey, CachedBgp>>;
 
 #[derive(Clone, Copy)]
 pub(crate) enum OrderCacheRef<'a> {
@@ -80,8 +92,8 @@ impl<K: Clone + Eq + Hash, V: Clone> Default for BoundedCache<K, V> {
     }
 }
 
-// This private cache's actual key homes are u64, (u64, u64), and Arc<[u8]>.
-// Their clones never allocate. Recency uses those existing identities, and the
+// Keys are scalar IDs, shared prepared bytes, or OrderKey's scalar/shared forms.
+// Their clones never allocate. Recency uses those existing owners, and the
 // admitted table certificate includes both inline link slots in every entry.
 impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
     pub(crate) fn new(limits: CacheLimits) -> Self {
@@ -97,6 +109,10 @@ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
 
     pub(crate) fn stats(&self) -> CacheStats {
         self.stats
+    }
+
+    pub(crate) fn retention_enabled(&self) -> bool {
+        self.limits.entries != 0 && self.limits.bytes != 0
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {

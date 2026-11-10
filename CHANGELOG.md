@@ -6,6 +6,53 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [4.0.2] - 2026-11-10
+
+- **Native dataset freezing:** Ordinary freeze prepares query statistics and
+  source-proof metadata on demand, preserving existing proof access. First use
+  prepares the required metadata. Publication with an explicit memory account
+  retains its admitted metadata before returning the dataset.
+
+- **Finite nested RDF terms:** Native storage, text ingestion, event transfer,
+  GTS resolution and columnar projection preserve finite deep term graphs
+  through iterative traversal. Cycles, missing operands and resource refusals
+  retain their original validation behavior and source evidence.
+
+- **Caller-owned GTS dictionaries:** Streaming import and export use admitted
+  caller storage, explicit spill policy and retained term leases. Indexed
+  dictionary access checks locator coverage, source identity, capabilities and
+  selected-frame integrity across segments, snapshots and append-only tails.
+  Indirect references require separate explicit preparation; retained numeric
+  projections share the metadata ceiling and preserve original source order.
+  Selected RDF import resolves only the requested dependency closure, while
+  full import and global verification remain explicit operations. Buffered
+  navigation keeps cached seeks local and preserves real I/O refusals.
+
+- **Prepared SELECT cursors:** Ordinary prepared SELECT queries expose their
+  schema before reading and borrow rows with their original terms and evidence.
+  Settlement distinguishes completed execution, consumer stopping and typed
+  source or governor failure. Operators retain their required units and report
+  their buffering strategy; dropping a cursor releases suspended reservations.
+
+- **Explicit source encodings:** GB 18030 conversion selects either the complete
+  2005 profile or the 2022 Amendment 1 profile, with strict chunk-independent
+  decoding and encoding. Native RDF ingestion preserves original source-byte
+  contributions, typed failures and admitted conversion storage. Content BOMs
+  that conflict with the declared encoding are refused.
+
+- **Original projection diagnostics:** CSVW projection shares the native term
+  dictionary, and conversion failures retain original source errors without
+  eagerly rendering them. Ground SPARQL result comparison preserves exact bags
+  and blank-node equivalence without constructing intermediate RDF carriers.
+
+- **Reasoning and archive correctness:** OWL Direct keys compare literal value
+  identities, and positive-world proof replay remains bound to complete source
+  evidence. Lossless tar inventory preserves original member framing and
+  historical acceptance while bounding PAX lookup and refunding refused
+  inventory admission.
+
+The v4 compatibility baseline and C ABI 0.20.0 remain unchanged.
+
 ## [4.0.1] - 2026-11-08
 
 - **Current SHACL reports:** Refresh the W3C SHACL 1.2 suite and vocabularies

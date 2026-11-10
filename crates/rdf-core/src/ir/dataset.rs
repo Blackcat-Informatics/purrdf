@@ -45,6 +45,7 @@ use super::term::{BlankScope, TermId, TermValue};
 use super::triple::{OrdinalRows, compare_masked, component_mask, masked_permutation, masked_rows};
 
 mod inspection;
+mod statistics;
 
 /// Declare the shared sparse frozen-row location lookup on resident carriers.
 macro_rules! source_location_method {
@@ -321,8 +322,9 @@ pub struct QuadRef<'a, Id = TermId> {
 pub struct RdfDataset {
     /// Graph-independent lexical ownership shared by resident carriers.
     dictionary: super::frozen_terms::FrozenTerms,
-    statistics: super::statistics::LocalStatistics,
-    snapshot_identity: purrdf_hash::hex::Digest32,
+    statistics: Option<super::statistics::LocalStatistics>,
+    native_statistics: statistics::NativeStatistics,
+    snapshot_identity: OnceLock<purrdf_hash::hex::Digest32>,
     /// Deduplicated quad rows in deterministic order (C0.5).
     quads: Box<[QuadRow]>,
     /// `(reifier, triple-term, graph)` bindings; many reifiers MAY bind one triple
@@ -414,6 +416,7 @@ impl std::fmt::Debug for RdfDataset {
             .field("predecessor_index", &self.predecessor_index)
             .field("statement_graph_rows", &self.statement_graph_rows)
             .field("statistics", &self.statistics)
+            .field("native_statistics", &self.native_statistics)
             .field("snapshot_identity", &self.snapshot_identity)
             .finish()
     }
@@ -437,6 +440,15 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
         }
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
+        let statistics = match &dataset.statistics {
+            Some(_) => None,
+            None => Some(
+                dataset
+                    .prepare_statistics_with_memory(&mut memory)?
+                    .into_owned(),
+            ),
+        };
+        let snapshot_identity = dataset.frozen_snapshot_identity();
         let triples = memory.collect(dataset.quads.iter().map(|row| TripleIds {
             s: row.s,
             p: row.p,
@@ -451,8 +463,11 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
             }))?;
         Ok(Self {
             dictionary: dataset.dictionary,
-            statistics: dataset.statistics,
-            snapshot_identity: dataset.snapshot_identity,
+            statistics: dataset
+                .statistics
+                .or(statistics)
+                .expect("triple conversion prepared its owned statistics"),
+            snapshot_identity,
             triples: TripleTable::new(memory.boxed_slice(triples)?),
             reifiers: memory.boxed_slice(reifiers)?,
             reifier_targets: OnceLock::new(),
@@ -1012,19 +1027,23 @@ impl RdfDataset {
         ) -> Result<(), E>,
     ) -> Result<crate::source::SourceDifferenceWork, E> {
         use crate::source::SourceSide;
-        self.statistics.source_directory().visit_changes(
-            next.statistics.source_directory(),
-            memory,
-            |added, record, memory| {
-                let (side, dataset) = if added {
-                    (SourceSide::Next, next)
-                } else {
-                    (SourceSide::Previous, self)
-                };
-                let row = dataset.source_record_row(record);
-                visit(side, record.stream, row, memory)
-            },
-        )
+        self.with_prepared_statistics(memory, |previous, memory| {
+            next.with_prepared_statistics(memory, |next_statistics, memory| {
+                previous.source_directory().visit_changes(
+                    next_statistics.source_directory(),
+                    memory,
+                    |added, record, memory| {
+                        let (side, dataset) = if added {
+                            (SourceSide::Next, next)
+                        } else {
+                            (SourceSide::Previous, self)
+                        };
+                        let row = dataset.source_record_row(record);
+                        visit(side, record.stream, row, memory)
+                    },
+                )
+            })
+        })
     }
 
     pub(crate) fn source_record_row(
@@ -1048,8 +1067,8 @@ impl RdfDataset {
         }
     }
 
-    pub(crate) fn predicate_statistics(&self) -> &super::statistics::LocalStatistics {
-        &self.statistics
+    pub(crate) fn prepared_statistics(&self) -> Option<&super::statistics::LocalStatistics> {
+        self.statistics.as_ref()
     }
 
     /// Assemble a frozen dataset from already-validated, already-ordered parts.
@@ -1066,47 +1085,30 @@ impl RdfDataset {
         locations: Box<[(QuadHandle, RdfLocation)]>,
         caps: RdfStoreCapabilities,
         named_graphs: Box<[TermId]>,
+        eager_statistics: bool,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
-        let statistics = super::statistics::LocalStatistics::build(
-            &dictionary,
-            (quads.len(), |index| QuadIds::from(quads[index])),
-            &(reifiers.len(), |index| reifiers[index]),
-            (annotations.len(), |index| {
-                let (s, p, o, g) = annotations[index];
-                QuadIds { s, p, o, g }
-            }),
-            memory,
-        )?;
-        // Seal content and graph declarations once, before publishing the owner.
-        // Query admission reads this fixed-size identity without walking payloads.
-        let graphs = memory.try_scope(|memory| {
-            let mut graphs = purrdf_hash::multiset::Multiset256::default();
-            let mut pending = Vec::new();
-            for &graph in &named_graphs {
-                memory.admission_mut().checkpoint(1)?;
-                let mut hash = purrdf_hash::blake3::RecordHasher::new();
-                dictionary
-                    .try_visit_canonical_bytes(graph, &mut pending, memory, |bytes, memory| {
-                        crate::source::source_hash_update(&mut hash, bytes, memory)
-                    })
-                    .map_err(|error| crate::source::source_visit_error(&error))?;
-                graphs
-                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
-            }
-            memory.release_vec(pending)?;
-            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
-        })?;
-        let snapshot_identity = crate::source::resident_snapshot(
-            statistics.source_directory().content_records(),
-            graphs,
-            dictionary.snapshot_fingerprint(memory)?,
-        );
-        Ok(Self {
+        let native_statistics =
+            statistics::NativeStatistics::new(&dictionary, !eager_statistics, memory)?;
+        let statistics = if eager_statistics {
+            Some(super::statistics::LocalStatistics::build(
+                &dictionary,
+                (quads.len(), |index| QuadIds::from(quads[index])),
+                &(reifiers.len(), |index| reifiers[index]),
+                (annotations.len(), |index| {
+                    let (s, p, o, g) = annotations[index];
+                    QuadIds { s, p, o, g }
+                }),
+                memory,
+            )?)
+        } else {
+            None
+        };
+        let dataset = Self {
             dictionary,
             statistics,
-            snapshot_identity,
+            native_statistics,
+            snapshot_identity: OnceLock::new(),
             quads,
             reifiers,
             reifier_targets: OnceLock::new(),
@@ -1119,7 +1121,61 @@ impl RdfDataset {
             named_graphs,
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
-        })
+        };
+        if eager_statistics {
+            let identity = dataset.compute_snapshot_identity_with_memory(memory)?;
+            let _ = dataset.snapshot_identity.set(identity);
+        }
+        Ok(dataset)
+    }
+
+    fn compute_snapshot_identity_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+        // Explicit-memory freeze seals before publication. Ordinary freeze
+        // seals on first use, then caches only this fixed-size content identity.
+        let graphs = memory.try_scope(|memory| {
+            let mut graphs = purrdf_hash::multiset::Multiset256::default();
+            let mut pending = Vec::new();
+            for &graph in &self.named_graphs {
+                memory.admission_mut().checkpoint(1)?;
+                let mut hash = purrdf_hash::blake3::RecordHasher::new();
+                self.dictionary
+                    .try_visit_canonical_bytes(graph, &mut pending, memory, |bytes, memory| {
+                        crate::source::source_hash_update(&mut hash, bytes, memory)
+                    })
+                    .map_err(|error| crate::source::source_visit_error(&error))?;
+                graphs
+                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            memory.release_vec(pending)?;
+            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
+        })?;
+        let records = if let Some(statistics) = &self.statistics {
+            statistics.source_directory().content_records()
+        } else {
+            let mut records = purrdf_hash::multiset::Multiset256::default();
+            for relation in [
+                super::statistics::Relation::Asserted,
+                super::statistics::Relation::Reifiers,
+                super::statistics::Relation::Annotations,
+            ] {
+                records
+                    .combine(
+                        self.native_source_summary(None, GraphMatch::Any, relation)
+                            .records,
+                    )
+                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            }
+            records
+        };
+        Ok(crate::source::resident_snapshot(
+            records,
+            graphs,
+            self.dictionary.snapshot_fingerprint(memory)?,
+        ))
     }
 
     pub(crate) fn term_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
@@ -1138,8 +1194,13 @@ impl RdfDataset {
     }
 
     /// Frozen content identity, including empty graph declarations.
-    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
-        self.snapshot_identity
+    pub(crate) fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        *self.snapshot_identity.get_or_init(|| {
+            self.compute_snapshot_identity_with_memory(&mut purrdf_lex::allocation::Memory::new(
+                &mut purrdf_lex::allocation::Resident,
+            ))
+            .expect("validated native identity has no workspace allocation or unbounded population")
+        })
     }
 
     /// Every named graph known to this dataset (quad-bearing or explicitly
@@ -2371,7 +2432,8 @@ impl RdfDataset {
         Self {
             dictionary: self.dictionary.clone(),
             statistics: self.statistics.clone(),
-            snapshot_identity: self.snapshot_identity,
+            native_statistics: self.native_statistics.clone(),
+            snapshot_identity: self.snapshot_identity.clone(),
             quads: self.quads.clone(),
             reifiers: self.reifiers.clone(),
             reifier_targets: OnceLock::new(),
@@ -2465,7 +2527,12 @@ impl RdfDataset {
             .checked_add(permutations)?
             .checked_add(reifier_orders)?
             .checked_add(annotation_orders)?
-            .checked_add(self.statistics.retained_bytes()?)?
+            .checked_add(
+                self.statistics
+                    .as_ref()
+                    .map_or(Some(0), super::statistics::LocalStatistics::retained_bytes)?,
+            )?
+            .checked_add(self.native_statistics.retained_bytes()?)?
             .checked_add(histogram)
     }
 

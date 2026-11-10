@@ -318,6 +318,43 @@ pub(crate) fn visit_changes<
     )
 }
 
+struct DirectoryScratch {
+    pending: WorkList<usize, 0>,
+    ranges: Vec<Range<usize>>,
+    working: Vec<Range<usize>>,
+}
+
+struct DirectoryWorkspace<'m, 'a, S: Admission + ?Sized> {
+    scratch: Option<DirectoryScratch>,
+    memory: &'m mut Memory<'a, S>,
+}
+
+impl<S: Admission + ?Sized> DirectoryWorkspace<'_, '_, S> {
+    fn release(&mut self) -> Result<(), StorageError> {
+        let Some(DirectoryScratch {
+            pending,
+            ranges,
+            working,
+        }) = self.scratch.take()
+        else {
+            return Ok(());
+        };
+        // Attempt every refund even if the original account refuses one shrink.
+        let pending = pending.release_admitted(self.memory);
+        let ranges = self.memory.release_vec(ranges);
+        let working = self.memory.release_vec(working);
+        pending.and(ranges).and(working)
+    }
+}
+
+impl<S: Admission + ?Sized> Drop for DirectoryWorkspace<'_, '_, S> {
+    fn drop(&mut self) {
+        // Only these scratch buffers belong to us; retained visitor output keeps
+        // its own admission. Preserve an unwinding visitor's original panic.
+        let _ = self.release();
+    }
+}
+
 /// Compare canonical multisets across any number of sorted carrier directories.
 /// Frames hold one range per carrier; no merged row or key array is built.
 /// The callback's index belongs to the selected side's directory list.
@@ -338,9 +375,23 @@ pub(crate) fn visit_directory_sets<
 ) -> Result<SourceDifferenceWork, E> {
     // Release only our scratch. A failed visitor may retain an independently
     // admitted output vector; refunding a blanket scope would uncharge it.
-    let mut pending = WorkList::<_, 0>::new();
-    let mut ranges = Vec::new();
-    let mut working = Vec::new();
+    let mut workspace = DirectoryWorkspace {
+        scratch: Some(DirectoryScratch {
+            pending: WorkList::new(),
+            ranges: Vec::new(),
+            working: Vec::new(),
+        }),
+        memory,
+    };
+    let DirectoryWorkspace { scratch, memory } = &mut workspace;
+    // Scratch is installed above and only release takes it after this callback
+    // finishes or while the workspace unwinds.
+    let DirectoryScratch {
+        pending,
+        ranges,
+        working,
+    } = scratch.as_mut().expect("owned directory scratch");
+    let memory = &mut **memory;
     let result = (|| {
         let width = previous
             .len()
@@ -350,13 +401,13 @@ pub(crate) fn visit_directory_sets<
             return Ok(SourceDifferenceWork::default());
         }
         for source in previous {
-            memory.push(&mut ranges, 0..source.len()?)?;
+            memory.push(ranges, 0..source.len()?)?;
         }
         for source in next {
-            memory.push(&mut ranges, 0..source.len()?)?;
+            memory.push(ranges, 0..source.len()?)?;
         }
-        for range in &ranges {
-            memory.push(&mut working, range.clone())?;
+        for range in ranges.iter() {
+            memory.push(working, range.clone())?;
         }
         pending.try_push_admitted(0_usize, memory)?;
         let mut work = SourceDifferenceWork::default();
@@ -413,34 +464,27 @@ pub(crate) fn visit_directory_sets<
             let right = ranges.len();
             for (source, range) in previous.iter().zip(&mut working[..previous.len()]) {
                 let middle = partition(source, range.clone(), byte, mask)?;
-                memory.push(&mut ranges, middle..range.end)?;
+                memory.push(ranges, middle..range.end)?;
                 range.end = middle;
             }
             for (source, range) in next.iter().zip(&mut working[previous.len()..]) {
                 let middle = partition(source, range.clone(), byte, mask)?;
-                memory.push(&mut ranges, middle..range.end)?;
+                memory.push(ranges, middle..range.end)?;
                 range.end = middle;
             }
             pending.try_push_admitted(right, memory)?;
             let left = ranges.len();
-            for range in &working {
-                memory.push(&mut ranges, range.clone())?;
+            for range in working.iter() {
+                memory.push(ranges, range.clone())?;
             }
             pending.try_push_admitted(left, memory)?;
         }
         Ok(work)
     })();
-    let released = pending.release_admitted(memory);
-    let ranges_released = memory.release_vec(ranges);
-    let working_released = memory.release_vec(working);
+    let cleanup = workspace.release();
     match result {
         Err(error) => Err(error),
-        Ok(work) => {
-            released?;
-            ranges_released?;
-            working_released?;
-            Ok(work)
-        }
+        Ok(work) => cleanup.map(|()| work).map_err(E::from),
     }
 }
 
