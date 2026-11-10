@@ -2735,6 +2735,11 @@ impl RdfDatasetBuilder {
         self.interner.term(id)
     }
 
+    /// Borrow the immutable term table for checked native validation.
+    pub(super) fn terms(&self) -> &[InternedTerm] {
+        &self.interner.terms
+    }
+
     /// Resolve a term's [`StrRange`] to a `&str` borrowed from the builder's arena
     /// (for build-time readers that have an interned term's range).
     pub(crate) fn interned_str(&self, range: StrRange) -> &str {
