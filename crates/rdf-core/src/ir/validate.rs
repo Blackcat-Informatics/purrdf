@@ -59,10 +59,10 @@ pub fn validate_statement_positions_with_memory<S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     memory.admission_mut().checkpoint(1)?;
-    require_subject_kind_with_memory(subject, &"statement subject", ASSERTED_SUBJECT, memory)?;
-    require_predicate_kind_with_memory(predicate, &"statement predicate", memory)?;
+    require_subject_kind_with_memory(subject, || "statement subject", ASSERTED_SUBJECT, memory)?;
+    require_predicate_kind_with_memory(predicate, || "statement predicate", memory)?;
     if let Some(graph) = graph {
-        require_graph_kind_with_memory(graph, "statement graph", memory)?;
+        require_graph_kind_with_memory(graph, || "statement graph", memory)?;
     }
     Ok(())
 }
@@ -80,11 +80,11 @@ pub fn validate_triple_positions_with_memory<S: Admission + ?Sized>(
     memory.admission_mut().checkpoint(1)?;
     require_subject_kind_with_memory(
         subject,
-        &"triple term subject",
+        || "triple term subject",
         TRIPLE_COMPONENT_SUBJECT,
         memory,
     )?;
-    require_predicate_kind_with_memory(predicate, &"triple term predicate", memory)
+    require_predicate_kind_with_memory(predicate, || "triple term predicate", memory)
 }
 
 fn interned_kind(term: &InternedTerm) -> Kind {
@@ -180,11 +180,11 @@ pub(crate) fn validate_value_with_memory<'a, S: Admission + ?Sized>(
         |_, _, subject, predicate, _, memory| {
             require_subject_kind_with_memory(
                 subject,
-                &"triple term subject",
+                || "triple term subject",
                 TRIPLE_COMPONENT_SUBJECT,
                 memory,
             )?;
-            require_predicate_kind_with_memory(predicate, &"triple term predicate", memory)?;
+            require_predicate_kind_with_memory(predicate, || "triple term predicate", memory)?;
             Ok(Kind::Triple)
         },
         |_, _, _| {},
@@ -346,7 +346,7 @@ fn require_subject_kind(
 ) -> Result<(), RdfDiagnostic> {
     resident_validation(require_subject_kind_with_memory(
         kind,
-        &LazyContext(core::cell::RefCell::new(Some(ctx))),
+        ctx,
         triple_reason,
         &mut Memory::new(&mut Resident),
     ))
@@ -363,7 +363,7 @@ const TRIPLE_COMPONENT_SUBJECT: &str =
 fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
     resident_validation(require_predicate_kind_with_memory(
         kind,
-        &LazyContext(core::cell::RefCell::new(Some(ctx))),
+        ctx,
         &mut Memory::new(&mut Resident),
     ))
 }
@@ -372,7 +372,7 @@ fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<()
 fn require_graph_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
     resident_validation(require_graph_kind_with_memory(
         kind,
-        LazyContext(core::cell::RefCell::new(Some(ctx))),
+        ctx,
         &mut Memory::new(&mut Resident),
     ))
 }
@@ -399,17 +399,6 @@ fn resident_validation<T>(result: Result<T, NativeBuildError>) -> Result<T, RdfD
     result.map_err(RdfDiagnostic::from)
 }
 
-struct LazyContext<F>(core::cell::RefCell<Option<F>>);
-impl<F: FnOnce() -> String> core::fmt::Display for LazyContext<F> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let context = self
-            .0
-            .borrow_mut()
-            .take()
-            .expect("a positional context is rendered once");
-        f.write_str(&context())
-    }
-}
 const QUAD_SUBJECT_POSITION: usize = 0;
 const QUAD_PREDICATE_POSITION: usize = 1;
 const QUAD_OBJECT_POSITION: usize = 2;
@@ -464,49 +453,59 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
     for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        check_id_in_range_with_memory(
-            graph,
-            term_count,
-            format_args!("named graph declaration #{i}"),
-            memory,
-        )?;
-        require_graph_name_with_memory(
-            builder,
-            graph,
-            format_args!("named graph declaration #{i}"),
-            memory,
-        )?;
+        let context = format_args!("named graph declaration #{i}");
+        check_id_in_range_with_memory(graph, term_count, || context, memory)?;
+        require_graph_name_with_memory(builder, graph, || context, memory)?;
     }
 
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        let subject_context = QuadContext::<QUAD_SUBJECT_POSITION>(i);
-        let predicate_context = QuadContext::<QUAD_PREDICATE_POSITION>(i);
-        check_id_in_range_with_memory(q.s, term_count, &subject_context, memory)?;
-        check_id_in_range_with_memory(q.p, term_count, &predicate_context, memory)?;
+        check_id_in_range_with_memory(
+            q.s,
+            term_count,
+            || QuadContext::<QUAD_SUBJECT_POSITION>(i),
+            memory,
+        )?;
+        check_id_in_range_with_memory(
+            q.p,
+            term_count,
+            || QuadContext::<QUAD_PREDICATE_POSITION>(i),
+            memory,
+        )?;
         check_id_in_range_with_memory(
             q.o,
             term_count,
-            QuadContext::<QUAD_OBJECT_POSITION>(i),
+            || QuadContext::<QUAD_OBJECT_POSITION>(i),
             memory,
         )?;
         if let Some(g) = q.g {
             check_id_in_range_with_memory(
                 g,
                 term_count,
-                QuadContext::<QUAD_GRAPH_POSITION>(i),
+                || QuadContext::<QUAD_GRAPH_POSITION>(i),
                 memory,
             )?;
         }
 
-        require_subject_with_memory(builder, q.s, &subject_context, ASSERTED_SUBJECT, memory)?;
-        require_iri_predicate_with_memory(builder, q.p, &predicate_context, memory)?;
+        require_subject_with_memory(
+            builder,
+            q.s,
+            || QuadContext::<QUAD_SUBJECT_POSITION>(i),
+            ASSERTED_SUBJECT,
+            memory,
+        )?;
+        require_iri_predicate_with_memory(
+            builder,
+            q.p,
+            || QuadContext::<QUAD_PREDICATE_POSITION>(i),
+            memory,
+        )?;
         if let Some(g) = q.g {
             require_graph_name_with_memory(
                 builder,
                 g,
-                QuadContext::<QUAD_GRAPH_POSITION>(i),
+                || QuadContext::<QUAD_GRAPH_POSITION>(i),
                 memory,
             )?;
         }
@@ -515,33 +514,21 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 4. Reifier id-reference validity; the reified target MUST be a triple term.
     for (i, (reifier, triple, graph)) in reifiers.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        check_id_in_range_with_memory(
-            reifier,
-            term_count,
-            format_args!("reifier #{i} resource"),
-            memory,
-        )?;
-        check_id_in_range_with_memory(
-            triple,
-            term_count,
-            format_args!("reifier #{i} target"),
-            memory,
-        )?;
+        let resource_context = format_args!("reifier #{i} resource");
+        let target_context = format_args!("reifier #{i} target");
+        check_id_in_range_with_memory(reifier, term_count, || resource_context, memory)?;
+        check_id_in_range_with_memory(triple, term_count, || target_context, memory)?;
         require_subject_with_memory(
             builder,
             reifier,
-            &format_args!("reifier #{i} resource"),
+            || resource_context,
             ASSERTED_SUBJECT,
             memory,
         )?;
         if let Some(g) = graph {
-            check_id_in_range_with_memory(
-                g,
-                term_count,
-                format_args!("reifier #{i} graph"),
-                memory,
-            )?;
-            require_graph_name_with_memory(builder, g, format_args!("reifier #{i} graph"), memory)?;
+            let graph_context = format_args!("reifier #{i} graph");
+            check_id_in_range_with_memory(g, term_count, || graph_context, memory)?;
+            require_graph_name_with_memory(builder, g, || graph_context, memory)?;
         }
         if !matches!(builder.term(triple), InternedTerm::Triple { .. }) {
             return Err(diag_with_memory(
@@ -558,50 +545,24 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 5. Annotation id-reference validity + predicate-is-IRI.
     for (i, (reifier, p, o, graph)) in annotations.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        check_id_in_range_with_memory(
-            reifier,
-            term_count,
-            format_args!("annotation #{i} reifier"),
-            memory,
-        )?;
-        check_id_in_range_with_memory(
-            p,
-            term_count,
-            format_args!("annotation #{i} predicate"),
-            memory,
-        )?;
-        check_id_in_range_with_memory(
-            o,
-            term_count,
-            format_args!("annotation #{i} object"),
-            memory,
-        )?;
-        require_iri_predicate_with_memory(
-            builder,
-            p,
-            &format_args!("annotation #{i} predicate"),
-            memory,
-        )?;
+        let reifier_context = format_args!("annotation #{i} reifier");
+        let predicate_context = format_args!("annotation #{i} predicate");
+        let object_context = format_args!("annotation #{i} object");
+        check_id_in_range_with_memory(reifier, term_count, || reifier_context, memory)?;
+        check_id_in_range_with_memory(p, term_count, || predicate_context, memory)?;
+        check_id_in_range_with_memory(o, term_count, || object_context, memory)?;
+        require_iri_predicate_with_memory(builder, p, || predicate_context, memory)?;
         require_subject_with_memory(
             builder,
             reifier,
-            &format_args!("annotation #{i} reifier"),
+            || reifier_context,
             ASSERTED_SUBJECT,
             memory,
         )?;
         if let Some(g) = graph {
-            check_id_in_range_with_memory(
-                g,
-                term_count,
-                format_args!("annotation #{i} graph"),
-                memory,
-            )?;
-            require_graph_name_with_memory(
-                builder,
-                g,
-                format_args!("annotation #{i} graph"),
-                memory,
-            )?;
+            let graph_context = format_args!("annotation #{i} graph");
+            check_id_in_range_with_memory(g, term_count, || graph_context, memory)?;
+            require_graph_name_with_memory(builder, g, || graph_context, memory)?;
         }
     }
 
@@ -641,37 +602,20 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
         memory.admission_mut().checkpoint(1)?;
         let id = TermId::from_index(raw as u32).expect("stored term index is representable");
         if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
-            check_id_in_range_with_memory(
-                s,
-                term_count,
-                format_args!("triple term #{raw} subject"),
-                memory,
-            )?;
-            check_id_in_range_with_memory(
-                p,
-                term_count,
-                format_args!("triple term #{raw} predicate"),
-                memory,
-            )?;
-            check_id_in_range_with_memory(
-                o,
-                term_count,
-                format_args!("triple term #{raw} object"),
-                memory,
-            )?;
+            let subject_context = format_args!("triple term #{raw} subject");
+            let predicate_context = format_args!("triple term #{raw} predicate");
+            let object_context = format_args!("triple term #{raw} object");
+            check_id_in_range_with_memory(s, term_count, || subject_context, memory)?;
+            check_id_in_range_with_memory(p, term_count, || predicate_context, memory)?;
+            check_id_in_range_with_memory(o, term_count, || object_context, memory)?;
             require_subject_with_memory(
                 builder,
                 s,
-                &format_args!("triple term #{raw} subject"),
+                || subject_context,
                 TRIPLE_COMPONENT_SUBJECT,
                 memory,
             )?;
-            require_iri_predicate_with_memory(
-                builder,
-                p,
-                &format_args!("triple term #{raw} predicate"),
-                memory,
-            )?;
+            require_iri_predicate_with_memory(builder, p, || predicate_context, memory)?;
         }
     }
 
@@ -735,10 +679,10 @@ fn check_acyclic_with_memory<S: Admission + ?Sized>(
 }
 
 /// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
-fn check_id_in_range_with_memory<S: Admission + ?Sized>(
+fn check_id_in_range_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     id: TermId,
     term_count: usize,
-    ctx: impl core::fmt::Display,
+    ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     if id.index() >= term_count {
@@ -746,7 +690,7 @@ fn check_id_in_range_with_memory<S: Admission + ?Sized>(
             "rdf-ir-term-out-of-range",
             format_args!(
                 "{} references term #{} but only {term_count} terms are interned",
-                ctx,
+                ctx(),
                 id.index(),
             ),
             memory,
@@ -755,19 +699,19 @@ fn check_id_in_range_with_memory<S: Admission + ?Sized>(
     Ok(())
 }
 
-fn require_subject_with_memory<S: Admission + ?Sized>(
+fn require_subject_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     builder: &RdfDatasetBuilder,
     id: TermId,
-    ctx: &(impl core::fmt::Display + ?Sized),
+    ctx: impl FnOnce() -> C,
     triple_reason: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     require_subject_kind_with_memory(interned_kind(builder.term(id)), ctx, triple_reason, memory)
 }
 
-fn require_subject_kind_with_memory<S: Admission + ?Sized>(
+fn require_subject_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     kind: Kind,
-    ctx: &(impl core::fmt::Display + ?Sized),
+    ctx: impl FnOnce() -> C,
     triple_reason: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
@@ -775,29 +719,29 @@ fn require_subject_kind_with_memory<S: Admission + ?Sized>(
         Kind::Iri | Kind::Blank => Ok(()),
         Kind::Literal => Err(diag_with_memory(
             "rdf-ir-literal-subject",
-            format_args!("{ctx} must not be a literal"),
+            format_args!("{} must not be a literal", ctx()),
             memory,
         )),
         Kind::Triple => Err(diag_with_memory(
             "rdf-ir-triple-subject",
-            format_args!("{ctx} must be an IRI or blank node; {triple_reason}"),
+            format_args!("{} must be an IRI or blank node; {triple_reason}", ctx()),
             memory,
         )),
     }
 }
 
-fn require_iri_predicate_with_memory<S: Admission + ?Sized>(
+fn require_iri_predicate_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     builder: &RdfDatasetBuilder,
     id: TermId,
-    ctx: &(impl core::fmt::Display + ?Sized),
+    ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     require_predicate_kind_with_memory(interned_kind(builder.term(id)), ctx, memory)
 }
 
-fn require_predicate_kind_with_memory<S: Admission + ?Sized>(
+fn require_predicate_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     kind: Kind,
-    ctx: &(impl core::fmt::Display + ?Sized),
+    ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     if !matches!(kind, Kind::Iri) {
@@ -805,7 +749,7 @@ fn require_predicate_kind_with_memory<S: Admission + ?Sized>(
             "rdf-ir-predicate-not-iri",
             format_args!(
                 "{} must be an IRI, but resolves to {}",
-                ctx,
+                ctx(),
                 kind_name(kind)
             ),
             memory,
@@ -814,18 +758,18 @@ fn require_predicate_kind_with_memory<S: Admission + ?Sized>(
     Ok(())
 }
 
-fn require_graph_name_with_memory<S: Admission + ?Sized>(
+fn require_graph_name_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     builder: &RdfDatasetBuilder,
     id: TermId,
-    ctx: impl core::fmt::Display,
+    ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     require_graph_kind_with_memory(interned_kind(builder.term(id)), ctx, memory)
 }
 
-fn require_graph_kind_with_memory<S: Admission + ?Sized>(
+fn require_graph_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     kind: Kind,
-    ctx: impl core::fmt::Display,
+    ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
     match kind {
@@ -834,7 +778,7 @@ fn require_graph_kind_with_memory<S: Admission + ?Sized>(
             "rdf-ir-graph-name-invalid",
             format_args!(
                 "{} must be an IRI or blank node, but resolves to {}",
-                ctx,
+                ctx(),
                 kind_name(other)
             ),
             memory,
