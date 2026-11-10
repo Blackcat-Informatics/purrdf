@@ -410,10 +410,16 @@ impl<F: FnOnce() -> String> core::fmt::Display for LazyContext<F> {
         f.write_str(&context())
     }
 }
-struct QuadContext<'a>(usize, &'a str);
-impl core::fmt::Display for QuadContext<'_> {
+const QUAD_SUBJECT_POSITION: usize = 0;
+const QUAD_PREDICATE_POSITION: usize = 1;
+const QUAD_OBJECT_POSITION: usize = 2;
+const QUAD_GRAPH_POSITION: usize = 3;
+
+struct QuadContext<const POSITION: usize>(usize);
+impl<const POSITION: usize> core::fmt::Display for QuadContext<POSITION> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "quad #{} {}", self.0, self.1)
+        let position = const { ["subject", "predicate", "object", "graph"][POSITION] };
+        write!(f, "quad #{} {}", self.0, position)
     }
 }
 
@@ -475,19 +481,34 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
         memory.admission_mut().checkpoint(1)?;
-        let subject_context = QuadContext(i, "subject");
-        let predicate_context = QuadContext(i, "predicate");
+        let subject_context = QuadContext::<QUAD_SUBJECT_POSITION>(i);
+        let predicate_context = QuadContext::<QUAD_PREDICATE_POSITION>(i);
         check_id_in_range_with_memory(q.s, term_count, &subject_context, memory)?;
         check_id_in_range_with_memory(q.p, term_count, &predicate_context, memory)?;
-        check_id_in_range_with_memory(q.o, term_count, QuadContext(i, "object"), memory)?;
+        check_id_in_range_with_memory(
+            q.o,
+            term_count,
+            QuadContext::<QUAD_OBJECT_POSITION>(i),
+            memory,
+        )?;
         if let Some(g) = q.g {
-            check_id_in_range_with_memory(g, term_count, QuadContext(i, "graph"), memory)?;
+            check_id_in_range_with_memory(
+                g,
+                term_count,
+                QuadContext::<QUAD_GRAPH_POSITION>(i),
+                memory,
+            )?;
         }
 
         require_subject_with_memory(builder, q.s, &subject_context, ASSERTED_SUBJECT, memory)?;
         require_iri_predicate_with_memory(builder, q.p, &predicate_context, memory)?;
         if let Some(g) = q.g {
-            require_graph_name_with_memory(builder, g, QuadContext(i, "graph"), memory)?;
+            require_graph_name_with_memory(
+                builder,
+                g,
+                QuadContext::<QUAD_GRAPH_POSITION>(i),
+                memory,
+            )?;
         }
     }
 
