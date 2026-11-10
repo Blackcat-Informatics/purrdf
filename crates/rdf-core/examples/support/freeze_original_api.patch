@@ -1,0 +1,57 @@
+--- a/freeze.rs
++++ b/freeze.rs
+@@ -45,7 +45,7 @@
+                         assert_eq!(builder.term_count(), rows * 187 / 1170);
+                         builder
+                     },
+-                    |builder| builder.freeze().expect("validated fixture materializes"),
++                    |builder| builder.freeze(),
+                     BatchSize::LargeInput,
+                 );
+             },
+--- a/support/freeze_fixture.rs
++++ b/support/freeze_fixture.rs
+@@ -33,21 +33,18 @@
+         .map(|index| {
+             builder
+                 .intern_iri(&format!("https://example.org/freeze/p/{index}"))
+-                .expect("fixture predicate is valid")
+         })
+         .collect();
+     let graphs: Vec<_> = (0..graph_count)
+         .map(|index| {
+             builder
+                 .intern_iri(&format!("https://example.org/freeze/g/{index}"))
+-                .expect("fixture graph is valid")
+         })
+         .collect();
+     let subjects: Vec<_> = (0..subjects)
+         .map(|index| {
+             builder
+                 .intern_iri(&format!("https://example.org/freeze/s/{index}"))
+-                .expect("fixture subject is valid")
+         })
+         .collect();
+     let objects: Vec<_> = (0..objects)
+@@ -55,11 +52,9 @@
+             if index % 2 == 0 {
+                 builder
+                     .intern_literal(RdfLiteral::simple(format!("source value {index}")))
+-                    .expect("fixture literal is valid")
+             } else {
+                 builder
+                     .intern_iri(&format!("https://example.org/freeze/o/{index}"))
+-                    .expect("fixture object is valid")
+             }
+         })
+         .collect();
+@@ -77,8 +72,7 @@
+                 predicates[index % PREDICATES],
+                 objects[index % objects.len()],
+                 graph,
+-            )
+-            .expect("fixture statement is valid");
++            );
+     }
+     builder
+ }

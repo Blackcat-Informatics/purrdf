@@ -23,6 +23,16 @@ on:
     - cron: "17 4 * * 0"
   workflow_dispatch:
     inputs:
+      freeze_runtime:
+        description: Collect only the full-size original/candidate freeze runtime evidence
+        required: false
+        default: false
+        type: boolean
+      candidate_ref:
+        description: Full candidate commit SHA required by freeze_runtime
+        required: false
+        default: ""
+        type: string
       base_ref:
         description: >-
           Base commit for the x86_64 and aarch64 bench comparison. Empty means the
@@ -36,6 +46,7 @@ permissions:
 
 jobs:
   benchmarks:
+    if: ${{ !inputs.freeze_runtime }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     continue-on-error: true
@@ -181,7 +192,7 @@ jobs:
   # accept the harness's baseline flags. A target the base commit runs on another
   # harness is marked as having no base, since its records are not this harness's.
   bench-compare-plan:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.freeze_runtime
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -229,6 +240,7 @@ jobs:
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
   bench-compare:
+    if: ${{ !inputs.freeze_runtime }}
     needs: bench-compare-plan
     name: bench-compare (${{ matrix.runner }} / ${{ matrix.target.crate }} / ${{ matrix.target.bench }})
     runs-on: ${{ matrix.runner }}
@@ -313,3 +325,111 @@ jobs:
             bench-head.log
             target/purrdf-bench/
           if-no-files-found: warn
+
+  freeze-runtime:
+    if: github.event_name == 'workflow_dispatch' && inputs.freeze_runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BASE_SHA: ${{ inputs.base_ref }}
+      CANDIDATE_SHA: ${{ inputs.candidate_ref }}
+      EVIDENCE: ${{ github.workspace }}/.worktrees/freeze-runtime-evidence
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-D warnings -C target-cpu=native"
+    steps:
+      - name: Checkout evidence controller
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install one compiler for both arms
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly
+
+      - name: Admit immutable sources and record compiler inputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE"
+          exec > >(tee "$EVIDENCE/setup.log") 2>&1
+          [[ "$BASE_SHA" == 4a23c91eab218cf497c4caa4f40ef264c33cba05 ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(uname -m)" == x86_64 ]]
+          [[ -z "${CARGO_ENCODED_RUSTFLAGS+x}" ]]
+          for arm in original candidate; do
+            sha="$BASE_SHA"
+            if [[ "$arm" == candidate ]]; then sha="$CANDIDATE_SHA"; fi
+            [[ "$(git rev-parse --verify --end-of-options "${sha}^{commit}")" == "$sha" ]]
+            git worktree add --detach "$GITHUB_WORKSPACE/.worktrees/freeze-runtime-$arm" "$sha"
+            git archive "$sha" | gzip > "$EVIDENCE/$arm-source.tar.gz"
+          done
+          git rev-parse HEAD > "$EVIDENCE/controller-sha.txt"
+          cp crates/rdf-core/examples/freeze_runtime_evidence.rs "$EVIDENCE/"
+          cp crates/rdf-core/examples/support/freeze_original_api.patch "$EVIDENCE/"
+          cp .github/workflows/benchmarks.yaml "$EVIDENCE/"
+          rustc -vV > "$EVIDENCE/rustc.txt"
+          cargo -vV > "$EVIDENCE/cargo.txt"
+          rustc --print cfg --edition=2024 -C opt-level=3 -C lto=fat \
+            -C codegen-units=1 -C debuginfo=0 -C strip=none -C target-cpu=native \
+            > "$EVIDENCE/native-cfg.txt"
+          printf 'RUSTFLAGS=%s\nCARGO_BUILD_JOBS=%s\nCARGO_INCREMENTAL=%s\nCARGO_ENCODED_RUSTFLAGS=absent\n' \
+            "$RUSTFLAGS" "$CARGO_BUILD_JOBS" "$CARGO_INCREMENTAL" > "$EVIDENCE/safe-build-environment.txt"
+
+      - name: Build private bench libraries and retain Cargo evidence
+        run: |
+          set -euo pipefail
+          for arm in original candidate; do
+            cd "$GITHUB_WORKSPACE/.worktrees/freeze-runtime-$arm"
+            export CARGO_TARGET_DIR="$EVIDENCE/$arm-target"
+            packages=(-p purrdf-core)
+            if [[ "$arm" == candidate ]]; then
+              packages+=(-p purrdf-testkit -p purrdf-lex -p purrdf-hash)
+            fi
+            printf '%q ' cargo build --profile bench --lib --locked "${packages[@]}" > "$EVIDENCE/$arm-build-command.txt"
+            cargo -Z unstable-options build --profile bench --lib --locked "${packages[@]}" \
+              --unit-graph > "$EVIDENCE/$arm-units.json" 2> "$EVIDENCE/$arm-units.log"
+            if cargo build --profile bench --lib --locked "${packages[@]}" \
+              --message-format=json > "$EVIDENCE/$arm-cargo.json" 2> "$EVIDENCE/$arm-build.log"; then
+              echo 0 > "$EVIDENCE/$arm-build.status"
+            else
+              status=$?
+              echo "$status" > "$EVIDENCE/$arm-build.status"
+              exit "$status"
+            fi
+          done
+
+      - name: Link and run eight counterbalanced full-size measurements
+        run: |
+          set -euo pipefail
+          deps="$EVIDENCE/candidate-target/release"
+          metadata=()
+          for name in purrdf_lex purrdf_hash purrdf_testkit; do
+            mapfile -t files < <(jq -r --arg name "$name" \
+              'select(.reason == "compiler-artifact" and .target.name == $name) | .filenames[] | select(endswith(".rmeta"))' \
+              "$EVIDENCE/candidate-cargo.json")
+            [[ "${#files[@]}" == 1 ]]
+            metadata+=(--extern "$name=${files[0]}")
+          done
+          rustc --edition=2024 -D warnings -C opt-level=3 \
+            -L "dependency=$deps/deps" \
+            --extern "purrdf_lex=$deps/libpurrdf_lex.rlib" \
+            --extern "purrdf_hash=$deps/libpurrdf_hash.rlib" \
+            --extern "purrdf_testkit=$deps/libpurrdf_testkit.rlib" \
+            "${metadata[@]}" \
+            crates/rdf-core/examples/freeze_runtime_evidence.rs \
+            -o "$EVIDENCE/freeze-runtime-evidence" > "$EVIDENCE/controller-build.log" 2>&1
+          "$EVIDENCE/freeze-runtime-evidence" "$EVIDENCE" "$GITHUB_WORKSPACE" "$CANDIDATE_SHA" \
+            > "$EVIDENCE/controller.log" 2>&1
+
+      - name: Upload evidence including failed or partial collection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: freeze-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .worktrees/freeze-runtime-evidence/
+            !.worktrees/freeze-runtime-evidence/*-target/
+          if-no-files-found: error
+          include-hidden-files: true
