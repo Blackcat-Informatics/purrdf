@@ -183,7 +183,7 @@ fn structural_navigation_refuses_truncation_wrong_chunk_types_and_seek_positions
         matches!(error.kind(), DecodeErrorKind::Io(cause) if cause.kind() == io::ErrorKind::InvalidData)
     );
     assert_eq!(error.offset(), start);
-    assert!(source.reads.is_empty());
+    assert_eq!(source.reads, []);
 }
 
 #[test]
