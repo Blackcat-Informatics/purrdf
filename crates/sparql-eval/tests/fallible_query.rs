@@ -99,6 +99,189 @@ fn prepared_entry_uses_the_same_completeness_boundary() {
     assert_eq!(complete.evidence.consumed_bytes, 17);
 }
 
+#[test]
+fn prepared_row_cursor_keeps_worker_state_and_latches_late_source_failure() {
+    for governors in [
+        purrdf_sparql_eval::QueryGovernors::UNBOUNDED,
+        purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_max_answers(1),
+    ] {
+        let paged = two_page_faulting_dataset(ScriptedFault::Provider);
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", None)
+            .unwrap();
+        let cursor = engine
+            .open_select_cursor_governed_fallible_view(
+                &view,
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &governors,
+            )
+            .unwrap();
+        let mut cursor = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let mut cursor = cursor;
+                    let row = cursor
+                        .next_row()
+                        .unwrap()
+                        .expect("the first page is readable");
+                    assert_eq!(row.cells().len(), 3);
+                    cursor
+                })
+                .join()
+                .unwrap()
+        });
+        let error = cursor
+            .next_row()
+            .expect_err("the second page fails after one published row");
+        let FallibleSparqlError::Operational {
+            error: original,
+            evidence,
+        } = error
+        else {
+            panic!("the original provider failure has operational precedence");
+        };
+        assert_eq!(evidence.requested_pages, [PageId(0), PageId(1)]);
+        assert_eq!(evidence.consumed_pages, 1);
+        assert!(!cursor.is_complete());
+        for repeated in [cursor.next_row().unwrap_err(), cursor.settle().unwrap_err()] {
+            let FallibleSparqlError::Operational {
+                error,
+                evidence: repeated,
+            } = repeated
+            else {
+                panic!("a failed cursor never publishes a successful short answer");
+            };
+            assert_eq!(error, original);
+            assert_eq!(repeated, evidence);
+        }
+    }
+}
+
+#[test]
+fn prepared_row_cursor_settles_complete_empty_and_consumed_prefix_reads() {
+    let paged = PagedDataset::from_provider(Arc::new(InMemoryPageProvider::with_byte_lengths(
+        vec![(page(), 17)],
+        PageGeneration(4),
+    )))
+    .unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (query, expected) in [
+        ("SELECT ?s WHERE { ?s ?p ?o }", 1),
+        ("SELECT ?s WHERE { ?s <http://example.org/missing> ?o }", 0),
+    ] {
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let mut cursor = engine
+            .open_select_cursor_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap();
+        assert_eq!(
+            cursor
+                .schema()
+                .vars()
+                .iter()
+                .map(purrdf_sparql_algebra::Variable::as_str)
+                .collect::<Vec<_>>(),
+            ["s"]
+        );
+        let mut count = 0;
+        while cursor.next_row().unwrap().is_some() {
+            count += 1;
+        }
+        let settled = cursor.settle().unwrap();
+        assert!(matches!(
+            settled.query.completion,
+            purrdf_sparql_eval::eval::SelectCompletion::Complete
+        ));
+        assert_eq!(settled.query.delivered, expected);
+        assert_eq!(count, expected);
+        assert_eq!(settled.evidence.consumed_pages, u64::from(expected != 0));
+        assert_eq!(*cursor.settle().unwrap().evidence, *settled.evidence);
+    }
+    let prepared = engine
+        .prepare_query("SELECT ?s WHERE { ?s ?p ?o }", None)
+        .unwrap();
+    let refused_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let mut refused = engine
+        .open_select_cursor_governed_fallible_view(
+            &refused_view,
+            &prepared,
+            &[],
+            &QueryOptions::EMPTY,
+            &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_max_intermediate_cells(0),
+        )
+        .unwrap();
+    assert_eq!(
+        refused
+            .schema()
+            .vars()
+            .iter()
+            .map(purrdf_sparql_algebra::Variable::as_str)
+            .collect::<Vec<_>>(),
+        ["s"]
+    );
+    assert!(refused.next_row().unwrap().is_none());
+    let settled = refused.settle().unwrap();
+    assert!(matches!(
+        settled.query.completion,
+        purrdf_sparql_eval::eval::SelectCompletion::Truncated { .. }
+    ));
+    assert_eq!(settled.evidence.requested_pages, [] as [PageId; 0]);
+    assert!(matches!(
+        refused.coordinates(),
+        purrdf_sparql_eval::QueryCoordinates::NotStarted
+    ));
+    let prefix_source = two_page_faulting_dataset(ScriptedFault::Provider);
+    let view = prefix_source.query_view(PagedQueryLimits::UNBOUNDED);
+    let mut cursor = engine
+        .open_select_cursor_governed_fallible_view(
+            &view,
+            &prepared,
+            &[],
+            &QueryOptions::EMPTY,
+            &purrdf_sparql_eval::QueryGovernors::METERED,
+        )
+        .unwrap();
+    assert!(cursor.next_row().unwrap().is_some());
+    let settled = cursor.settle().unwrap();
+    assert!(matches!(
+        settled.query.completion,
+        purrdf_sparql_eval::eval::SelectCompletion::ConsumerStopped
+    ));
+    assert_eq!(settled.query.delivered, 1);
+    assert_eq!(
+        settled.evidence.requested_pages,
+        [PageId(0)],
+        "settling never reads the poisoned suffix"
+    );
+    let completed_prefix = engine
+        .query_prepared_governed_view(
+            page().as_ref(),
+            &prepared,
+            &[],
+            &QueryOptions::EMPTY,
+            &purrdf_sparql_eval::QueryGovernors::METERED,
+        )
+        .unwrap();
+    assert_eq!(
+        settled
+            .query
+            .governors
+            .as_ref()
+            .unwrap()
+            .consumed_in(ResourceDimension::Fuel),
+        completed_prefix
+            .evidence()
+            .consumed_in(ResourceDimension::Fuel),
+        "performed BGP work is committed before the receipt"
+    );
+    assert!(!cursor.is_complete());
+    assert!(cursor.next_row().unwrap().is_none());
+}
+
 struct CancelAfterSealProvider {
     page: Arc<RdfDataset>,
     calls: AtomicUsize,

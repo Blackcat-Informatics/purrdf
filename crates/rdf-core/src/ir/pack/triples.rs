@@ -851,7 +851,7 @@ fn partition_rows<'a>(
     s: Option<PackTermId>,
     p: Option<PackTermId>,
     o: Option<PackTermId>,
-) -> Box<dyn Iterator<Item = (u64, u64, u64)> + 'a> {
+) -> Box<dyn Iterator<Item = (u64, u64, u64)> + Send + 'a> {
     let local_s = match s {
         Some(u) => match local_lookup(part.local_s, u) {
             Some(l) => Some(l),

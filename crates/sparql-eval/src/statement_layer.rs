@@ -90,6 +90,228 @@ pub(crate) struct StatementProbe<I: ViewTermId> {
     pub scan_reifier_rows: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ReifierRoute<I> {
+    None,
+    Subject(I),
+    Target(I),
+    Components([Option<I>; 3]),
+    Graph,
+}
+
+#[derive(Clone, Copy)]
+enum AnnotationRoute<I> {
+    Range,
+    Subject(I),
+    Pattern,
+}
+
+#[derive(Clone, Copy)]
+enum Residual {
+    Keyed,
+    Unkeyed,
+    Range,
+    None,
+}
+
+impl<I: ViewTermId> StatementProbe<I> {
+    fn reifier_route(self) -> ReifierRoute<I> {
+        if !self.scan_reifier_rows {
+            return ReifierRoute::None;
+        }
+        match (self.s, self.o) {
+            (Some(subject), _) => ReifierRoute::Subject(subject),
+            (None, Some(target)) => ReifierRoute::Target(target),
+            (None, None) if self.components.iter().any(Option::is_some) => {
+                ReifierRoute::Components(self.components)
+            }
+            (None, None) => ReifierRoute::Graph,
+        }
+    }
+
+    fn annotation_route(self, ranged: bool) -> AnnotationRoute<I> {
+        if ranged {
+            AnnotationRoute::Range
+        } else if let Some(subject) = self.s {
+            AnnotationRoute::Subject(subject)
+        } else {
+            AnnotationRoute::Pattern
+        }
+    }
+
+    fn accepts(self, residual: Residual, quad: &QuadIds<I>) -> bool {
+        match residual {
+            Residual::Keyed => self.graph.matches(quad.g) && self.accepts(Residual::Unkeyed, quad),
+            Residual::Unkeyed => {
+                self.p.is_none_or(|id| quad.p == id) && self.o.is_none_or(|id| quad.o == id)
+            }
+            Residual::Range => self.s.is_none_or(|id| quad.s == id),
+            Residual::None => true,
+        }
+    }
+}
+
+type RetainedRows<'a, I> = crate::WorkspaceBox<dyn Iterator<Item = QuadIds<I>> + Send + 'a>;
+
+/// A source-order continuation over the original statement-layer probes. Each
+/// selected probe opens once, when its phase is first requested; the annotation
+/// stream is never opened speculatively ahead of the reifier stream.
+pub(crate) struct StatementCursor<'a, D: purrdf_core::CursorDatasetView> {
+    dataset: &'a D,
+    probe: StatementProbe<D::Id>,
+    range: Option<crate::expr::RetainedAnnotationRange>,
+    growth: crate::WorkspaceCapability,
+    workspace: crate::workspace::QueryWorkspace<D::ReadError>,
+    active: Option<(RetainedRows<'a, D::Id>, Residual)>,
+    phase: u8,
+    ended: bool,
+}
+
+impl<'a, D: purrdf_core::CursorDatasetView> StatementCursor<'a, D> {
+    pub(crate) fn new(
+        dataset: &'a D,
+        probe: StatementProbe<D::Id>,
+        range: Option<crate::expr::RetainedAnnotationRange>,
+        ctx: &crate::eval::EvalCtx<'_, D>,
+    ) -> Self {
+        Self {
+            dataset,
+            probe,
+            range,
+            growth: ctx.growth.clone(),
+            workspace: ctx.workspace.clone(),
+            active: None,
+            phase: 0,
+            ended: false,
+        }
+    }
+
+    fn retain<T: Iterator<Item = QuadIds<D::Id>> + Send + 'a>(
+        &self,
+        rows: T,
+        residual: Residual,
+    ) -> Result<(RetainedRows<'a, D::Id>, Residual), crate::EvalError> {
+        Ok((
+            crate::WorkspaceBox::new_admitted(rows, &self.growth)?
+                .coerce(|rows| -> Box<dyn Iterator<Item = QuadIds<D::Id>> + Send + 'a> { rows }),
+            residual,
+        ))
+    }
+
+    fn next_inner(&mut self) -> Result<Option<QuadIds<D::Id>>, crate::EvalError> {
+        loop {
+            if let Some((rows, residual)) = &mut self.active {
+                for quad in &mut **rows {
+                    if self.probe.accepts(*residual, &quad) {
+                        return Ok(Some(quad));
+                    }
+                }
+                self.active = None;
+            }
+            let probe = self.probe;
+            self.active = match self.phase {
+                0 => {
+                    self.phase = 1;
+                    match probe.reifier_route() {
+                        ReifierRoute::None => None,
+                        ReifierRoute::Subject(subject) => Some(self.retain(
+                            self.dataset.cursor_reifier_quads_of(subject),
+                            Residual::Keyed,
+                        )?),
+                        ReifierRoute::Target(target) => Some(
+                            self.retain(
+                                self.dataset
+                                    .cursor_reifier_quads_for_target(target, probe.graph),
+                                Residual::Unkeyed,
+                            )?,
+                        ),
+                        ReifierRoute::Components(components) => Some(
+                            self.retain(
+                                self.dataset
+                                    .cursor_reifier_quads_for_components(components, probe.graph),
+                                Residual::Unkeyed,
+                            )?,
+                        ),
+                        ReifierRoute::Graph => Some(self.retain(
+                            self.dataset.cursor_reifier_quads_in_graph(probe.graph),
+                            Residual::Unkeyed,
+                        )?),
+                    }
+                }
+                1 => {
+                    self.phase = 2;
+                    Some(match probe.annotation_route(self.range.is_some()) {
+                        AnnotationRoute::Range => self.retain(
+                            self.dataset.cursor_annotation_quads_for_range(
+                                probe.p,
+                                probe.o,
+                                probe.graph,
+                                self.range
+                                    .as_ref()
+                                    .expect("selected range is retained")
+                                    .clone(),
+                            ),
+                            Residual::Range,
+                        )?,
+                        AnnotationRoute::Subject(subject) => self.retain(
+                            self.dataset.cursor_annotations_of_with_graph(subject).map(
+                                move |(p, o, g)| QuadIds {
+                                    s: subject,
+                                    p,
+                                    o,
+                                    g,
+                                },
+                            ),
+                            Residual::Keyed,
+                        )?,
+                        AnnotationRoute::Pattern => self.retain(
+                            self.dataset.cursor_annotation_quads_for_pattern(
+                                probe.p,
+                                probe.o,
+                                probe.graph,
+                            ),
+                            Residual::None,
+                        )?,
+                    })
+                }
+                _ => return Ok(None),
+            };
+        }
+    }
+}
+
+impl<D: purrdf_core::CursorDatasetView> Iterator for StatementCursor<'_, D> {
+    type Item = Result<QuadIds<D::Id>, crate::EvalError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.ended {
+            return None;
+        }
+        let next = (|| {
+            if let Some(error) = self.dataset.read_error() {
+                return Err(self.workspace.source_error(error));
+            }
+            let next = self.next_inner()?;
+            if let Some(error) = self
+                .range
+                .as_ref()
+                .and_then(crate::expr::RetainedAnnotationRange::take_failure)
+            {
+                return Err(error);
+            }
+            if let Some(error) = self.dataset.read_error() {
+                return Err(self.workspace.source_error(error));
+            }
+            Ok(next)
+        })();
+        if !matches!(next, Ok(Some(_))) {
+            self.active = None;
+            self.ended = true;
+        }
+        next.transpose()
+    }
+}
+
 /// Call `emit` for each matching quad until it requests a break. A break stops
 /// both streams before pulling or translating another source row.
 ///
@@ -111,21 +333,19 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
     mut emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
     let StatementProbe {
-        s,
+        s: _,
         p,
         o,
-        components,
+        components: _,
         graph,
-        scan_reifier_rows,
+        scan_reifier_rows: _,
     } = probe;
 
     // The KEYED walks (`reifier_quads_of`/`annotations_of_with_graph`) are narrowed by
     // REIFIER (Part A: skipped per-page unless the page's sealed summary proves it owns
     // a row for that exact reifier), never by graph, so the graph scope is still applied
     // here alongside the predicate/object id-equality `quads_for_pattern` applies.
-    let keyed_residual = move |quad: &QuadIds<D::Id>| {
-        graph.matches(quad.g) && p.is_none_or(|id| quad.p == id) && o.is_none_or(|id| quad.o == id)
-    };
+    let keyed_residual = move |quad: &QuadIds<D::Id>| probe.accepts(Residual::Keyed, quad);
 
     // The UNKEYED walks (`reifier_quads_in_graph`/`annotation_quads_in_graph`) are
     // narrowed by the SAME `graph` scope before the residual runs — a `GraphMatch`-aware
@@ -134,21 +354,20 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
     // inside each visited unit (a unit named by the index may also hold rows in OTHER
     // graphs). So the walk itself already enforces the graph scope; only the
     // predicate/object id-equality remains here.
-    let unkeyed_residual = move |quad: &QuadIds<D::Id>| {
-        p.is_none_or(|id| quad.p == id) && o.is_none_or(|id| quad.o == id)
-    };
+    let unkeyed_residual = move |quad: &QuadIds<D::Id>| probe.accepts(Residual::Unkeyed, quad);
 
     // ── reifier rows: (reifier, rdf:reifies, <<triple>>) ────────────────────
-    if scan_reifier_rows {
-        match (s, o) {
-            (Some(reifier), _) => {
+    {
+        match probe.reifier_route() {
+            ReifierRoute::None => {}
+            ReifierRoute::Subject(reifier) => {
                 for quad in dataset.reifier_quads_of(reifier).filter(keyed_residual) {
                     if emit(quad).is_break() {
                         return;
                     }
                 }
             }
-            (None, Some(target)) => {
+            ReifierRoute::Target(target) => {
                 for quad in dataset
                     .reifier_quads_for_target(target, graph)
                     .filter(unkeyed_residual)
@@ -158,7 +377,7 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
                     }
                 }
             }
-            (None, None) if components.iter().any(Option::is_some) => {
+            ReifierRoute::Components(components) => {
                 for quad in dataset
                     .reifier_quads_for_components(components, graph)
                     .filter(unkeyed_residual)
@@ -168,7 +387,7 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
                     }
                 }
             }
-            (None, None) => {
+            ReifierRoute::Graph => {
                 for quad in dataset
                     .reifier_quads_in_graph(graph)
                     .filter(unkeyed_residual)
@@ -182,16 +401,16 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
     }
 
     // ── annotation rows: (reifier, predicate, object) ───────────────────────
-    if let Some(range) = range.as_ref() {
-        for quad in dataset.annotation_quads_for_range(p, o, graph, range) {
-            if s.is_none_or(|subject| quad.s == subject) && emit(quad).is_break() {
-                return;
+    match probe.annotation_route(range.is_some()) {
+        AnnotationRoute::Range => {
+            let range = range.as_ref().expect("selected range is retained");
+            for quad in dataset.annotation_quads_for_range(p, o, graph, range) {
+                if probe.accepts(Residual::Range, &quad) && emit(quad).is_break() {
+                    return;
+                }
             }
         }
-        return;
-    }
-    match s {
-        Some(reifier) => {
+        AnnotationRoute::Subject(reifier) => {
             for quad in dataset
                 .annotations_of_with_graph(reifier)
                 .map(|(pred, obj, g)| QuadIds {
@@ -207,7 +426,7 @@ pub(crate) fn visit_quads_range<D: DatasetView>(
                 }
             }
         }
-        None => {
+        AnnotationRoute::Pattern => {
             for quad in dataset.annotation_quads_for_pattern(p, o, graph) {
                 if emit(quad).is_break() {
                     return;
@@ -299,6 +518,25 @@ mod tests {
                 assert_eq!(
                     measured.retained_bytes,
                     i64::try_from(arrays * 257 * 4).unwrap()
+                );
+                let mut expected = Vec::new();
+                visit_quads(&dataset, probe, |quad| {
+                    expected.push(quad);
+                    ControlFlow::Continue(())
+                });
+                let ctx = crate::eval::EvalCtx::new(&dataset);
+                let mut cursor = StatementCursor::new(&dataset, probe, None, &ctx);
+                let mut actual = Vec::new();
+                while let Some(quad) = cursor
+                    .next()
+                    .transpose()
+                    .expect("original source remains readable")
+                {
+                    actual.push(quad);
+                }
+                assert_eq!(
+                    actual, expected,
+                    "retained statement probe preserves source order"
                 );
             }
         }
