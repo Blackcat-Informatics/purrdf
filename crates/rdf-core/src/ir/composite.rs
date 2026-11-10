@@ -9,9 +9,9 @@ use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
 use crate::hash::FastMap;
 use crate::{
-    BlankScope, DatasetView, DeltaDatasetView, DeltaViewId, GraphMatch, QuadIds, QuadProbePlan,
-    RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfStoreCapabilities, TermId, TermRef, TermValue,
-    ViewLimits, ViewStats, ViewTermId, ViewWork,
+    BlankScope, CursorDatasetView, DatasetView, DeltaDatasetView, DeltaViewId, GraphMatch, QuadIds,
+    QuadProbePlan, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfStoreCapabilities, TermId,
+    TermRef, TermValue, ViewLimits, ViewStats, ViewTermId, ViewWork,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -20,7 +20,7 @@ use std::sync::{Arc, LazyLock};
 
 type LocalId = DeltaViewId;
 type Pattern<I> = (Option<I>, Option<I>, Option<I>, GraphMatch<I>);
-type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<LocalId>> + 'a>;
+type ErasedRows<'a> = Box<dyn Iterator<Item = QuadIds<LocalId>> + Send + 'a>;
 
 // Physical plans depend only on four bound-axis bits. Cache the small, fixed
 // set once, including graph-unbound variants needed by placement and the
@@ -995,7 +995,7 @@ impl SelectedGraphs {
         p: Option<CompositeViewId>,
         o: Option<CompositeViewId>,
         graph: CompositeViewId,
-    ) -> Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + '_> {
+    ) -> Box<dyn Iterator<Item = QuadIds<CompositeViewId>> + Send + '_> {
         Box::new(CompositeDatasetView::quads_for_pattern_with_plan(
             &self.view,
             &plan,
@@ -2116,19 +2116,19 @@ enum Table {
 /// One active statement-table cursor over any borrowed dataset view, built
 /// without allocating. Carrier adapters retain their own graph/identity
 /// translations.
-fn metadata_probe<D: DatasetView>(
+fn metadata_probe<D: CursorDatasetView>(
     source: &D,
     table: Table,
     subject: Option<D::Id>,
     graph: GraphMatch<D::Id>,
-) -> impl Iterator<Item = QuadIds<D::Id>> + '_ {
+) -> impl Iterator<Item = QuadIds<D::Id>> + Send + '_ {
     match (table, subject) {
         (Table::Ordinary, _) => Cursor::Empty,
-        (Table::Reifier, Some(subject)) => Cursor::First(source.reifier_quads_of(subject)),
-        (Table::Reifier, None) => Cursor::Second(source.reifier_quads_in_graph(graph)),
+        (Table::Reifier, Some(subject)) => Cursor::First(source.cursor_reifier_quads_of(subject)),
+        (Table::Reifier, None) => Cursor::Second(source.cursor_reifier_quads_in_graph(graph)),
         (Table::Annotation, Some(subject)) => Cursor::Third(
             source
-                .annotations_of_with_graph(subject)
+                .cursor_annotations_of_with_graph(subject)
                 .map(move |(p, o, g)| QuadIds {
                     s: subject,
                     p,
@@ -2136,7 +2136,9 @@ fn metadata_probe<D: DatasetView>(
                     g,
                 }),
         ),
-        (Table::Annotation, None) => Cursor::Fourth(source.annotation_quads_in_graph(graph)),
+        (Table::Annotation, None) => {
+            Cursor::Fourth(source.cursor_annotation_quads_for_pattern(None, None, graph))
+        }
     }
 }
 

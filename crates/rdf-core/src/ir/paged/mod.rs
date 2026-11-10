@@ -1324,6 +1324,48 @@ fn disagreeing_field(sealed: &PageSummary, page: &RdfDataset) -> Option<&'static
         .and_then(|fresh| sealed.first_disagreeing_field(&fresh))
 }
 
+impl PagedDataset {
+    pub(crate) fn annotation_quads_for_range_owned<'a, R: crate::AnnotationRangeSource + 'a>(
+        &'a self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+        range: R,
+    ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + Send + 'a {
+        let stopping = range.clone();
+        admission::candidate_pages_for_stream(
+            self.graph_index(),
+            self.page_count(),
+            graph,
+            PageStream::Annotation,
+        )
+        .map(move |id| &self.pages[id.0 as usize])
+        .take_while(move |_| {
+            stopping
+                .value_range()
+                .workspace
+                .is_none_or(|workspace| !workspace.stopped())
+        })
+        .filter(move |slot| {
+            // The original caller retains pruning failures before publication.
+            self.range_may_match(slot, PageStream::Annotation, predicate, range.value_range())
+                .unwrap_or_default()
+        })
+        .flat_map(move |slot| {
+            let page = self
+                .page(slot.id)
+                .expect("sealed page must re-materialize deterministically");
+            page.annotation_quads()
+                .map(move |row| row.map_ids(|id| slot.translation.to_global(id)))
+                .filter(move |row| {
+                    graph.matches(row.g)
+                        && predicate.is_none_or(|id| id == row.p)
+                        && object.is_none_or(|id| id == row.o)
+                })
+        })
+    }
+}
+
 impl DatasetView for PagedDataset {
     type Id = GlobalTermId;
     type ReadError = std::convert::Infallible;
@@ -1655,32 +1697,7 @@ impl DatasetView for PagedDataset {
         graph: GraphMatch<Self::Id>,
         range: &'a crate::AnnotationValueRange<'a>,
     ) -> impl Iterator<Item = QuadIds<Self::Id>> + 'a {
-        admission::candidate_pages_for_stream(
-            self.graph_index(),
-            self.page_count(),
-            graph,
-            PageStream::Annotation,
-        )
-        .map(move |id| &self.pages[id.0 as usize])
-        .take_while(move |_| range.workspace.is_none_or(|workspace| !workspace.stopped()))
-        .filter(move |slot| {
-            // The original caller owner retains failures and must inspect them
-            // before publishing results; no rows escape after refusal.
-            self.range_may_match(slot, PageStream::Annotation, predicate, *range)
-                .unwrap_or_default()
-        })
-        .flat_map(move |slot| {
-            let page = self
-                .page(slot.id)
-                .expect("sealed page must re-materialize deterministically");
-            page.annotation_quads()
-                .map(move |row| row.map_ids(|id| slot.translation.to_global(id)))
-                .filter(move |row| {
-                    graph.matches(row.g)
-                        && predicate.is_none_or(|id| id == row.p)
-                        && object.is_none_or(|id| id == row.o)
-                })
-        })
+        self.annotation_quads_for_range_owned(predicate, object, graph, range)
     }
 
     /// Every named graph any page declares, including ones a page leaves empty or

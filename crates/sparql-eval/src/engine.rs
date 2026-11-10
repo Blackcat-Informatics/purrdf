@@ -22,6 +22,8 @@
 //! across worker-local engines without retaining a global evaluation lock.
 
 mod bounded_workspace;
+mod select_cursor;
+pub use select_cursor::{FallibleSelectCursor, FallibleSelectSettlement, PreparedSelectCursor};
 pub(crate) mod coordinates;
 pub(crate) use coordinates::now as prepare_coordinate_now;
 pub use coordinates::{ExecutionCoordinateObserver, QueryCoordinates, SuppliedQueryCoordinates};
@@ -405,15 +407,26 @@ impl PreparedQuery {
         outcome: Outcome<I>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Outcome<I>, crate::EvalError> {
-        match (&self.source_schema, outcome) {
-            (Some(schema), Outcome::Solutions(rows)) => Ok(Outcome::Solutions(
-                rows.reorder_like_admitted(schema, workspace)?,
+        match outcome {
+            Outcome::Solutions(rows) => Ok(Outcome::Solutions(
+                self.restore_solution_layout(rows, workspace)?,
             )),
-            (_, outcome) => Ok(outcome),
+            outcome => Ok(outcome),
         }
     }
 
-    fn restore_evaluated_layout<I: purrdf_core::ViewTermId>(
+    pub(crate) fn restore_solution_layout<I: purrdf_core::ViewTermId>(
+        &self,
+        rows: crate::solution::SolutionSeq<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::solution::SolutionSeq<I>, crate::EvalError> {
+        match &self.source_schema {
+            Some(schema) => rows.reorder_like_admitted(schema, workspace),
+            None => Ok(rows),
+        }
+    }
+
+    pub(crate) fn restore_evaluated_layout<I: purrdf_core::ViewTermId>(
         &self,
         evaluated: EvaluatedOutcome<I>,
         workspace: &crate::WorkspaceCapability,
@@ -6210,16 +6223,11 @@ pub(crate) fn eval_diagnostic_code<'e>(
 /// must never poison the shared, un-substituted plan-cache entry.
 /// The cloned query and its original native container grant are destroyed in
 /// that order on success, rewrite refusal and evaluator failure.
-struct RuntimeSubstitution {
-    query: Query,
-    _frame: crate::workspace::LexicalFrame,
-}
-
 fn runtime_substitution(
     query: &Query,
     substitutions: Prebindings<'_>,
     workspace: &crate::WorkspaceCapability,
-) -> Result<RuntimeSubstitution, EvaluationFailure> {
+) -> Result<crate::expr::AdmittedQuery, EvaluationFailure> {
     let mut frame = crate::workspace::LexicalFrame::new(workspace);
     let query = {
         let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
@@ -6233,7 +6241,7 @@ fn runtime_substitution(
         crate::substitute::apply_shacl_prebinding_with_memory(query, substitutions, &mut memory)
             .map_err(EvaluationFailure::from)?
     };
-    Ok(RuntimeSubstitution {
+    Ok(crate::expr::AdmittedQuery {
         query,
         _frame: frame,
     })

@@ -21,6 +21,16 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b).
 
+mod cursor_answer;
+mod cursor_buffering;
+pub use cursor_buffering::{CursorBufferReason, CursorBufferingReport};
+mod cursor_query;
+mod cursor_status;
+pub use cursor_status::{CursorAnswerStatus, CursorPrefix, SelectCompletion, SelectSettlement};
+mod positive_cursor;
+
+pub(crate) use cursor_query::CursorQuery;
+
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -43,6 +53,76 @@ use crate::solution::{SolutionSeq, VarSchema};
 use crate::vm::RowContinuation as _;
 use crate::witness::RelationWitness;
 use crate::xpath_regex::Selection;
+
+/// The arena checkpoint observed at the instant numeric scratch is requested.
+/// Retained scans supply a checkpoint refreshed before each read; ordinary
+/// evaluation reads its arena directly through the same admission path.
+pub(crate) trait NumericScratchCheckpoint {
+    fn computed_count(&self) -> usize;
+    fn claim_growth(&self) -> u64;
+}
+
+impl NumericScratchCheckpoint for ScratchInterner {
+    fn computed_count(&self) -> usize {
+        self.computed_count()
+    }
+
+    fn claim_growth(&self) -> u64 {
+        self.claim_uncharged_growth()
+    }
+}
+
+/// Admit an exact operation with scratch but no arithmetic work. In particular,
+/// annotation pruning must admit at the comparison, rather than when its lazy
+/// iterator opens or when a read that does no numeric work begins.
+pub(crate) fn admit_numeric_scratch(
+    governors: Option<&GovernorState>,
+    deferral: Option<&crate::row_checkpoint::WorkerDeferral>,
+    scratch: &impl NumericScratchCheckpoint,
+    bytes: u64,
+) -> Result<(), TrippedGovernor> {
+    if bytes == 0 {
+        return Ok(());
+    }
+    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
+    #[cfg(test)]
+    if deferral.is_none() {
+        crate::vm::charge_trace::record(|| format!("charge {point:?} x0"));
+    }
+    if let Some(deferral) = deferral {
+        if let Some(state) = governors
+            && let Some(cause) = state.poll_stop_after(0)
+        {
+            return Err(state
+                .tripped()
+                .unwrap_or(TrippedGovernor::Stopped { cause }));
+        }
+        if deferral.owns_arena() {
+            return deferral.charge_numeric(point, 0, scratch.computed_count(), bytes);
+        }
+        deferral.charge_fuel(Some(point), 0, None)?;
+        if !deferral.scratch_engaged() {
+            return Ok(());
+        }
+        let growth = scratch.claim_growth();
+        if growth != 0 {
+            deferral.charge_scratch(growth, None)?;
+        }
+        return deferral.admit_transient(bytes);
+    }
+    let Some(state) = governors else {
+        return Ok(());
+    };
+    let dimension = purrdf_core::ResourceDimension::ScratchBytes;
+    if !state.is_engaged_in(dimension) {
+        return Ok(());
+    }
+    let growth = scratch.claim_growth();
+    if growth != 0 {
+        state.charge(dimension, growth)?;
+    }
+    state.admit_transient(dimension, bytes)
+}
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
 /// value; the benches and differential tests flip individual flags to
@@ -498,6 +578,24 @@ pub(crate) enum WorkspaceAdmission {
     Admitted,
 }
 
+/// Delivery ownership and the original finite-governor rollback boundary.
+#[derive(Clone, Copy)]
+enum CursorDelivery {
+    Retained,
+    Live,
+    CommitUnits,
+}
+
+impl CursorDelivery {
+    fn consumes(self) -> bool {
+        !matches!(self, Self::Retained)
+    }
+
+    fn requires_commit_units(self) -> bool {
+        matches!(self, Self::CommitUnits)
+    }
+}
+
 /// The mutable evaluation context threaded through [`eval`].
 ///
 /// Generic over the read view `D` (the storage-backend seam): the evaluator drives
@@ -532,6 +630,9 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// The exact verdict which stopped the original answer producer, if any.
     pub(crate) evidence_stop: Option<purrdf_core::evidence::WitnessVerdict>,
     pub(crate) annotation_range: Option<crate::expr::AnnotationRanges>,
+    pub(crate) bgp_cursor_sources: Option<crate::bgp::BgpSourceFactory<D>>,
+    cursor_delivery: CursorDelivery,
+    cursor_buffering: Option<cursor_buffering::BufferingTrace>,
     /// Original query-owned reverse identities, shared only over this same view.
     term_lookup: TermLookup<D::Id>,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
@@ -775,7 +876,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) geo: &'d purrdf_geo_kernel::GeoProfile,
     /// The request's explicit invocation law, borrowed without allocating on
     /// healthy paths and inherited by function children and parallel workers.
-    pub(crate) user_function_admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
+    pub(crate) user_function_admission: Option<Arc<dyn crate::user_fn::UserFunctionAdmission>>,
     /// The caller-injected property-function table.
     /// [`crate::property_fn::PropertyFunctionRegistry::EMPTY`] (the default) means
     /// no relation is registered: a predicate IRI only reaches this table when the
@@ -1349,6 +1450,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
+            bgp_cursor_sources: None,
+            cursor_delivery: CursorDelivery::Retained,
+            cursor_buffering: None,
             term_lookup: TermLookup::default(),
             scratch: ScratchInterner::default(),
             computed_admission: Vec::new(),
@@ -1959,6 +2063,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
 
     /// Read positive eligibility from the source tree or this evaluation's
     /// temporary tree. No address survives the temporary subtree's scope.
+    pub(crate) fn note_cursor_buffer(&self, reason: CursorBufferReason) {
+        if let Some(trace) = &self.cursor_buffering {
+            trace.note(reason);
+        }
+    }
+
     pub(crate) fn positive_region(&self, pattern: &GraphPattern) -> Option<bool> {
         [self.plan.as_ref(), self.positive_shape.as_ref()]
             .into_iter()
@@ -2855,6 +2965,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: self.annotation_range.clone(),
+            bgp_cursor_sources: self.bgp_cursor_sources,
+            cursor_delivery: self.cursor_delivery,
+            cursor_buffering: self.cursor_buffering.clone(),
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -2963,7 +3076,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // must see the same table and depth bound as its parent.
             user_functions: self.user_functions,
             geo: self.geo,
-            user_function_admission: self.user_function_admission,
+            user_function_admission: self.user_function_admission.clone(),
             // Read-only shared registry (a `Copy` pointer), for the same reason: a
             // worker that evaluates a property-function call must resolve the
             // predicate IRI against the same table its parent would.
@@ -3035,13 +3148,13 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Attach the invocation law for SPARQL-bodied functions, or clear it with
-    /// `None`. The same borrowed owner is inherited by children and workers.
+    /// `None`. Children and workers retain the same shared owner.
     #[must_use]
     pub fn with_user_function_admission(
         mut self,
-        admission: Option<&'d Arc<dyn crate::user_fn::UserFunctionAdmission>>,
+        admission: Option<&Arc<dyn crate::user_fn::UserFunctionAdmission>>,
     ) -> Self {
-        self.user_function_admission = admission;
+        self.user_function_admission = admission.cloned();
         self
     }
 
@@ -3116,6 +3229,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ) -> Result<(), TrippedGovernor> {
         if cost == purrdf_xsd::exact::Cost::ZERO {
             return Ok(());
+        }
+        if cost.work() == 0 {
+            return admit_numeric_scratch(
+                self.governors.as_deref(),
+                self.exact_deferral.as_ref(),
+                &self.scratch,
+                cost.bytes(),
+            );
         }
         // A worker of a forked row loop defers the charge to the loop's ordered commit:
         // charged here, it would land in the shared counters in schedule order.
@@ -3234,6 +3355,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
+            bgp_cursor_sources: self.bgp_cursor_sources,
+            cursor_delivery: self.cursor_delivery,
+            cursor_buffering: self.cursor_buffering.clone(),
             term_lookup: if self.growth.is_bounded() {
                 self.term_lookup.fork_admitted(&self.growth)?
             } else {
@@ -3300,7 +3424,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             base_iri: None,
             user_functions: self.user_functions,
             geo: self.geo,
-            user_function_admission: self.user_function_admission,
+            user_function_admission: self.user_function_admission.clone(),
             // Inherited with the function table: a function body is SPARQL like any
             // other, so a property-function call inside it resolves against the same
             // relations the calling query sees.
@@ -3563,6 +3687,8 @@ pub(crate) fn discard_delivery<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> b
 
 enum DeliveryResume<I: ViewTermId> {
     Node(Evaluated<I>),
+    Bgp,
+    Positive,
     Acknowledge,
     ApplicationContinue(usize),
 }
@@ -3580,6 +3706,8 @@ struct StreamSequence<'a, I: ViewTermId> {
     target: DeliveryTarget,
     lift: Option<crate::governor::lift::DetachedLift>,
     blocks: crate::AdmittedVec<SolutionSeq<I>>,
+    consumed: bool,
+    output_count: usize,
     kind: StreamKind<'a, I>,
     stopped: bool,
     busy: bool,
@@ -3629,6 +3757,7 @@ struct ApplicationStream<I: ViewTermId> {
     ordinal: usize,
     row: Option<crate::binop::ApplicationRow<I>>,
     first_block: usize,
+    child_rows: usize,
     emitted: usize,
     ceiling: Option<usize>,
 }
@@ -3647,6 +3776,12 @@ impl<D: DatasetView + Sync> ResidentAbort<D> for Box<ApplicationBody> {
 }
 
 enum DeliveryEvent<'a, I: ViewTermId> {
+    PositiveNext {
+        stopped: bool,
+    },
+    BgpNext {
+        stopped: bool,
+    },
     Original {
         position: OrdinaryPosition<'a>,
         evaluated: Evaluated<I>,
@@ -3684,6 +3819,10 @@ enum DeliveryAdvance<'a, 'd, D: DatasetView + Sync> {
     Complete(OrdinaryPosition<'a>, Result<Evaluated<D::Id>, EvalError>),
     Function(crate::user_fn::UserInvocation<'d, 'd, D>),
     Descend(OrdinaryPosition<'a>),
+    Yield {
+        rows: SolutionSeq<D::Id>,
+        resume: DeliveryEvent<'a, D::Id>,
+    },
 }
 
 enum StreamStart<'a, I: ViewTermId> {
@@ -3705,7 +3844,16 @@ impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> ResidentAbort<D> for Box<Stre
 /// The ordinary graph-child route keeps each entered node's cursor, search
 /// frame and local cap in one admitted worklist while graph children descend.
 /// Expression rows and copied EXISTS children use their own suspended states.
-enum OrdinaryAfter<'a, I: ViewTermId> {
+enum OrdinaryAfter<'a, I: ViewTermId, P: Copy + Send + Sync> {
+    Positive {
+        state: Box<positive_cursor::PositiveExecution<'a, I, P>>,
+        finish: Option<(usize, crate::governor::lift::DetachedLift)>,
+        _allocation: crate::WorkspaceAllocation,
+    },
+    Bgp {
+        state: Box<crate::bgp::BgpCursor<'a, I, P>>,
+        _allocation: crate::WorkspaceAllocation,
+    },
     ApplicationBody {
         state: Box<ApplicationBody>,
         _allocation: crate::WorkspaceAllocation,
@@ -4156,24 +4304,24 @@ impl OrdinaryPosition<'_> {
     }
 }
 
-struct OrdinaryFrame<'a, I: ViewTermId> {
+struct OrdinaryFrame<'a, I: ViewTermId, P: Copy + Send + Sync> {
     position: OrdinaryPosition<'a>,
     boundary: NodeBoundary<I>,
-    after: OrdinaryAfter<'a, I>,
+    after: OrdinaryAfter<'a, I, P>,
 }
 
 /// One owner for every installed ordinary boundary. A panic cannot skip the
 /// node cursor, evidence-search or local-cap restoration when frames move.
-struct OrdinaryState<'a, I: ViewTermId> {
+struct OrdinaryState<'a, I: ViewTermId, P: Copy + Send + Sync> {
     active: Option<NodeBoundary<I>>,
-    first: Option<OrdinaryFrame<'a, I>>,
-    pending: crate::AdmittedVec<OrdinaryFrame<'a, I>>,
+    first: Option<OrdinaryFrame<'a, I, P>>,
+    pending: crate::AdmittedVec<OrdinaryFrame<'a, I, P>>,
     next_delivery: DeliveryTarget,
 }
 
 /// Resident adapter; the movable state itself never borrows its query context.
 struct OrdinaryRunner<'a, 'ctx, 'd, D: DatasetView + Sync> {
-    state: OrdinaryState<'a, D::Id>,
+    state: OrdinaryState<'a, D::Id, D::ProbePlan>,
     ctx: &'ctx mut EvalCtx<'d, D>,
 }
 
@@ -4204,8 +4352,31 @@ enum OrdinaryAdvance<'a, 'd, D: DatasetView + Sync> {
     Consumed(bool),
 }
 
-impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
-    fn frame_mut(&mut self, token: usize) -> Result<&mut OrdinaryFrame<'a, I>, EvalError> {
+impl<'a, I: ViewTermId, P: Copy + Send + Sync> OrdinaryState<'a, I, P> {
+    fn delivery_is_consumed<D: DatasetView<Id = I> + Sync>(
+        &self,
+        target: DeliveryTarget,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        match target {
+            DeliveryTarget::External => Ok(ctx.cursor_delivery.consumes()),
+            DeliveryTarget::Parent(parent) | DeliveryTarget::ApplicationRight(parent) => {
+                let frame = match parent.checked_sub(1) {
+                    Some(index) => self.pending.get(index),
+                    None => self.first.as_ref(),
+                }
+                .ok_or_else(|| EvalError::internal("delivery parent frame is absent"))?;
+                let OrdinaryAfter::Stream { state, .. } = &frame.after else {
+                    return Err(EvalError::internal(
+                        "delivery parent has another continuation",
+                    ));
+                };
+                Ok(state.consumed)
+            }
+            DeliveryTarget::None | DeliveryTarget::Discard => Ok(false),
+        }
+    }
+    fn frame_mut(&mut self, token: usize) -> Result<&mut OrdinaryFrame<'a, I, P>, EvalError> {
         if token == 0 {
             self.first.as_mut()
         } else {
@@ -4223,14 +4394,176 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
         Ok(state)
     }
 
-    fn advance_delivery<'d, D: DatasetView<Id = I> + Sync>(
+    fn start_positive<'d: 'a, D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        position: OrdinaryPosition<'a>,
+        state: positive_cursor::PositiveExecution<'a, I, P>,
+        finish: Option<(usize, crate::governor::lift::DetachedLift)>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<DeliveryAdvance<'a, 'd, D>, EvalError> {
+        if self.first.is_some() {
+            self.pending.reserve_next()?;
+        }
+        let (state, allocation) =
+            crate::workspace::box_native(state, &ctx.growth, "retained SELECT source")?;
+        self.push_parent(
+            position,
+            OrdinaryAfter::Positive {
+                state,
+                finish,
+                _allocation: allocation,
+            },
+        );
+        self.active = Some(NodeBoundary::delivery_overlay(None));
+        self.advance_delivery(DeliveryEvent::PositiveNext { stopped: false }, ctx)
+    }
+
+    fn advance_delivery<'d: 'a, D: DatasetView<Id = I, ProbePlan = P> + Sync>(
         &mut self,
         mut event: DeliveryEvent<'a, I>,
-        mut delivery: Option<&mut RowConsumer<'_, D>>,
         ctx: &mut EvalCtx<'d, D>,
     ) -> Result<DeliveryAdvance<'a, 'd, D>, EvalError> {
         loop {
             event = match event {
+                DeliveryEvent::PositiveNext { stopped } => {
+                    if let Some(active) = &mut self.active {
+                        active.abort(ctx);
+                    }
+                    let OrdinaryFrame {
+                        position,
+                        boundary,
+                        after,
+                    } = self.pop().ok_or_else(|| {
+                        EvalError::internal("retained positive relation has no source continuation")
+                    })?;
+                    self.active = Some(boundary);
+                    let OrdinaryAfter::Positive {
+                        mut state,
+                        finish,
+                        _allocation: allocation,
+                    } = after
+                    else {
+                        return Err(EvalError::internal(
+                            "retained positive relation reached another continuation",
+                        ));
+                    };
+                    match state.poll(stopped, ctx)? {
+                        positive_cursor::PositivePoll::Rows(block) => {
+                            let boundary =
+                                self.active.as_mut().expect("original positive boundary");
+                            let target = boundary.delivery;
+                            boundary.delivery_ordinal = boundary
+                                .delivery_ordinal
+                                .checked_add(block.rows.len())
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                            self.push_parent(
+                                position.clone(),
+                                OrdinaryAfter::Positive {
+                                    state,
+                                    finish,
+                                    _allocation: allocation,
+                                },
+                            );
+                            self.active = Some(NodeBoundary::delivery_overlay(None));
+                            DeliveryEvent::Offer {
+                                position,
+                                target,
+                                block,
+                                resume: DeliveryResume::Positive,
+                            }
+                        }
+                        positive_cursor::PositivePoll::Complete {
+                            evaluated,
+                            produced,
+                        } => {
+                            let evaluated = match finish {
+                                None => evaluated,
+                                Some((ordinal, lift)) => {
+                                    let mut lift = lift.attach(position.pattern());
+                                    match lift.absorb(ordinal, evaluated) {
+                                        Some(rows) => lift.finish(rows),
+                                        None => lift.withheld(),
+                                    }
+                                }
+                            };
+                            let boundary =
+                                self.active.as_mut().expect("original positive boundary");
+                            boundary.delivery = DeliveryTarget::None;
+                            boundary.streamed_output = Some(produced);
+                            let finished = finish_ordinary_active(
+                                &mut self.active,
+                                ctx,
+                                position.pattern(),
+                                Ok(evaluated),
+                            );
+                            return Ok(DeliveryAdvance::Complete(position, finished));
+                        }
+                    }
+                }
+                DeliveryEvent::BgpNext { stopped } => {
+                    if let Some(active) = &mut self.active {
+                        active.abort(ctx);
+                    }
+                    let OrdinaryFrame {
+                        position,
+                        boundary,
+                        after,
+                    } = self.pop().ok_or_else(|| {
+                        EvalError::internal("retained BGP has no source continuation")
+                    })?;
+                    self.active = Some(boundary);
+                    let OrdinaryAfter::Bgp {
+                        mut state,
+                        _allocation: allocation,
+                    } = after
+                    else {
+                        return Err(EvalError::internal(
+                            "retained BGP reached another continuation",
+                        ));
+                    };
+                    let factory = ctx.bgp_cursor_sources.ok_or_else(|| {
+                        EvalError::internal("retained BGP lost its transferable source capability")
+                    })?;
+                    if stopped {
+                        state.stop(ctx)?;
+                    }
+                    match state.next(ctx, factory)? {
+                        crate::bgp::BgpCursorPoll::Row(block) => {
+                            let boundary = self.active.as_mut().expect("original BGP boundary");
+                            let target = boundary.delivery;
+                            boundary.delivery_ordinal = boundary
+                                .delivery_ordinal
+                                .checked_add(block.rows.len())
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                            self.push_parent(
+                                position.clone(),
+                                OrdinaryAfter::Bgp {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            self.active = Some(NodeBoundary::delivery_overlay(None));
+                            DeliveryEvent::Offer {
+                                position,
+                                target,
+                                block,
+                                resume: DeliveryResume::Bgp,
+                            }
+                        }
+                        crate::bgp::BgpCursorPoll::Complete { header, produced } => {
+                            let boundary = self.active.as_mut().expect("original BGP boundary");
+                            boundary.delivery = DeliveryTarget::None;
+                            boundary.streamed_output = Some(produced);
+                            let finished = finish_ordinary_active(
+                                &mut self.active,
+                                ctx,
+                                position.pattern(),
+                                Ok(Evaluated::Complete(header)),
+                            );
+                            return Ok(DeliveryAdvance::Complete(position, finished));
+                        }
+                    }
+                }
                 DeliveryEvent::Original {
                     position,
                     evaluated,
@@ -4294,20 +4627,31 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                             stopped: discard_delivery(ctx),
                         },
                         DeliveryTarget::External => {
-                            let terminal = delivery.as_deref_mut().ok_or_else(|| {
-                                EvalError::internal("external delivery has no terminal consumer")
-                            })?;
-                            terminal.deliver(&block, ctx)?;
-                            DeliveryEvent::Acknowledged {
-                                position,
-                                resume,
-                                stopped: terminal.stopped(),
-                            }
+                            return Ok(DeliveryAdvance::Yield {
+                                rows: block,
+                                resume: DeliveryEvent::Acknowledged {
+                                    position,
+                                    resume,
+                                    stopped: false,
+                                },
+                            });
                         }
                         DeliveryTarget::Parent(target)
                         | DeliveryTarget::ApplicationRight(target) => {
-                            if ctx.expression_barrier.observed().is_some()
-                                || ctx.stop_check().is_some()
+                            let consumer = self.stream_mut(target)?;
+                            let committed_projection = ctx.cursor_delivery.requires_commit_units()
+                                && consumer.consumed
+                                && !application_right
+                                && matches!(
+                                    consumer.kind,
+                                    StreamKind::Project { .. } | StreamKind::Slice { .. }
+                                );
+                            // A pure wrapper maps its source's already licensed
+                            // unit, including a certified partial. Polling here
+                            // would add a stop coordinate absent from its native body.
+                            if !committed_projection
+                                && (ctx.expression_barrier.observed().is_some()
+                                    || ctx.stop_check().is_some())
                             {
                                 event = DeliveryEvent::Acknowledged {
                                     position,
@@ -4370,6 +4714,19 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                                     Ok(crate::expr::FilterLink::Copied(cursor.owner()))
                                 }
                             };
+                            if application_right {
+                                let StreamKind::Application(application) =
+                                    &mut self.stream_mut(target)?.kind
+                                else {
+                                    return Err(EvalError::internal(
+                                        "application right delivery lost its owner",
+                                    ));
+                                };
+                                application.child_rows = application
+                                    .child_rows
+                                    .checked_add(block.rows.len())
+                                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                            }
                             let computation: Result<Option<OrdinaryExpression<'a, I>>, EvalError> =
                                 match &self.stream_mut(target)?.kind {
                                     StreamKind::Application(application) if application_right => {
@@ -4720,6 +5077,8 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                     resume,
                     stopped,
                 } => match resume {
+                    DeliveryResume::Bgp => DeliveryEvent::BgpNext { stopped },
+                    DeliveryResume::Positive => DeliveryEvent::PositiveNext { stopped },
                     DeliveryResume::ApplicationContinue(target) => DeliveryEvent::ApplicationNext {
                         target,
                         advance: true,
@@ -4757,6 +5116,11 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                         let output = state.output.take().ok_or_else(|| {
                             EvalError::internal("forwarded delivery block is absent")
                         })?;
+                        consumer.output_count = consumer
+                            .output_count
+                            .checked_add(output.rows.len())
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                        let consumed = consumer.consumed;
                         if let StreamKind::Slice {
                             index,
                             kept,
@@ -4767,8 +5131,10 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                         } = &mut consumer.kind
                         {
                             *schema = Some(output.schema);
-                            for row in output.rows {
-                                rows.push_row(row)?;
+                            if !consumed {
+                                for row in output.rows {
+                                    rows.push_row(row)?;
+                                }
                             }
                             *kept = kept.saturating_add(1);
                             *index = index.saturating_add(1);
@@ -4786,10 +5152,12 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                             continue;
                         }
                         let count = output.rows.len();
-                        if !matches!(
-                            consumer.kind,
-                            StreamKind::Union { .. } | StreamKind::Graph(_)
-                        ) {
+                        if !consumed
+                            && !matches!(
+                                consumer.kind,
+                                StreamKind::Union { .. } | StreamKind::Graph(_)
+                            )
+                        {
                             consumer.blocks.push(output)?;
                         }
                         let stopped =
@@ -4940,6 +5308,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                     }
                     if application.row.is_none() {
                         application.first_block = consumer.blocks.len();
+                        application.child_rows = 0;
                     }
                     if self.first.is_some() {
                         self.pending.reserve_next()?;
@@ -5040,6 +5409,45 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
         if matches!(target, DeliveryTarget::None) && !contextual_group {
             return Ok(None);
         }
+        let consumed = self.delivery_is_consumed(target, ctx)?;
+        if consumed
+            && ctx.cursor_delivery.requires_commit_units()
+            && !matches!(
+                node,
+                GraphPattern::Project { .. }
+                    | GraphPattern::ProjectStar { .. }
+                    | GraphPattern::Slice { .. }
+            )
+        {
+            // Charged/stateful children finish in original operator-major order.
+            // A final join still streams its product after its factors settle.
+            if !matches!(
+                node,
+                GraphPattern::Bgp { .. }
+                    | GraphPattern::Values { .. }
+                    | GraphPattern::Path { .. }
+                    | GraphPattern::Join { .. }
+            ) {
+                ctx.note_cursor_buffer(CursorBufferReason::GovernorSettlement);
+            }
+            return Ok(None);
+        }
+        if consumed
+            && matches!(
+                node,
+                GraphPattern::Filter { .. } | GraphPattern::Extend { .. }
+            )
+            && !crate::parallel::is_parallel_safe(
+                attached_expression(node)?,
+                ctx.safety_registries(),
+            )
+        {
+            ctx.note_cursor_buffer(CursorBufferReason::StatefulExpression);
+            // Keep stateful expressions in their original operator-major order.
+            // Their row identity and shared random/mint sequence cannot be
+            // interleaved with an ancestor's next expression stage.
+            return Ok(None);
+        }
         let mut graph = None;
         let (kind, child, streamed) = match node {
             GraphPattern::Apply { left, policy, .. }
@@ -5053,6 +5461,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                         ordinal: 0,
                         row: None,
                         first_block: 0,
+                        child_rows: 0,
                         emitted: 0,
                         ceiling: ctx.row_ceiling(),
                     }),
@@ -5162,6 +5571,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
             GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner }
                 if crate::modifier::dedup_streaming_safe(inner, ctx) =>
             {
+                ctx.note_cursor_buffer(CursorBufferReason::DistinctKeys);
                 (
                     StreamKind::Dedup(crate::modifier::DeliveryDedup::new(
                         self.special_application_policy(node)
@@ -5191,11 +5601,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                     .delivery = DeliveryTarget::None;
                 return Ok(Some(StreamStart::Complete(lift.finish(rows))));
             }
-            GraphPattern::Join { right, .. } => (
-                StreamKind::BinaryRight { minus: false },
-                right.as_ref(),
-                false,
-            ),
+            GraphPattern::Join { .. } => return Ok(None),
             GraphPattern::Minus { right, .. } => (
                 StreamKind::BinaryRight { minus: true },
                 right.as_ref(),
@@ -5220,6 +5626,8 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                 target,
                 lift,
                 blocks: crate::AdmittedVec::new(&ctx.growth),
+                consumed,
+                output_count: 0,
                 kind,
                 stopped: false,
                 busy: false,
@@ -5358,7 +5766,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
         }
         Ok(next)
     }
-    fn push_parent(&mut self, position: OrdinaryPosition<'a>, after: OrdinaryAfter<'a, I>) {
+    fn push_parent(&mut self, position: OrdinaryPosition<'a>, after: OrdinaryAfter<'a, I, P>) {
         let frame = OrdinaryFrame {
             position,
             boundary: self.active.take().expect("entered parent node"),
@@ -5371,7 +5779,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
         }
     }
 
-    fn pop(&mut self) -> Option<OrdinaryFrame<'a, I>> {
+    fn pop(&mut self) -> Option<OrdinaryFrame<'a, I, P>> {
         pop_inline_frame(&mut self.pending, &mut self.first)
     }
 
@@ -5633,7 +6041,7 @@ fn finish_ordinary_active<D: DatasetView + Sync>(
     result
 }
 
-impl<I: ViewTermId> OrdinaryState<'_, I> {
+impl<I: ViewTermId, P: Copy + Send + Sync> OrdinaryState<'_, I, P> {
     fn new(workspace: &crate::WorkspaceCapability) -> Self {
         Self {
             active: None,
@@ -5677,6 +6085,9 @@ impl<I: ViewTermId> OrdinaryState<'_, I> {
             if let OrdinaryAfter::ApplicationBody { state, .. } = &mut frame.after {
                 state.abort(ctx);
             }
+            if let OrdinaryAfter::Positive { state, .. } = &mut frame.after {
+                state.abort(ctx);
+            }
             frame.boundary.abort(ctx);
         }
     }
@@ -5689,10 +6100,11 @@ impl<D: DatasetView + Sync> Drop for OrdinaryRunner<'_, '_, '_, D> {
 
 type FunctionValue = (Option<TermValue>, Option<crate::evidence_exec::RowEvidence>);
 
-enum OrdinaryEntry<'a> {
+enum OrdinaryEntry<'a, I: ViewTermId> {
     Pattern(OrdinaryPosition<'a>),
     Literal(OrdinaryPosition<'a>),
     Function(FunctionValue),
+    Delivery(DeliveryEvent<'a, I>),
 }
 
 #[expect(
@@ -5702,9 +6114,14 @@ enum OrdinaryEntry<'a> {
 enum OrdinaryPoll<'a, 'd, D: DatasetView + Sync> {
     Complete(Evaluated<D::Id>),
     Function(
-        OrdinaryState<'a, D::Id>,
+        OrdinaryState<'a, D::Id, D::ProbePlan>,
         crate::user_fn::UserInvocation<'d, 'd, D>,
     ),
+    Yield {
+        state: OrdinaryState<'a, D::Id, D::ProbePlan>,
+        rows: SolutionSeq<D::Id>,
+        resume: DeliveryEvent<'a, D::Id>,
+    },
 }
 
 impl<'a, 'd, D: DatasetView + Sync> OrdinaryRunner<'a, '_, 'd, D> {
@@ -5715,41 +6132,807 @@ impl<'a, 'd, D: DatasetView + Sync> OrdinaryRunner<'a, '_, 'd, D> {
         let state = std::mem::replace(&mut self.state, OrdinaryState::new(&self.ctx.growth));
         OrdinaryPoll::Function(state, invocation)
     }
+
+    fn yield_rows(
+        &mut self,
+        rows: SolutionSeq<D::Id>,
+        resume: DeliveryEvent<'a, D::Id>,
+    ) -> OrdinaryPoll<'a, 'd, D> {
+        let state = std::mem::replace(&mut self.state, OrdinaryState::new(&self.ctx.growth));
+        OrdinaryPoll::Yield {
+            state,
+            rows,
+            resume,
+        }
+    }
 }
 
 /// Flat child frames own their contexts and immutable bodies, never their parents.
 struct QueryFrame<'a, 'd, D: DatasetView + Sync> {
-    state: Option<OrdinaryState<'a, D::Id>>,
+    state: Option<OrdinaryState<'a, D::Id, D::ProbePlan>>,
     invocation: crate::user_fn::UserInvocation<'d, 'd, D>,
 }
 
-struct QueryDriver<'a, 'ctx, 'd, D: DatasetView + Sync> {
+struct QueryState<'a, 'd, D: DatasetView + Sync> {
     frames: crate::AdmittedVec<QueryFrame<'a, 'd, D>>,
-    root_state: Option<OrdinaryState<'a, D::Id>>,
-    root: &'ctx mut EvalCtx<'d, D>,
+    root_state: Option<OrdinaryState<'a, D::Id, D::ProbePlan>>,
     root_iri: Option<&'a str>,
 }
 
-enum DriverResult<I: ViewTermId> {
-    Graph(Evaluated<I>),
-    Function(FunctionValue),
+/// A temporary execution borrow; retained state never points into its context.
+struct QueryDriver<'a, 'ctx, 'd, D: DatasetView + Sync> {
+    state: &'ctx mut QueryState<'a, 'd, D>,
+    root: &'ctx mut EvalCtx<'d, D>,
+    abort_on_drop: bool,
 }
 
-impl<D: DatasetView + Sync> Drop for QueryDriver<'_, '_, '_, D> {
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline row delivery avoids a new allocation on every continuation resume"
+)]
+enum DriverResult<'a, I: ViewTermId> {
+    Graph(Evaluated<I>),
+    Function(FunctionValue),
+    Yield {
+        rows: SolutionSeq<I>,
+        resume: DeliveryEvent<'a, I>,
+    },
+}
+
+enum QueryPoll<I: ViewTermId> {
+    Rows(SolutionSeq<I>),
+    Complete(Evaluated<I>),
+}
+
+/// A movable query continuation; the dataset and immutable algebra are external
+/// owners, and the execution context is borrowed only while advancing it.
+struct QueryExecution<'a, 'd, D: DatasetView + Sync> {
+    state: QueryState<'a, 'd, D>,
+    entry: Option<OrdinaryEntry<'a, D::Id>>,
+}
+
+/// An ordinary SELECT continuation over external immutable algebra and a view.
+/// The execution owns its context; a returned row borrows that context until the
+/// caller has finished reading its cells and evidence.
+pub struct SelectCursor<'q, 'd: 'q, D: DatasetView + Sync> {
+    query: CursorQuery<'q>,
+    layout: Option<&'q crate::engine::PreparedQuery>,
+    schema: crate::solution::SharedSchema,
+    execution: crate::WorkspaceBox<dyn QueryContinuation<'d, D> + 'q>,
+    context: EvalCtx<'d, D>,
+    block: Option<SolutionSeq<D::Id>>,
+    ordinal: usize,
+    outcome: Option<EvaluatedOutcome<D::Id>>,
+    failed: bool,
+    streaming: bool,
+    delivered: usize,
+    final_produced: usize,
+    undecided: usize,
+    settlement: Option<SelectSettlement>,
+    answer: Option<cursor_answer::CursorAnswer>,
+}
+
+/// Erase the already admitted implementation state at the public boundary.
+/// The library proves the concrete continuation is Send; downstream callers
+/// need not recursively inspect its internal algebra and function frames.
+trait QueryContinuation<'d, D: DatasetView + Sync>: Send {
+    fn poll(&mut self, ctx: &mut EvalCtx<'d, D>) -> Result<QueryPoll<D::Id>, EvalError>;
+    fn abort(&mut self, ctx: &mut EvalCtx<'d, D>);
+    fn stop_after_block(&mut self) -> Result<(), EvalError>;
+}
+
+impl<'q, 'd: 'q, D: DatasetView + Sync> QueryContinuation<'d, D> for QueryExecution<'q, 'd, D> {
+    fn poll(&mut self, ctx: &mut EvalCtx<'d, D>) -> Result<QueryPoll<D::Id>, EvalError> {
+        QueryExecution::poll(self, ctx)
+    }
+
+    fn abort(&mut self, ctx: &mut EvalCtx<'d, D>) {
+        ResidentAbort::abort(self, ctx);
+    }
+
+    fn stop_after_block(&mut self) -> Result<(), EvalError> {
+        self.stop_after_row(true)
+    }
+}
+
+/// One original SELECT row, valid while its query continuation is borrowed.
+pub struct SelectRow<'row, 'd, D: DatasetView + Sync> {
+    sequence: &'row SolutionSeq<D::Id>,
+    ordinal: usize,
+    context: &'row EvalCtx<'d, D>,
+}
+
+purrdf_hash::debug_non_exhaustive!(['q, 'd: 'q, D: DatasetView + Sync]
+    SelectCursor<'q, 'd, D> { ordinal, failed });
+purrdf_hash::debug_non_exhaustive!(['row, 'd, D: DatasetView + Sync]
+    SelectRow<'row, 'd, D> { ordinal });
+
+impl<'d, D: DatasetView + Sync> SelectRow<'_, 'd, D> {
+    /// Projected names in the original prepared SELECT's column order.
+    #[must_use]
+    pub fn schema(&self) -> &VarSchema {
+        &self.sequence.schema
+    }
+
+    /// Original interned cells. Computed ids belong to this row's context.
+    #[must_use]
+    pub fn cells(&self) -> &[Option<SolutionTerm<D::Id>>] {
+        &self.sequence.rows[self.ordinal]
+    }
+
+    /// Original admitted evidence handle for this solution.
+    #[must_use]
+    pub fn evidence(&self) -> crate::RowEvidence {
+        self.sequence.rows[self.ordinal].evidence().clone()
+    }
+
+    /// The owner used to resolve existing and computed cells without copying them.
+    #[must_use]
+    pub fn context(&self) -> &EvalCtx<'d, D> {
+        self.context
+    }
+}
+
+impl<'q, 'd: 'q, D: purrdf_core::CursorDatasetView> SelectCursor<'q, 'd, D> {
+    /// Open a prepared SELECT using the supplied original evaluation context.
+    ///
+    /// # Errors
+    /// Returns the original admission, preparation or source failure. A different
+    /// query form is an invalid cursor request.
+    pub fn from_context(query: &'q Query, context: EvalCtx<'d, D>) -> Result<Self, EvalError> {
+        Self::from_admitted_query(CursorQuery::Borrowed(query), None, context)
+    }
+
+    pub(crate) fn from_admitted_query(
+        query: CursorQuery<'q>,
+        kept: Option<&crate::plan::PlanCache>,
+        mut context: EvalCtx<'d, D>,
+    ) -> Result<Self, EvalError> {
+        if !matches!(query.query(), Query::Select { .. }) {
+            return Err(EvalError::config(
+                "an ordinary row cursor requires a SELECT query",
+            ));
+        }
+        begin_query_evaluated(query.query(), kept, &mut context)?;
+        context.cursor_buffering = Some(cursor_buffering::BufferingTrace::new(&context.growth)?);
+        let answer = context
+            .evidence_verdict
+            .take()
+            .map(|request| {
+                let request = context
+                    .evidence_input
+                    .as_ref()
+                    .ok_or_else(|| {
+                        EvalError::internal("cursor answer status lost its evidence source")
+                    })?
+                    .answer_request(request)?;
+                cursor_answer::CursorAnswer::new(request, &context.growth)
+            })
+            .transpose()?;
+        let commit_units = context.stop_signal().is_some()
+            || context.governor_state().is_some_and(|state| {
+                crate::governor::CALLER_SETTABLE_DIMENSIONS
+                    .into_iter()
+                    .any(|dimension| {
+                        !(dimension == purrdf_core::ResourceDimension::UdfDepth
+                            && context.user_functions.is_empty())
+                            && state.caller_ceiling(dimension).is_some()
+                    })
+            });
+        if answer
+            .as_ref()
+            .is_some_and(|answer| answer.is_verdict() && answer.witness_stop().is_none())
+        {
+            context.note_cursor_buffer(CursorBufferReason::VerdictCommitUnit);
+        }
+        let streaming = !answer
+            .as_ref()
+            .is_some_and(cursor_answer::CursorAnswer::is_verdict);
+        context.cursor_delivery = if !streaming {
+            CursorDelivery::Retained
+        } else if commit_units {
+            CursorDelivery::CommitUnits
+        } else {
+            CursorDelivery::Live
+        };
+        context.bgp_cursor_sources = streaming.then(crate::bgp::BgpSourceFactory::for_view);
+        let delivered = streaming
+            || answer
+                .as_ref()
+                .is_some_and(cursor_answer::CursorAnswer::is_verdict);
+        let execution = QueryExecution::from_position(query.position(), false, delivered, &context);
+        let execution = crate::WorkspaceBox::new_admitted(execution, &context.growth)?
+            .coerce(|execution| -> Box<dyn QueryContinuation<'d, D> + 'q> { execution });
+        let schema = crate::blank_scope::without_joined_blanks_admitted(
+            SolutionSeq::<D::Id>::empty(syntactic_schema_admitted(
+                query_pattern(query.query()),
+                &context.growth,
+            )?),
+            &context.growth,
+        )?
+        .schema;
+        let outcome = match answer
+            .as_ref()
+            .and_then(cursor_answer::CursorAnswer::witness_stop)
+        {
+            None => None,
+            Some(verdict) => {
+                context.evidence_stop = Some(verdict);
+                let rows = SolutionSeq::empty(syntactic_schema_admitted(
+                    query_pattern(query.query()),
+                    &context.growth,
+                )?);
+                let done = finish_solution_query(
+                    query.query(),
+                    Evaluated::Complete(rows),
+                    streaming.then_some(0),
+                    &mut context,
+                )?;
+                Some(cursor_settlement(done)?.0)
+            }
+        };
+        Ok(Self {
+            query,
+            layout: None,
+            schema,
+            execution,
+            context,
+            block: None,
+            ordinal: 0,
+            outcome,
+            failed: false,
+            streaming,
+            delivered: 0,
+            final_produced: 0,
+            undecided: 0,
+            settlement: None,
+            answer,
+        })
+    }
+}
+
+impl<'q, 'd: 'q, D: DatasetView + Sync> SelectCursor<'q, 'd, D> {
+    pub(crate) fn set_prepared_layout(
+        &mut self,
+        prepared: &'q crate::engine::PreparedQuery,
+    ) -> Result<(), EvalError> {
+        self.schema = crate::blank_scope::without_joined_blanks_admitted(
+            prepared.restore_solution_layout(
+                SolutionSeq::<D::Id>::empty(self.schema.clone()),
+                &self.context.growth,
+            )?,
+            &self.context.growth,
+        )?
+        .schema;
+        self.layout = Some(prepared);
+        Ok(())
+    }
+
+    /// The original SELECT's projected columns, available even for an empty answer.
+    /// Reading this header does not advance or open a source iterator.
+    #[must_use]
+    pub fn schema(&self) -> &VarSchema {
+        &self.schema
+    }
+
+    /// Advance the original continuation by one solution.
+    ///
+    /// # Errors
+    /// A midstream failure ends this execution and returns its original failure;
+    /// it never creates a successful settlement for the delivered prefix.
+    pub fn next_row(&mut self) -> Result<Option<SelectRow<'_, 'd, D>>, EvalError> {
+        Ok(self
+            .prepare_next_row()?
+            .map(|ordinal| self.prepared_row(ordinal)))
+    }
+
+    pub(crate) fn prepare_next_row(&mut self) -> Result<Option<usize>, EvalError> {
+        if self.settlement.is_some() {
+            return Ok(None);
+        }
+        let ready = match self.advance_row() {
+            Ok(ready) => ready,
+            Err(error) => return Err(self.fail(error)),
+        };
+        if !ready {
+            return Ok(None);
+        }
+        let ordinal = self.ordinal;
+        let (Some(next), Some(delivered)) =
+            (self.ordinal.checked_add(1), self.delivered.checked_add(1))
+        else {
+            return Err(self.fail(EvalError::WorkspaceBoundOverflow));
+        };
+        if let Some(answer) = &mut self.answer
+            && (self.streaming || !answer.is_verdict())
+        {
+            if let Err(error) =
+                answer.observe_row(&self.block.as_ref().expect("one delivered block").rows[ordinal])
+            {
+                return Err(self.fail(error));
+            }
+            self.context.evidence_stop = answer.witness_stop();
+        }
+        if self.block.as_ref().expect("one delivered block").rows[ordinal]
+            .evidence()
+            .is_undecided()
+        {
+            self.undecided = self
+                .undecided
+                .checked_add(1)
+                .ok_or_else(|| self.fail(EvalError::WorkspaceBoundOverflow))?;
+        }
+        self.ordinal = next;
+        self.delivered = delivered;
+        self.final_produced = self
+            .final_produced
+            .checked_add(1)
+            .ok_or_else(|| self.fail(EvalError::WorkspaceBoundOverflow))?;
+        Ok(Some(ordinal))
+    }
+
+    pub(crate) fn prepared_row(&self, ordinal: usize) -> SelectRow<'_, 'd, D> {
+        SelectRow {
+            sequence: self.block.as_ref().expect("one delivered block"),
+            ordinal,
+            context: &self.context,
+        }
+    }
+
+    pub(crate) fn is_settled(&self) -> bool {
+        !self.failed && self.settlement.is_some()
+    }
+
+    pub(crate) fn take_relation_witness(&mut self) -> RelationWitness {
+        std::mem::take(&mut self.context.witness)
+    }
+
+    pub(crate) fn abort_read(&mut self) {
+        self.failed = true;
+        self.execution.abort(&mut self.context);
+        self.block = None;
+    }
+
+    fn fail(&mut self, error: EvalError) -> EvalError {
+        self.abort_read();
+        error
+    }
+
+    fn advance_row(&mut self) -> Result<bool, EvalError> {
+        loop {
+            if self
+                .block
+                .as_ref()
+                .is_some_and(|block| self.ordinal < block.rows.len())
+            {
+                let at_cap = self.streaming
+                    && self
+                        .context
+                        .governor_state()
+                        .and_then(|state| {
+                            state.caller_ceiling(purrdf_core::ResourceDimension::AnswerRows)
+                        })
+                        .is_some_and(|cap| {
+                            usize::try_from(cap).is_ok_and(|cap| self.delivered >= cap)
+                        });
+                if at_cap {
+                    let block = self.block.as_ref().expect("one final output block");
+                    self.final_produced = self
+                        .final_produced
+                        .checked_add(block.rows.len() - self.ordinal)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    self.ordinal = block.rows.len();
+                    // Count actual final rows without publishing or observing
+                    // overflow rows. Final cap settlement retains precedence.
+                    continue;
+                }
+                return Ok(true);
+            }
+            if self.block.is_some()
+                && self.outcome.is_none()
+                && self.streaming
+                && self
+                    .answer
+                    .as_ref()
+                    .and_then(cursor_answer::CursorAnswer::witness_stop)
+                    .is_some()
+            {
+                self.execution.stop_after_block()?;
+            }
+            self.block = None;
+            self.ordinal = 0;
+            if self.failed {
+                return Err(EvalError::config("a failed SELECT cursor cannot resume"));
+            }
+            if self.outcome.is_some() {
+                return Ok(false);
+            }
+            match self.execution.poll(&mut self.context)? {
+                QueryPoll::Rows(rows) => {
+                    if let Some(answer) = &mut self.answer {
+                        let search = self
+                            .context
+                            .evidence_search
+                            .as_ref()
+                            .and_then(|frames| frames.last());
+                        if !self.streaming {
+                            answer.observe_block(&rows, search)?;
+                            self.context.evidence_stop = answer.witness_stop();
+                            if self.context.evidence_stop.is_some() {
+                                self.execution.stop_after_block()?;
+                            }
+                            continue;
+                        }
+                        answer.begin_block(search)?;
+                        self.context.evidence_stop = answer.witness_stop();
+                    }
+                    self.block = Some(crate::blank_scope::without_joined_blanks_admitted(
+                        match self.layout {
+                            Some(prepared) => {
+                                prepared.restore_solution_layout(rows, &self.context.growth)?
+                            }
+                            None => rows,
+                        },
+                        &self.context.growth,
+                    )?);
+                }
+                QueryPoll::Complete(done) => {
+                    let done = finish_solution_query(
+                        self.query.query(),
+                        done,
+                        self.streaming.then_some(self.final_produced),
+                        &mut self.context,
+                    )?;
+                    let done = match self.layout {
+                        Some(prepared) => {
+                            prepared.restore_evaluated_layout(done, &self.context.growth)?
+                        }
+                        None => done,
+                    };
+                    let (outcome, rows) = cursor_settlement(done)?;
+                    self.outcome = Some(outcome);
+                    if !self.streaming {
+                        self.block = Some(rows);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Buffering strategies selected so far by the original operator paths.
+    /// The report is bounded independently of the answer size and reads no source.
+    #[must_use]
+    pub fn buffering_report(&self) -> CursorBufferingReport {
+        self.context.cursor_buffering.as_ref().map_or_else(
+            CursorBufferingReport::default,
+            cursor_buffering::BufferingTrace::report,
+        )
+    }
+
+    /// Whether every row was delivered and evaluation settled successfully.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        !self.failed
+            && match &self.settlement {
+                Some(settlement) => matches!(settlement.completion, SelectCompletion::Complete),
+                None => {
+                    self.exhausted() && matches!(self.outcome, Some(EvaluatedOutcome::Complete(_)))
+                }
+            }
+    }
+
+    fn exhausted(&self) -> bool {
+        self.outcome.is_some()
+            && self
+                .block
+                .as_ref()
+                .is_none_or(|block| self.ordinal >= block.rows.len())
+    }
+
+    /// Settle this consumer's actual prefix and stop any unread continuation.
+    /// Repeated settlement returns the original receipt without another source read.
+    ///
+    /// # Errors
+    /// A failed execution cannot publish a successful read receipt.
+    pub fn settle(&mut self) -> Result<SelectSettlement, EvalError> {
+        if self.failed {
+            return Err(EvalError::config(
+                "a failed SELECT cursor cannot settle successfully",
+            ));
+        }
+        if let Some(settlement) = &self.settlement {
+            return Ok(settlement.clone());
+        }
+        let exhausted = self.exhausted();
+        let stopped_search = if self.block.is_some() && self.outcome.is_none() {
+            let stopped = (|| {
+                self.execution.stop_after_block()?;
+                match self.execution.poll(&mut self.context)? {
+                    QueryPoll::Complete(done) => Ok(done.rows().rows.search_evidence().clone()),
+                    QueryPoll::Rows(_) => Err(EvalError::internal(
+                        "a SELECT producer emitted rows after consumer-stop acknowledgement",
+                    )),
+                }
+            })();
+            match stopped {
+                Ok(search) => Some(search),
+                Err(error) => return Err(self.fail(error)),
+            }
+        } else {
+            None
+        };
+        let governors = self.governor_evidence();
+        let completion = if !exhausted {
+            SelectCompletion::ConsumerStopped
+        } else {
+            match self.outcome.as_ref().expect("settled query outcome") {
+                EvaluatedOutcome::Complete(_) => {
+                    match governors.as_ref().and_then(|evidence| evidence.tripped) {
+                        None => SelectCompletion::Complete,
+                        Some(tripped) => SelectCompletion::Truncated {
+                            tripped,
+                            answers: crate::PartialAnswers::Certain(CursorPrefix {
+                                rows: self.delivered,
+                                positional: true,
+                            }),
+                        },
+                    }
+                }
+                EvaluatedOutcome::Truncated { certificate, .. } => {
+                    let prefix = CursorPrefix {
+                        rows: self.delivered,
+                        positional: certificate.is_positional_prefix(),
+                    };
+                    let answers = match certificate.bound() {
+                        crate::governor::soundness::SpineClass::Certain => {
+                            crate::PartialAnswers::Certain(prefix)
+                        }
+                        crate::governor::soundness::SpineClass::Possible => {
+                            crate::PartialAnswers::AtMost(prefix)
+                        }
+                        crate::governor::soundness::SpineClass::Unknown => {
+                            crate::PartialAnswers::Unknown(
+                                certificate
+                                    .barrier()
+                                    .expect("a collapsed bound names its original barrier"),
+                            )
+                        }
+                    };
+                    SelectCompletion::Truncated {
+                        tripped: certificate.tripped(),
+                        answers,
+                    }
+                }
+            }
+        };
+        if self.answer.is_some() {
+            let search = match stopped_search.map_or_else(|| self.settlement_search(), Ok) {
+                Ok(search) => search,
+                Err(error) => return Err(self.fail(error)),
+            };
+            let result = self
+                .answer
+                .as_mut()
+                .expect("requested native status")
+                .finish(
+                    &search,
+                    exhausted
+                        && matches!(completion, SelectCompletion::Complete)
+                        && self.context.evidence_stop.is_none(),
+                );
+            if let Err(error) = result {
+                return Err(self.fail(error));
+            }
+        }
+        self.execution.abort(&mut self.context);
+        self.block = None;
+        let settlement = SelectSettlement {
+            completion,
+            delivered: self.delivered,
+            established: self.delivered - self.undecided,
+            undecided: self.undecided,
+            governors,
+        };
+        self.settlement = Some(settlement.clone());
+        Ok(settlement)
+    }
+
+    fn settlement_search(&self) -> Result<crate::RowEvidence, EvalError> {
+        match &self.outcome {
+            Some(
+                EvaluatedOutcome::Complete(Outcome::Solutions(rows))
+                | EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Solutions(rows),
+                    ..
+                },
+            ) => Ok(rows.rows.search_evidence().clone()),
+            Some(_) => Err(EvalError::internal(
+                "a SELECT cursor settled another query form",
+            )),
+            None => {
+                let mut search = crate::RowEvidence::default();
+                if let Some(frames) = &self.context.evidence_search {
+                    for frame in frames {
+                        search = search.combine(
+                            frame,
+                            purrdf_core::evidence::EvidenceCombination::Conjunction,
+                        )?;
+                    }
+                }
+                Ok(search)
+            }
+        }
+    }
+
+    /// Borrow the requested native semantic status after settling this consumer.
+    /// An unread suffix is explicit and never claims completed enumeration.
+    ///
+    /// # Errors
+    /// Refuses an unsettled or failed read and preserves native count failures.
+    pub fn answer_status(&self) -> Result<CursorAnswerStatus<'_>, EvalError> {
+        if self.failed || self.settlement.is_none() {
+            return Err(EvalError::config(
+                "native answer status requires a successful cursor settlement",
+            ));
+        }
+        self.answer.as_ref().map_or(
+            Ok(CursorAnswerStatus::Unrequested),
+            cursor_answer::CursorAnswer::status,
+        )
+    }
+
+    /// Committed governor counters and trip at the current read boundary.
+    /// An unfinished producer can retain pending charges until acknowledgement;
+    /// settlement commits the performed work before publishing its receipt.
+    #[must_use]
+    pub fn governor_evidence(&self) -> Option<purrdf_core::GovernorEvidence> {
+        self.context.governor_state().map(|state| state.evidence())
+    }
+}
+
+impl<D: DatasetView + Sync> Drop for SelectCursor<'_, '_, D> {
     fn drop(&mut self) {
+        self.execution.abort(&mut self.context);
+    }
+}
+
+/// The cursor has delivered these payloads separately; settlement keeps their
+/// original search and bound metadata without retaining another answer owner.
+fn cursor_settlement<I: ViewTermId>(
+    outcome: EvaluatedOutcome<I>,
+) -> Result<(EvaluatedOutcome<I>, SolutionSeq<I>), EvalError> {
+    let header = |rows: &SolutionSeq<I>| {
+        let mut header = SolutionSeq::empty(rows.schema.clone());
+        header
+            .rows
+            .retain_search_evidence(rows.rows.search_evidence().clone());
+        header
+    };
+    match outcome {
+        EvaluatedOutcome::Complete(Outcome::Solutions(rows)) => Ok((
+            EvaluatedOutcome::Complete(Outcome::Solutions(header(&rows))),
+            rows,
+        )),
+        EvaluatedOutcome::Truncated {
+            outcome: Outcome::Solutions(rows),
+            certificate,
+        } => {
+            let (_, proof) = certificate.split();
+            let empty = header(&rows);
+            Ok((
+                EvaluatedOutcome::Truncated {
+                    outcome: Outcome::Solutions(empty.clone()),
+                    certificate: Truncation::new(empty, proof),
+                },
+                rows,
+            ))
+        }
+        _ => Err(EvalError::internal(
+            "a SELECT cursor settled another query form",
+        )),
+    }
+}
+
+impl<'a, 'd: 'a, D: DatasetView + Sync> QueryExecution<'a, 'd, D> {
+    fn new(
+        pattern: &'a GraphPattern,
+        literal: bool,
+        delivered: bool,
+        ctx: &EvalCtx<'d, D>,
+    ) -> Self {
+        Self::from_position(OrdinaryPosition::Borrowed(pattern), literal, delivered, ctx)
+    }
+
+    fn from_position(
+        position: OrdinaryPosition<'a>,
+        literal: bool,
+        delivered: bool,
+        ctx: &EvalCtx<'d, D>,
+    ) -> Self {
+        let mut root_state = OrdinaryState::new(&ctx.growth);
+        if delivered {
+            root_state.next_delivery = DeliveryTarget::External;
+        }
+        Self {
+            state: QueryState {
+                frames: crate::AdmittedVec::new(&ctx.growth),
+                root_state: Some(root_state),
+                root_iri: None,
+            },
+            entry: Some(if literal {
+                OrdinaryEntry::Literal(position)
+            } else {
+                OrdinaryEntry::Pattern(position)
+            }),
+        }
+    }
+
+    fn poll(&mut self, ctx: &mut EvalCtx<'d, D>) -> Result<QueryPoll<D::Id>, EvalError> {
+        let entry = self.entry.take().ok_or_else(|| {
+            EvalError::internal("a completed query continuation was advanced again")
+        })?;
+        let mut driver = QueryDriver {
+            state: &mut self.state,
+            root: ctx,
+            abort_on_drop: true,
+        };
+        match run_query_driver(&mut driver, entry)? {
+            DriverResult::Graph(done) => Ok(QueryPoll::Complete(done)),
+            DriverResult::Function(_) => Err(EvalError::internal(
+                "a graph entry returned as a function value",
+            )),
+            DriverResult::Yield { rows, resume } => {
+                self.entry = Some(OrdinaryEntry::Delivery(resume));
+                driver.abort_on_drop = false;
+                Ok(QueryPoll::Rows(rows))
+            }
+        }
+    }
+
+    fn stop_after_row(&mut self, stopped: bool) -> Result<(), EvalError> {
+        let Some(OrdinaryEntry::Delivery(DeliveryEvent::Acknowledged {
+            stopped: pending, ..
+        })) = &mut self.entry
+        else {
+            return Err(EvalError::internal(
+                "delivered rows lost their acknowledgement",
+            ));
+        };
+        *pending = stopped;
+        Ok(())
+    }
+}
+
+impl<D: DatasetView + Sync> ResidentAbort<D> for QueryExecution<'_, '_, D> {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        self.state.abort(ctx);
+        self.entry = None;
+    }
+}
+
+impl<D: DatasetView + Sync> QueryState<'_, '_, D> {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
         while let Some(mut frame) = self.frames.pop() {
             if let Some(state) = &mut frame.state {
                 state.abort(&mut frame.invocation.child);
             }
         }
         if let Some(state) = &mut self.root_state {
-            state.abort(self.root);
+            state.abort(ctx);
         }
     }
 }
 
-fn function_identity<'a, I: ViewTermId>(
-    state: &'a OrdinaryState<'_, I>,
+impl<D: DatasetView + Sync> Drop for QueryDriver<'_, '_, '_, D> {
+    fn drop(&mut self) {
+        if self.abort_on_drop {
+            self.state.abort(self.root);
+        }
+    }
+}
+
+fn function_identity<'a, I: ViewTermId, P: Copy + Send + Sync>(
+    state: &'a OrdinaryState<'_, I, P>,
 ) -> Result<&'a str, EvalError> {
     let frame = state
         .pending
@@ -5773,30 +6956,34 @@ fn eval_ordinary_chain<D: DatasetView + Sync>(
 
 fn eval_ordinary_chain_with_delivery<D: DatasetView + Sync>(
     pattern: &GraphPattern,
-    delivery: Option<&mut RowConsumer<'_, D>>,
+    mut delivery: Option<&mut RowConsumer<'_, D>>,
     literal: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut root_state = OrdinaryState::new(&ctx.growth);
-    if delivery.is_some() {
-        root_state.next_delivery = DeliveryTarget::External;
-    }
-    let mut driver = QueryDriver {
-        frames: crate::AdmittedVec::new(&ctx.growth),
-        root_state: Some(root_state),
-        root: ctx,
-        root_iri: None,
-    };
-    let entry = if literal {
-        OrdinaryEntry::Literal(OrdinaryPosition::Borrowed(pattern))
-    } else {
-        OrdinaryEntry::Pattern(OrdinaryPosition::Borrowed(pattern))
-    };
-    match run_query_driver(&mut driver, entry, delivery)? {
-        DriverResult::Graph(done) => Ok(done),
-        DriverResult::Function(_) => Err(EvalError::internal(
-            "a graph entry returned as a function value",
+    let mut pending = ResidentPending {
+        child: Some(QueryExecution::new(
+            pattern,
+            literal,
+            delivery.is_some(),
+            ctx,
         )),
+        ctx,
+    };
+    loop {
+        let execution = pending
+            .child
+            .as_mut()
+            .expect("one original query continuation");
+        match execution.poll(pending.ctx)? {
+            QueryPoll::Complete(done) => return Ok(done),
+            QueryPoll::Rows(rows) => {
+                let terminal = delivery.as_deref_mut().ok_or_else(|| {
+                    EvalError::internal("external delivery has no terminal consumer")
+                })?;
+                terminal.deliver(&rows, pending.ctx)?;
+                execution.stop_after_row(terminal.stopped())?;
+            }
+        }
     }
 }
 
@@ -5805,82 +6992,90 @@ pub(crate) fn evaluate_user_invocation<'d, D: DatasetView + Sync>(
     iri: &str,
     ctx: &mut EvalCtx<'d, D>,
 ) -> Result<FunctionValue, EvalError> {
-    let mut driver = QueryDriver {
+    let mut state = QueryState {
         frames: crate::AdmittedVec::new(&ctx.growth),
         root_state: None,
-        root: ctx,
         root_iri: Some(iri),
     };
-    driver.frames.reserve_next()?;
+    let mut driver = QueryDriver {
+        state: &mut state,
+        root: ctx,
+        abort_on_drop: true,
+    };
+    driver.state.frames.reserve_next()?;
     begin_query_evaluated(&invocation.query.query, None, &mut invocation.child)?;
     let position = crate::expr::PreparedPattern::Query(invocation.query.clone()).into_cursor();
-    driver.frames.push_reserved(QueryFrame {
+    driver.state.frames.push_reserved(QueryFrame {
         state: Some(OrdinaryState::new(&invocation.child.growth)),
         invocation,
     });
     match run_query_driver(
         &mut driver,
         OrdinaryEntry::Pattern(OrdinaryPosition::Copied(position)),
-        None,
     )? {
         DriverResult::Function(value) => Ok(value),
         DriverResult::Graph(_) => Err(EvalError::internal(
             "a function entry returned as a graph result",
         )),
+        DriverResult::Yield { .. } => Err(EvalError::internal(
+            "a direct function entry yielded an external graph row",
+        )),
     }
 }
 
-fn run_query_driver<'a, D: DatasetView + Sync>(
-    driver: &mut QueryDriver<'a, '_, '_, D>,
-    mut entry: OrdinaryEntry<'a>,
-    mut delivery: Option<&mut RowConsumer<'_, D>>,
-) -> Result<DriverResult<D::Id>, EvalError> {
+fn run_query_driver<'a, 'd: 'a, D: DatasetView + Sync>(
+    driver: &mut QueryDriver<'a, '_, 'd, D>,
+    mut entry: OrdinaryEntry<'a, D::Id>,
+) -> Result<DriverResult<'a, D::Id>, EvalError> {
     loop {
-        let polled = if let Some(frame) = driver.frames.last_mut() {
+        let polled = if let Some(frame) = driver.state.frames.last_mut() {
             run_ordinary(
                 frame.state.take().expect("one active child query"),
                 entry,
                 &mut frame.invocation.child,
-                delivery.as_deref_mut(),
             )?
         } else {
             run_ordinary(
-                driver.root_state.take().expect("one active root query"),
+                driver
+                    .state
+                    .root_state
+                    .take()
+                    .expect("one active root query"),
                 entry,
                 driver.root,
-                delivery.as_deref_mut(),
             )?
         };
         match polled {
             OrdinaryPoll::Function(state, mut invocation) => {
-                if let Some(frame) = driver.frames.last_mut() {
+                if let Some(frame) = driver.state.frames.last_mut() {
                     frame.state = Some(state);
                 } else {
-                    driver.root_state = Some(state);
+                    driver.state.root_state = Some(state);
                 }
                 // Retained frame backing storage precedes entry into the child body.
-                driver.frames.reserve_next()?;
+                driver.state.frames.reserve_next()?;
                 begin_query_evaluated(&invocation.query.query, None, &mut invocation.child)?;
                 let position =
                     crate::expr::PreparedPattern::Query(invocation.query.clone()).into_cursor();
                 let child_state = OrdinaryState::new(&invocation.child.growth);
-                driver.frames.push_reserved(QueryFrame {
+                driver.state.frames.push_reserved(QueryFrame {
                     state: Some(child_state),
                     invocation,
                 });
                 entry = OrdinaryEntry::Pattern(OrdinaryPosition::Copied(position));
             }
             OrdinaryPoll::Complete(done) => {
-                let Some(mut frame) = driver.frames.pop() else {
+                let Some(mut frame) = driver.state.frames.pop() else {
                     return Ok(DriverResult::Graph(done));
                 };
                 let outcome = finish_solution_query(
                     &frame.invocation.query.query,
                     done,
+                    None,
                     &mut frame.invocation.child,
                 )?;
-                if driver.frames.is_empty() && driver.root_state.is_none() {
-                    let iri = driver.root_iri.ok_or_else(|| {
+                if driver.state.frames.is_empty() && driver.state.root_state.is_none() {
+                    let iri = driver.state.root_iri.ok_or_else(|| {
                         EvalError::internal("direct function entry lost its call identity")
                     })?;
                     return crate::user_fn::finish_user_function(
@@ -5891,7 +7086,7 @@ fn run_query_driver<'a, D: DatasetView + Sync>(
                     )
                     .map(DriverResult::Function);
                 }
-                let returned = if let Some(parent) = driver.frames.last_mut() {
+                let returned = if let Some(parent) = driver.state.frames.last_mut() {
                     let iri =
                         function_identity(parent.state.as_ref().expect("suspended parent query"))?;
                     crate::user_fn::finish_user_function(
@@ -5902,7 +7097,11 @@ fn run_query_driver<'a, D: DatasetView + Sync>(
                     )?
                 } else {
                     let iri = function_identity(
-                        driver.root_state.as_ref().expect("suspended root query"),
+                        driver
+                            .state
+                            .root_state
+                            .as_ref()
+                            .expect("suspended root query"),
                     )?;
                     crate::user_fn::finish_user_function(
                         frame.invocation,
@@ -5913,15 +7112,26 @@ fn run_query_driver<'a, D: DatasetView + Sync>(
                 };
                 entry = OrdinaryEntry::Function(returned);
             }
+            OrdinaryPoll::Yield {
+                state,
+                rows,
+                resume,
+            } => {
+                if let Some(frame) = driver.state.frames.last_mut() {
+                    frame.state = Some(state);
+                } else {
+                    driver.state.root_state = Some(state);
+                }
+                return Ok(DriverResult::Yield { rows, resume });
+            }
         }
     }
 }
 
-fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
-    state: OrdinaryState<'a, D::Id>,
-    entry: OrdinaryEntry<'a>,
+fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
+    state: OrdinaryState<'a, D::Id, D::ProbePlan>,
+    entry: OrdinaryEntry<'a, D::Id>,
     ctx: &mut EvalCtx<'d, D>,
-    mut delivery: Option<&mut RowConsumer<'_, D>>,
 ) -> Result<OrdinaryPoll<'a, 'd, D>, EvalError> {
     let mut runner = OrdinaryRunner { state, ctx };
     let mut ready = None;
@@ -5931,6 +7141,19 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
         OrdinaryEntry::Literal(position) => {
             literal_root = true;
             position
+        }
+        OrdinaryEntry::Delivery(event) => {
+            match runner.state.advance_delivery(event, runner.ctx)? {
+                DeliveryAdvance::Complete(position, evaluated) => {
+                    ready = Some(evaluated);
+                    position
+                }
+                DeliveryAdvance::Function(invocation) => return Ok(runner.suspend(invocation)),
+                DeliveryAdvance::Descend(next) => next,
+                DeliveryAdvance::Yield { rows, resume } => {
+                    return Ok(runner.yield_rows(rows, resume));
+                }
+            }
         }
         OrdinaryEntry::Function((value, record)) => {
             let frame = runner
@@ -5961,11 +7184,10 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
             })();
             match advanced {
                 Ok(OrdinaryAdvance::Consumed(stopped)) => {
-                    match runner.state.advance_delivery(
-                        DeliveryEvent::Consumed { stopped },
-                        delivery.as_deref_mut(),
-                        runner.ctx,
-                    )? {
+                    match runner
+                        .state
+                        .advance_delivery(DeliveryEvent::Consumed { stopped }, runner.ctx)?
+                    {
                         DeliveryAdvance::Complete(position, evaluated) => {
                             ready = Some(evaluated);
                             position
@@ -5974,6 +7196,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             return Ok(runner.suspend(invocation));
                         }
                         DeliveryAdvance::Descend(next) => next,
+                        DeliveryAdvance::Yield { rows, resume } => {
+                            return Ok(runner.yield_rows(rows, resume));
+                        }
                     }
                 }
                 Ok(OrdinaryAdvance::Descend(next)) => next,
@@ -6102,6 +7327,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                         );
                     }
                     Ok(crate::shapes::ShapeStart::Native(physical)) => {
+                        runner
+                            .ctx
+                            .note_cursor_buffer(CursorBufferReason::PhysicalPlan);
                         let boundary = runner
                             .state
                             .active
@@ -6138,6 +7366,49 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                         }
                     };
                     if let Some(plan) = plan {
+                        if runner.ctx.bgp_cursor_sources.is_some()
+                            && !(runner.ctx.cursor_delivery.requires_commit_units()
+                                && matches!(current_pattern, GraphPattern::Union { .. }))
+                            && runner.state.active.as_ref().is_some_and(|boundary| {
+                                boundary.awaiting_delivery() && boundary.physical.is_none()
+                            })
+                            && runner.state.delivery_is_consumed(
+                                runner
+                                    .state
+                                    .active
+                                    .as_ref()
+                                    .expect("positive boundary")
+                                    .delivery,
+                                runner.ctx,
+                            )?
+                        {
+                            let state = positive_cursor::PositiveExecution::new(
+                                current.clone(),
+                                plan,
+                                &runner.ctx.growth,
+                            )?;
+                            match runner.state.start_positive(
+                                current.clone(),
+                                state,
+                                None,
+                                runner.ctx,
+                            )? {
+                                DeliveryAdvance::Complete(position, evaluated) => {
+                                    current = position;
+                                    break evaluated;
+                                }
+                                DeliveryAdvance::Descend(next) => {
+                                    current = next;
+                                    continue;
+                                }
+                                DeliveryAdvance::Function(invocation) => {
+                                    return Ok(runner.suspend(invocation));
+                                }
+                                DeliveryAdvance::Yield { rows, resume } => {
+                                    return Ok(runner.yield_rows(rows, resume));
+                                }
+                            }
+                        }
                         let evaluated =
                             eval_positive_body(current_pattern, None, &plan, true, runner.ctx)
                                 .and_then(|evaluated| {
@@ -6189,6 +7460,103 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             current_pattern,
                             Err(error),
                         );
+                    }
+                }
+                if matches!(
+                    current_pattern,
+                    GraphPattern::Values { .. } | GraphPattern::Path { .. }
+                ) && runner.ctx.bgp_cursor_sources.is_some()
+                    && runner.state.active.as_ref().is_some_and(|boundary| {
+                        boundary.awaiting_delivery() && boundary.physical.is_none()
+                    })
+                    && runner.state.delivery_is_consumed(
+                        runner
+                            .state
+                            .active
+                            .as_ref()
+                            .expect("leaf source boundary")
+                            .delivery,
+                        runner.ctx,
+                    )?
+                {
+                    let state =
+                        positive_cursor::PositiveExecution::leaf(current.clone(), runner.ctx)?;
+                    match runner
+                        .state
+                        .start_positive(current.clone(), state, None, runner.ctx)?
+                    {
+                        DeliveryAdvance::Complete(position, evaluated) => {
+                            current = position;
+                            break evaluated;
+                        }
+                        DeliveryAdvance::Descend(next) => {
+                            current = next;
+                            continue;
+                        }
+                        DeliveryAdvance::Function(invocation) => {
+                            return Ok(runner.suspend(invocation));
+                        }
+                        DeliveryAdvance::Yield { rows, resume } => {
+                            return Ok(runner.yield_rows(rows, resume));
+                        }
+                    }
+                }
+                if let GraphPattern::Bgp { patterns } = current_pattern
+                    && runner.ctx.bgp_cursor_sources.is_some()
+                    && runner.state.active.as_ref().is_some_and(|boundary| {
+                        boundary.awaiting_delivery() && boundary.physical.is_none()
+                    })
+                    && runner.state.delivery_is_consumed(
+                        runner.state.active.as_ref().expect("BGP boundary").delivery,
+                        runner.ctx,
+                    )?
+                {
+                    match crate::bgp::start_bgp_cursor(patterns, None, None, runner.ctx)? {
+                        crate::bgp::BgpStart::Complete(rows) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Ok(Evaluated::Complete(rows)),
+                            );
+                        }
+                        crate::bgp::BgpStart::Cursor(state) => {
+                            if runner.state.first.is_some() {
+                                runner.state.pending.reserve_next()?;
+                            }
+                            let (state, allocation) = crate::workspace::box_native(
+                                state,
+                                &runner.ctx.growth,
+                                "retained BGP source",
+                            )?;
+                            runner.state.push_parent(
+                                current.clone(),
+                                OrdinaryAfter::Bgp {
+                                    state,
+                                    _allocation: allocation,
+                                },
+                            );
+                            runner.state.active = Some(NodeBoundary::delivery_overlay(None));
+                            match runner.state.advance_delivery(
+                                DeliveryEvent::BgpNext { stopped: false },
+                                runner.ctx,
+                            )? {
+                                DeliveryAdvance::Complete(position, evaluated) => {
+                                    current = position;
+                                    break evaluated;
+                                }
+                                DeliveryAdvance::Descend(next) => {
+                                    current = next;
+                                    continue;
+                                }
+                                DeliveryAdvance::Function(invocation) => {
+                                    return Ok(runner.suspend(invocation));
+                                }
+                                DeliveryAdvance::Yield { rows, resume } => {
+                                    return Ok(runner.yield_rows(rows, resume));
+                                }
+                            }
+                        }
                     }
                 }
                 if let GraphPattern::Graph { name, inner } = current_pattern {
@@ -6566,11 +7934,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
         loop {
             macro_rules! delivery_event {
                 ($event:expr) => {
-                    match runner.state.advance_delivery(
-                        $event,
-                        delivery.as_deref_mut(),
-                        runner.ctx,
-                    )? {
+                    match runner.state.advance_delivery($event, runner.ctx)? {
                         DeliveryAdvance::Complete(position, evaluated) => {
                             current = position;
                             completed = evaluated;
@@ -6582,6 +7946,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                         DeliveryAdvance::Descend(next) => {
                             current = next;
                             continue 'drive;
+                        }
+                        DeliveryAdvance::Yield { rows, resume } => {
+                            return Ok(runner.yield_rows(rows, resume))
                         }
                     }
                 };
@@ -6635,7 +8002,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                     let row = application.row.take().ok_or_else(|| {
                         EvalError::internal("application body lost its current driver")
                     })?;
-                    match row.finish(policy, evaluated?, runner.ctx)? {
+                    match row.finish(policy, evaluated?, application.child_rows, runner.ctx)? {
                         crate::binop::ApplicationRowResult::Retry(row) => {
                             application.row = Some(row);
                             Ok(DeliveryEvent::ApplicationNext {
@@ -6741,6 +8108,14 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             .child
                             .take()
                             .expect("completed streamed GRAPH owner");
+                        if state.consumed {
+                            runner
+                                .state
+                                .active
+                                .as_mut()
+                                .expect("streamed GRAPH boundary")
+                                .streamed_output = Some(state.output_count);
+                        }
                         let StreamKind::Graph(sequence) = state.kind else {
                             unreachable!("completed graph retains its owner");
                         };
@@ -6866,6 +8241,14 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                     let Some(rows) = lift.absorb(ordinal, child) else {
                         return Ok(Some(lift.withheld()));
                     };
+                    if state.consumed {
+                        runner
+                            .state
+                            .active
+                            .as_mut()
+                            .expect("streamed parent boundary")
+                            .streamed_output = Some(state.output_count);
+                    }
                     match &mut state.kind {
                         StreamKind::Slice { schema, rows, .. } => {
                             let GraphPattern::Slice { inner, .. } = node else {
@@ -6883,6 +8266,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             return Ok(Some(lift.finish(SolutionSeq { schema, rows })));
                         }
                         StreamKind::BinaryRight { minus } if !lift.is_truncated() => {
+                            pending
+                                .ctx
+                                .note_cursor_buffer(CursorBufferReason::ProbeRelation);
                             let minus = *minus;
                             let (GraphPattern::Join { left, .. }
                             | GraphPattern::Minus { left, .. }) = node
@@ -6920,7 +8306,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             ))));
                         }
                         StreamKind::Union { ordinal } => {
-                            state.blocks.push(rows)?;
+                            if !state.consumed {
+                                state.blocks.push(rows)?;
+                            }
                             *ordinal += 1;
                             let GraphPattern::Union { arms } = node else {
                                 return Err(EvalError::internal(
@@ -6969,9 +8357,12 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                         &mut state.blocks,
                         crate::AdmittedVec::new(&pending.ctx.growth),
                     );
-                    Ok(Some(
-                        lift.finish(crate::binop::concat_union(blocks, pending.ctx)?),
-                    ))
+                    let rows = if state.consumed {
+                        SolutionSeq::empty(syntactic_schema_admitted(node, &pending.ctx.growth)?)
+                    } else {
+                        crate::binop::concat_union(blocks, pending.ctx)?
+                    };
+                    Ok(Some(lift.finish(rows)))
                 })();
                 drop(pending);
                 // Continued states retain their scopes in their published frame.
@@ -7203,6 +8594,8 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
             runner.state.active = Some(boundary);
             let pattern = position.pattern();
             let mut function = None;
+            let mut delivered = None;
+            let mut finished_delivery = None;
             let result = match (after, completed) {
                 (OrdinaryAfter::BinaryFirst { kind, first, lift }, Ok(child)) => (|| {
                     let mut lift = lift.attach(pattern);
@@ -7212,6 +8605,9 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                     if lift.is_truncated() {
                         return Ok(Some(lift.finish(SolutionSeq::empty(rows.schema))));
                     }
+                    runner
+                        .ctx
+                        .note_cursor_buffer(CursorBufferReason::DriverRelation);
                     let other = match pattern {
                         GraphPattern::Join { left, right }
                         | GraphPattern::Minus { left, right } => {
@@ -7231,6 +8627,51 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             &runner.ctx.growth,
                         )?
                     {
+                        if runner.ctx.bgp_cursor_sources.is_some()
+                            && runner.state.active.as_ref().is_some_and(|boundary| {
+                                boundary.awaiting_delivery() && boundary.physical.is_none()
+                            })
+                            && runner.state.delivery_is_consumed(
+                                runner
+                                    .state
+                                    .active
+                                    .as_ref()
+                                    .expect("seeded join boundary")
+                                    .delivery,
+                                runner.ctx,
+                            )?
+                        {
+                            let prepared =
+                                crate::binop::prepare_seeded_join(rows, other, None, runner.ctx)?;
+                            let state = positive_cursor::PositiveExecution::seeded(
+                                position.child(other)?,
+                                prepared,
+                                &runner.ctx.growth,
+                            )?;
+                            return match runner.state.start_positive(
+                                position.clone(),
+                                state,
+                                Some((1, lift.detach())),
+                                runner.ctx,
+                            )? {
+                                DeliveryAdvance::Complete(returned, evaluated) => {
+                                    finished_delivery = Some((returned, evaluated));
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Yield { rows, resume } => {
+                                    delivered = Some((rows, resume));
+                                    Ok(None)
+                                }
+                            };
+                        }
                         return crate::binop::finish_seeded_join(
                             lift, rows, other, 1, None, runner.ctx,
                         )
@@ -7359,6 +8800,57 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                                 }
                                 OrdinaryAdvance::Descend(next) => {
                                     current = next;
+                                    Ok(None)
+                                }
+                            };
+                        }
+                        if matches!(kind, OrdinaryBinary::Join)
+                            && runner.ctx.bgp_cursor_sources.is_some()
+                            && runner.state.active.as_ref().is_some_and(|boundary| {
+                                boundary.awaiting_delivery() && boundary.physical.is_none()
+                            })
+                            && runner.state.delivery_is_consumed(
+                                runner
+                                    .state
+                                    .active
+                                    .as_ref()
+                                    .expect("join source boundary")
+                                    .delivery,
+                                runner.ctx,
+                            )?
+                        {
+                            let (left, right) = if first == 0 {
+                                (rows, second)
+                            } else {
+                                (second, rows)
+                            };
+                            let state = positive_cursor::PositiveExecution::joined(
+                                position.clone(),
+                                left,
+                                right,
+                                lift.detach(),
+                                runner.ctx,
+                            )?;
+                            return match runner.state.start_positive(
+                                position.clone(),
+                                state,
+                                None,
+                                runner.ctx,
+                            )? {
+                                DeliveryAdvance::Complete(returned, evaluated) => {
+                                    finished_delivery = Some((returned, evaluated));
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Descend(next) => {
+                                    current = next;
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Function(invocation) => {
+                                    function = Some(invocation);
+                                    Ok(None)
+                                }
+                                DeliveryAdvance::Yield { rows, resume } => {
+                                    delivered = Some((rows, resume));
                                     Ok(None)
                                 }
                             };
@@ -7859,13 +9351,29 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                 (OrdinaryAfter::CorrelatedRight { .. }, _) => {
                     unreachable!("LATERAL child handled before parent")
                 }
-                (OrdinaryAfter::Stream { .. } | OrdinaryAfter::Delivery { .. }, _) => {
+                (
+                    OrdinaryAfter::Bgp { .. }
+                    | OrdinaryAfter::Positive { .. }
+                    | OrdinaryAfter::Stream { .. }
+                    | OrdinaryAfter::Delivery { .. },
+                    _,
+                ) => {
                     unreachable!("delivery continuations handled before ordinary parents")
                 }
                 (OrdinaryAfter::ApplicationBody { .. }, _) => {
                     unreachable!("application body handled before ordinary parents")
                 }
             };
+            if let Some((returned, evaluated)) = finished_delivery {
+                // The retained producer already finished its original boundary.
+                // Unwind its callers without finishing that boundary twice.
+                current = returned;
+                completed = evaluated;
+                continue;
+            }
+            if let Some((rows, resume)) = delivered {
+                return Ok(runner.yield_rows(rows, resume));
+            }
             if let Some(invocation) = function {
                 return Ok(runner.suspend(invocation));
             }
@@ -8055,91 +9563,8 @@ impl<'a, I: ViewTermId> PositiveSlots<'a, I> {
     }
 }
 
-enum PositiveAfter<'a, I: ViewTermId> {
-    First {
-        driven: &'a GraphPattern,
-        first: usize,
-        independent: bool,
-        lift: crate::governor::lift::DetachedLift,
-    },
-    Second {
-        first: usize,
-        driver: Option<SolutionSeq<I>>,
-        lift: crate::governor::lift::DetachedLift,
-    },
-    Union {
-        ordinal: usize,
-        input: Option<PositiveSlot>,
-        blocks: crate::AdmittedVec<SolutionSeq<I>>,
-        lift: crate::governor::lift::DetachedLift,
-    },
-}
-
-struct PositiveFrame<'a, I: ViewTermId> {
-    pattern: &'a GraphPattern,
-    boundary: Option<NodeBoundary<I>>,
-    after: PositiveAfter<'a, I>,
-}
-
-struct PositiveRunner<'a, 'i, 'ctx, 'd, D: DatasetView + Sync> {
-    first: Option<PositiveFrame<'a, D::Id>>,
-    pending: crate::AdmittedVec<PositiveFrame<'a, D::Id>>,
-    active: Option<NodeBoundary<D::Id>>,
-    inputs: PositiveSlots<'i, D::Id>,
-    ctx: &'ctx mut EvalCtx<'d, D>,
-}
-
 fn pop_inline_frame<T>(pending: &mut crate::AdmittedVec<T>, first: &mut Option<T>) -> Option<T> {
     pending.pop().or_else(|| first.take())
-}
-
-impl<'a, D: DatasetView + Sync> PositiveRunner<'a, '_, '_, '_, D> {
-    fn push(&mut self, frame: PositiveFrame<'a, D::Id>) {
-        if self.first.is_none() {
-            self.first = Some(frame);
-        } else {
-            self.pending.push_reserved(frame);
-        }
-    }
-
-    fn pop(&mut self) -> Option<PositiveFrame<'a, D::Id>> {
-        pop_inline_frame(&mut self.pending, &mut self.first)
-    }
-
-    fn reserve(&mut self) -> Result<(), EvalError> {
-        if self.first.is_some() {
-            self.pending.reserve_next()?;
-        }
-        Ok(())
-    }
-
-    fn finish(
-        &mut self,
-        pattern: &GraphPattern,
-        result: Result<Evaluated<D::Id>, EvalError>,
-    ) -> Result<Evaluated<D::Id>, EvalError> {
-        match self.active.as_mut() {
-            Some(boundary) => {
-                let result = boundary.finish(pattern, self.ctx, result);
-                self.active = None;
-                result
-            }
-            None => result,
-        }
-    }
-}
-
-impl<D: DatasetView + Sync> Drop for PositiveRunner<'_, '_, '_, '_, D> {
-    fn drop(&mut self) {
-        if let Some(boundary) = &mut self.active {
-            boundary.abort(self.ctx);
-        }
-        while let Some(mut frame) = self.pop() {
-            if let Some(boundary) = &mut frame.boundary {
-                boundary.abort(self.ctx);
-            }
-        }
-    }
 }
 
 /// The caller owns the root boundary; every descendant boundary lives in an
@@ -8151,236 +9576,7 @@ fn eval_positive_body<D: DatasetView + Sync>(
     fork: bool,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    if !plan.contains(pattern) {
-        return Err(EvalError::internal(
-            "a seeded relation is outside its positive plan",
-        ));
-    }
-    let workspace = ctx.growth.clone();
-    let mut runner = PositiveRunner {
-        first: None,
-        pending: crate::AdmittedVec::new(&workspace),
-        active: None,
-        inputs: PositiveSlots {
-            first: PositiveEntry::Vacant(None),
-            rest: crate::AdmittedVec::new(&workspace),
-            free: Some(0),
-        },
-        ctx,
-    };
-    let mut input = input.map(|input| runner.inputs.insert(input)).transpose()?;
-    let mut current = pattern;
-    let mut root = true;
-    'descend: loop {
-        if !root {
-            runner.active = Some(NodeBoundary::enter(current, runner.ctx)?);
-        }
-        root = false;
-        let early = match &mut runner.active {
-            Some(boundary) => boundary.start(current, runner.ctx)?,
-            None => None,
-        };
-        let result = if let Some(early) = early {
-            runner.inputs.release(input.take());
-            Ok(early)
-        } else {
-            match current {
-                GraphPattern::Bgp { patterns } => {
-                    let order = input.is_none().then(|| plan.unit_order(current)).flatten();
-                    let input = input.take().map(|slot| runner.inputs.value(slot));
-                    crate::bgp::eval_bgp_seeded(patterns, input, order, runner.ctx)
-                        .map(Evaluated::Complete)
-                }
-                GraphPattern::Join { left, right } => {
-                    runner.reserve()?;
-                    let first = usize::from(!plan.driver_left(current));
-                    let (driver, driven) = if first == 0 {
-                        (&**left, &**right)
-                    } else {
-                        (&**right, &**left)
-                    };
-                    let after = PositiveAfter::First {
-                        driven,
-                        first,
-                        independent: input.is_none() && plan.children_disjoint(current),
-                        lift: crate::governor::lift::Lift::at_admitted(current, &workspace)?
-                            .detach(),
-                    };
-                    let boundary = runner.active.take();
-                    runner.push(PositiveFrame {
-                        pattern: current,
-                        boundary,
-                        after,
-                    });
-                    current = driver;
-                    continue 'descend;
-                }
-                GraphPattern::Union { arms } => {
-                    if fork && crate::binop::positive_union_may_fork(arms, runner.ctx) {
-                        let input = input.take().map(|slot| runner.inputs.value(slot));
-                        crate::binop::eval_positive_union_parallel(
-                            current, arms, input, plan, runner.ctx,
-                        )
-                    } else if !arms.is_empty() {
-                        let arm = &arms[0];
-                        runner.reserve()?;
-                        let after = PositiveAfter::Union {
-                            ordinal: 0,
-                            input: input.take(),
-                            blocks: crate::AdmittedVec::new(&workspace),
-                            lift: crate::governor::lift::Lift::at_admitted(current, &workspace)?
-                                .detach(),
-                        };
-                        let child_input = match &after {
-                            PositiveAfter::Union { input, .. } => input.map(PositiveSlot::borrowed),
-                            _ => unreachable!(),
-                        };
-                        let boundary = runner.active.take();
-                        runner.push(PositiveFrame {
-                            pattern: current,
-                            boundary,
-                            after,
-                        });
-                        input = child_input;
-                        current = arm;
-                        continue 'descend;
-                    } else {
-                        runner.inputs.release(input.take());
-                        Ok(
-                            crate::governor::lift::Lift::at_admitted(current, &workspace)?.finish(
-                                crate::binop::concat_union(std::iter::empty(), runner.ctx)?,
-                            ),
-                        )
-                    }
-                }
-                _ => unreachable!("positive plan contains only BGP, Join and Union"),
-            }
-        };
-        let mut completed = runner.finish(current, result);
-        loop {
-            let Some(frame) = runner.pop() else {
-                return completed;
-            };
-            current = frame.pattern;
-            runner.active = frame.boundary;
-            let result = match (frame.after, completed) {
-                (_, Err(error)) => Err(error),
-                (
-                    PositiveAfter::First {
-                        driven,
-                        first,
-                        independent,
-                        lift,
-                    },
-                    Ok(child),
-                ) => {
-                    let mut lift = lift.attach(current);
-                    match lift.absorb(first, child) {
-                        None => Ok(lift.withheld()),
-                        Some(rows) if lift.is_truncated() => {
-                            Ok(lift.finish(SolutionSeq::empty(rows.schema)))
-                        }
-                        Some(rows) => {
-                            runner.reserve()?;
-                            let driver = if independent {
-                                input = None;
-                                Some(rows)
-                            } else {
-                                input = Some(runner.inputs.insert(positive_input(
-                                    plan,
-                                    if let GraphPattern::Join { left, right } = current {
-                                        if first == 0 { left } else { right }
-                                    } else {
-                                        unreachable!()
-                                    },
-                                    rows,
-                                )?)?);
-                                None
-                            };
-                            let boundary = runner.active.take();
-                            runner.push(PositiveFrame {
-                                pattern: current,
-                                boundary,
-                                after: PositiveAfter::Second {
-                                    first,
-                                    driver,
-                                    lift: lift.detach(),
-                                },
-                            });
-                            current = driven;
-                            continue 'descend;
-                        }
-                    }
-                }
-                (
-                    PositiveAfter::Second {
-                        first,
-                        driver,
-                        lift,
-                    },
-                    Ok(child),
-                ) => {
-                    let mut lift = lift.attach(current);
-                    match lift.absorb(1 - first, child) {
-                        None => Ok(lift.withheld()),
-                        Some(rows) => {
-                            let rows = match driver {
-                                None => rows,
-                                Some(driver) => {
-                                    crate::binop::hash_join(&driver, &rows, runner.ctx)?
-                                }
-                            };
-                            Ok(lift.finish(rows))
-                        }
-                    }
-                }
-                (
-                    PositiveAfter::Union {
-                        ordinal,
-                        input: producer,
-                        mut blocks,
-                        lift,
-                    },
-                    Ok(child),
-                ) => {
-                    let mut lift = lift.attach(current);
-                    match lift.absorb(ordinal, child) {
-                        None => {
-                            runner.inputs.release(producer);
-                            Ok(lift.withheld())
-                        }
-                        Some(rows) => {
-                            blocks.push(rows)?;
-                            let GraphPattern::Union { arms } = current else {
-                                unreachable!()
-                            };
-                            if lift.is_truncated() || ordinal + 1 == arms.len() {
-                                runner.inputs.release(producer);
-                                Ok(lift.finish(crate::binop::concat_union(blocks, runner.ctx)?))
-                            } else {
-                                runner.reserve()?;
-                                let boundary = runner.active.take();
-                                runner.push(PositiveFrame {
-                                    pattern: current,
-                                    boundary,
-                                    after: PositiveAfter::Union {
-                                        ordinal: ordinal + 1,
-                                        input: producer,
-                                        blocks,
-                                        lift: lift.detach(),
-                                    },
-                                });
-                                input = producer.map(PositiveSlot::borrowed);
-                                current = &arms[ordinal + 1];
-                                continue 'descend;
-                            }
-                        }
-                    }
-                }
-            };
-            completed = runner.finish(current, result);
-        }
-    }
+    positive_cursor::body(OrdinaryPosition::Borrowed(pattern), input, plan, fork, ctx)
 }
 
 /// Repeated occurrences of a BGP OPTIONAL leaf keep its immutable compilation,
@@ -8411,6 +9607,7 @@ struct NodeBoundary<I: ViewTermId> {
     restore: Option<NodeCursors>,
     delivery: DeliveryTarget,
     delivery_ordinal: usize,
+    streamed_output: Option<usize>,
     overlay: bool,
     delivery_whole: bool,
     physical: Option<crate::shapes::runtime::NativeShapeRun<I>>,
@@ -8430,6 +9627,7 @@ impl<I: ViewTermId> NodeBoundary<I> {
             restore,
             delivery: DeliveryTarget::None,
             delivery_ordinal: 0,
+            streamed_output: None,
             overlay: true,
             delivery_whole: false,
             physical: None,
@@ -8494,6 +9692,7 @@ impl<I: ViewTermId> NodeBoundary<I> {
                 restore: None,
                 delivery: DeliveryTarget::None,
                 delivery_ordinal: 0,
+                streamed_output: None,
                 overlay: false,
                 delivery_whole: false,
                 physical: None,
@@ -8571,10 +9770,11 @@ impl<I: ViewTermId> NodeBoundary<I> {
         }
         self.delivery = DeliveryTarget::None;
         if self.restore.is_some() {
+            let streamed_output = self.streamed_output.take();
             evaluated = evaluated.map(|value| {
                 // A child has restored its own cursor; charge this output at its parent.
                 ctx.enter_node(pattern);
-                let committed = commit_node_output(value, ctx);
+                let committed = commit_node_output(value, streamed_output, ctx);
                 match (committed, ctx.stop_check()) {
                     (Evaluated::Complete(rows), Some(tripped)) => {
                         Evaluated::Truncated(Truncation::origin(rows, tripped))
@@ -8751,6 +9951,7 @@ fn install_local_slice_pushdown<D: DatasetView + Sync>(
 /// an efficiency, not a second precedence rule.
 fn commit_node_output<D: DatasetView + Sync>(
     evaluated: Evaluated<D::Id>,
+    streamed_output: Option<usize>,
     ctx: &EvalCtx<'_, D>,
 ) -> Evaluated<D::Id> {
     // The one null test that makes an ungoverned execution free.
@@ -8779,14 +9980,15 @@ fn commit_node_output<D: DatasetView + Sync>(
     }
 
     let width = rows.schema.len();
+    let count = streamed_output.unwrap_or(rows.rows.len());
     let tripped = ctx
-        .observe_cells(rows.rows.len(), width)
+        .observe_cells(count, width)
         .err()
         // Charged, never cut: this bag is already materialized, so refusing rows here
         // would discard computed answers without saving any work — and would make the
         // budget non-monotone against the free lift one row of budget away. See
         // [`EvalCtx::charge_committed_rows`].
-        .or_else(|| ctx.charge_committed_rows(rows.rows.len()))
+        .or_else(|| ctx.charge_committed_rows(count))
         .or_else(|| ctx.charge_scratch_growth().err());
 
     match (certificate, tripped) {
@@ -8814,6 +10016,7 @@ fn commit_node_output<D: DatasetView + Sync>(
 /// other ceiling: a result whose size equals the cap is complete.
 fn commit_answer_rows<D: DatasetView + Sync>(
     evaluated: Evaluated<D::Id>,
+    delivered: Option<usize>,
     ctx: &EvalCtx<'_, D>,
 ) -> Evaluated<D::Id> {
     let Some(state) = ctx.governors.as_ref() else {
@@ -8833,7 +10036,7 @@ fn commit_answer_rows<D: DatasetView + Sync>(
 
     let mut tripped = state.tripped();
     let mut cap_cut = false;
-    for admitted in 0..rows.rows.len() {
+    for admitted in 0..delivered.unwrap_or(rows.rows.len()) {
         if let Err(cap) = state.charge_final_output(purrdf_core::ResourceDimension::AnswerRows, 1) {
             rows.rows.truncate(admitted);
             tripped.get_or_insert(cap);
@@ -9770,10 +10973,11 @@ fn begin_query_evaluated<D: DatasetView + Sync>(
 fn finish_solution_query<D: DatasetView + Sync>(
     query: &Query,
     evaluated: Evaluated<D::Id>,
+    delivered: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
     match query {
-        Query::Select { .. } => match commit_answer_rows(evaluated, ctx) {
+        Query::Select { .. } => match commit_answer_rows(evaluated, delivered, ctx) {
             Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
                 crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?,
             ))),
@@ -9831,7 +11035,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         // (see `crate::blank_scope`) is dropped from the answer here either way.
         Query::Select { pattern, .. } | Query::Ask { pattern, .. } => {
             let evaluated = eval_answer_pattern(pattern, ctx)?;
-            finish_solution_query(query, evaluated, ctx)
+            finish_solution_query(query, evaluated, None, ctx)
         }
         Query::Construct {
             template, pattern, ..
@@ -10600,6 +11804,44 @@ mod tests {
             };
             let _ = runtime.emit(&[left, right])?;
             Ok(())
+        }
+    }
+
+    #[test]
+    fn abandoned_ordinary_delivery_restores_context_for_reuse() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("http://example.org/p").unwrap();
+        for iri in [
+            "http://example.org/a",
+            "http://example.org/b",
+            "http://example.org/c",
+        ] {
+            let value = builder.intern_iri(iri).unwrap();
+            builder.push_quad(value, predicate, value, None).unwrap();
+        }
+        let dataset = builder.freeze().unwrap();
+        for text in [
+            "SELECT ?value WHERE { VALUES ?value { <http://example.org/a> <http://example.org/b> <http://example.org/c> } }",
+            "SELECT ?value WHERE { ?value <http://example.org/p> ?value }",
+        ] {
+            let query = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(text)
+                .unwrap();
+            let pattern = query_pattern(&query);
+            let mut context = EvalCtx::new(dataset.as_ref());
+            context.bgp_cursor_sources = Some(crate::bgp::BgpSourceFactory::for_view());
+            context.cursor_delivery = CursorDelivery::Live;
+            let mut pending = ResidentPending {
+                child: Some(QueryExecution::new(pattern, false, true, &context)),
+                ctx: &mut context,
+            };
+            assert!(matches!(
+                pending.child.as_mut().unwrap().poll(pending.ctx).unwrap(),
+                QueryPoll::Rows(_)
+            ));
+            drop(pending);
+            let reused = eval_evaluated(&GraphPattern::empty_bgp(), &mut context).unwrap();
+            assert_eq!(reused.rows().rows.len(), 1);
         }
     }
 

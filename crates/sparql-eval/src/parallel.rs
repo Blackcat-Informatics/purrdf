@@ -914,17 +914,22 @@ impl<'a, R> RowSink<'a, R> {
     /// right shape here: a caller that ignores [`Self::is_full`] then produces exactly the
     /// ceiling's worth of rows, which is a prefix of what it would have produced — never a
     /// different bag.
+    /// Reports whether this sink retained the row, including inclusive overflow
+    /// refusal and physical allocation failure.
     #[inline]
-    pub(crate) fn push(&mut self, row: R) {
+    pub(crate) fn push(&mut self, row: R) -> bool {
         if self.failure.is_some() {
-            return;
+            return false;
         }
         if self.out.len() < self.ceiling {
             if let Err(error) = self.out.push(row) {
                 self.fail(error);
+                return false;
             }
+            true
         } else {
             self.overflowed = true;
+            false
         }
     }
 
