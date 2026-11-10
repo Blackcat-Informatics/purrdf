@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "branch": "paudley/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "base_ref": "origin/main",
+  "head": "8b14021fc537f9db8879504ba5c0d78dd26f726a",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x/.stage/4-0-1-rdfdatasetbuilder-freeze-is-4565x/sync/20261110T105915-7b50ef30af3847bf96167064f742d47b",
+  "conflicts": [
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/binop.rs",
+    "docs/design/purrdf-simd.md",
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "60bf2a78f7de12b6393166ad1b715b5baaf7a8e6",
+  "merge_bases": [
+    "60f09fd03b730ae5c90bf2c49fcac869fc945313"
+  ],
+  "merge_index": "f6bd2c85ffe6ab37683edb6f137054ce16f2de44ce5314bb0ce3d286210f47ab",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/sparql-eval/src/bgp.rs'\nRecorded preimage for 'crates/sparql-eval/src/binop.rs'\nRecorded preimage for 'docs/design/purrdf-simd.md'\nRecorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "3a0fd3beb5a5a2be60895b5088f57100ad45e6f5",
+  "candidate_patch": "candidate-596a6c04c60c4ad8b444db0fee387113.patch",
+  "validation_records": [
+    "validation-runs/20261109T155811-0886e5fb60/result.json",
+    "validation-runs/20261109T161904-fd89c22c3a/result.json",
+    "validation-runs/20261109T163453-2b43cb8717/result.json",
+    "validation-runs/20261109T163909-d87bd73836/result.json",
+    "validation-runs/20261109T164244-49a7e39aca/result.json",
+    "validation-runs/20261109T165052-524ac36ed5/result.json",
+    "validation-runs/20261109T165247-c2843ed935/result.json",
+    "validation-runs/20261109T233937-7a2d0b40d1/result.json",
+    "validation-runs/20261109T234215-e00d7da21c/result.json",
+    "validation-runs/20261110T003316-2ba91edd20/result.json",
+    "validation-runs/20261110T004346-debf3d9601/result.json",
+    "validation-runs/20261110T004611-7ba5bb8545/result.json",
+    "validation-runs/20261110T004911-faae5a7d9c/result.json"
+  ],
+  "commit": "2cc8910e853c070539c8119a2c404cd9328ecfba",
+  "tree": "3a0fd3beb5a5a2be60895b5088f57100ad45e6f5"
+}

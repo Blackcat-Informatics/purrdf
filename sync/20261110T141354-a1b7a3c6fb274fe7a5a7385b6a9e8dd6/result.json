@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "branch": "paudley/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "base_ref": "origin/main",
+  "head": "03457c32f23fd5c2c2bb9c75f6212709015a72b4",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x/.stage/4-0-1-rdfdatasetbuilder-freeze-is-4565x/sync/20261110T141354-a1b7a3c6fb274fe7a5a7385b6a9e8dd6",
+  "conflicts": [],
+  "status": "completed",
+  "base": "2df5b3966dfe2b283b364f5c2e3a79353a0224ea",
+  "merge_bases": [
+    "60bf2a78f7de12b6393166ad1b715b5baaf7a8e6"
+  ],
+  "merge_index": "d195a7923bf836cf792583640737563a9376475f8b16148cea66792e8ecd4f19",
+  "candidate_tree": "92fcc539570e0f3c0ac584e1aeba143dba361685",
+  "candidate_patch": "candidate-ebff2175b2b94c179761de06757bc58f.patch",
+  "validation_records": [
+    "validation-runs/20261109T155811-0886e5fb60/result.json",
+    "validation-runs/20261109T161904-fd89c22c3a/result.json",
+    "validation-runs/20261109T163453-2b43cb8717/result.json",
+    "validation-runs/20261109T163909-d87bd73836/result.json",
+    "validation-runs/20261109T164244-49a7e39aca/result.json",
+    "validation-runs/20261109T165052-524ac36ed5/result.json",
+    "validation-runs/20261109T165247-c2843ed935/result.json",
+    "validation-runs/20261109T233937-7a2d0b40d1/result.json",
+    "validation-runs/20261109T234215-e00d7da21c/result.json",
+    "validation-runs/20261110T003316-2ba91edd20/result.json",
+    "validation-runs/20261110T004346-debf3d9601/result.json",
+    "validation-runs/20261110T004611-7ba5bb8545/result.json",
+    "validation-runs/20261110T004911-faae5a7d9c/result.json"
+  ],
+  "commit": "f3d9f8c080d035856cbd010d695d3cf833df934a",
+  "tree": "92fcc539570e0f3c0ac584e1aeba143dba361685"
+}

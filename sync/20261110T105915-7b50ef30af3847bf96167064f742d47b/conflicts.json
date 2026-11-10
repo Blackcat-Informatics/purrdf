@@ -1,0 +1,82 @@
+{
+  "crates/sparql-eval/src/bgp.rs": [
+    {
+      "mode": "100644",
+      "oid": "ba4bb3fea76f92a5b318e6da745411ec20b2b81b",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "ae03bd15effdfb33f0142beb464502a653f07613",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "80f74f3a9341afc480ac04dc7b207b77b69ca0e9",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "crates/sparql-eval/src/binop.rs": [
+    {
+      "mode": "100644",
+      "oid": "389c69b56752e560a51029d1f37e3df3ac0f13e6",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "fff7980cc6954d4d0277d08f0c9b80dc04c75563",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "a5cf9c7a6ad45fb6fed875ebe0b5b0848a96ba25",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "docs/design/purrdf-simd.md": [
+    {
+      "mode": "100644",
+      "oid": "121b0b5e7df82e604fff74fd604f93f292cfccba",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "dc8e49c6b952bae53419c6e255f5096386c65122",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "9bdaef3a4a736116d5bc8d81ab7febae26adba57",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ],
+  "helpers-ledger.toml": [
+    {
+      "mode": "100644",
+      "oid": "98d8690f463982dbbe20e1322d84095bd03553c8",
+      "stage": 1,
+      "content": "inputs/3-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "92ebb143520e1b984228353ec53511c679ef7917",
+      "stage": 2,
+      "content": "inputs/3-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "112aeb86410af5a2acef423ecdcfea25707376ef",
+      "stage": 3,
+      "content": "inputs/3-3.bin"
+    }
+  ]
+}

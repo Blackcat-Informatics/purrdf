@@ -1,0 +1,26 @@
+[
+  {
+    "path": "crates/sparql-eval/src/bgp.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/0.bin"
+  },
+  {
+    "path": "crates/sparql-eval/src/binop.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/1.bin"
+  },
+  {
+    "path": "docs/design/purrdf-simd.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/2.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "original/3.bin"
+  }
+]

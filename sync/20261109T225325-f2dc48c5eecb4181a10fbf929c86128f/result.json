@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "branch": "paudley/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "b4d7e4d247f51ffd376a3c3e71ba08b749c31fed",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1249-4-0-1-rdfdatasetbuilder-freeze-is-4565x/.stage/4-0-1-rdfdatasetbuilder-freeze-is-4565x/sync/20261109T225325-f2dc48c5eecb4181a10fbf929c86128f",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "60f09fd03b730ae5c90bf2c49fcac869fc945313",
+  "merge_bases": [
+    "beec8e4bf47c3ba4b531f8ea3e4707ba83cb4890"
+  ],
+  "merge_index": "97ce9805ba842c4e47d9170fa2251c9761f58f80199187312117423a37ccec51",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "c94abd7c5d6dcd2131f55a5841e14e65edc582f5",
+  "candidate_patch": "candidate-bcfe361c4507474ea9ba8ed25c80b1c5.patch",
+  "validation_records": [
+    "validation-runs/20261109T155811-0886e5fb60/result.json",
+    "validation-runs/20261109T161904-fd89c22c3a/result.json",
+    "validation-runs/20261109T163453-2b43cb8717/result.json",
+    "validation-runs/20261109T163909-d87bd73836/result.json",
+    "validation-runs/20261109T164244-49a7e39aca/result.json",
+    "validation-runs/20261109T165052-524ac36ed5/result.json",
+    "validation-runs/20261109T165247-c2843ed935/result.json"
+  ],
+  "commit": "14fca0067f0f2909e118c7cee3e44c89973650f7",
+  "tree": "c94abd7c5d6dcd2131f55a5841e14e65edc582f5"
+}

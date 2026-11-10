@@ -1,0 +1,26 @@
+[
+  {
+    "path": "crates/sparql-eval/src/bgp.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-596a6c04c60c4ad8b444db0fee387113/0.bin"
+  },
+  {
+    "path": "crates/sparql-eval/src/binop.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-596a6c04c60c4ad8b444db0fee387113/1.bin"
+  },
+  {
+    "path": "docs/design/purrdf-simd.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-596a6c04c60c4ad8b444db0fee387113/2.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-596a6c04c60c4ad8b444db0fee387113/3.bin"
+  }
+]
