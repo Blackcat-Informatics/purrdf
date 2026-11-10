@@ -688,13 +688,31 @@ fn check_id_in_range_with_memory<'a, S: Admission + ?Sized, C: core::fmt::Displa
     Ok(term)
 }
 
+fn is_native_iri_or_blank(term: &InternedTerm) -> bool {
+    matches!(term, InternedTerm::Iri(_) | InternedTerm::Blank { .. })
+}
+
 fn require_subject_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     term: &InternedTerm,
     ctx: impl FnOnce() -> C,
     triple_reason: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
-    require_subject_kind_with_memory(interned_kind(term), ctx, triple_reason, memory)
+    if is_native_iri_or_blank(term) {
+        return Ok(());
+    }
+    native_subject_failure_with_memory(term, ctx(), triple_reason, memory)
+}
+
+#[cold]
+#[inline(never)]
+fn native_subject_failure_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
+    term: &InternedTerm,
+    ctx: C,
+    triple_reason: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_subject_kind_with_memory(interned_kind(term), || ctx, triple_reason, memory)
 }
 
 fn require_subject_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
@@ -763,7 +781,20 @@ fn require_graph_name_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
     ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
-    require_graph_kind_with_memory(interned_kind(term), ctx, memory)
+    if is_native_iri_or_blank(term) {
+        return Ok(());
+    }
+    native_graph_failure_with_memory(term, ctx(), memory)
+}
+
+#[cold]
+#[inline(never)]
+fn native_graph_failure_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
+    term: &InternedTerm,
+    ctx: C,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_graph_kind_with_memory(interned_kind(term), || ctx, memory)
 }
 
 fn require_graph_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
