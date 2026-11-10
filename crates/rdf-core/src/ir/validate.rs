@@ -34,12 +34,57 @@ use purrdf_lex::walk::WorkList;
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
 
-#[derive(Clone, Copy)]
-pub(crate) enum Kind {
+/// The RDF kind inspected by native and streamed positional validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// An IRI resource.
     Iri,
+    /// A scoped blank resource.
     Blank,
+    /// A literal value.
     Literal,
+    /// An RDF 1.2 triple term.
     Triple,
+}
+
+/// Validate a streamed statement's kinds through freeze's positional rules.
+/// Referenced identifiers and nested terms must already have been resolved.
+///
+/// # Errors
+/// Returns the same positional diagnostic codes as native dataset admission.
+pub fn validate_statement_positions_with_memory<S: Admission + ?Sized>(
+    subject: Kind,
+    predicate: Kind,
+    graph: Option<Kind>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    memory.admission_mut().checkpoint(1)?;
+    require_subject_kind_with_memory(subject, &"statement subject", ASSERTED_SUBJECT, memory)?;
+    require_predicate_kind_with_memory(predicate, &"statement predicate", memory)?;
+    if let Some(graph) = graph {
+        require_graph_kind_with_memory(graph, &"statement graph", memory)?;
+    }
+    Ok(())
+}
+
+/// Validate streamed triple components through freeze's positional rules.
+/// Referenced identifiers and object dependencies must already be resolved.
+///
+/// # Errors
+/// Returns the same subject/predicate diagnostic codes as native triple admission.
+pub fn validate_triple_positions_with_memory<S: Admission + ?Sized>(
+    subject: Kind,
+    predicate: Kind,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    memory.admission_mut().checkpoint(1)?;
+    require_subject_kind_with_memory(
+        subject,
+        &"triple term subject",
+        TRIPLE_COMPONENT_SUBJECT,
+        memory,
+    )?;
+    require_predicate_kind_with_memory(predicate, &"triple term predicate", memory)
 }
 
 fn interned_kind(term: &InternedTerm) -> Kind {
@@ -106,7 +151,7 @@ pub(crate) fn validate_value_with_memory<'a, S: Admission + ?Sized>(
             memory.admission_mut().checkpoint(1)?;
             let kind = match term {
                 TermValue::Iri(iri) => {
-                    validate_absolute_with_memory(iri, memory)?;
+                    validate_iri_with_memory(iri, memory)?;
                     Kind::Iri
                 }
                 TermValue::Blank { .. } => Kind::Blank,
@@ -148,7 +193,11 @@ pub(crate) fn validate_value_with_memory<'a, S: Admission + ?Sized>(
     )
 }
 
-fn validate_absolute_with_memory<S: Admission + ?Sized>(
+/// Validate an IRI through the native absolute-identity home and original account.
+/// A returned diagnostic retains its buffers in `memory` until destruction.
+/// # Errors
+/// Returns original lexical, storage and caller-cancellation failures.
+pub fn validate_iri_with_memory<S: Admission + ?Sized>(
     iri: &str,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
@@ -170,14 +219,17 @@ fn validate_absolute_with_memory<S: Admission + ?Sized>(
 
 /// The shared borrowed literal boundary, with original physical ownership for
 /// every diagnostic and composite-datatype parser/scanner allocation.
-pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
+/// A returned diagnostic retains its buffers in `memory` until destruction.
+/// # Errors
+/// Returns original component, composite, storage and cancellation failures.
+pub fn validate_literal_with_memory<S: Admission + ?Sized>(
     lexical_form: &str,
     datatype: &str,
     language: Option<&str>,
     direction: Option<crate::RdfTextDirection>,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
-    validate_absolute_with_memory(datatype, memory)?;
+    validate_iri_with_memory(datatype, memory)?;
     if let Err(cause) =
         crate::RdfLiteral::diagnose_components_with_memory(datatype, language, direction, memory)
     {

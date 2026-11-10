@@ -11,6 +11,7 @@
 //! index beside the graph, fed by the same pushes, and each row costs what its
 //! own anchors cost.
 
+use crate::dictionary::DictionaryError;
 use crate::model::{Graph, ReifierRow, Term, TermKind, Triple3};
 use crate::term_table::TermsRef;
 use crate::{FastMap, FastSet};
@@ -23,6 +24,7 @@ pub(super) struct ReifierIndex {
     /// term-id order: every triple term naming it through `rf`, and the
     /// implicit self-bound triple term (no `rf`, no `tt`) whose own id it is.
     anchors: FastMap<usize, Vec<usize>>,
+    anchor_entries: usize,
     /// Reifier id → its FIRST recorded binding, as [`Graph::reifier`] answers.
     first: FastMap<usize, Triple3>,
     /// Every materialized row, so a repeated row is recorded once, as
@@ -31,6 +33,14 @@ pub(super) struct ReifierIndex {
 }
 
 impl ReifierIndex {
+    pub(super) fn retained_entries(&self) -> usize {
+        self.anchors
+            .len()
+            .saturating_add(self.anchor_entries)
+            .saturating_add(self.first.len())
+            .saturating_add(self.rows.len())
+    }
+
     /// Note a term the fold has just appended as `term_id`.
     pub(super) fn observe_term(&mut self, term_id: usize, term: &Term) {
         if term.kind != TermKind::Triple {
@@ -42,6 +52,7 @@ impl ReifierIndex {
             (None, Some(_)) => return,
         };
         self.anchors.entry(anchored_on).or_default().push(term_id);
+        self.anchor_entries = self.anchor_entries.saturating_add(1);
     }
 
     /// The triple terms anchored on `rid`.
@@ -77,16 +88,19 @@ impl ReifierIndex {
         terms: TermsRef<'_>,
         rid: usize,
         triple: Triple3,
-    ) -> bool {
+    ) -> Result<bool, DictionaryError> {
         let mut seen: FastSet<usize> = FastSet::default();
-        self.anchors(rid).iter().any(|&anchor| {
-            <[usize; 3]>::from(triple).into_iter().any(|component| {
+        for &anchor in self.anchors(rid) {
+            for component in <[usize; 3]>::from(triple) {
                 // Each probe starts from an empty set; clearing the hoisted
                 // set reuses its table instead of allocating one per component.
                 seen.clear();
-                self.depends_on_anchor(terms, component, anchor, (rid, triple), &mut seen)
-            })
-        })
+                if self.depends_on_anchor(terms, component, anchor, (rid, triple), &mut seen)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     fn depends_on_anchor(
@@ -96,19 +110,32 @@ impl ReifierIndex {
         anchor: usize,
         pending: (usize, Triple3),
         seen: &mut FastSet<usize>,
-    ) -> bool {
-        if term_id == anchor {
-            return true;
+    ) -> Result<bool, DictionaryError> {
+        let mut work = purrdf_lex::walk::WorkList::<usize, 16>::new();
+        work.push(term_id);
+        while let Some(term_id) = work.pop() {
+            if term_id == anchor {
+                return Ok(true);
+            }
+            if !seen.insert(term_id) {
+                continue;
+            }
+            if let TermsRef::Stored(storage) = terms {
+                let required = seen.len().saturating_add(work.len()).saturating_add(3);
+                let limit = storage.limits().metadata_entries;
+                if required > limit {
+                    return Err(DictionaryError::Limit {
+                        resource: "reifier-traversal-entries",
+                        required,
+                        limit,
+                    });
+                }
+            }
+            if let Some((s, p, o)) = self.pending_binding(terms, term_id, pending)? {
+                work.extend([o, p, s]);
+            }
         }
-        if !seen.insert(term_id) {
-            return false;
-        }
-        let Some(triple) = self.pending_binding(terms, term_id, pending) else {
-            return false;
-        };
-        <[usize; 3]>::from(triple)
-            .into_iter()
-            .any(|component| self.depends_on_anchor(terms, component, anchor, pending, seen))
+        Ok(false)
     }
 
     /// The `(s, p, o)` a triple TERM would resolve to once `pending` is
@@ -125,15 +152,17 @@ impl ReifierIndex {
         terms: TermsRef<'_>,
         term_id: usize,
         pending: (usize, Triple3),
-    ) -> Option<Triple3> {
-        let term = terms.get(term_id)?;
+    ) -> Result<Option<Triple3>, DictionaryError> {
+        let Some(term) = terms.get(term_id)? else {
+            return Ok(None);
+        };
         if term.kind != TermKind::Triple {
-            return None;
+            return Ok(None);
         }
         // A self-describing triple term (`tt`) can only name already-introduced
         // components, so it is acyclic by construction and takes precedence.
         if let Some(triple) = term.triple {
-            return Some(triple);
+            return Ok(Some(triple));
         }
         // Otherwise the components come from the statement layer, through the
         // reifier id the term names — or, when it names none, through its OWN
@@ -141,8 +170,8 @@ impl ReifierIndex {
         // being read is not recorded yet, so substitute it for the id it binds.
         let rid = term.reifier.unwrap_or(term_id);
         if rid == pending.0 {
-            return Some(pending.1);
+            return Ok(Some(pending.1));
         }
-        self.first_binding(rid)
+        Ok(self.first_binding(rid))
     }
 }

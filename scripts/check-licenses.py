@@ -583,12 +583,12 @@ LICENCE_HEADING = re.compile(r"^(#{1,6})\s+(?:Licen[cs]|许可|授权)", re.MULT
 LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
     "MIT": (r"\bMIT\b",),
     "Unicode-3.0": (r"Unicode-3\.0", r"Unicode\s+License\s+v3"),
+    "Unicode-DFS-2016": (r"\bUnicode-DFS-2016\b",),
+    "ICU": (r"`ICU`|\bICU[- ]License\b",),
     "BSD-3-Clause": (r"BSD-3-Clause",),
     "CC-BY-4.0": (r"CC-BY-4\.0", r"Creative\s+Commons\s+Attribution\s+4\.0"),
     "Apache-2.0": (
-        r"Apache-2\.0",
-        r"Apache\s+License,?\s+Version\s+2\.0",
-        r"Apache\s+License\s+2\.0",
+        r"Apache-2\.0", r"Apache\s+License,?\s+Version\s+2\.0", r"Apache\s+License\s+2\.0",
     ),
     "MulanPSL-2.0": (
         r"MulanPSL-2\.0",

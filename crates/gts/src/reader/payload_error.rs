@@ -15,6 +15,7 @@ pub(super) enum PayloadError {
     },
     Damaged(PayloadCause),
     Budget(PayloadCause),
+    Dictionary(crate::dictionary::DictionaryError),
 }
 
 #[derive(Debug)]
@@ -57,6 +58,8 @@ impl From<DecodeError> for PayloadError {
         classified(PayloadCause::Cbor(error), class)
     }
 }
+
+purrdf_lex::variant_from!(PayloadError { Dictionary(crate::dictionary::DictionaryError) });
 
 fn stream_classification(
     error: &(dyn std::error::Error + 'static),
@@ -116,6 +119,7 @@ impl PayloadError {
             Self::Unavailable { reason, .. } => reason,
             Self::Damaged(_) => "damaged",
             Self::Budget(_) => "over-budget",
+            Self::Dictionary(_) => "storage",
         }
     }
 
@@ -124,13 +128,14 @@ impl PayloadError {
             Self::Unavailable { reason, .. } => super::diag_code_for(reason),
             Self::Damaged(_) => "DamagedFrame",
             Self::Budget(_) => budget_code,
+            Self::Dictionary(_) => "DictionaryStorage",
         }
     }
 
     pub(super) fn diagnostic_detail(&self) -> String {
         match self {
             Self::Damaged(_) => format!("payload decode failed: {self}"),
-            Self::Unavailable { .. } | Self::Budget(_) => self.to_string(),
+            Self::Unavailable { .. } | Self::Budget(_) | Self::Dictionary(_) => self.to_string(),
         }
     }
 }
@@ -141,6 +146,7 @@ impl fmt::Display for PayloadError {
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
                 detail.fmt(f)
             }
+            Self::Dictionary(cause) => cause.fmt(f),
         }
     }
 }
@@ -151,6 +157,7 @@ impl std::error::Error for PayloadError {
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
                 detail
             }
+            Self::Dictionary(cause) => cause,
         })
     }
 }
@@ -190,6 +197,7 @@ impl purrdf_hash::error::StructuredError for PayloadError {
         },
         Damaged(detail) => "gts-payload-damaged" { "detail" => Cause(detail) },
         Budget(detail) => "gts-payload-budget" { "detail" => Cause(detail) },
+        Dictionary(cause) => "gts-payload-dictionary" { "cause" => Cause(cause) },
     }
 }
 
