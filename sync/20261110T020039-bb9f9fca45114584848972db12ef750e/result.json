@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1247-sparql-eval-a-row-cursor-for-an",
+  "branch": "paudley/1247-sparql-eval-a-row-cursor-for-an",
+  "base_ref": "origin/main",
+  "head": "09ea24792ff95d2de61b8d347a5b73fda41193c2",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1247-sparql-eval-a-row-cursor-for-an/.stage/sparql-eval-a-row-cursor-for-an/sync/20261110T020039-bb9f9fca45114584848972db12ef750e",
+  "conflicts": [],
+  "status": "completed",
+  "base": "ce97c3aa404a358af822396812a5a54a941cb2c6",
+  "merge_bases": [
+    "beec8e4bf47c3ba4b531f8ea3e4707ba83cb4890"
+  ],
+  "merge_index": "f8aa92975a18d176feae98cabe3f682e20cad26a3f9961d78ee062fb68a82caf",
+  "candidate_tree": "80adae45501789b4cc8a7f6565e79f13cb185905",
+  "candidate_patch": "candidate-b74f2229d9264a44b20c0110cc4dc917.patch",
+  "validation_records": [
+    "validation-runs/20261110T015633-df7eff4a87/result.json"
+  ],
+  "commit": "622c19b823b4d9ead6208357a835f79d3b3d3a80",
+  "tree": "80adae45501789b4cc8a7f6565e79f13cb185905"
+}
