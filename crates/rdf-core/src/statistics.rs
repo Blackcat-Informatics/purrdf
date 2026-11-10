@@ -78,9 +78,13 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
 
     /// Identity of the complete immutable numeric statistics representation.
     /// Equal identities certify equal answers, including availability, exactness
-    /// and distinct-domain IDs, for every identical numeric request. The identity
-    /// binds the dictionary generation and must agree across provider instances.
-    /// It does not certify a view's physical access costs or cardinality model.
+    /// and ordered distinct-ID sequences, for every identical numeric request
+    /// across provider instances. Consumers compile constants in the current view
+    /// and key the full numeric request together with all other planning inputs.
+    /// This identity does not certify ID-to-lexical mappings, RDF content or
+    /// cross-view dictionary compatibility. Combining distinct domains across
+    /// views requires a separate compatible-dictionary proof. Physical access
+    /// costs and cardinality models remain separate planning inputs.
     /// Unknown providers retain no numeric forecast across operations.
     fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
         None

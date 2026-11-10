@@ -592,6 +592,7 @@ source on every run.
 | `b"purrdf-core/evidence-frame/v1"` | `FRAME_DOMAIN` | `crates/rdf-core/src/evidence/frame.rs` |
 | `b"purrdf-core/evidence-reason/v1"` | `REASON_DOMAIN` | `crates/rdf-core/src/evidence/reason.rs` |
 | `b"purrdf-core/evidence-record/v1"` | `RECORD_DOMAIN` | `crates/rdf-core/src/evidence/record.rs` |
+| `b"purrdf-core/native-statistics-representation/v1"` | `(inline)` | `crates/rdf-core/src/ir/dataset/statistics.rs` |
 | `b"purrdf-core/paged-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/mod.rs` |
 | `b"purrdf-core/paged-stack-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/paged/stack.rs` |
 | `b"purrdf-core/residue-snapshot/v1"` | `RESIDUE` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
@@ -688,6 +689,7 @@ source on every run.
 | `b"purrdf-sparql-eval/embedding-space-vectors-generation/v1"` | `VECTORS_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
 | `b"purrdf-sparql-eval/execution-coordinates/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/extension-env"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/extension_env.rs` |
+| `b"purrdf-sparql-eval/numeric-forecast-key/v1"` | `(inline)` | `crates/sparql-eval/src/bgp/forecast.rs` |
 | `b"purrdf-sparql-eval/property-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/property_fn_plan.rs` |
 | `b"purrdf-sparql-eval/update-context/v1"` | `(inline)` | `crates/sparql-eval/src/update.rs` |
 | `b"purrdf-sparql-eval/user-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/user_fn.rs` |
