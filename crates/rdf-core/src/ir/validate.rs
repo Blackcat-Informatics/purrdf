@@ -736,7 +736,21 @@ fn require_iri_predicate_with_memory<S: Admission + ?Sized, C: core::fmt::Displa
     ctx: impl FnOnce() -> C,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
-    require_predicate_kind_with_memory(interned_kind(builder.term(id)), ctx, memory)
+    let term = builder.term(id);
+    if matches!(term, InternedTerm::Iri(_)) {
+        return Ok(());
+    }
+    native_predicate_failure_with_memory(term, ctx(), memory)
+}
+
+#[cold]
+#[inline(never)]
+fn native_predicate_failure_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
+    term: &InternedTerm,
+    ctx: C,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), NativeBuildError> {
+    require_predicate_kind_with_memory(interned_kind(term), || ctx, memory)
 }
 
 fn require_predicate_kind_with_memory<S: Admission + ?Sized, C: core::fmt::Display>(
