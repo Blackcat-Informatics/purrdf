@@ -2861,9 +2861,9 @@ impl PreparedValidator {
     ///
     /// `CHANGE_PATH_CONSTANT` is the entry cost the zero-growth cases already pin.
     /// `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, by
-    /// `crates/shapes/tests/sparql_path_alloc.rs`: **43** for a `sh:sparql` SELECT
-    /// constraint, **99** for a custom `sh:ask` component over a two-valued path,
-    /// **55** for a custom `sh:select` component, and **97** for a
+    /// `crates/shapes/tests/sparql_path_alloc.rs`: **41** for a `sh:sparql` SELECT
+    /// constraint, **95** for a custom `sh:ask` component over a two-valued path,
+    /// **53** for a custom `sh:select` component, and **93** for a
     /// `sh:expression` function call over two argument tuples.
     ///
     /// The term is FLAT in the data graph — a fixed focus count costs the same over
@@ -2946,9 +2946,9 @@ impl PreparedValidator {
     ///
     /// A shape backed by SPARQL query text is the qualification and it is a
     /// FIRST-PARTY one: `sh:sparql`, a custom component's `sh:ask`/`sh:select`
-    /// validator and a SHACL-AF `sh:expression` call each run one query per focus
-    /// node and so carry a real per-focus-node term, pinned in closed form at
-    /// 43 / 99 / 55 / 97 allocations by
+    /// validator and a SHACL-AF `sh:expression` call evaluate SPARQL per focus
+    /// node, value node or argument tuple and carry a per-focus-node term, pinned at
+    /// 41 / 95 / 53 / 93 allocations by
     /// `crates/shapes/tests/sparql_path_alloc.rs`. See
     /// [`Self::validate_focus_nodes`] for that closed form, for what the term is
     /// made of, and for the two third-party residuals the guarantee also excludes.

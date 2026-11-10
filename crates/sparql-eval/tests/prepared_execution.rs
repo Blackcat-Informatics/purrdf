@@ -172,7 +172,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
 ///
-/// The native ownership path measures **24** allocations on each of five
+/// The native ownership path measures **22** allocations on each of five
 /// consecutive steady-state runs. The call includes the original probe write,
 /// evaluation context, admitted VALUES/BGP/join schemas and row buffers, and
 /// interned projection. The old component breakdown described the previous
@@ -187,10 +187,13 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// The prepared algebra identity is cached outside these steady-state readings.
 /// Iterative projection retains its parent beside the inserted VALUES join,
 /// adding one admitted continuation buffer to the previous 23 allocations.
+/// A disjoint join now drains its Cartesian product without building a hash
+/// index. Exact native allocation traces identify the two removed allocations:
+/// the index table and its one row-index bucket, reducing the total from 24 to 22.
 ///
 /// None of it is the plan: the numbered tree and its compiled expressions are the
 /// retained substituted tree's, built once and shared by every run.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 24;
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 22;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
