@@ -70,13 +70,14 @@ fn legacy_mapping_matches_the_independently_pinned_reference() {
     for line in reference.lines().filter(|line| line.starts_with("<U")) {
         let mut fields = line.split_whitespace();
         let scalar = fields.next().expect("scalar field");
-        let scalar = u32::from_str_radix(&scalar[2..scalar.len() - 1], 16).expect("hex scalar");
+        let scalar = purrdf_hash::hex::parse_u32(&scalar.as_bytes()[2..scalar.len() - 1])
+            .expect("hex scalar");
         let scalar = char::from_u32(scalar).expect("reference scalar");
         let mut encoded = [0; 4];
         let mut width = 0;
         for byte in fields.next().expect("bytes").split("\\x").skip(1) {
-            encoded[width] = u8::from_str_radix(byte, 16).expect("reference byte");
-            width += 1;
+            width += purrdf_hash::hex::decode_to_slice(byte, &mut encoded[width..])
+                .expect("reference byte");
         }
         assert_eq!(fields.next(), Some("|0"));
         let mut utf8 = [0; 4];
