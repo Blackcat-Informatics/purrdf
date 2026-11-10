@@ -193,7 +193,7 @@ fn original_source_failure_precedes_later_identity_failure_and_stays_typed() {
         cause
             .original()
             .get_ref()
-            .is_some_and(|cause| cause.is::<OriginalFailure>()),
+            .is_some_and(<dyn std::error::Error + Send + Sync>::is::<OriginalFailure>),
         "the original opaque payload remains in its native IO owner"
     );
     let checks = input.work().identity_checks;

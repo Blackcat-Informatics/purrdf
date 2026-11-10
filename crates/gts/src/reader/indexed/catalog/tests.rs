@@ -111,7 +111,7 @@ fn locators_are_checked_against_structure_even_after_valid_index_rehash() {
         .segment(0)
         .expect("valid optional dict-only locator form");
     let no_locators = altered_index(&original, |payload| {
-        payload.retain(|(key, _)| !matches!(key.as_text(), Some("off" | "ti")))
+        payload.retain(|(key, _)| !matches!(key.as_text(), Some("off" | "ti")));
     });
     assert!(matches!(
         open(no_locators).segment(0),
