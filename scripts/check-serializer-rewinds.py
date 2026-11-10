@@ -135,11 +135,9 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     "against the currently-open graph BEFORE anything is written — which is the "
     "decide-before-emitting shape this gate exists to enforce, not a violation of "
     "it. Note `out` is a separate parameter and is never rewound.",
-    (
-        "crates/rdf/src/native_codecs/stream.rs",
-        "self.raw",
-    ): "The line reader's INPUT buffer, reused across lines. This is the parse path; "
-    "there is no document being emitted here to take anything back from.",
+    ("crates/rdf/src/native_codecs/stream.rs", "self.raw"): "The line reader's INPUT buffer, reused across lines. This is the parse path; there is no document being emitted here to take anything back from.",
+    ("crates/rdf/src/native_codecs/stream/encoded.rs", "workspace.text"): "The encoded reader reuses its admitted INPUT line and removes an NDJSON CR terminator before parsing. This is input scratch; scalar contribution callbacks receive separate bytes and no emitted output is rewound.",
+    ("crates/rdf/src/native_codecs/stream/encoded.rs", "workspace.sources"): "The encoded reader reuses its admitted current INPUT line's source map and removes the NDJSON CR contribution alongside its input terminator. This map holds source coordinates, never emitted bytes.",
     ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.tasks"): "The typed RDF projector consumes pending Node, Term and annotation construction frames. These tasks contain borrowed carrier references, not emitted bytes.",
     ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.results"): "The typed RDF projector transfers its final owned JSON input from a construction result stack before generic compaction or byte serialization.",
     ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "tasks"): "Typed projection scheduling consumes a reversed Vec of pending tasks while retaining its admitted capacity until explicit release. No task holds emitted bytes.",
