@@ -5601,6 +5601,11 @@ impl<'a, I: ViewTermId, P: Copy + Send + Sync> OrdinaryState<'a, I, P> {
                     .delivery = DeliveryTarget::None;
                 return Ok(Some(StreamStart::Complete(lift.finish(rows))));
             }
+            GraphPattern::Join { right, .. } if !consumed => (
+                StreamKind::BinaryRight { minus: false },
+                right.as_ref(),
+                false,
+            ),
             GraphPattern::Join { .. } => return Ok(None),
             GraphPattern::Minus { right, .. } => (
                 StreamKind::BinaryRight { minus: true },
