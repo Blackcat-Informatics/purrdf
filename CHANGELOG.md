@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [4.0.2] - 2026-11-10
 
+- **Native dataset freezing:** Ordinary freeze prepares query statistics and
+  source-proof metadata on demand, preserving existing proof access. First use
+  prepares the required metadata. Publication with an explicit memory account
+  retains its admitted metadata before returning the dataset.
+
 - **Finite nested RDF terms:** Native storage, text ingestion, event transfer,
   GTS resolution and columnar projection preserve finite deep term graphs
   through iterative traversal. Cycles, missing operands and resource refusals
