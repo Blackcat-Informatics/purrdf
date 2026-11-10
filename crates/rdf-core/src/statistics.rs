@@ -76,6 +76,16 @@ pub trait SnapshotStatistics<I: ViewTermId>: Sync {
     /// A host must change it whenever any returned count or exactness changes.
     fn fingerprint(&self) -> u64;
 
+    /// Identity of the complete immutable numeric statistics representation.
+    /// Equal identities certify equal answers, including availability, exactness
+    /// and distinct-domain IDs, for every identical numeric request. The identity
+    /// binds the dictionary generation and must agree across provider instances.
+    /// It does not certify a view's physical access costs or cardinality model.
+    /// Unknown providers retain no numeric forecast across operations.
+    fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
+        None
+    }
+
     /// Total rows in one effective stream and graph scope. Unknown providers
     /// retain None; a stored zero certifies absence in that stream.
     fn stream_rows(

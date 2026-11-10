@@ -169,6 +169,7 @@ impl PositivePlan {
             active_dataset,
             active_graph,
             root,
+            None,
             &QueryWorkspace::resident(),
         )
     }
@@ -178,9 +179,18 @@ impl PositivePlan {
         active_dataset: &ActiveDataset<D::Id>,
         active_graph: GraphMatch<D::Id>,
         root: &GraphPattern,
+        cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
         workspace: &QueryWorkspace<D::ReadError>,
     ) -> Result<Option<Self>, EvalError> {
-        Self::build_with_seed(dataset, active_dataset, active_graph, root, None, workspace)
+        Self::build_with_seed(
+            dataset,
+            active_dataset,
+            active_graph,
+            root,
+            None,
+            cache,
+            workspace,
+        )
     }
 
     /// Ordinary joins may drive a pure relation from any upstream binding bag.
@@ -199,6 +209,7 @@ impl PositivePlan {
             active_graph,
             root,
             seed,
+            None,
             &QueryWorkspace::resident(),
         )
     }
@@ -209,6 +220,7 @@ impl PositivePlan {
         active_graph: GraphMatch<D::Id>,
         root: &GraphPattern,
         seed: &SeedEstimate,
+        cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
         workspace: &QueryWorkspace<D::ReadError>,
     ) -> Result<Option<Self>, EvalError> {
         if !Self::seed_eligible_admitted(root, &seed.schema, &workspace.capability())? {
@@ -220,6 +232,7 @@ impl PositivePlan {
             active_graph,
             root,
             Some(seed),
+            cache,
             workspace,
         )
     }
@@ -230,6 +243,7 @@ impl PositivePlan {
         active_graph: GraphMatch<D::Id>,
         root: &GraphPattern,
         seed: Option<&SeedEstimate>,
+        cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
         account: &QueryWorkspace<D::ReadError>,
     ) -> Result<Option<Self>, EvalError> {
         let workspace = account.capability();
@@ -272,6 +286,7 @@ impl PositivePlan {
                         active_graph,
                         patterns,
                         &seed,
+                        cache,
                         account,
                     )?;
                     if patterns.len() >= 2 {

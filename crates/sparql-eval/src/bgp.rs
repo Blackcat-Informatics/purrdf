@@ -52,6 +52,7 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+pub(crate) mod forecast;
 mod positive;
 mod window;
 pub(crate) use positive::PositivePlan;
@@ -1042,7 +1043,11 @@ fn plan_or_cached_order<D: DatasetView>(
             .get(&key)
             .cloned()
             .map(BgpOrder::Caller),
-        OrderCacheRef::Bounded(cache) => cache.lock().expect("order cache lock poisoned").get(&key),
+        OrderCacheRef::Bounded(cache) => cache
+            .lock()
+            .expect("order cache lock poisoned")
+            .get(&crate::plan_cache::OrderKey::Order(key))
+            .map(|cached| cached.order),
     };
     if let Some(order) = cached
         && order.len() == compiled.len()
@@ -1067,13 +1072,21 @@ fn plan_or_cached_order<D: DatasetView>(
             let bytes = std::alloc::Layout::array::<usize>(order.len())
                 .map_err(|_| EvalError::WorkspaceBoundOverflow)?
                 .size()
-                .checked_add(size_of::<BgpOrder>())
-                .and_then(|bytes| bytes.checked_add(2 * size_of_val(&key)))
+                .checked_add(size_of::<crate::plan_cache::CachedBgp>())
+                .and_then(|bytes| bytes.checked_add(3 * size_of::<crate::plan_cache::OrderKey>()))
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
             cache
                 .lock()
                 .expect("order cache lock poisoned")
-                .insert_admitted(key, order.clone(), bytes, workspace)?;
+                .insert_admitted(
+                    crate::plan_cache::OrderKey::Order(key),
+                    crate::plan_cache::CachedBgp {
+                        order: order.clone(),
+                        forecast: None,
+                    },
+                    bytes,
+                    workspace,
+                )?;
         }
     }
     Ok(order)
@@ -1260,6 +1273,17 @@ fn cost_based_order_from_admitted<D: DatasetView>(
     initial: &[bool],
     workspace: &crate::WorkspaceCapability,
 ) -> Result<AdmittedVec<usize>, EvalError> {
+    cost_based_order_captured(compiled, dataset, scope, initial, None, workspace)
+}
+
+fn cost_based_order_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    initial: &[bool],
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
     let n = compiled.len();
     if n <= 1 {
         let mut order = AdmittedVec::with_capacity(n, workspace)?;
@@ -1268,7 +1292,7 @@ fn cost_based_order_from_admitted<D: DatasetView>(
         }
         return Ok(order);
     }
-    let base = cost_base(compiled, dataset, scope, workspace)?;
+    let base = cost_base_captured(compiled, dataset, scope, inputs, workspace)?;
     let domains = pattern_domains(
         compiled,
         dataset,
@@ -1527,38 +1551,63 @@ struct PatternCost {
     cardinality_only: bool,
 }
 
+#[cfg(test)]
 fn cost_base<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<AdmittedVec<PatternCost>, EvalError> {
+    cost_base_captured(compiled, dataset, scope, None, workspace)
+}
+
+fn cost_base_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<PatternCost>, EvalError> {
     let mut base = AdmittedVec::with_capacity(compiled.len(), workspace)?;
-    for pattern in compiled {
+    for (index, pattern) in compiled.iter().enumerate() {
         let s = constant_of(&pattern.s);
         let p = constant_of(&pattern.p);
         let o = constant_of(&pattern.o);
         let mut rows = 0_u64;
         let mut work = 0_u128;
         let mut cardinality_only = true;
-        visit_access_costs(pattern, dataset, scope, &mut |probe, cost, statistic| {
-            cardinality_only &= cost.cardinality_fallback().is_some();
-            let cardinality = statistic.map_or_else(
-                || {
-                    cost.cardinality_fallback()
-                        .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g))
-                },
-                |count| count.value,
-            );
-            // Match the conservative saturation used by base_cardinality over
-            // merged graph scopes. Host work is a separate statistic: every
-            // physically representable graph slice on 32/64-bit targets has
-            // a sum of u64 work estimates below u128::MAX.
-            rows = rows.saturating_add(cardinality);
-            work = work
-                .checked_add(u128::from(cost.work()))
-                .expect("physically representable graph work sum fits u128");
-        });
+        let inputs = inputs.map(|inputs| inputs[index].as_slice());
+        let mut graph_index = 0;
+        visit_access_costs_captured(
+            pattern,
+            dataset,
+            scope,
+            inputs,
+            &mut |probe, cost, statistic| {
+                let input = inputs.map(|inputs| inputs[graph_index]);
+                graph_index += 1;
+                cardinality_only &= cost.cardinality_fallback().is_some();
+                let cardinality = statistic.map_or_else(
+                    || {
+                        cost.cardinality_fallback().unwrap_or_else(|| {
+                            input.map_or_else(
+                                || dataset.cardinality_estimate(s, p, o, probe.g),
+                                |input| input.cardinality,
+                            )
+                        })
+                    },
+                    |count| count.value,
+                );
+                // Match the conservative saturation used by base_cardinality over
+                // merged graph scopes. Host work is a separate statistic: every
+                // physically representable graph slice on 32/64-bit targets has
+                // a sum of u64 work estimates below u128::MAX.
+                rows = rows.saturating_add(cardinality);
+                work = work
+                    .checked_add(u128::from(cost.work()))
+                    .expect("physically representable graph work sum fits u128");
+            },
+        );
         base.push_reserved(PatternCost {
             rows: rows as f64,
             cardinality_only,
@@ -1582,14 +1631,37 @@ fn visit_access_costs<D: DatasetView>(
         Option<purrdf_core::StatisticCount>,
     ),
 ) {
+    visit_access_costs_captured(pattern, dataset, scope, None, visit);
+}
+
+fn visit_access_costs_captured<D: DatasetView>(
+    pattern: &CompiledPattern<D::Id>,
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&[forecast::PhysicalInput<D::Id>]>,
+    visit: &mut dyn FnMut(
+        purrdf_core::ProbePattern<D::Id>,
+        purrdf_core::AccessCost,
+        Option<purrdf_core::StatisticCount>,
+    ),
+) {
     let s = constant_of(&pattern.s);
     let p = constant_of(&pattern.p);
     let o = constant_of(&pattern.o);
+    let mut graph_index = 0;
     let mut graph = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
-        let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-        let cost = dataset.cost(probe, &plan);
-        let statistic = provider_cardinality(dataset, pattern, probe);
+        let input = inputs.map(|inputs| inputs[graph_index]);
+        graph_index += 1;
+        debug_assert!(input.is_none_or(|input| input.graph == g));
+        let cost = input.map_or_else(
+            || {
+                let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+                dataset.cost(probe, &plan)
+            },
+            |input| input.cost,
+        );
+        let statistic = provider_cardinality_captured(dataset, pattern, probe, input.as_ref());
         if cost.cardinality_fallback().is_some()
             && let Some(count) = statistic
         {
@@ -1600,15 +1672,26 @@ fn visit_access_costs<D: DatasetView>(
             );
             return;
         }
-        let statements = dataset
-            .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
+        let statements = input
+            .map_or_else(
+                || {
+                    dataset.statement_cardinality_estimate(
+                        probe,
+                        components_of(&pattern.o, constant_of),
+                    )
+                },
+                |input| input.statements,
+            )
             .unwrap_or(0);
         if statements == 0 {
             visit(probe, cost, statistic);
         } else {
-            let ordinary = cost
-                .cardinality_fallback()
-                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+            let ordinary = cost.cardinality_fallback().unwrap_or_else(|| {
+                input.map_or_else(
+                    || dataset.cardinality_estimate(s, p, o, g),
+                    |input| input.cardinality,
+                )
+            });
             // Statement summaries provide row counts, not a conversion into a
             // host's physical work unit. Use the explicit cardinality fallback
             // for this complete probe instead of inventing a statement page fee.
@@ -1685,19 +1768,45 @@ fn base_cardinality<D: DatasetView>(
     cp: &CompiledPattern<D::Id>,
     scope: &GraphScope<D::Id>,
 ) -> u64 {
+    base_cardinality_captured(dataset, cp, scope, None)
+}
+
+fn base_cardinality_captured<D: DatasetView>(
+    dataset: &D,
+    cp: &CompiledPattern<D::Id>,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&[forecast::PhysicalInput<D::Id>]>,
+) -> u64 {
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
-    let cardinality = |g| {
+    let mut graph_index = 0;
+    let mut cardinality = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
-        if let Some(count) = provider_cardinality(dataset, cp, probe) {
+        let input = inputs.map(|inputs| &inputs[graph_index]);
+        graph_index += 1;
+        debug_assert!(input.is_none_or(|input| input.graph == g));
+        if let Some(count) = provider_cardinality_captured(dataset, cp, probe, input) {
             return count.value;
         }
-        dataset.cardinality_estimate(s, p, o, g).saturating_add(
-            dataset
-                .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
-                .unwrap_or(0),
-        )
+        input
+            .map_or_else(
+                || dataset.cardinality_estimate(s, p, o, g),
+                |input| input.cardinality,
+            )
+            .saturating_add(
+                input
+                    .map_or_else(
+                        || {
+                            dataset.statement_cardinality_estimate(
+                                probe,
+                                components_of(&cp.o, constant_of),
+                            )
+                        },
+                        |input| input.statements,
+                    )
+                    .unwrap_or(0),
+            )
     };
     match scope {
         GraphScope::One(gm) => cardinality(*gm),
@@ -1715,14 +1824,29 @@ fn provider_cardinality<D: DatasetView>(
     pattern: &CompiledPattern<D::Id>,
     probe: purrdf_core::ProbePattern<D::Id>,
 ) -> Option<purrdf_core::StatisticCount> {
+    provider_cardinality_captured(dataset, pattern, probe, None)
+}
+
+fn provider_cardinality_captured<D: DatasetView>(
+    dataset: &D,
+    pattern: &CompiledPattern<D::Id>,
+    probe: purrdf_core::ProbePattern<D::Id>,
+    input: Option<&forecast::PhysicalInput<D::Id>>,
+) -> Option<purrdf_core::StatisticCount> {
     let statistics = dataset.statistics()?;
     if matches!(pattern.o, Pos::Triple(_)) {
         let components = components_of(&pattern.o, constant_of);
         let mut count = statistics.structural_pattern(probe, components)?;
         if dataset.statement_indexes().reifier_components {
-            let indexed = dataset
-                .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
-                .saturating_add(dataset.statement_cardinality_estimate(probe, components)?);
+            let indexed = input
+                .map_or_else(
+                    || dataset.cardinality_estimate(probe.s, probe.p, probe.o, probe.g),
+                    |input| input.cardinality,
+                )
+                .saturating_add(input.map_or_else(
+                    || dataset.statement_cardinality_estimate(probe, components),
+                    |input| input.statements,
+                )?);
             count.value = count.value.min(indexed);
         }
         return Some(count);
@@ -1731,9 +1855,15 @@ fn provider_cardinality<D: DatasetView>(
     if count.accuracy == purrdf_core::StatisticsAccuracy::UpperBound
         && dataset.statement_indexes() == purrdf_core::StatementIndexSupport::INDEXED
     {
-        let indexed = dataset
-            .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
-            .saturating_add(dataset.statement_cardinality_estimate(probe, [None; 3])?);
+        let indexed = input
+            .map_or_else(
+                || dataset.cardinality_estimate(probe.s, probe.p, probe.o, probe.g),
+                |input| input.cardinality,
+            )
+            .saturating_add(input.map_or_else(
+                || dataset.statement_cardinality_estimate(probe, [None; 3]),
+                |input| input.statements,
+            )?);
         count.value = count.value.min(indexed);
     }
     Some(count)
@@ -3485,6 +3615,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     graph,
                     right,
                     &seed,
+                    None,
                     account,
                 )? {
                     positive.survey_seeded_admitted(
@@ -3555,6 +3686,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 active_dataset,
                 active_graph,
                 pattern,
+                None,
                 account,
             )?
         {
@@ -3724,6 +3856,7 @@ fn forecast_bgp<D: DatasetView>(
     active_graph: GraphMatch<D::Id>,
     patterns: &[TriplePattern],
     seed: &SeedEstimate,
+    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(VarSchema, PlanEstimate, AdmittedVec<usize>), EvalError> {
     let workspace = account.capability();
@@ -3740,14 +3873,36 @@ fn forecast_bgp<D: DatasetView>(
     let compiled = compile_bgp_admitted(dataset, patterns, &working, account)?;
     let any_absent = compiled.is_none();
     let compiled = compiled.as_deref().unwrap_or(&[]);
+    let preparation = if any_absent {
+        None
+    } else {
+        forecast::prepare(
+            dataset, compiled, &scope, &initial, seed.rows, cache, &workspace,
+        )?
+    };
+    if preparation.is_some() {
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| account.source_error(error))?;
+    }
+    let cached = preparation.as_ref().and_then(forecast::Preparation::get);
     let order = if any_absent {
         let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
         for index in 0..patterns.len() {
             order.push_reserved(index);
         }
         order
+    } else if let Some(cached) = &cached {
+        AdmittedVec::from_iter_admitted(cached.order.iter().copied(), &workspace)?
     } else {
-        cost_based_order_from_admitted(compiled, dataset, &scope, &initial, &workspace)?
+        cost_based_order_captured(
+            compiled,
+            dataset,
+            &scope,
+            &initial,
+            preparation.as_ref().map(|preparation| &preparation.inputs),
+            &workspace,
+        )?
     };
     let schema = VarSchema::from_vars_admitted(
         working
@@ -3761,11 +3916,31 @@ fn forecast_bgp<D: DatasetView>(
         (0, 0)
     } else if patterns.is_empty() {
         (seed.rows, seed.rows)
+    } else if let Some((rows, peak)) = cached.as_ref().and_then(|cached| cached.forecast) {
+        (rows, peak)
     } else {
-        replay_cost_estimate_from_admitted(
-            compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+        replay_cost_estimate_captured(
+            compiled,
+            dataset,
+            &scope,
+            &order,
+            (&initial, seed.rows),
+            preparation.as_ref().map(|preparation| &preparation.inputs),
+            &workspace,
         )?
     };
+    if cached.is_none()
+        && let Some(preparation) = &preparation
+    {
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| account.source_error(error))?;
+        let retained = BgpOrder::from_admitted(
+            AdmittedVec::from_iter_admitted(order.iter().copied(), &workspace)?,
+            &workspace,
+        )?;
+        preparation.insert(retained, rows, peak_rows, &workspace)?;
+    }
     let estimate = PlanEstimate::new(
         rows,
         peak_rows,
@@ -3889,6 +4064,7 @@ fn survey_bgp_seeded<D: DatasetView>(
         active_graph,
         patterns,
         seed,
+        None,
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
@@ -4005,6 +4181,7 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
 /// Saturating `f64`-to-`u64` conversion: Rust's `as` cast saturates rather than wrapping,
 /// so an estimate beyond `u64::MAX` becomes `u64::MAX` and a negative one — which the
 /// model cannot produce, every factor being non-negative — would become zero.
+#[cfg(test)]
 fn replay_cost_estimate_from_admitted<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
@@ -4014,7 +4191,35 @@ fn replay_cost_estimate_from_admitted<D: DatasetView>(
     driving_rows: u64,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<(u64, u64), EvalError> {
-    let base = cardinality_base(compiled, dataset, scope, workspace)?;
+    replay_cost_estimate_captured(
+        compiled,
+        dataset,
+        scope,
+        order,
+        (initial, driving_rows),
+        None,
+        workspace,
+    )
+}
+
+fn replay_cost_estimate_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    order: &[usize],
+    (initial, driving_rows): (&[bool], u64),
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(u64, u64), EvalError> {
+    let base = match inputs {
+        None => cardinality_base(compiled, dataset, scope, workspace)?,
+        Some(inputs) => AdmittedVec::from_iter_admitted(
+            compiled.iter().enumerate().map(|(index, pattern)| {
+                base_cardinality_captured(dataset, pattern, scope, Some(&inputs[index])) as f64
+            }),
+            workspace,
+        )?,
+    };
     let known = pattern_domains(compiled, dataset, scope, base.iter().copied(), workspace)?;
     let t = dataset.term_count().max(1) as f64;
     let columns = cost_columns(compiled, workspace)?;
@@ -5019,13 +5224,18 @@ mod tests {
     /// Caller-provided statistics in this fixture's comparable work unit. They
     /// describe a resident hot access path and a cold rare access path; no
     /// library conversion from pages or residency participates in the ranking.
-    struct HostCost<'a> {
+    struct HostCost<'a, E = std::convert::Infallible> {
         inner: &'a RdfDataset,
         predicates: [TermId; 3],
         measured: Option<[purrdf_core::AccessCost; 3]>,
         cardinalities: Option<[u64; 3]>,
         supplied_statistics: bool,
         statistics_accuracy: purrdf_core::StatisticsAccuracy,
+        cacheable_statistics: bool,
+        statistics_reads: std::sync::atomic::AtomicUsize,
+        failure: Option<E>,
+        failed: std::sync::atomic::AtomicBool,
+        fail_statistics: bool,
         first_probe: std::sync::Mutex<Option<TermId>>,
     }
 
@@ -5043,7 +5253,29 @@ mod tests {
                 cardinalities: None,
                 supplied_statistics: false,
                 statistics_accuracy: purrdf_core::StatisticsAccuracy::Exact,
+                cacheable_statistics: false,
+                statistics_reads: std::sync::atomic::AtomicUsize::new(0),
+                failure: None,
+                failed: std::sync::atomic::AtomicBool::new(false),
+                fail_statistics: false,
                 first_probe: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn with_failure<E>(self, error: E, fail_statistics: bool) -> HostCost<'a, E> {
+            HostCost {
+                inner: self.inner,
+                predicates: self.predicates,
+                measured: self.measured,
+                cardinalities: self.cardinalities,
+                supplied_statistics: self.supplied_statistics,
+                statistics_accuracy: self.statistics_accuracy,
+                cacheable_statistics: self.cacheable_statistics,
+                statistics_reads: self.statistics_reads,
+                first_probe: self.first_probe,
+                failure: Some(error),
+                failed: self.failed,
+                fail_statistics,
             }
         }
 
@@ -5055,14 +5287,21 @@ mod tests {
         }
     }
 
-    impl DatasetView for HostCost<'_> {
+    impl<E: std::error::Error + Clone + Send + Sync + 'static> DatasetView for HostCost<'_, E> {
         type Id = TermId;
-        type ReadError = std::convert::Infallible;
+        type ReadError = E;
         type TermGuard<'a>
             = TermRef<'a, Self::Id>
         where
             Self: 'a;
         type ProbePlan = purrdf_core::QuadProbePlan;
+
+        fn read_error(&self) -> Option<E> {
+            self.failed
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .then(|| self.failure.clone())
+                .flatten()
+        }
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.inner.quads()
@@ -5107,6 +5346,10 @@ mod tests {
             o: Option<TermId>,
             g: GraphMatch,
         ) -> u64 {
+            if self.failure.is_some() && !self.fail_statistics {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             if let Some(cardinalities) = self.cardinalities
                 && let Some(index) = self.predicates.iter().position(|id| Some(*id) == p)
             {
@@ -5148,7 +5391,9 @@ mod tests {
         }
     }
 
-    impl purrdf_core::SnapshotStatistics<TermId> for HostCost<'_> {
+    impl<E: std::error::Error + Clone + Send + Sync + 'static>
+        purrdf_core::SnapshotStatistics<TermId> for HostCost<'_, E>
+    {
         fn source(&self) -> &'static str {
             "fixture-exact"
         }
@@ -5158,6 +5403,19 @@ mod tests {
                 self.inner.stats_fingerprint(),
                 self.statistics_accuracy,
             ))
+        }
+
+        fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
+            if !self.cacheable_statistics {
+                return None;
+            }
+            const DOMAIN: purrdf_hash::Domain =
+                purrdf_hash::Domain::new(b"purrdf-sparql-eval/test-host-statistics/v1");
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            hash.update(DOMAIN.as_bytes());
+            hash.update(purrdf_core::SnapshotStatistics::cache_identity(self.inner)?.as_ref());
+            hash.update(&purrdf_core::SnapshotStatistics::fingerprint(self).to_le_bytes());
+            Some((*hash.finalize().as_bytes()).into())
         }
 
         fn predicate(
@@ -5203,7 +5461,7 @@ mod tests {
         }
     }
 
-    impl HostCost<'_> {
+    impl<E> HostCost<'_, E> {
         fn predicate_object_count(
             &self,
             predicate: TermId,
@@ -5211,6 +5469,12 @@ mod tests {
             graph: GraphMatch,
             stream: purrdf_core::StatisticsStream,
         ) -> purrdf_core::StatisticCount {
+            if self.failure.is_some() && self.fail_statistics {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.statistics_reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // This original fixture has only asserted rows. Count the native
             // exact p/o prefix; no replacement triple store or wrapper is built.
             let value = match stream {
@@ -5227,6 +5491,131 @@ mod tests {
                 accuracy: self.statistics_accuracy,
             }
         }
+    }
+
+    /// Warm positive UNION forecasts reuse provider reads, while changing the
+    /// provider revision or physical model requires a fresh forecast.
+    #[test]
+    fn numeric_forecast_reuses_statistics_and_rechecks_source_and_access_inputs() {
+        use std::sync::atomic::Ordering;
+        let graph = skewed_graph(false);
+        let mut view = HostCost::over(&graph, false);
+        view.supplied_statistics = true;
+        view.cacheable_statistics = true;
+        let engine = crate::NativeSparqlEngine::new();
+        let query = engine.prepare_query(
+            "SELECT ?s WHERE { { ?s <http://ex/hot> ?a } UNION { ?s <http://ex/mid> ?a } ?s <http://ex/rare> ?b }", None,
+        ).unwrap();
+        let execute = |view: &HostCost<'_>| {
+            let result = engine
+                .query_prepared_view(view, &query, &[], &crate::QueryOptions::EMPTY)
+                .unwrap();
+            let purrdf_core::SparqlResult::Solutions {
+                variables, rows, ..
+            } = result
+            else {
+                panic!("solutions")
+            };
+            assert_eq!(variables, ["s"]);
+            assert_eq!(rows, vec![vec![Some(TermValue::iri("http://ex/hub"))]; 25]);
+            view.statistics_reads.load(Ordering::Relaxed)
+        };
+        let first = execute(&view);
+        assert!(first > 0);
+        assert_eq!(
+            execute(&view),
+            first,
+            "warm UNION planning must not rescan provider statistics"
+        );
+        view.measured = HostCost::over(&graph, true).measured;
+        let changed_work = execute(&view);
+        assert!(
+            changed_work > first,
+            "new physical costs must invalidate numeric forecasts"
+        );
+        assert_eq!(execute(&view), changed_work);
+        view.cardinalities = Some([1000; 3]);
+        let changed_cardinality = execute(&view);
+        assert!(changed_cardinality > changed_work);
+        view.statistics_accuracy = purrdf_core::StatisticsAccuracy::UpperBound;
+        let changed_source = execute(&view);
+        assert!(
+            changed_source > changed_cardinality,
+            "provider exactness is part of its identity"
+        );
+        assert_eq!(execute(&view), changed_source);
+        view.cacheable_statistics = false;
+        let uncached = execute(&view);
+        assert!(
+            execute(&view) > uncached,
+            "unknown identities keep the existing planning law"
+        );
+    }
+
+    /// A latched physical or provider failure must not publish numeric forecasts.
+    #[test]
+    fn numeric_forecast_does_not_retain_failed_source_observations() {
+        let graph = skewed_graph(false);
+        let patterns = host_cost_patterns(&graph);
+        let cache = crate::plan_cache::BoundedOrderCache::default();
+        for fail_statistics in [false, true] {
+            let mut view = HostCost::over(&graph, false);
+            view.supplied_statistics = true;
+            view.cacheable_statistics = true;
+            let original = "metadata refusal".parse::<u8>().unwrap_err();
+            let view = view.with_failure(original.clone(), fail_statistics);
+            let account = crate::workspace::QueryWorkspace::resident()
+                .capture_direct_errors()
+                .unwrap();
+            let result = forecast_bgp(
+                &view,
+                &ActiveDataset::store_default(),
+                GraphMatch::Default,
+                &patterns,
+                &SeedEstimate::default(),
+                Some(crate::plan_cache::OrderCacheRef::Bounded(&cache)),
+                &account,
+            );
+            assert!(matches!(result, Err(EvalError::WorkspaceStopped)));
+            assert_eq!(
+                account.take_failure(),
+                Some(original),
+                "original typed source cause"
+            );
+            assert_eq!(
+                cache.lock().unwrap().stats().entries,
+                0,
+                "failed metadata cannot become a future cache hit"
+            );
+        }
+        let mut ready = HostCost::over(&graph, false);
+        ready.supplied_statistics = true;
+        ready.cacheable_statistics = true;
+        let (_, expected, _) = forecast_bgp(
+            &ready,
+            &ActiveDataset::store_default(),
+            GraphMatch::Default,
+            &patterns,
+            &SeedEstimate::default(),
+            None,
+            &crate::workspace::QueryWorkspace::resident(),
+        )
+        .unwrap();
+        let (_, estimate, _) = forecast_bgp(
+            &ready,
+            &ActiveDataset::store_default(),
+            GraphMatch::Default,
+            &patterns,
+            &SeedEstimate::default(),
+            Some(crate::plan_cache::OrderCacheRef::Bounded(&cache)),
+            &crate::workspace::QueryWorkspace::resident(),
+        )
+        .unwrap();
+        assert_eq!(
+            estimate, expected,
+            "the neighboring ready source retains the uncached forecast"
+        );
+        assert_eq!(cache.lock().unwrap().stats().entries, 1);
     }
 
     #[test]

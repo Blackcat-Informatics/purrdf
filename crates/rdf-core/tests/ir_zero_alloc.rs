@@ -159,6 +159,7 @@ fn sealed_predicate_statistics_and_distinct_domains_allocate_nothing() {
     fn assert_reads<I: ViewTermId>(statistics: &dyn SnapshotStatistics<I>, predicate: I) {
         let window = CurrentThreadWindow::open();
         for _ in 0..16 {
+            std::hint::black_box(statistics.cache_identity());
             assert_eq!(
                 statistics
                     .stream_rows(GraphMatch::Any, StatisticsStream::Asserted)

@@ -22,6 +22,7 @@ pub(super) struct NativeStatistics {
     scalar: Mutex<Vec<u64>>,
     visitor: Mutex<Option<Vec<u64>>>,
     fingerprint: OnceLock<u64>,
+    cache_identity: OnceLock<purrdf_hash::hex::Digest32>,
     rdf_type: Option<TermId>,
 }
 
@@ -42,6 +43,7 @@ impl NativeStatistics {
             scalar: Mutex::new(scalar),
             visitor: Mutex::new(Some(visitor)),
             fingerprint: OnceLock::new(),
+            cache_identity: OnceLock::new(),
             rdf_type: dictionary
                 .term_id_by_iri_with_memory(purrdf_iri::vocab::rdf::TYPE, memory)?,
         })
@@ -67,6 +69,7 @@ impl Clone for NativeStatistics {
             scalar: Mutex::new(vec![0; scalar.len()]),
             visitor: Mutex::new(Some(vec![0; scalar.len()])),
             fingerprint: self.fingerprint.clone(),
+            cache_identity: self.cache_identity.clone(),
             rdf_type: self.rdf_type,
         }
     }
@@ -259,6 +262,68 @@ impl RdfDataset {
 impl SnapshotStatistics<TermId> for RdfDataset {
     fn source(&self) -> &'static str {
         "native-frozen-predicate-domains-v1"
+    }
+
+    fn cache_identity(&self) -> Option<purrdf_hash::hex::Digest32> {
+        Some(*self.native_statistics.cache_identity.get_or_init(|| {
+            const DOMAIN: purrdf_hash::Domain =
+                purrdf_hash::Domain::new(b"purrdf-core/native-statistics-representation/v1");
+            let mut hash = purrdf_hash::blake3::Hasher::new();
+            hash.update(DOMAIN.as_bytes());
+            // Eager and deferred providers may expose different metadata choices.
+            hash.update(&[u8::from(self.statistics.is_some())]);
+            let id = |id: Option<TermId>| id.map_or(u32::MAX, |id| id.index() as u32);
+            hash.update(&id(self.native_statistics.rdf_type).to_le_bytes());
+            hash.update(&(self.dictionary.terms.len() as u64).to_le_bytes());
+            for term in &self.dictionary.terms {
+                use super::super::term::InternedTerm;
+                match term {
+                    InternedTerm::Iri(_) => {
+                        hash.update(&[0]);
+                    }
+                    InternedTerm::Blank { .. } => {
+                        hash.update(&[1]);
+                    }
+                    InternedTerm::Literal(literal) => {
+                        hash.update(&[2]);
+                        hash.update(&id(Some(literal.datatype)).to_le_bytes());
+                    }
+                    InternedTerm::Triple { s, p, o } => {
+                        hash.update(&[3]);
+                        for term in [s, p, o] {
+                            hash.update(&id(Some(*term)).to_le_bytes());
+                        }
+                    }
+                }
+            }
+            hash.update(&(self.named_graphs.len() as u64).to_le_bytes());
+            for graph in &self.named_graphs {
+                hash.update(&id(Some(*graph)).to_le_bytes());
+            }
+            for (tag, relation) in [
+                Relation::Asserted,
+                Relation::Reifiers,
+                Relation::Annotations,
+                Relation::Targets,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                hash.update(&[tag as u8]);
+                let count = match relation {
+                    Relation::Asserted => self.quads.len(),
+                    Relation::Annotations => self.annotations.len(),
+                    Relation::Reifiers | Relation::Targets => self.reifiers.len(),
+                };
+                hash.update(&(count as u64).to_le_bytes());
+                for row in self.statistic_rows(relation) {
+                    for term in [Some(row.s), Some(row.p), Some(row.o), row.g] {
+                        hash.update(&id(term).to_le_bytes());
+                    }
+                }
+            }
+            (*hash.finalize().as_bytes()).into()
+        }))
     }
 
     fn fingerprint(&self) -> u64 {
