@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 <!-- BEGIN GENERATED: conformance-matrix -->
 | Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |
 | --- | --- | ---: | ---: | ---: | ---: | :---: |
-| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 19 | 0 | 0 | 0 | GREEN |
+| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 24 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
 | RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
