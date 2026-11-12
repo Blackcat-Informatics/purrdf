@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, the base16 codec and 32-byte digest value, the fixed-key table hasher, FNV-1a and SplitMix64"
+description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak, CRC-32 and XXH64 digests, streaming and one-shot, the base16 codec and 32-byte digest value, the fixed-key table hasher, FNV-1a and SplitMix64"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0"
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-hash"
 rust-version.workspace = true
-keywords = ["blake3", "sha3", "crc32", "hash", "digest"]
+keywords = ["blake3", "sha3", "crc32", "xxhash", "hash", "digest"]
 categories = ["algorithms", "cryptography", "encoding"]
 
 [package.metadata.docs.rs]

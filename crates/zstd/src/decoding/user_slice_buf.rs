@@ -174,7 +174,7 @@ impl<'a> UserSliceBackend<'a> {
     /// block decodes, while the bytes are still cache-resident; a
     /// post-decode whole-output hash walk re-reads the entire frame
     /// cold (a full extra memory pass on large outputs). Only the
-    /// XXH64 accumulation reads it, hence the `hash` gate.
+    /// XXH64 accumulation reads it.
 
     pub(crate) fn written_since(&self, from: usize) -> &[u8] {
         &self.slice[from..self.tail]

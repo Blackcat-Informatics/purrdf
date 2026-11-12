@@ -56,7 +56,7 @@ pub(crate) fn compress_block_encoded<M: Matcher>(
     // Per-physical-block decompressed (regenerated) size sidecar, in
     // block-emit order — 1:1 with `FrameEmitInfo.blocks`, same cardinality
     // discipline as the XXH64 checksum sidecar. Captured under `lsm` alone
-    // (not gated on `hash`, not opt-in) because `FrameEmitInfo` is always
+    // (unconditional, not opt-in) because `FrameEmitInfo` is always
     // built under `lsm` and every block needs its `decompressed_size`.
 ) -> BlockType {
     let block_size = uncompressed_data.len() as u32;

@@ -73,9 +73,8 @@ pub struct StreamingEncoder<W: Write, M: Matcher = MatchGeneratorDriver> {
     magicless: bool,
     /// Whether to emit a trailing XXH64 content checksum and set the frame
     /// header's `Content_Checksum_flag` (upstream `ZSTD_c_checksumFlag`).
-    /// Default `false`, matching the upstream library default; combined with
-    /// the `hash` feature, so without `hash` no checksum is emitted
-    /// regardless. See [`Self::set_content_checksum`].
+    /// Default `false`, matching the upstream library default; when `true`
+    /// the native XXH64 digest is appended. See [`Self::set_content_checksum`].
     content_checksum: bool,
     /// Dictionary applied to the frame (upstream zstd `ZSTD_CCtx_loadDictionary` on a
     /// streaming context). `None` = no dictionary. Set before the first write.
@@ -220,8 +219,8 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
     /// upstream library default (`ZSTD_c_checksumFlag = 0`). Must be called
     /// before the first [`write`](Write::write); once the frame header is
     /// emitted the flag is fixed, so a late change returns an error rather
-    /// than producing a header/trailer mismatch. Without the `hash` feature
-    /// no checksum is emitted regardless.
+    /// than producing a header/trailer mismatch. The digest is always
+    /// the native XXH64.
     pub fn set_content_checksum(&mut self, emit: bool) -> Result<(), Error> {
         self.ensure_open()?;
         if self.frame_started {
