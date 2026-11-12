@@ -226,6 +226,25 @@ impl<Id: Copy> Spelling<'_, Id> {
     }
 }
 
+/// The numbered symbols of a run and the lines written in their numbers.
+pub(super) type Discovered<Id> = (Symbols<Id>, Lines);
+
+/// The class of a symbol's first byte, in byte order: `"` (a literal), `)`
+/// (`CLOSE`), `.` (`TERM`), `<` (an IRI, `OPEN` or a sentinel) and `_` (a
+/// blank node). Two symbols of different classes differ at their first byte,
+/// so their order is the order of their classes and neither is read.
+///
+/// `meta` is the symbol's packed meta, which is only valid before it is ranked.
+pub(super) const fn first_byte_class(symbol: u32, meta: Meta) -> u8 {
+    match meta.kind() {
+        Kind::Literal => 0,
+        Kind::Fixed if symbol == CLOSE => 1,
+        Kind::Fixed if symbol == TERM => 2,
+        Kind::Fixed | Kind::Iri => 3,
+        Kind::Blank => 4,
+    }
+}
+
 /// Grow a vector of a dataset's size by a quarter, admitting the layout first.
 pub(super) fn push_bounded<T, S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,

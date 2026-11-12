@@ -744,3 +744,88 @@ fn a_term_that_changes_length_between_reads_is_refused_and_its_twin_succeeds() {
     }
     assert!(refused >= 2, "a changed length is refused, not written");
 }
+
+// ---------------------------------------------------------------------------
+// Each faster ordering agrees with comparator C on every pair of symbols.
+
+/// Number the distinct symbols of `view` as a run does, then compare every pair
+/// of them with `faster` and with comparator C, which reads both spellings again.
+fn every_pair_agrees_with_c<D: DatasetView>(
+    view: &D,
+    faster: impl Fn(&order::Symbols<D::Id>, u32, u32, &str, &str) -> Option<Ordering>,
+) -> usize {
+    let run = SearchRun::new(SearchPolicy::Unlimited, None);
+    let state = CanonState::new(
+        view,
+        CanonScope::Dataset,
+        CanonPresentation::Overlay,
+        CanonHash::Sha256,
+        &run,
+    )
+    .issue_labels()
+    .expect("labels issue");
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = Memory::new(&mut resident);
+    let (symbols, _) = state.discover_symbols(&mut memory).expect("symbols number");
+    let (mut first, mut second) = (String::new(), String::new());
+    let mut decided = 0;
+    for a in 0..u32::try_from(symbols.count()).unwrap() {
+        for b in 0..u32::try_from(symbols.count()).unwrap() {
+            let by_text = state
+                .compare_text(&symbols, &mut memory, a, b, &mut first, &mut second)
+                .expect("both symbols spell");
+            // `first` and `second` still hold the two spellings C compared.
+            if let Some(ordering) = faster(&symbols, a, b, &first, &second) {
+                assert_eq!(
+                    ordering, by_text,
+                    "symbols {a} and {b}: {first:?} {second:?}"
+                );
+                decided += 1;
+            }
+        }
+    }
+    decided
+}
+
+/// Symbols of different first-byte classes are ordered by their classes
+/// without being read; the class of each symbol is the first byte of its
+/// spelling, so the partition cannot disagree with the text order.
+#[test]
+fn the_first_byte_partition_agrees_with_the_text_comparison_on_every_pair() {
+    let classes = *b"\").<_";
+    let class_byte = |class: u8| classes[usize::from(class)];
+    let by_class = |symbols: &order::Symbols<_>, a: u32, b: u32, x: &str, y: &str| {
+        let (ca, cb) = (
+            order::first_byte_class(a, symbols.meta_of(a)),
+            order::first_byte_class(b, symbols.meta_of(b)),
+        );
+        assert_eq!(
+            class_byte(ca),
+            x.as_bytes()[0],
+            "symbol {a} starts with its class"
+        );
+        assert_eq!(
+            class_byte(cb),
+            y.as_bytes()[0],
+            "symbol {b} starts with its class"
+        );
+        (ca != cb).then(|| ca.cmp(&cb))
+    };
+    let mut cross_class = 0;
+    cross_class += every_pair_agrees_with_c(&*mixed(), by_class);
+    for dataset in statements() {
+        cross_class += every_pair_agrees_with_c(&*dataset, by_class);
+    }
+    let mut t = TableBuilder::new();
+    let (s, p, g) = (t.iri(S), t.iri(P), t.iri(G));
+    let blank = t.blank("b");
+    let odd = t.tagged("x", "en US");
+    let unclean = t.raw_iri("http://e/a b");
+    t.quad(s, p, odd, Some(blank));
+    t.quad(blank, p, unclean, Some(g));
+    cross_class += every_pair_agrees_with_c(&t.build(), by_class);
+    assert!(
+        cross_class > 100,
+        "classes decide many pairs ({cross_class})"
+    );
+}

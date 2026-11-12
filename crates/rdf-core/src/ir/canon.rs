@@ -3701,39 +3701,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory: &mut Memory<'_, S>,
         sink: &mut result::ResultBuilder<D::Id, D::ReadError>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        let render = BlankRender::Canonical {
-            issuer: &self.canonical,
-        };
-        let mut flatten = Flatten::new(self, render, memory)?;
-        collect_components::<_, D::ReadError>(
-            self.ds,
-            self.scope,
-            self.presentation,
-            self.stop,
-            &mut |comp| {
-                self.walk_component(comp, &mut flatten, memory)?;
-                flatten.check_ready()
-            },
-        )?;
-        let Flatten {
-            mut symbols,
-            mut lines,
-            leaf,
-            ..
-        } = flatten;
-        memory.release_string(leaf)?;
-        symbols.release_table(memory)?;
+        let (mut symbols, mut lines) = self.discover_symbols(memory)?;
         let mut first = String::new();
         let mut second = String::new();
         memory.reserve_string(&mut first, symbols.max_len())?;
         memory.reserve_string(&mut second, symbols.max_len())?;
         let ranked = order::rank(&mut symbols, memory, |symbols, memory, a, b| {
-            let spelling = symbols.spelling();
-            first.clear();
-            second.clear();
-            self.render_symbol(&spelling, a, symbols.meta_of(a), &mut first, memory)?;
-            self.render_symbol(&spelling, b, symbols.meta_of(b), &mut second, memory)?;
-            Ok::<_, CanonError<D::ReadError>>(first.as_bytes().cmp(second.as_bytes()))
+            let (class_a, class_b) = (
+                order::first_byte_class(a, symbols.meta_of(a)),
+                order::first_byte_class(b, symbols.meta_of(b)),
+            );
+            if class_a != class_b {
+                return Ok::<_, CanonError<D::ReadError>>(class_a.cmp(&class_b));
+            }
+            self.compare_text(symbols, memory, a, b, &mut first, &mut second)
         })?;
         let term = symbols.rank_of(order::TERM);
         lines.remap(&symbols);
@@ -3883,6 +3864,57 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         drop(std::mem::take(&mut self.incident));
         drop(std::mem::take(&mut self.first_degree));
         drop(std::mem::take(&mut self.canonical.order));
+    }
+
+    /// Walk every component once, numbering each distinct leaf and recording
+    /// each line as its sequence of numbers. The leaf buffer and the lookup
+    /// table are released before this returns.
+    fn discover_symbols<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<order::Discovered<D::Id>, CanonError<D::ReadError>> {
+        let render = BlankRender::Canonical {
+            issuer: &self.canonical,
+        };
+        let mut flatten = Flatten::new(self, render, memory)?;
+        collect_components::<_, D::ReadError>(
+            self.ds,
+            self.scope,
+            self.presentation,
+            self.stop,
+            &mut |comp| {
+                self.walk_component(comp, &mut flatten, memory)?;
+                flatten.check_ready()
+            },
+        )?;
+        let Flatten {
+            mut symbols,
+            lines,
+            leaf,
+            ..
+        } = flatten;
+        memory.release_string(leaf)?;
+        symbols.release_table(memory)?;
+        Ok((symbols, lines))
+    }
+
+    /// Comparator C: the bytes of the two symbols' spellings, each read again
+    /// from the source into `first` and `second`.
+    fn compare_text<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        first.clear();
+        second.clear();
+        self.render_symbol(&spelling, a, symbols.meta_of(a), first, memory)?;
+        self.render_symbol(&spelling, b, symbols.meta_of(b), second, memory)?;
+        Ok(first.as_bytes().cmp(second.as_bytes()))
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
