@@ -752,7 +752,14 @@ fn a_term_that_changes_length_between_reads_is_refused_and_its_twin_succeeds() {
 /// of them with `faster` and with comparator C, which reads both spellings again.
 fn every_pair_agrees_with_c<D: DatasetView>(
     view: &D,
-    faster: impl Fn(&order::Symbols<D::Id>, u32, u32, &str, &str) -> Option<Ordering>,
+    faster: impl Fn(
+        &CanonState<'_, D>,
+        &order::Symbols<D::Id>,
+        u32,
+        u32,
+        &str,
+        &str,
+    ) -> Option<Ordering>,
 ) -> usize {
     let run = SearchRun::new(SearchPolicy::Unlimited, None);
     let state = CanonState::new(
@@ -775,7 +782,7 @@ fn every_pair_agrees_with_c<D: DatasetView>(
                 .compare_text(&symbols, &mut memory, a, b, &mut first, &mut second)
                 .expect("both symbols spell");
             // `first` and `second` still hold the two spellings C compared.
-            if let Some(ordering) = faster(&symbols, a, b, &first, &second) {
+            if let Some(ordering) = faster(&state, &symbols, a, b, &first, &second) {
                 assert_eq!(
                     ordering, by_text,
                     "symbols {a} and {b}: {first:?} {second:?}"
@@ -787,30 +794,39 @@ fn every_pair_agrees_with_c<D: DatasetView>(
     decided
 }
 
+/// The class partition as a `faster` ordering: it decides a pair exactly when
+/// the classes differ, and each class must be the first byte of its spelling.
+fn by_class<D: DatasetView>(
+    _: &CanonState<'_, D>,
+    symbols: &order::Symbols<D::Id>,
+    a: u32,
+    b: u32,
+    x: &str,
+    y: &str,
+) -> Option<Ordering> {
+    let classes = *b"\").<_";
+    let (ca, cb) = (
+        order::first_byte_class(a, symbols.meta_of(a)),
+        order::first_byte_class(b, symbols.meta_of(b)),
+    );
+    assert_eq!(
+        classes[usize::from(ca)],
+        x.as_bytes()[0],
+        "symbol {a} starts with its class"
+    );
+    assert_eq!(
+        classes[usize::from(cb)],
+        y.as_bytes()[0],
+        "symbol {b} starts with its class"
+    );
+    (ca != cb).then(|| ca.cmp(&cb))
+}
+
 /// Symbols of different first-byte classes are ordered by their classes
 /// without being read; the class of each symbol is the first byte of its
 /// spelling, so the partition cannot disagree with the text order.
 #[test]
 fn the_first_byte_partition_agrees_with_the_text_comparison_on_every_pair() {
-    let classes = *b"\").<_";
-    let class_byte = |class: u8| classes[usize::from(class)];
-    let by_class = |symbols: &order::Symbols<_>, a: u32, b: u32, x: &str, y: &str| {
-        let (ca, cb) = (
-            order::first_byte_class(a, symbols.meta_of(a)),
-            order::first_byte_class(b, symbols.meta_of(b)),
-        );
-        assert_eq!(
-            class_byte(ca),
-            x.as_bytes()[0],
-            "symbol {a} starts with its class"
-        );
-        assert_eq!(
-            class_byte(cb),
-            y.as_bytes()[0],
-            "symbol {b} starts with its class"
-        );
-        (ca != cb).then(|| ca.cmp(&cb))
-    };
     let mut cross_class = 0;
     cross_class += every_pair_agrees_with_c(&*mixed(), by_class);
     for dataset in statements() {
@@ -828,4 +844,92 @@ fn the_first_byte_partition_agrees_with_the_text_comparison_on_every_pair() {
         cross_class > 100,
         "classes decide many pairs ({cross_class})"
     );
+}
+
+/// Two IRIs written between angle brackets unchanged compare as their text
+/// followed by the closing bracket, read from the source without copying. The
+/// IRIs here sit on both sides of `>` (0x3E) at the point where one ends and the
+/// other continues, share prefixes, and include escaped ones that must go through
+/// the text comparison.
+#[test]
+fn the_clean_iri_comparison_agrees_with_the_text_comparison_on_every_pair() {
+    let spellings = [
+        "http://e/a",
+        "http://e/a-",
+        "http://e/a.",
+        "http://e/a=",
+        "http://e/a?",
+        "http://e/a/",
+        "http://e/a%20",
+        "http://e/ab",
+        "http://e/",
+        "http://e/a b",
+        "http://e/a>",
+        "http://e/a\u{a0}",
+        "http://e/a\u{2028}",
+        "http://e/\u{e9}",
+    ];
+    let mut t = TableBuilder::new();
+    let p = t.iri(P);
+    for (at, spelling) in spellings.iter().enumerate() {
+        let subject = t.raw_iri(spelling);
+        let object = t.raw_iri(spellings[(at + 3) % spellings.len()]);
+        t.quad(subject, p, object, None);
+    }
+    let mut compared_by_iri = 0;
+    let clean_both = |state: &CanonState<'_, Table>,
+                      symbols: &order::Symbols<_>,
+                      a: u32,
+                      b: u32,
+                      _: &str,
+                      _: &str| {
+        let clean = |symbol: u32| {
+            let meta = symbols.meta_of(symbol);
+            meta.kind() == order::Kind::Iri && meta.clean()
+        };
+        (clean(a) && clean(b)).then(|| {
+            state
+                .compare_clean_iris(symbols, a, b)
+                .expect("both IRIs borrow")
+        })
+    };
+    compared_by_iri += every_pair_agrees_with_c(&t.build(), clean_both);
+    assert!(
+        compared_by_iri > 50,
+        "clean IRI pairs are decided ({compared_by_iri})"
+    );
+}
+
+/// The borrowed comparison of clean IRIs checks the length it was numbered
+/// with, so an IRI that spells itself longer when read again is refused too; the
+/// stable twin of the same view succeeds.
+#[test]
+fn an_iri_that_changes_length_between_reads_is_refused_and_its_twin_succeeds() {
+    let build = |nth: Option<usize>| {
+        let mut t = TableBuilder::new();
+        let (s, p) = (t.iri(S), t.iri(P));
+        let moving = t.raw_iri("http://e/moving b");
+        let clean = t.raw_iri("http://e/moving");
+        let other = t.raw_iri("http://e/other");
+        t.quad(s, p, moving, None);
+        t.quad(s, p, clean, None);
+        t.quad(s, p, other, None);
+        let mut table = t.build();
+        if let Some(nth) = nth {
+            let target = table.over.iter().find(|(id, _)| *id == clean).unwrap();
+            table.flicker = Some((clean, nth, target.1.longer()));
+        }
+        table
+    };
+    let expected = document(&build(None)).unwrap();
+    assert_eq!(expected, oracle(&build(None)));
+    let mut refused = 0;
+    for nth in 1..=12 {
+        match document(&build(Some(nth))) {
+            Err(CanonError::SourceInconsistent) => refused += 1,
+            Ok(bytes) => assert_eq!(bytes, expected),
+            Err(other) => panic!("the only refusal is SourceInconsistent, got {other:?}"),
+        }
+    }
+    assert!(refused >= 2, "a changed length is refused, not written");
 }

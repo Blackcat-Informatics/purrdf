@@ -3714,7 +3714,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             if class_a != class_b {
                 return Ok::<_, CanonError<D::ReadError>>(class_a.cmp(&class_b));
             }
-            self.compare_text(symbols, memory, a, b, &mut first, &mut second)
+            self.compare_within_class(symbols, memory, a, b, &mut first, &mut second)
         })?;
         let term = symbols.rank_of(order::TERM);
         lines.remap(&symbols);
@@ -3896,6 +3896,58 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory.release_string(leaf)?;
         symbols.release_table(memory)?;
         Ok((symbols, lines))
+    }
+
+    /// Order two symbols whose spellings start with the same byte: the borrowed
+    /// IRIs when both are IRIs written between angle brackets unchanged, else
+    /// comparator C.
+    fn compare_within_class<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let (meta_a, meta_b) = (symbols.meta_of(a), symbols.meta_of(b));
+        let clean_iri = |meta: order::Meta| meta.kind() == order::Kind::Iri && meta.clean();
+        if clean_iri(meta_a) && clean_iri(meta_b) {
+            return self.compare_clean_iris(symbols, a, b);
+        }
+        self.compare_text(symbols, memory, a, b, first, second)
+    }
+
+    /// Two IRIs spelled `<iri>` with nothing escaped compare as `iri` followed by
+    /// `>`: the text after the bracket is the IRI and its closing bracket, and
+    /// the space after each is equal. The IRIs are borrowed from the source, not
+    /// copied; one whose length differs from the length recorded for it is a
+    /// source that changed between reads.
+    fn compare_clean_iris(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        a: u32,
+        b: u32,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        let (Some(guard_a), Some(guard_b)) = (
+            self.ds.resolve_if_ready(spelling.rep(a)),
+            self.ds.resolve_if_ready(spelling.rep(b)),
+        ) else {
+            return Err(self.latched_read_error());
+        };
+        let (TermRef::Iri(iri_a), TermRef::Iri(iri_b)) = (guard_a.term(), guard_b.term()) else {
+            return Err(CanonError::SourceInconsistent);
+        };
+        for (symbol, iri) in [(a, iri_a), (b, iri_b)] {
+            if iri.len() + 2 != spelling.len(symbol, symbols.meta_of(symbol)) {
+                return Err(CanonError::SourceInconsistent);
+            }
+        }
+        Ok(iri_a
+            .bytes()
+            .chain(std::iter::once(b'>'))
+            .cmp(iri_b.bytes().chain(std::iter::once(b'>'))))
     }
 
     /// Comparator C: the bytes of the two symbols' spellings, each read again
