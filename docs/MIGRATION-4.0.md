@@ -546,6 +546,15 @@ physical allocation refusal. Flat boundaries retain native causes through
 This admission covers the retained refusal and its publication control. It does
 not certify canonicalization scratch or successful canonical result ownership.
 
+## Canonical document construction
+
+The canonical document is built from numbered terms instead of one owned string
+per line and a second copy of the whole document. Canonical bytes, digests and
+blank labels are unchanged for every input. A `DatasetView` implementor must
+spell a term identically every time a run reads it; a term whose length differs
+between reads is refused with `CanonError::SourceInconsistent`. A same-length
+change is not detected, and the bytes of such a source are undefined.
+
 ## Canonical Function Ontology catalogs
 
 Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted
