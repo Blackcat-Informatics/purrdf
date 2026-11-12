@@ -53,7 +53,8 @@ impl<'a> Parts<'a> {
     ) -> core::result::Result<String, StorageError> {
         // Exact-fit buffer from the known part lengths: one allocation per
         // recompose instead of the amortized-doubling reallocs of `String::new()`.
-        let mut capacity = self.path.len();
+        let guard = network_path_guard(self.authority.is_some(), &self.path);
+        let mut capacity = self.path.len() + guard.len();
         for (part, delimiter) in [
             (self.scheme, 1),
             (self.authority, 2),
@@ -77,6 +78,7 @@ impl<'a> Parts<'a> {
             out.push_str("//");
             out.push_str(a);
         }
+        out.push_str(guard);
         out.push_str(&self.path);
         if let Some(q) = &self.query {
             out.push('?');
@@ -195,6 +197,19 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) 
         Ok(value) => Ok(value),
         Err(IriReadError::Lexical(error)) => Err(error),
         Err(IriReadError::Storage(error)) => panic!("resident IRI storage failed: {error}"),
+    }
+}
+
+/// The RFC-3986 §3.3 guard, in one place: with no authority a path may not begin
+/// with `//`, or the recomposed text (§5.3) would read as `scheme://...` and turn
+/// the path into an authority. The returned prefix is `"/."` for that case, which
+/// `remove_dot_segments` strips again, so the guarded form is a fixed point; it is
+/// empty otherwise. Apply it AFTER dot-segment removal, where the text is rebuilt.
+pub(crate) fn network_path_guard(has_authority: bool, path: &str) -> &'static str {
+    if !has_authority && path.starts_with("//") {
+        "/."
+    } else {
+        ""
     }
 }
 

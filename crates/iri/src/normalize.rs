@@ -18,7 +18,7 @@
 use purrdf_lex::percent;
 
 use crate::parse::{Iri, parse};
-use crate::resolve::remove_dot_segments;
+use crate::resolve::{network_path_guard, remove_dot_segments};
 
 impl Iri {
     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
@@ -48,7 +48,9 @@ impl Iri {
             out.push_str("//");
             out.push_str(&normalize_authority(auth));
         }
-        out.push_str(&remove_dot_segments(&percent::normalize(self.path())));
+        let path = remove_dot_segments(&percent::normalize(self.path()));
+        out.push_str(network_path_guard(self.authority().is_some(), &path));
+        out.push_str(&path);
         if let Some(q) = self.query() {
             out.push('?');
             out.push_str(&percent::normalize(q));
@@ -58,10 +60,10 @@ impl Iri {
             out.push_str(&percent::normalize(frag));
         }
 
-        // Re-parse: a normalized IRI is still a valid IRI by construction. The
-        // panic path is unreachable for any input that parsed in the first place
-        // (we only ever lower-case ASCII and decode unreserved chars), so a parse
-        // failure here is a genuine bug, not user input — hence `expect`.
+        // Re-parse: a normalized IRI is still a valid IRI by construction. We only
+        // lower-case ASCII, decode unreserved chars and remove dot segments, and
+        // `network_path_guard` keeps a `//` path from reading as an authority, so a
+        // parse failure here is a genuine bug, not user input — hence `expect`.
         parse(&out).expect("normalized IRI must re-parse")
     }
 }

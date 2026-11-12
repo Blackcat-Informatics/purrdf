@@ -51,6 +51,41 @@ fn valid_iri() -> impl Strategy<Value = String> {
     })
 }
 
+/// IRIs with NO authority and a path built from empty, dot and ordinary
+/// segments, so dot-segment removal can leave a `//` path (the class that once
+/// made `normalize` panic). Each segment may contain `:` since that is what
+/// turned the re-read authority into an invalid port.
+fn authorityless_iri() -> impl Strategy<Value = String> {
+    let scheme = prop::sample::select(vec!["a", "urn", "x-y"]);
+    let seg = prop::sample::select(vec!["", "", ".", "..", "x", "x:y", "b", "%7e"]);
+    let segs = prop::collection::vec(seg, 0..6);
+    (scheme, prop::bool::ANY, segs).prop_map(|(s, rooted, segs)| {
+        let mut out = format!("{s}:");
+        if rooted {
+            out.push('/');
+        }
+        out.push_str(&segs.join("/"));
+        out
+    })
+}
+
+prop_test! {
+    /// Normalization of an authority-less IRI neither panics nor invents an
+    /// authority, keeps its scheme, re-parses, and is a fixed point.
+    #[test]
+    fn normalize_authorityless_is_total_and_idempotent(s in authorityless_iri()) {
+        // A `//` straight after the scheme is an (empty) authority; those are
+        // outside this property.
+        if let Ok(iri) = parse(&s) && iri.authority().is_none() {
+            let n1 = iri.normalize();
+            prop_assert!(n1.authority().is_none());
+            prop_assert_eq!(n1.scheme(), iri.scheme().map(str::to_ascii_lowercase).as_deref());
+            let n2 = n1.normalize();
+            prop_assert_eq!(n1.as_str(), n2.as_str());
+        }
+    }
+}
+
 prop_test! {
     /// The parser never rewrites its input: `as_str()` is byte-identical.
     #[test]
