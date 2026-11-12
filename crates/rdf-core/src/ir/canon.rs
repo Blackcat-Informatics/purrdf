@@ -4400,7 +4400,7 @@ impl<'a, D: DatasetView> Flatten<'a, D> {
             state.write_fixed(symbol, &mut leaf, memory)?;
             // `<`, the IRI, `>` and the space: nothing was escaped.
             let clean = sentinel.is_some_and(|iri| leaf.len() == iri.len() + 3);
-            let aligned = order::is_one_token(leaf.bytes());
+            let aligned = order::is_one_token(leaf.as_bytes());
             symbols.push_fixed(leaf.len(), clean, aligned, memory)?;
         }
         Ok(Self {

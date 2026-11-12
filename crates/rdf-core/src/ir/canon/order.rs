@@ -134,9 +134,75 @@ pub(super) fn symbol_number(leaves: usize) -> Result<u32, StorageError> {
         .ok_or(StorageError::SizeOverflow)
 }
 
-/// The length of the first token of `bytes`, up to and including its stop byte,
-/// or `None` when the bytes end before one.
-fn token_len(mut bytes: impl Iterator<Item = u8>) -> Option<usize> {
+/// Where the tokenizer stands after reading some bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Scan {
+    /// It stopped, and the token is this many bytes long.
+    Stopped(usize),
+    /// It has not stopped. `quoted` is whether it is inside a quoted literal,
+    /// `escaped` whether the last byte was a backslash that takes the next one.
+    Open { quoted: bool, escaped: bool },
+}
+
+/// Run the tokenizer over `bytes` in one pass.
+fn scan(bytes: &[u8]) -> Scan {
+    let Some((&first, rest)) = bytes.split_first() else {
+        return Scan::Open {
+            quoted: false,
+            escaped: false,
+        };
+    };
+    let mut quoted = first == b'"';
+    if first == b'\n' || (!quoted && first == b' ') {
+        return Scan::Stopped(1);
+    }
+    let mut escaped = false;
+    for (at, &byte) in rest.iter().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if quoted {
+            match byte {
+                b'\\' => escaped = true,
+                b'"' => quoted = false,
+                b'\n' => return Scan::Stopped(at + 2),
+                _ => {}
+            }
+        } else if byte == b' ' || byte == b'\n' {
+            return Scan::Stopped(at + 2);
+        }
+    }
+    Scan::Open { quoted, escaped }
+}
+
+/// Whether `bytes` are exactly one token.
+pub(super) fn is_one_token(bytes: &[u8]) -> bool {
+    scan(bytes) == Scan::Stopped(bytes.len())
+}
+
+/// Whether a leaf's `text` followed by its space is exactly one token, without
+/// writing the space: the tokenizer must not stop inside `text` and must stand
+/// outside a quoted literal at its end, where the space then stops it. An empty
+/// `text` leaves a lone space, which is one token.
+fn leaf_is_one_token(text: &[u8]) -> bool {
+    scan(text)
+        == Scan::Open {
+            quoted: false,
+            escaped: false,
+        }
+}
+
+/// Whether a leaf symbol is aligned. A clean IRI is aligned by construction:
+/// its text is `<`, the IRI and `>` with nothing escaped, and the IRI escape set
+/// holds every byte up to and including the space, so the tokenizer, which
+/// starts outside a quote at `<`, first stops at the trailing space.
+fn leaf_aligned(kind: Kind, clean: bool, text: &str) -> bool {
+    (kind == Kind::Iri && clean) || leaf_is_one_token(text.as_bytes())
+}
+
+/// The tokenizer as it was first written, over an iterator that is counted
+/// and then read again; kept as the oracle for the one-pass [`scan`].
+#[cfg(test)]
+fn reference_token_len(mut bytes: impl Iterator<Item = u8>) -> Option<usize> {
     let first = bytes.next()?;
     let mut quoted = first == b'"';
     if first == b'\n' || (!quoted && first == b' ') {
@@ -162,10 +228,10 @@ fn token_len(mut bytes: impl Iterator<Item = u8>) -> Option<usize> {
     None
 }
 
-/// Whether `bytes` are exactly one token.
-pub(super) fn is_one_token(bytes: impl Iterator<Item = u8> + Clone) -> bool {
-    let total = bytes.clone().count();
-    token_len(bytes) == Some(total)
+/// Whether `bytes` are exactly one token, by [`reference_token_len`].
+#[cfg(test)]
+pub(super) fn reference_is_one_token(bytes: &[u8]) -> bool {
+    reference_token_len(bytes.iter().copied()) == Some(bytes.len())
 }
 
 /// The distinct symbols of a run and the data needed to spell each again.
@@ -338,7 +404,7 @@ impl<Id: Copy + Eq + std::hash::Hash> Symbols<Id> {
         memory: &mut Memory<'_, S>,
     ) -> Result<(u32, Meta), StorageError> {
         let symbol = symbol_number(self.reps.len())?;
-        let aligned = is_one_token(text.bytes().chain(std::iter::once(b' ')));
+        let aligned = leaf_aligned(kind, clean, text);
         let meta = Meta::new(text.len(), kind, clean, rewritten, aligned);
         self.max_len = self.max_len.max(text.len() + 1);
         if meta.len_field() == LONG {
@@ -669,7 +735,41 @@ mod tests {
     }
 
     fn one_token(text: &str) -> bool {
-        is_one_token(text.bytes())
+        is_one_token(text.as_bytes())
+    }
+
+    /// The one-pass alignment checks equal the reference tokenizer on every byte
+    /// string up to six bytes over the bytes that steer it (quote, backslash,
+    /// space, newline) and two ordinary ones, both for a whole symbol and for a
+    /// leaf whose space is implied. It protects the alignment bit, which decides
+    /// whether a line is ordered by ranks or by its bytes.
+    #[test]
+    fn the_one_pass_alignment_check_equals_the_reference_tokenizer() {
+        const ALPHABET: [u8; 6] = *b"\"\\ \na@";
+        let mut checked = 0;
+        for len in 0..=6_u32 {
+            for mut code in 0..ALPHABET.len().pow(len) {
+                let mut bytes = Vec::new();
+                for _ in 0..len {
+                    bytes.push(ALPHABET[code % ALPHABET.len()]);
+                    code /= ALPHABET.len();
+                }
+                assert_eq!(
+                    is_one_token(&bytes),
+                    reference_is_one_token(&bytes),
+                    "{bytes:?}"
+                );
+                let mut spaced = bytes.clone();
+                spaced.push(b' ');
+                assert_eq!(
+                    leaf_is_one_token(&bytes),
+                    reference_is_one_token(&spaced),
+                    "{bytes:?} and its space"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, (0..=6).map(|len| 6_usize.pow(len)).sum::<usize>());
     }
 
     #[test]

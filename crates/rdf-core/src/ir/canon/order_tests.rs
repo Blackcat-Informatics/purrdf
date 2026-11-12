@@ -601,8 +601,10 @@ fn long_lines_match_the_oracle() {
 // ---------------------------------------------------------------------------
 // Generated fixtures: whatever mix of clean, unclean, irregular and blank terms.
 
-#[test]
-fn generated_documents_match_the_oracle_for_every_mix_of_terms() {
+/// A view drawn from `seed`: clean, unclean and irregular IRIs, literals with
+/// spaces, quotes, backslashes and newlines, tags with a space, a newline or
+/// nothing, blanks, in any slot.
+fn generated(seed: u64) -> Table {
     const TAGS: [&str; 12] = [
         "en",
         "en-us",
@@ -628,46 +630,96 @@ fn generated_documents_match_the_oracle_for_every_mix_of_terms() {
         "http://e/a\u{2028}",
         "http://e/a%20",
     ];
-    for seed in 0..96_u64 {
-        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32;
-        let mut draw = |bound: usize| -> usize {
-            usize::try_from(purrdf_hash::mix::splitmix64_next(&mut state) % bound as u64).unwrap()
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32;
+    let mut draw = |bound: usize| -> usize {
+        usize::try_from(purrdf_hash::mix::splitmix64_next(&mut state) % bound as u64).unwrap()
+    };
+    let mut t = TableBuilder::new();
+    let p = t.iri(P);
+    let blanks: Vec<_> = (0..4).map(|k| t.blank(&format!("b{k}"))).collect();
+    let mut terms = Vec::new();
+    for _ in 0..10 {
+        let kind = draw(3);
+        let id = if kind == 0 {
+            t.raw_iri(IRIS[draw(IRIS.len())])
+        } else if kind == 1 {
+            t.tagged(LEXICALS[draw(LEXICALS.len())], TAGS[draw(TAGS.len())])
+        } else {
+            t.iri(IRIS[draw(IRIS.len())])
         };
-        let mut t = TableBuilder::new();
-        let p = t.iri(P);
-        let blanks: Vec<_> = (0..4).map(|k| t.blank(&format!("b{k}"))).collect();
-        let mut terms = Vec::new();
-        for _ in 0..10 {
-            let kind = draw(3);
-            let id = if kind == 0 {
-                t.raw_iri(IRIS[draw(IRIS.len())])
-            } else if kind == 1 {
-                t.tagged(LEXICALS[draw(LEXICALS.len())], TAGS[draw(TAGS.len())])
-            } else {
-                t.iri(IRIS[draw(IRIS.len())])
-            };
-            terms.push(id);
-        }
-        for _ in 0..(6 + draw(14)) {
-            let subject = if draw(2) == 0 {
-                blanks[draw(blanks.len())]
-            } else {
-                t.iri(IRIS[draw(IRIS.len())])
-            };
-            let object = if draw(3) == 0 {
-                blanks[draw(blanks.len())]
-            } else {
-                terms[draw(terms.len())]
-            };
-            let graph = match draw(3) {
-                0 => None,
-                1 => Some(blanks[draw(blanks.len())]),
-                _ => Some(t.iri(G)),
-            };
-            t.quad(subject, p, object, graph);
-        }
-        check(&t.build());
+        terms.push(id);
     }
+    for _ in 0..(6 + draw(14)) {
+        let subject = if draw(2) == 0 {
+            blanks[draw(blanks.len())]
+        } else {
+            t.iri(IRIS[draw(IRIS.len())])
+        };
+        let object = if draw(3) == 0 {
+            blanks[draw(blanks.len())]
+        } else {
+            terms[draw(terms.len())]
+        };
+        let graph = match draw(3) {
+            0 => None,
+            1 => Some(blanks[draw(blanks.len())]),
+            _ => Some(t.iri(G)),
+        };
+        t.quad(subject, p, object, graph);
+    }
+    t.build()
+}
+
+/// Every generated mix of terms canonicalizes to the oracle's bytes.
+#[test]
+fn generated_documents_match_the_oracle_for_every_mix_of_terms() {
+    for seed in 0..96_u64 {
+        check(&generated(seed));
+    }
+}
+
+/// The alignment bit recorded at discovery, including the clean-IRI shortcut
+/// that skips reading the IRI, equals the reference tokenizer over the symbol's
+/// rendered spelling, on every symbol of the generated views. It protects the
+/// choice between ordering a line by ranks and ordering it by its bytes.
+#[test]
+fn the_recorded_alignment_equals_the_reference_tokenizer_on_every_generated_symbol() {
+    let (mut clean_iris, mut unaligned) = (0, 0);
+    for seed in 0..96_u64 {
+        let view = generated(seed);
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
+        let state = CanonState::new(
+            &view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+            &run,
+        )
+        .issue_labels()
+        .expect("labels issue");
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let (symbols, _) = state.discover_symbols(&mut memory).expect("symbols number");
+        let spelling = symbols.spelling();
+        for symbol in 0..u32::try_from(symbols.count()).unwrap() {
+            let meta = symbols.meta_of(symbol);
+            let mut text = String::new();
+            state
+                .render_symbol(&spelling, symbol, meta, &mut text, &mut memory)
+                .expect("the symbol spells");
+            assert_eq!(
+                meta.aligned(),
+                order::reference_is_one_token(text.as_bytes()),
+                "symbol {symbol}: {text:?}"
+            );
+            clean_iris += usize::from(meta.kind() == order::Kind::Iri && meta.clean());
+            unaligned += usize::from(!meta.aligned());
+        }
+    }
+    assert!(
+        clean_iris > 100 && unaligned > 20,
+        "both outcomes are exercised ({clean_iris} clean IRIs, {unaligned} unaligned)"
+    );
 }
 
 // ---------------------------------------------------------------------------
