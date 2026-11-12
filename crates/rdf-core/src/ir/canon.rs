@@ -3706,15 +3706,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut second = String::new();
         memory.reserve_string(&mut first, symbols.max_len())?;
         memory.reserve_string(&mut second, symbols.max_len())?;
-        let ranked = order::rank(&mut symbols, memory, |symbols, memory, a, b| {
-            let (class_a, class_b) = (
-                order::first_byte_class(a, symbols.meta_of(a)),
-                order::first_byte_class(b, symbols.meta_of(b)),
-            );
-            if class_a != class_b {
-                return Ok::<_, CanonError<D::ReadError>>(class_a.cmp(&class_b));
-            }
-            self.compare_within_class(symbols, memory, a, b, &mut first, &mut second)
+        let heads = order::head_keys(&symbols, memory, |symbols, memory, symbol| {
+            self.head_key_of(symbols, memory, symbol, &mut first)
+        })?;
+        let ranked = order::rank(&mut symbols, memory, heads, |symbols, memory, a, b| {
+            self.compare_symbols(symbols, memory, a, b, &mut first, &mut second)
         })?;
         let term = symbols.rank_of(order::TERM);
         lines.remap(&symbols);
@@ -3896,6 +3892,57 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory.release_string(leaf)?;
         symbols.release_table(memory)?;
         Ok((symbols, lines))
+    }
+
+    /// The head key of `symbol`, read again from the source: a clean IRI is
+    /// borrowed, every other symbol is spelled into `buffer`. A length other
+    /// than the one recorded when the symbol was found is a source that changed
+    /// between reads.
+    fn head_key_of<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        symbol: u32,
+        buffer: &mut String,
+    ) -> Result<[u8; order::HEAD], CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        let meta = symbols.meta_of(symbol);
+        if meta.kind() == order::Kind::Iri && meta.clean() {
+            let Some(guard) = self.ds.resolve_if_ready(spelling.rep(symbol)) else {
+                return Err(self.latched_read_error());
+            };
+            let TermRef::Iri(iri) = guard.term() else {
+                return Err(CanonError::SourceInconsistent);
+            };
+            if iri.len() + 2 != spelling.len(symbol, meta) {
+                return Err(CanonError::SourceInconsistent);
+            }
+            return Ok(order::bracketed_head_key(iri.as_bytes()));
+        }
+        buffer.clear();
+        self.render_symbol(&spelling, symbol, meta, buffer, memory)?;
+        Ok(order::head_key(buffer.as_bytes()))
+    }
+
+    /// Order two symbols by their full spellings: by first-byte class when the
+    /// classes differ, else within the class.
+    fn compare_symbols<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let (class_a, class_b) = (
+            order::first_byte_class(a, symbols.meta_of(a)),
+            order::first_byte_class(b, symbols.meta_of(b)),
+        );
+        if class_a != class_b {
+            return Ok(class_a.cmp(&class_b));
+        }
+        self.compare_within_class(symbols, memory, a, b, first, second)
     }
 
     /// Order two symbols whose spellings start with the same byte: the borrowed

@@ -798,6 +798,138 @@ fn a_term_that_changes_length_between_reads_is_refused_and_its_twin_succeeds() {
 }
 
 // ---------------------------------------------------------------------------
+// Symbols that tie on their head keys.
+
+/// IRIs and literals that share their first 40 bytes, so every head key of a
+/// kind ties, with an unclean IRI among them; with `apart`, each term starts
+/// with its own number instead, so only an IRI and its unclean twin tie.
+fn shared_heads(apart: bool) -> Table {
+    let mut t = TableBuilder::new();
+    let p = t.iri(P);
+    for k in 0..6 {
+        let (iri, lexical) = if apart {
+            (
+                format!("http://example.org/{k}/a-shared-prefix-of-forty-bytes/"),
+                format!("{k} a shared prefix of more than forty bytes, then "),
+            )
+        } else {
+            (
+                format!("http://example.org/a-shared-prefix-of-forty-bytes/{k}"),
+                format!("a shared prefix of more than forty bytes, then {k}"),
+            )
+        };
+        let s = t.iri(&iri);
+        let o = t.tagged(&lexical, if k % 2 == 0 { "en" } else { "en US" });
+        t.quad(s, p, o, None);
+        let unclean = t.raw_iri(&format!("{iri} {k}"));
+        t.quad(unclean, p, o, None);
+    }
+    t.build()
+}
+
+/// Rank the symbols of `view` with the comparator a run uses and check every
+/// pair of ranks against comparator C's verdict on the two spellings, read
+/// before any rank replaced the metadata C needs. Returns how many comparisons
+/// ranking made.
+fn ranks_agree_with_c<D: DatasetView>(view: &D) -> usize {
+    let run = SearchRun::new(SearchPolicy::Unlimited, None);
+    let state = CanonState::new(
+        view,
+        CanonScope::Dataset,
+        CanonPresentation::Overlay,
+        CanonHash::Sha256,
+        &run,
+    )
+    .issue_labels()
+    .expect("labels issue");
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = Memory::new(&mut resident);
+    let (mut symbols, _) = state.discover_symbols(&mut memory).expect("symbols number");
+    let count = u32::try_from(symbols.count()).unwrap();
+    let (mut first, mut second) = (String::new(), String::new());
+    let mut by_text = Vec::new();
+    for a in 0..count {
+        for b in 0..count {
+            by_text.push(
+                state
+                    .compare_text(&symbols, &mut memory, a, b, &mut first, &mut second)
+                    .expect("both symbols spell"),
+            );
+        }
+    }
+    let heads = order::head_keys(&symbols, &mut memory, |symbols, memory, symbol| {
+        state.head_key_of(symbols, memory, symbol, &mut first)
+    })
+    .expect("every head key reads");
+    let mut compares = 0;
+    order::rank(&mut symbols, &mut memory, heads, |symbols, memory, a, b| {
+        compares += 1;
+        state.compare_symbols(symbols, memory, a, b, &mut first, &mut second)
+    })
+    .expect("the symbols rank");
+    for a in 0..count {
+        for b in 0..count {
+            assert_eq!(
+                symbols.rank_of(a).cmp(&symbols.rank_of(b)),
+                by_text[(a * count + b) as usize],
+                "symbols {a} and {b}"
+            );
+        }
+    }
+    compares
+}
+
+/// Sorting by head key and refining ties by the full comparison gives the
+/// order comparator C gives, on the differential fixtures, on symbols that all
+/// tie past 32 bytes and on their twin whose keys mostly differ. It protects the rank
+/// of every symbol, which is the order of every regular line.
+#[test]
+fn head_key_ranking_with_tie_refinement_equals_comparator_c() {
+    ranks_agree_with_c(&*mixed());
+    for dataset in statements() {
+        ranks_agree_with_c(&*dataset);
+    }
+    for seed in 0..96_u64 {
+        ranks_agree_with_c(&generated(seed));
+    }
+    let tied = ranks_agree_with_c(&shared_heads(false));
+    let apart = ranks_agree_with_c(&shared_heads(true));
+    assert!(
+        tied > apart,
+        "ties are refined by reading the symbols ({tied} against {apart})"
+    );
+}
+
+/// A source that fails while tied head keys are refined is refused with its
+/// own failure, as before the keys; the twin without the failure succeeds. The
+/// tied view reads more often than its untied twin, so the extra reads are the
+/// refinement's.
+#[test]
+fn a_read_failure_while_ties_are_refined_is_refused_with_the_source_failure() {
+    let reads = |apart: bool| {
+        let table = shared_heads(apart);
+        let bytes = document(&table).unwrap();
+        assert_eq!(bytes, oracle(&shared_heads(apart)));
+        table.reads.get()
+    };
+    let tied_reads = reads(false);
+    let apart_reads = reads(true);
+    assert!(
+        tied_reads > apart_reads,
+        "refinement reads the source ({tied_reads} against {apart_reads})"
+    );
+    for at in 1..=tied_reads {
+        let mut table = shared_heads(false);
+        table.fail_at = Some(at);
+        assert_eq!(
+            document(&table),
+            Err(CanonError::Read(TableFault)),
+            "a failure at resolution {at} must be the run's result"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Each faster ordering agrees with comparator C on every pair of symbols.
 
 /// Number the distinct symbols of `view` as a run does, then compare every pair

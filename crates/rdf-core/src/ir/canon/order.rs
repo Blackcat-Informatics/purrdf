@@ -26,6 +26,15 @@
 //! Lines containing such a symbol are *irregular*: they are ordered by their
 //! bytes and merged into the regular order by byte comparison, so every input
 //! yields the bytes a plain sort of the rendered lines would.
+//!
+//! Ranking sorts by a head key first: the first [`HEAD`] bytes of a symbol's
+//! spelling, padded with zero bytes, read when ranking begins. The key is monotone in the bytewise order
+//! of the full spelling: if `a` is below `b` then `key(a) <= key(b)`, because a
+//! first difference within the head is kept by both keys, and otherwise the keys
+//! agree on the bytes of `a` while each zero of its padding is at most the byte
+//! of `b` in the same place. So sorting by key and then ordering each run of
+//! equal keys by the full spelling gives the full order, and two different keys
+//! are never two equal spellings.
 
 use std::cmp::Ordering;
 
@@ -48,6 +57,59 @@ pub(super) const REIFIES: u32 = 4;
 pub(super) const SENTINEL_ANNOTATION: u32 = 5;
 /// The first symbol number that names a leaf.
 pub(super) const FIRST_LEAF: u32 = 6;
+
+/// How many leading bytes of a spelling its head key holds.
+pub(super) const HEAD: usize = 32;
+
+/// A symbol's head key and the symbol.
+pub(super) type Head = ([u8; HEAD], u32);
+
+/// The head key of a whole spelling: its first [`HEAD`] bytes, padded with
+/// zero bytes.
+pub(super) fn head_key(spelling: &[u8]) -> [u8; HEAD] {
+    let mut key = [0; HEAD];
+    let len = spelling.len().min(HEAD);
+    key[..len].copy_from_slice(&spelling[..len]);
+    key
+}
+
+/// The head key of a clean IRI's spelling, `<`, the IRI, `>` and a space,
+/// without writing it.
+pub(super) fn bracketed_head_key(iri: &[u8]) -> [u8; HEAD] {
+    let mut key = [0; HEAD];
+    key[0] = b'<';
+    let len = iri.len().min(HEAD - 1);
+    key[1..=len].copy_from_slice(&iri[..len]);
+    for (at, byte) in [(iri.len() + 1, b'>'), (iri.len() + 2, b' ')] {
+        if let Some(slot) = key.get_mut(at) {
+            *slot = byte;
+        }
+    }
+    key
+}
+
+/// Every symbol's head key, read by `key_of` into an array admitted at its
+/// exact length, so no growth copy is ever held beside it.
+///
+/// # Errors
+/// The first failure of `key_of` or of admitting the array.
+pub(super) fn head_keys<
+    Id: Copy + Eq + std::hash::Hash,
+    E: From<StorageError>,
+    S: Admission + ?Sized,
+>(
+    symbols: &Symbols<Id>,
+    memory: &mut Memory<'_, S>,
+    mut key_of: impl FnMut(&Symbols<Id>, &mut Memory<'_, S>, u32) -> Result<[u8; HEAD], E>,
+) -> Result<Vec<Head>, E> {
+    let mut heads = Vec::new();
+    memory.reserve(&mut heads, symbols.count())?;
+    for symbol in 0..symbols.count() {
+        let symbol = u32::try_from(symbol).map_err(|_| StorageError::SizeOverflow)?;
+        heads.push((key_of(symbols, memory, symbol)?, symbol));
+    }
+    Ok(heads)
+}
 
 /// How a symbol is spelled again.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -434,6 +496,7 @@ impl<Id: Copy + Eq + std::hash::Hash> Symbols<Id> {
         }
         push_bounded(memory, &mut self.reps, id)?;
         push_bounded(memory, &mut self.meta, meta.bits())?;
+
         let required = self
             .table
             .len()
@@ -477,6 +540,7 @@ impl<Id: Copy + Eq + std::hash::Hash> Symbols<Id> {
         memory.release_vec(self.reps)?;
         memory.release_vec(self.long_lens)?;
         memory.release_vec(self.arena_index)?;
+
         memory.release_string(self.arena)
     }
 }
@@ -500,7 +564,14 @@ impl Ranked {
 
 /// Order all symbols by their text and give equal text one dense rank.
 ///
-/// `compare` orders two symbols by their full text. On return each symbol's
+/// `heads` holds every symbol's head key (see [`head_keys`]). They are sorted
+/// by key with the standard sort, which sees only that total, infallible order. Each run of equal keys is then ordered by
+/// `compare`, which orders two symbols by their full text and may fail, through
+/// the fallible sort, so a failure is returned as it was met. Only two symbols
+/// of equal keys are compared again when equal text is grouped. The head keys
+/// are released before this returns.
+///
+/// On return each symbol's
 /// entry in `symbols` is its rank, and the result lists, per rank, the symbol that
 /// stands for it. The order of writes matters: a symbol's packed metadata is read
 /// by `compare` until the comparison of that symbol with its successor has
@@ -516,34 +587,48 @@ pub(super) fn rank<
 >(
     symbols: &mut Symbols<Id>,
     memory: &mut Memory<'_, S>,
+    mut heads: Vec<Head>,
     mut compare: impl FnMut(&Symbols<Id>, &mut Memory<'_, S>, u32, u32) -> Result<Ordering, E>,
 ) -> Result<Ranked, E> {
     let count = symbols.count();
+    debug_assert_eq!(heads.len(), count, "every symbol has a head key");
+    heads.sort_unstable_by_key(|head| head.0);
+    let mut start = 0;
+    while start < heads.len() {
+        let key = heads[start].0;
+        let end = start
+            + heads[start..]
+                .iter()
+                .take_while(|head| head.0 == key)
+                .count();
+        if end - start > 1 {
+            try_sort_unstable_by(&mut heads[start..end], |a, b| {
+                if a.1 == b.1 {
+                    return Ok(Ordering::Equal);
+                }
+                compare(symbols, memory, a.1, b.1)
+            })?;
+        }
+        start = end;
+    }
     let mut order: Vec<u32> = Vec::new();
     memory.reserve(&mut order, count)?;
-    for symbol in 0..count {
-        order.push(u32::try_from(symbol).map_err(|_| StorageError::SizeOverflow)?);
-    }
-    try_sort_unstable_by(&mut order, |&a, &b| {
-        if a == b {
-            return Ok(Ordering::Equal);
-        }
-        compare(symbols, memory, a, b)
-    })?;
     let mut meta: Vec<u32> = Vec::new();
     memory.reserve(&mut meta, count)?;
     let mut rank = 0usize;
     let mut starts_group = true;
-    for at in 0..count {
-        let symbol = order[at];
+    for at in 0..heads.len() {
+        let (key, symbol) = heads[at];
         if starts_group {
             meta.push(symbols.meta[symbol as usize]);
-            order[rank] = symbol;
+            order.push(symbol);
         }
-        let same_as_next = if at + 1 < count {
-            compare(symbols, memory, symbol, order[at + 1])? == Ordering::Equal
-        } else {
-            false
+        // Different keys are different spellings; only equal keys are read.
+        let same_as_next = match heads.get(at + 1) {
+            Some(&(next_key, next)) if next_key == key => {
+                compare(symbols, memory, symbol, next)? == Ordering::Equal
+            }
+            _ => false,
         };
         symbols.meta[symbol as usize] =
             u32::try_from(rank).map_err(|_| StorageError::SizeOverflow)?;
@@ -552,7 +637,7 @@ pub(super) fn rank<
             rank += 1;
         }
     }
-    order.truncate(rank);
+    memory.release_vec(heads)?;
     Ok(Ranked {
         symbols: order,
         meta,
@@ -839,6 +924,105 @@ mod tests {
         assert!(prefixes > 1000, "proper prefixes are compared ({prefixes})");
     }
 
+    /// A clean IRI's key, built without writing the brackets and the space, is
+    /// the key of its written spelling for every length around the head, so
+    /// the closing bracket and the space land where the spelling puts them.
+    #[test]
+    fn a_clean_iri_key_equals_the_key_of_its_written_spelling() {
+        for len in 0..=HEAD + 2 {
+            let iri = "i".repeat(len);
+            let spelled = format!("<{iri}> ");
+            assert_eq!(
+                bracketed_head_key(iri.as_bytes()),
+                head_key(spelled.as_bytes()),
+                "an IRI of {len} bytes"
+            );
+        }
+    }
+
+    /// Rank `leaves` (each spelled with its trailing space) after the six fixed
+    /// symbols, comparing full spellings; the ranks in symbol order, and how
+    /// many comparisons ranking made.
+    fn rank_spellings(leaves: &[&[u8]]) -> (Vec<u32>, usize) {
+        let fixed: [&[u8]; 6] = [b"<<( ", b")>> ", b".\n", b"<r> ", b"<s> ", b"<t> "];
+        let mut spellings: Vec<Vec<u8>> = fixed.iter().map(|text| text.to_vec()).collect();
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut symbols = Symbols::<u32>::new();
+        for text in fixed {
+            symbols
+                .push_fixed(text.len(), false, true, &mut memory)
+                .unwrap();
+        }
+        for (at, text) in leaves.iter().enumerate() {
+            let body = std::str::from_utf8(text).unwrap();
+            let id = u32::try_from(at).unwrap();
+            symbols
+                .push_leaf(id, Kind::Literal, false, false, body, &mut memory)
+                .unwrap();
+            spellings.push([*text, b" "].concat());
+        }
+        let heads = head_keys::<u32, StorageError, _>(&symbols, &mut memory, |_, _, symbol| {
+            Ok(head_key(&spellings[symbol as usize]))
+        })
+        .unwrap();
+        let mut compares = 0;
+        rank::<u32, StorageError, _>(&mut symbols, &mut memory, heads, |_, _, a, b| {
+            compares += 1;
+            Ok(spellings[a as usize].cmp(&spellings[b as usize]))
+        })
+        .unwrap();
+        let ranks = (0..u32::try_from(spellings.len()).unwrap())
+            .map(|symbol| symbols.rank_of(symbol))
+            .collect();
+        let mut distinct = spellings.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        for (symbol, spelling) in spellings.iter().enumerate() {
+            let rank = symbols.rank_of(u32::try_from(symbol).unwrap());
+            assert_eq!(
+                &distinct[rank as usize], spelling,
+                "symbol {symbol} ranks where its spelling sorts"
+            );
+        }
+        (ranks, compares)
+    }
+
+    /// When every leaf shares its first 40 bytes, every head key ties and the
+    /// refinement by full spelling decides the whole order; the result is still
+    /// the bytewise order of the spellings. It protects ranking on data whose
+    /// symbols differ only past the head.
+    #[test]
+    fn ranking_equals_the_text_order_when_every_head_key_ties() {
+        let shared = "\"".to_owned() + &"p".repeat(40);
+        let mut leaves: Vec<Vec<u8>> = Vec::new();
+        for tail in [
+            "\"", "a\"", "\" ", "\"@en", "b\"", "a\"", "\"^^<x>", "\\\"\"",
+        ] {
+            leaves.push(format!("{shared}{tail}").into_bytes());
+        }
+        let borrowed: Vec<&[u8]> = leaves.iter().map(Vec::as_slice).collect();
+        let (_, compares) = rank_spellings(&borrowed);
+        assert!(
+            compares >= leaves.len() - 1,
+            "the refinement compares the tied leaves ({compares})"
+        );
+    }
+
+    /// Spellings shorter than the head, one a prefix of another and one holding
+    /// a zero byte beside the padding, rank in bytewise order with no comparison:
+    /// different keys already decide them. It protects the zero padding.
+    #[test]
+    fn short_spellings_rank_by_their_padded_keys() {
+        let leaves: [&[u8]; 8] = [b"<a", b"<ab", b"x", b"x ", b"x\0", b"", b"<a>", b"\"x\""];
+        let (ranks, compares) = rank_spellings(&leaves);
+        assert_eq!(compares, 0, "no two of these keys tie");
+        let mut sorted = ranks.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ranks.len(), "every spelling is distinct");
+    }
+
     /// Ranking is dense and never lets the comparison read a rank as if it were
     /// packed meta: equal texts of different view terms share one rank, ranks
     /// follow the text order with no gaps, and each rank keeps the meta of the
@@ -888,18 +1072,23 @@ mod tests {
             }
         }
         let mut ranked_reads = 0_usize;
-        let ranked = rank::<u32, StorageError, _>(&mut symbols, &mut memory, |s, _, a, b| {
-            for symbol in [a, b] {
-                assert_eq!(
-                    s.meta_of(symbol).bits(),
-                    original[symbol as usize],
-                    "symbol {symbol} was compared after its rank was written"
-                );
-                ranked_reads += 1;
-            }
-            Ok(texts[a as usize].cmp(texts[b as usize]))
+        let heads = head_keys::<u32, StorageError, _>(&symbols, &mut memory, |_, _, symbol| {
+            Ok(head_key(texts[symbol as usize].as_bytes()))
         })
         .unwrap();
+        let ranked =
+            rank::<u32, StorageError, _>(&mut symbols, &mut memory, heads, |s, _, a, b| {
+                for symbol in [a, b] {
+                    assert_eq!(
+                        s.meta_of(symbol).bits(),
+                        original[symbol as usize],
+                        "symbol {symbol} was compared after its rank was written"
+                    );
+                    ranked_reads += 1;
+                }
+                Ok(texts[a as usize].cmp(texts[b as usize]))
+            })
+            .unwrap();
         assert!(ranked_reads > 0);
         let mut distinct: Vec<&str> = texts.to_vec();
         distinct.sort_unstable();
