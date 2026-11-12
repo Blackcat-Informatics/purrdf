@@ -3723,48 +3723,73 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         out: &mut String,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        let (s, p, o, g) = comp.slots();
-        self.write_slot(s, render, out, memory)?;
-        memory.push_char(out, ' ')?;
-        self.write_slot(p, render, out, memory)?;
-        memory.push_char(out, ' ')?;
-        self.write_slot(o, render, out, memory)?;
-        if let Some(g) = g {
-            memory.push_char(out, ' ')?;
-            self.write_slot(g, render, out, memory)?;
-        }
-        memory.push_str(out, " .\n")?;
-        Ok(())
+        self.walk_component(
+            comp,
+            &mut TextAtoms {
+                state: self,
+                render,
+                out,
+            },
+            memory,
+        )
     }
 
-    fn write_slot<S: Admission + ?Sized>(
+    /// Walk one component's spelling atom by atom: the single control flow of a
+    /// canonical line, whatever the caller does with its atoms. The caller's
+    /// [`Atoms`] receive, in order, the quad slots with a separator between each,
+    /// a triple term as `open`, its three terms with a separator after each, then
+    /// `close`, and `end` after the last slot.
+    ///
+    /// Stop polls are made here and nowhere else, so every consumer of a
+    /// component's spelling is polled identically: once per slot, once per held
+    /// step of a triple term, and, inside [`write_leaf`](Self::write_leaf), once
+    /// per literal.
+    fn walk_component<S: Admission + ?Sized, A: Atoms<D>>(
+        &self,
+        comp: Component<D::Id>,
+        atoms: &mut A,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let (s, p, o, g) = comp.slots();
+        self.walk_slot(s, atoms, memory)?;
+        atoms.separator(memory)?;
+        self.walk_slot(p, atoms, memory)?;
+        atoms.separator(memory)?;
+        self.walk_slot(o, atoms, memory)?;
+        if let Some(g) = g {
+            atoms.separator(memory)?;
+            self.walk_slot(g, atoms, memory)?;
+        }
+        atoms.end(memory)
+    }
+
+    fn walk_slot<S: Admission + ?Sized, A: Atoms<D>>(
         &self,
         slot: Slot<D::Id>,
-        render: BlankRender<'_, D::Id>,
-        out: &mut String,
+        atoms: &mut A,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
         self.check_stop().map_err(CanonError::with_read_error)?;
         match slot {
-            Slot::Sentinel(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
-            Slot::Term(id) => self.write_term(id, render, out, memory)?,
+            Slot::Sentinel(iri) => atoms.sentinel(iri, memory)?,
+            Slot::Term(id) => self.walk_term(id, atoms, memory)?,
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
                 // form. `Some(g)`: sentinel then the graph term, so a named-graph
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                memory.append_text(out, |out| write_iri(SENTINEL_ANNOTATION_GRAPH, out))?;
+                atoms.sentinel(SENTINEL_ANNOTATION_GRAPH, memory)?;
                 if let Some(g) = g {
-                    memory.push_char(out, ' ')?;
-                    self.write_term(g, render, out, memory)?;
+                    atoms.separator(memory)?;
+                    self.walk_term(g, atoms, memory)?;
                 }
             }
         }
         Ok(())
     }
 
-    /// Write a term in canonical N-Quads form. Literal lexical forms / datatypes /
+    /// Walk a term in canonical N-Quads order. Literal lexical forms / datatypes /
     /// language / direction are emitted **verbatim** (never normalized), with one
     /// exception that is not a normalization: a composite (`cdt:List` /
     /// `cdt:Map`) literal's embedded `BLANK_NODE_LABEL` tokens are rendered
@@ -3775,85 +3800,53 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// datasets would serialize differently and the oracle would report a false
     /// negative. Every other byte of the lexical form is untouched.
     ///
-    /// A triple term is written over a work list: its opening `<<( ` at once, then
-    /// its subject next, with the separators, the predicate, the object and the
-    /// closing ` )>>` held back in that order until the subject's whole nesting is
-    /// written. A term that is not a triple term pushes nothing.
-    fn write_term<S: Admission + ?Sized>(
+    /// A triple term is walked over a work list: its `open` at once, then its
+    /// subject next, with the separators, the predicate, the object and the
+    /// `close` held back in that order until the subject's whole nesting is
+    /// walked. A term that is not a triple term hands its one leaf to the atoms.
+    fn walk_term<S: Admission + ?Sized, A: Atoms<D>>(
         &self,
         id: D::Id,
-        render: BlankRender<'_, D::Id>,
-        out: &mut String,
+        atoms: &mut A,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
         enum Step<Id> {
             Term(Id),
-            Text(&'static str),
+            Separator,
+            Close,
         }
         let mut held: WorkList<Step<D::Id>, 8> = WorkList::new();
         let mut next = Some(Step::Term(id));
         while let Some(step) = next.take().or_else(|| held.pop()) {
             self.check_stop().map_err(CanonError::with_read_error)?;
             let id = match step {
-                Step::Text(text) => {
-                    memory.push_str(out, text)?;
+                Step::Separator => {
+                    atoms.separator(memory)?;
+                    continue;
+                }
+                Step::Close => {
+                    atoms.close(memory)?;
                     continue;
                 }
                 Step::Term(id) => id,
             };
-            let Some(guard) = self.ds.resolve_if_ready(id) else {
-                held.release_admitted(memory)?;
-                return Ok(());
-            };
-            match guard.term() {
-                TermRef::Iri(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
-                TermRef::Blank { .. } => {
-                    memory.append_text(out, |out| write_blank(render.label(id), out))?;
+            match atoms.leaf(id, memory)? {
+                Leaf::Written => {}
+                Leaf::NotReady => {
+                    held.release_admitted(memory)?;
+                    return Ok(());
                 }
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let rendered =
-                        self.render_composite_lexical(lexical, datatype, render, memory)?;
-                    self.check_stop().map_err(CanonError::with_read_error)?;
-                    let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
-                        if let Cow::Owned(rendered) = rendered {
-                            memory.release_string(rendered)?;
-                        }
-                        held.release_admitted(memory)?;
-                        return Ok(());
-                    };
-                    let TermRef::Iri(dt) = datatype_guard.term() else {
-                        unreachable!("literal datatype must be an IRI")
-                    };
-                    memory.append_text(out, |out| {
-                        write_literal(
-                            &rendered,
-                            dt,
-                            language,
-                            direction.map(crate::RdfTextDirection::as_str),
-                            out,
-                        );
-                    })?;
-                    if let Cow::Owned(rendered) = rendered {
-                        memory.release_string(rendered)?;
-                    }
-                }
-                TermRef::Triple { s, p, o } => {
+                Leaf::Triple { s, p, o } => {
                     // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
                     // N-Quads form).
-                    memory.push_str(out, TRIPLE_TERM_OPEN)?;
-                    memory.push_char(out, ' ')?;
+                    atoms.open(memory)?;
                     for step in [
-                        Step::Text(TRIPLE_TERM_CLOSE),
-                        Step::Text(" "),
+                        Step::Close,
+                        Step::Separator,
                         Step::Term(o),
-                        Step::Text(" "),
+                        Step::Separator,
                         Step::Term(p),
-                        Step::Text(" "),
+                        Step::Separator,
                     ] {
                         held.try_push_admitted(step, memory)?;
                     }
@@ -3863,6 +3856,68 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
         held.release_admitted(memory)?;
         Ok(())
+    }
+
+    /// Write one non-triple term's bytes at `out`'s end, or say what else it is.
+    ///
+    /// The one body of a leaf's spelling. It makes no stop poll of its own: a
+    /// literal calls `between` once, after its composite lexical form is rendered
+    /// and before its datatype is read, which is where a literal has always been
+    /// polled. It allocates only through `memory`, and only when `out` lacks
+    /// capacity.
+    fn write_leaf<S: Admission + ?Sized>(
+        &self,
+        id: D::Id,
+        render: BlankRender<'_, D::Id>,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+        between: &mut dyn FnMut() -> Result<(), CanonError<D::ReadError>>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>> {
+        let Some(guard) = self.ds.resolve_if_ready(id) else {
+            return Ok(Leaf::NotReady);
+        };
+        match guard.term() {
+            TermRef::Iri(iri) => {
+                memory.append_text(out, |out| write_iri(iri, out))?;
+                Ok(Leaf::Written)
+            }
+            TermRef::Blank { .. } => {
+                memory.append_text(out, |out| write_blank(render.label(id), out))?;
+                Ok(Leaf::Written)
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let rendered = self.render_composite_lexical(lexical, datatype, render, memory)?;
+                between()?;
+                let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
+                    if let Cow::Owned(rendered) = rendered {
+                        memory.release_string(rendered)?;
+                    }
+                    return Ok(Leaf::NotReady);
+                };
+                let TermRef::Iri(dt) = datatype_guard.term() else {
+                    unreachable!("literal datatype must be an IRI")
+                };
+                memory.append_text(out, |out| {
+                    write_literal(
+                        &rendered,
+                        dt,
+                        language,
+                        direction.map(crate::RdfTextDirection::as_str),
+                        out,
+                    );
+                })?;
+                if let Cow::Owned(rendered) = rendered {
+                    memory.release_string(rendered)?;
+                }
+                Ok(Leaf::Written)
+            }
+            TermRef::Triple { s, p, o } => Ok(Leaf::Triple { s, p, o }),
+        }
     }
 
     /// A composite literal's lexical form with every embedded blank label
@@ -3910,6 +3965,116 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             },
             memory,
         )?)
+    }
+}
+
+/// What a term turned out to be when its leaf was asked for.
+enum Leaf<Id> {
+    /// The term's bytes were appended.
+    Written,
+    /// The view could not resolve the term; its failure is latched on the view.
+    NotReady,
+    /// A triple term, whose three components are walked instead. Nothing was written.
+    Triple { s: Id, p: Id, o: Id },
+}
+
+/// The atoms of one component's canonical spelling, in the order
+/// [`CanonState::walk_component`] produces them. An implementor decides what an
+/// atom becomes: text, or a symbol of a line.
+trait Atoms<D: DatasetView> {
+    /// `<<(` and the space after it, opening a triple term.
+    fn open<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// `)>>`, closing a triple term.
+    fn close<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// A fixed IRI that has no term id.
+    fn sentinel<S: Admission + ?Sized>(
+        &mut self,
+        iri: &'static str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// One term, which may turn out to be a triple term and then writes nothing.
+    fn leaf<S: Admission + ?Sized>(
+        &mut self,
+        id: D::Id,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>>;
+    /// The single space between two atoms of a line.
+    fn separator<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// ` .\n`, ending a line.
+    fn end<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+}
+
+/// A component's canonical line as text, exactly as the quad is spelled.
+struct TextAtoms<'a, 'o, D: DatasetView> {
+    state: &'a CanonState<'a, D>,
+    render: BlankRender<'a, D::Id>,
+    out: &'o mut String,
+}
+
+impl<D: DatasetView> Atoms<D> for TextAtoms<'_, '_, D> {
+    fn open<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, TRIPLE_TERM_OPEN)?;
+        memory.push_char(self.out, ' ')?;
+        Ok(())
+    }
+
+    fn close<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, TRIPLE_TERM_CLOSE)?;
+        Ok(())
+    }
+
+    fn sentinel<S: Admission + ?Sized>(
+        &mut self,
+        iri: &'static str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.append_text(self.out, |out| write_iri(iri, out))?;
+        Ok(())
+    }
+
+    fn leaf<S: Admission + ?Sized>(
+        &mut self,
+        id: D::Id,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>> {
+        let state = self.state;
+        state.write_leaf(id, self.render, self.out, memory, &mut || {
+            state.check_stop().map_err(CanonError::with_read_error)
+        })
+    }
+
+    fn separator<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_char(self.out, ' ')?;
+        Ok(())
+    }
+
+    fn end<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, " .\n")?;
+        Ok(())
     }
 }
 
