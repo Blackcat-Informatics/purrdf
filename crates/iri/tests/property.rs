@@ -86,6 +86,53 @@ prop_test! {
     }
 }
 
+/// References with and without a scheme, root, dot prefix, first segment
+/// holding a colon, query and fragment: the shapes where rebuilding a normalized
+/// text can drop the path (`.`), expose a scheme (`./a:b`) or expose an
+/// authority (`/.//x`).
+fn mixed_reference() -> impl Strategy<Value = String> {
+    let scheme = prop::option::of(prop::sample::select(vec!["a", "urn"]));
+    let prefix = prop::sample::select(vec!["", "/", "./", "../", ".//", "/.//", "//"]);
+    let seg = prop::sample::select(vec!["", ".", "..", "x", "a:b", "x:y", "%7e"]);
+    let segs = prop::collection::vec(seg, 0..5);
+    let query = prop::option::of(prop::sample::select(vec!["", "q"]));
+    let frag = prop::option::of(prop::sample::select(vec!["", "f"]));
+    (scheme, prefix, segs, query, frag).prop_map(|(sc, pre, segs, q, f)| {
+        let mut out = String::new();
+        if let Some(sc) = sc {
+            out.push_str(sc);
+            out.push(':');
+        }
+        out.push_str(pre);
+        out.push_str(&segs.join("/"));
+        if let Some(q) = q {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = f {
+            out.push('#');
+            out.push_str(f);
+        }
+        out
+    })
+}
+
+prop_test! {
+    /// For every input `parse` accepts, `normalize` returns, keeps scheme and
+    /// authority presence, and is a fixed point. This is what makes the re-parse
+    /// inside `normalize` unreachable.
+    #[test]
+    fn normalize_is_total_shape_preserving_and_idempotent(s in mixed_reference()) {
+        if let Ok(iri) = parse(&s) {
+            let n1 = iri.normalize();
+            prop_assert_eq!(n1.scheme().is_some(), iri.scheme().is_some());
+            prop_assert_eq!(n1.authority().is_some(), iri.authority().is_some());
+            let n2 = n1.normalize();
+            prop_assert_eq!(n1.as_str(), n2.as_str());
+        }
+    }
+}
+
 prop_test! {
     /// The parser never rewrites its input: `as_str()` is byte-identical.
     #[test]

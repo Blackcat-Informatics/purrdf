@@ -53,7 +53,8 @@ impl<'a> Parts<'a> {
     ) -> core::result::Result<String, StorageError> {
         // Exact-fit buffer from the known part lengths: one allocation per
         // recompose instead of the amortized-doubling reallocs of `String::new()`.
-        let guard = network_path_guard(self.authority.is_some(), &self.path);
+        let guard =
+            recomposition_guard(self.scheme.is_some(), self.authority.is_some(), &self.path);
         let mut capacity = self.path.len() + guard.len();
         for (part, delimiter) in [
             (self.scheme, 1),
@@ -200,17 +201,34 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) 
     }
 }
 
-/// The RFC-3986 §3.3 guard, in one place: with no authority a path may not begin
-/// with `//`, or the recomposed text (§5.3) would read as `scheme://...` and turn
-/// the path into an authority. The returned prefix is `"/."` for that case, which
-/// `remove_dot_segments` strips again, so the guarded form is a fixed point; it is
-/// empty otherwise. Apply it AFTER dot-segment removal, where the text is rebuilt.
-pub(crate) fn network_path_guard(has_authority: bool, path: &str) -> &'static str {
-    if !has_authority && path.starts_with("//") {
+/// The two RFC-3986 recomposition repairs (§5.3), in one place. The returned
+/// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
+/// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
+/// point. It is empty when no repair is needed.
+///
+/// * `"/."` (§3.3): with no authority a path may not begin with `//`, or the text
+///   would read as `scheme://...` and turn the path into an authority.
+/// * `"./"` (§4.2 `path-noscheme`): with no scheme and no authority, the first
+///   segment of a rootless path may not contain `:`, or it would read as a scheme.
+pub(crate) fn recomposition_guard(
+    has_scheme: bool,
+    has_authority: bool,
+    path: &str,
+) -> &'static str {
+    if has_authority {
+        ""
+    } else if path.starts_with("//") {
         "/."
+    } else if !has_scheme && first_segment_has_colon(path) {
+        "./"
     } else {
         ""
     }
+}
+
+/// `true` iff the first segment of a rootless `path` contains a `:`.
+fn first_segment_has_colon(path: &str) -> bool {
+    !path.starts_with('/') && path.split('/').next().is_some_and(|seg| seg.contains(':'))
 }
 
 /// RFC-3986 §5.2.2 transform-references (strict mode: a reference scheme is never

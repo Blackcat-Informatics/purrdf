@@ -85,7 +85,7 @@
 use crate::error::{IriError, Result};
 use crate::parse::{Iri, IriForm, classify, parse};
 use crate::parse::{IriReadError, parse_with_memory};
-use crate::resolve::network_path_guard;
+use crate::resolve::recomposition_guard;
 use purrdf_lex::allocation::{Admission, Memory, Resident};
 
 /// An [`Iri`] that is guaranteed to be **absolute** (to have a scheme).
@@ -316,15 +316,10 @@ fn relative_spelling(base: &Iri, target: &Iri) -> String {
         String::new()
     } else {
         let mut path = relative_path(base.path(), target.path());
-        let guard = network_path_guard(false, &path);
-        if !guard.is_empty() {
-            // Would re-parse as a network-path reference (a new authority).
-            path.insert_str(0, guard);
-        } else if !path.starts_with('/') && first_segment_has_colon(&path) {
-            // RFC-3986 §4.2 `path-noscheme`: a relative reference's first segment
-            // may not contain ':' or it would be read as a scheme.
-            path.insert_str(0, "./");
-        }
+        // Network-path (`/.`) and `path-noscheme` (`./`) repairs: a relative
+        // reference has neither scheme nor authority.
+        let guard = recomposition_guard(false, false, &path);
+        path.insert_str(0, guard);
         path
     };
 
@@ -377,11 +372,6 @@ fn relative_path(base_path: &str, target_path: &str) -> String {
         out.push_str("./");
     }
     out
-}
-
-/// `true` iff the first path segment contains a `:` (RFC-3986 §4.2 `path-noscheme`).
-fn first_segment_has_colon(path: &str) -> bool {
-    path.split('/').next().is_some_and(|seg| seg.contains(':'))
 }
 
 /// A parsed, non-empty IRI reference, classified by whether the RDF grammars

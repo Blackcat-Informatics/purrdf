@@ -179,6 +179,64 @@ fn normalize_adds_no_guard_where_none_is_needed() {
     }
 }
 
+/// A reference whose path reduces to nothing has no empty spelling (`parse`
+/// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
+/// otherwise-empty reference, and a query or fragment keeps the empty path.
+/// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
+/// reference. The inputs `..`, `../` and `./..` reduce to `.` only because dot
+/// removal on scheme-less references is unchanged here; this records current
+/// behaviour pending the separate decision in #1275, not a claim it is correct.
+#[test]
+fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
+    for input in [".", "..", "./", "../", "./.", "./..", ".././"] {
+        let n = parse(input).expect("input parses").normalize();
+        assert_eq!(n.as_str(), ".", "{input}");
+        assert_eq!(n.normalize().as_str(), ".", "{input}");
+    }
+    // Neighbours that must keep their current result: an empty path with a query
+    // or fragment is not rewritten, and non-empty results gain nothing.
+    assert_eq!(parse("?q").unwrap().normalize().as_str(), "?q");
+    assert_eq!(parse(".?q").unwrap().normalize().as_str(), "?q");
+    assert_eq!(parse("./#f").unwrap().normalize().as_str(), "#f");
+    assert_eq!(parse("x").unwrap().normalize().as_str(), "x");
+    assert_eq!(parse("./a").unwrap().normalize().as_str(), "a");
+}
+
+/// RFC 3986 §4.2: the first segment of a scheme-less relative path may not hold
+/// `:`. Dot-segment removal can expose one (`./a:b` -> `a:b`), which would
+/// re-parse as scheme `a`; the normal form keeps the `./` so the reference stays
+/// relative, and is a fixed point.
+#[test]
+fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
+    for (input, expected) in [
+        ("./a:b", "./a:b"),
+        ("../a:b", "./a:b"),
+        ("./a:b?q#f", "./a:b?q#f"),
+        ("./x:y/z", "./x:y/z"),
+    ] {
+        let n = parse(input).unwrap().normalize();
+        assert_eq!(n.as_str(), expected, "{input}");
+        assert_eq!(n.scheme(), None, "{input}: became absolute");
+        assert_eq!(n.normalize().as_str(), expected, "{input}");
+    }
+    // Neighbours: no prefix where the colon is not in the first segment, where
+    // the path is rooted, or where a scheme is present.
+    for (input, expected) in [
+        ("a:b", "a:b"),
+        ("./a", "a"),
+        ("a/b:c", "a/b:c"),
+        ("/a:b", "/a:b"),
+        ("/./a:b", "/a:b"),
+        ("a:./b:c", "a:b:c"),
+    ] {
+        assert_eq!(
+            parse(input).unwrap().normalize().as_str(),
+            expected,
+            "{input}"
+        );
+    }
+}
+
 /// Resolution recomposes components the same way: a relative reference whose
 /// merged path reduces to `//...` against a base with no authority must stay a
 /// path, never become a wrong authority or a typed error for a valid IRI.
