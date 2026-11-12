@@ -67,9 +67,16 @@ use purrdf_rdf::{
     DeltaDatasetView, FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits,
     QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits,
     dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
-    try_canonicalize_flat_view, try_canonicalize_with,
+    try_canonicalize_flat_view, try_canonicalize_with, try_flat_digest_view,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
+
+#[path = "support/canon_load.rs"]
+#[allow(
+    dead_code,
+    reason = "the shared fixture module also serves the allocation bench"
+)]
+mod load;
 
 /// Row-groups per dataset — medium, matching this crate's other fixture-scale
 /// benches (`native_codecs`'s `ROWS = 2_000` text rows; this fixture's rows carry
@@ -367,6 +374,74 @@ fn benches(c: &mut Bench) {
     group.finish();
 }
 
+/// Load-shaped timing: the borrowed flat document, the flat SHA-256 digest and the
+/// composed document-plus-BLAKE3 route, over each load fixture at
+/// `PURRDF_CANON_TIME_LINES` lines (default 131,072), normal line length.
+fn load_benches(c: &mut Bench) {
+    let lines: usize = std::env::var("PURRDF_CANON_TIME_LINES").map_or(131_072, |raw| {
+        raw.parse().expect("PURRDF_CANON_TIME_LINES is an integer")
+    });
+    let hash = CanonHash::Sha256;
+    let mut group = c.benchmark_group("flat_view_canon_load");
+    group.sample_size(10);
+    for (shape, loaded) in [
+        ("blank_free", load::blank_free(lines, 1)),
+        ("reifier", load::reifier(lines, 1)),
+    ] {
+        let ds = loaded.dataset;
+        let doc = borrowed_route(&*ds, hash);
+        let digest = try_flat_digest_view(
+            &*ds,
+            hash,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("flat digest");
+        assert_eq!(
+            purrdf_core::ContentDigest::of(doc.nquads().as_bytes()),
+            digest,
+            "{shape}: the flat document and flat digest routes must agree"
+        );
+        drop(doc);
+        group.bench_function(BenchmarkId::new("flat_doc", shape), |b| {
+            b.iter(|| black_box(borrowed_route(&*ds, hash)));
+        });
+        group.bench_function(BenchmarkId::new("flat_sha256", shape), |b| {
+            b.iter(|| {
+                black_box(
+                    try_flat_digest_view(
+                        &*ds,
+                        hash,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("flat digest"),
+                )
+            });
+        });
+        group.bench_function(BenchmarkId::new("flat_blake3_composed", shape), |b| {
+            b.iter(|| {
+                let doc = borrowed_route(&*ds, hash);
+                black_box(purrdf_hash::blake3::hash(doc.nquads().as_bytes()))
+            });
+        });
+    }
+    group.finish();
+}
+
+bench_group! {
+    name = flat_view_canon_load;
+    config = Bench::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(20));
+    targets = load_benches
+}
+
 bench_group! {
     name = flat_view_canon_benches;
     // Report-only and on a contended machine, like the other view-canon benches
@@ -378,4 +453,4 @@ bench_group! {
         .measurement_time(Duration::from_secs(2));
     targets = benches
 }
-bench_main!(flat_view_canon_benches);
+bench_main!(flat_view_canon_benches, flat_view_canon_load);

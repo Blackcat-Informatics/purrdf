@@ -222,3 +222,10 @@ harness = false
 # magnitude and no speedup.
 name = "flat_view_canon"
 harness = false
+
+[[bench]]
+# Allocation count and peak working bytes of flat canonical output and the
+# digest entries over two load-shaped fixtures. Separate from the timed
+# benches so allocator atomics do not perturb timing. Report-only.
+name = "flat_view_canon_alloc"
+harness = false
