@@ -3168,11 +3168,11 @@ impl<K, V> Default for Keys<'_, K, V> {
 }
 impl<'a, K, V> Iterator for Keys<'a, K, V> {
     type Item = &'a K;
+
     #[allow(
         clippy::manual_map,
         reason = "deliberate match: Option::map bloats LLVM IR on this hot path; scoped to the function because the match is its tail expression"
     )]
-
     fn next(&mut self) -> Option<&'a K> {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.inner.next() {
