@@ -265,6 +265,38 @@ fn receipt_json(receipt: &SearchReceipt) -> Value {
 mod tests {
     use super::*;
 
+    /// The route the Python binding takes for a refused request, short of the
+    /// PyO3 attribute writes: the operation's error passes through `execute`,
+    /// its original cause is found down the source chain and published through
+    /// `to_json`. A source inconsistency arrives with its own code; a stop
+    /// wrapped the same way keeps its own.
+    #[test]
+    fn a_wrapped_source_inconsistency_is_found_and_published_with_its_own_code() {
+        let refused = |cause: CanonError| {
+            let request = execute(SearchPolicy::Unlimited, None, |_| {
+                Err::<(), _>(CanonicalServiceError::Canonical {
+                    context: "canonical document".to_owned(),
+                    cause: Box::new(cause),
+                })
+            });
+            let error = request.result.expect_err("the operation refuses");
+            let cause = native_canonical_cause(&error)
+                .cloned()
+                .expect("the original cause is found");
+            let fields = crate::native_error::to_json(&cause).unwrap().to_string();
+            (cause, fields)
+        };
+        let (cause, fields) = refused(CanonError::SourceInconsistent);
+        assert_eq!(cause, CanonError::SourceInconsistent);
+        assert!(fields.contains("canonical-source-inconsistent"), "{fields}");
+        let (cause, fields) = refused(CanonError::Stopped);
+        assert_eq!(cause, CanonError::Stopped);
+        assert!(
+            !fields.contains("canonical-source-inconsistent"),
+            "{fields}"
+        );
+    }
+
     #[test]
     fn host_policy_requires_an_explicit_exact_u64_and_receipts_preserve_it() {
         for text in [
