@@ -2802,7 +2802,7 @@ mod tests {
     #[test]
     fn declared_named_graphs_survive_freeze_and_snapshot() {
         let empty_base = RdfDatasetBuilder::new().freeze().expect("empty base");
-        let mut m = MutableDataset::new(Arc::clone(&empty_base));
+        let mut m = MutableDataset::new(empty_base);
         ins(&mut m, q("s", "p", "o"));
         let plain = m.freeze().expect("freezes");
         assert_eq!(plain.named_graphs().count(), 0);
