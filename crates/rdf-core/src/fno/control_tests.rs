@@ -256,7 +256,7 @@ fn original_account_without_drop_refunds_refusals_and_last_catalog_or_error_owne
     // EOF latches a source failure. A hypothetical next-phase callback would
     // stop, and the account refuses any growth: neither may replace the source.
     use crate::DatasetView;
-    let faulty = crate::term_fixture::BudgetedView::new(Arc::clone(&source), 0);
+    let faulty = crate::term_fixture::BudgetedView::new(source, 0);
     let after = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&after);
     let ledger = Arc::new(Mutex::new(Ledger::default()));
