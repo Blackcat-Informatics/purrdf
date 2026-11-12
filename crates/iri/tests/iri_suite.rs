@@ -204,7 +204,7 @@ fn assert_contract(input: &str) {
 /// otherwise-empty reference, and a query or fragment keeps the empty path.
 /// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
 /// reference. The exact normal form of a reference with a leading `..` is
-/// decided in #1275, so those inputs assert only the contract, not a string.
+/// decided separately, so those inputs assert only the contract, not a string.
 #[test]
 fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
     for input in [".", "./", "./."] {
@@ -240,7 +240,7 @@ fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
         assert_eq!(n.scheme(), None, "{input}: became absolute");
         assert_eq!(n.normalize().as_str(), expected, "{input}");
     }
-    assert_contract("../a:b"); // exact form of a leading `..` is decided in #1275
+    assert_contract("../a:b"); // exact form of a leading `..` is decided separately
     // Neighbours: no prefix where the colon is not in the first segment, where
     // the path is rooted, or where a scheme is present.
     for (input, expected) in [
