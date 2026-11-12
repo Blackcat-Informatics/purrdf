@@ -351,12 +351,20 @@ Refusal surfaces as a typed value, never as a message to be parsed:
 |---|---|
 | `CanonError::ReservedVocabulary(ReservedVocabulary)` | §5 violated; carries `iri` and `position` |
 | `CanonError::BudgetExceeded(BudgetExceeded)` | §6 bound reached; carries `blank_count` |
+| `CanonError::SourceInconsistent` | the source spelled a term with a different length when it was read again while the document was built |
 
 The two are separate variants because they oblige a holder differently. A
 budget-exceeded dataset is well-formed and merely uncanonicalizable within bounds;
 a reserved-vocabulary dataset is one whose acceptance would have been an identity
 collision. A consumer auditing a rejection must be able to tell them apart without
 reading English.
+
+A source view must spell a term identically every time a run reads it. The
+document is built from each distinct term's text read more than once, and a
+read that returns a different length is refused as `SourceInconsistent` instead
+of producing bytes. A change that keeps the length cannot be detected without
+holding every text, so stability of a source within a run remains an obligation
+of the view's implementor; the bytes of such a source are undefined.
 
 `purrdf_core::check_admissible` applies the §5 predicate alone, so a store may
 screen at **admission** rather than only at the moment identity is minted.

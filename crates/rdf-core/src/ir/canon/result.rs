@@ -149,10 +149,15 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> ResultBuilder<Id, E> {
             .memory(|memory| memory.reserve(&mut self.fields.labels, count))
     }
 
-    pub(super) fn label(&mut self, id: Id, label: &str) -> Result<(), CanonError<E>> {
-        let label = self.grant.memory(|memory| memory.string(label))?;
-        self.grant
-            .memory(|memory| memory.push(&mut self.fields.labels, (id, label)))
+    /// Take over an issued label without copying it. The issuer allocated the box
+    /// outside every account, so the owned account is charged exactly the bytes
+    /// an admitted copy of the label would have charged.
+    pub(super) fn label(&mut self, id: Id, label: Box<str>) -> Result<(), CanonError<E>> {
+        let label = label.into_string();
+        self.grant.memory(|memory| {
+            memory.add_bytes(label.len())?;
+            memory.push(&mut self.fields.labels, (id, label))
+        })
     }
 
     pub(super) fn finish(
