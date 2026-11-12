@@ -11,7 +11,7 @@ license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0"
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-hash"
 rust-version.workspace = true
-keywords = ["blake3", "sha3", "crc32", "xxhash", "hash", "digest"]
+keywords = ["blake3", "sha3", "crc32", "xxhash", "hash"]
 categories = ["algorithms", "cryptography", "encoding"]
 
 [package.metadata.docs.rs]
