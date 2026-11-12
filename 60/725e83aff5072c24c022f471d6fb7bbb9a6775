@@ -1,0 +1,18 @@
+ghprsq source head backlink metadata
+
+parent_hashes: 60725e83aff5072c24c022f471d6fb7bbb9a6775
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1274
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1274
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 042233cdcf1da79a526895e4896e08dcc10af9cd
+GhpRsq-Head-Ref: paudley/1266-iri-normalize-panics-when-dot-segment
+GhpRsq-Head-OID: 60725e83aff5072c24c022f471d6fb7bbb9a6775
+GhpRsq-Result-Tree: f935c3a5803b13463a170fabe181883158d4438a
+GhpRsq-Result-Commit: 31ed955804864e11e959af0e601a719c7526111e
+GhpRsq-Parent-Hashes: 60725e83aff5072c24c022f471d6fb7bbb9a6775
+GhpRsq-Squash-Notes-SHA256: 92fe373af0c6079d14609a011ac58e698b8e39e91dba2ca2210647d0cbcfe0ab
+GhpRsq-Stage-Evidence: none
