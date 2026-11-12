@@ -127,6 +127,168 @@ fn normalize_is_idempotent() {
     assert_eq!(n1.as_str(), n2.as_str());
 }
 
+/// RFC 3986 §3.3: with no authority a path may not begin with `//`, or the
+/// rebuilt text reads as an authority. Normalization must therefore keep a path
+/// that dot-segment removal reduced to `//...` apart from the scheme. Protects
+/// `Iri::normalize` from panicking on (or silently re-reading as an authority)
+/// an IRI that `parse` accepted.
+#[test]
+fn normalize_keeps_an_authorityless_double_slash_path_a_path() {
+    for input in [
+        "a:/..//x:y",
+        "a:/.//x:y",
+        "a:/b/..//x:y",
+        "a:b/..//x:y",
+        "a:/.//x",
+        "a:/.//",
+    ] {
+        let original = parse(input).expect("input parses");
+        let n = original.normalize();
+        assert_eq!(n.scheme(), Some("a"), "{input}");
+        assert_eq!(n.authority(), None, "{input}: path became an authority");
+        assert!(n.path().starts_with("/.//"), "{input}: {}", n.as_str());
+        let reparsed = parse(n.as_str()).expect("normal form re-parses");
+        assert_eq!(reparsed.path(), n.path(), "{input}");
+        // The normal form is a fixed point, so idempotence holds for the class.
+        assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
+    }
+    assert_eq!(
+        parse("a:/..//x:y").unwrap().normalize().as_str(),
+        "a:/.//x:y"
+    );
+}
+
+/// The neighbours of the case above must keep their current result: a `//` path
+/// under an authority is legal and untouched, and an authority-less path that
+/// does not start with `//` after dot removal gains no guard.
+#[test]
+fn normalize_adds_no_guard_where_none_is_needed() {
+    for (input, expected) in [
+        ("http://h/..//x", "http://h//x"),
+        ("http://h//x", "http://h//x"),
+        ("a:/b//x", "a:/b//x"),
+        ("a:/./b", "a:/b"),
+        ("a:..//x", "a:/x"),
+        ("a:///x", "a:///x"),
+    ] {
+        assert_eq!(
+            parse(input).unwrap().normalize().as_str(),
+            expected,
+            "{input}"
+        );
+    }
+}
+
+/// What `normalize` guarantees for any parse-accepted input: it returns, its
+/// text re-parses, scheme and authority presence are unchanged, and a second
+/// call is identical.
+fn assert_contract(input: &str) {
+    let original = parse(input).expect("input parses");
+    let n = original.normalize();
+    let reparsed = parse(n.as_str()).expect("normal form re-parses");
+    assert_eq!(
+        reparsed.scheme().is_some(),
+        original.scheme().is_some(),
+        "{input}"
+    );
+    assert_eq!(
+        reparsed.authority().is_some(),
+        original.authority().is_some(),
+        "{input}"
+    );
+    assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
+}
+
+/// A reference whose path reduces to nothing has no empty spelling (`parse`
+/// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
+/// otherwise-empty reference, and a query or fragment keeps the empty path.
+/// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
+/// reference. The exact normal form of a reference with a leading `..` is
+/// decided separately, so those inputs assert only the contract, not a string.
+#[test]
+fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
+    for input in [".", "./", "./."] {
+        let n = parse(input).expect("input parses").normalize();
+        assert_eq!(n.as_str(), ".", "{input}");
+        assert_eq!(n.normalize().as_str(), ".", "{input}");
+    }
+    for input in ["..", "../", "./..", ".././"] {
+        assert_contract(input);
+    }
+    // Neighbours that must keep their current result: an empty path with a query
+    // or fragment is not rewritten, and non-empty results gain nothing.
+    assert_eq!(parse("?q").unwrap().normalize().as_str(), "?q");
+    assert_eq!(parse(".?q").unwrap().normalize().as_str(), "?q");
+    assert_eq!(parse("./#f").unwrap().normalize().as_str(), "#f");
+    assert_eq!(parse("x").unwrap().normalize().as_str(), "x");
+    assert_eq!(parse("./a").unwrap().normalize().as_str(), "a");
+}
+
+/// RFC 3986 §4.2: the first segment of a scheme-less relative path may not hold
+/// `:`. Dot-segment removal can expose one (`./a:b` -> `a:b`), which would
+/// re-parse as scheme `a`; the normal form keeps the `./` so the reference stays
+/// relative, and is a fixed point.
+#[test]
+fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
+    for (input, expected) in [
+        ("./a:b", "./a:b"),
+        ("./a:b?q#f", "./a:b?q#f"),
+        ("./x:y/z", "./x:y/z"),
+    ] {
+        let n = parse(input).unwrap().normalize();
+        assert_eq!(n.as_str(), expected, "{input}");
+        assert_eq!(n.scheme(), None, "{input}: became absolute");
+        assert_eq!(n.normalize().as_str(), expected, "{input}");
+    }
+    assert_contract("../a:b"); // exact form of a leading `..` is decided separately
+    // Neighbours: no prefix where the colon is not in the first segment, where
+    // the path is rooted, or where a scheme is present.
+    for (input, expected) in [
+        ("a:b", "a:b"),
+        ("./a", "a"),
+        ("a/b:c", "a/b:c"),
+        ("/a:b", "/a:b"),
+        ("/./a:b", "/a:b"),
+        ("a:./b:c", "a:b:c"),
+    ] {
+        assert_eq!(
+            parse(input).unwrap().normalize().as_str(),
+            expected,
+            "{input}"
+        );
+    }
+}
+
+/// Resolution recomposes components the same way: a relative reference whose
+/// merged path reduces to `//...` against a base with no authority must stay a
+/// path, never become a wrong authority or a typed error for a valid IRI.
+#[test]
+fn resolve_keeps_an_authorityless_double_slash_path_a_path() {
+    let base = parse("a:/p").unwrap();
+    for reference in [".//x", ".//x:y", ".././/x:y", "a:/..//x:y"] {
+        let r = base
+            .resolve(reference)
+            .unwrap_or_else(|e| panic!("{reference}: {e}"));
+        assert_eq!(r.authority(), None, "{reference}: {}", r.as_str());
+        let again = parse(r.as_str()).unwrap();
+        assert_eq!(again.path(), r.path(), "{reference}");
+        assert_eq!(again.authority(), None, "{reference}");
+    }
+    assert_eq!(base.resolve(".//x").unwrap().as_str(), "a:/.//x");
+    // Neighbours: a network-path reference does carry an authority, and an
+    // ordinary relative reference is unaffected.
+    assert_eq!(base.resolve("//x").unwrap().authority(), Some("x"));
+    assert_eq!(base.resolve("q/r").unwrap().as_str(), "a:/q/r");
+    assert_eq!(
+        parse("http://h/p")
+            .unwrap()
+            .resolve(".//x")
+            .unwrap()
+            .as_str(),
+        "http://h//x"
+    );
+}
+
 #[test]
 fn curie_prefix_detection_matches_sssom_semantics() {
     // A real CURIE.
