@@ -379,7 +379,14 @@ fn benches(c: &mut Bench) {
 /// `PURRDF_CANON_TIME_LINES` lines (default 131,072), normal line length.
 fn load_benches(c: &mut Bench) {
     let lines: usize = std::env::var("PURRDF_CANON_TIME_LINES").map_or(131_072, |raw| {
-        raw.parse().expect("PURRDF_CANON_TIME_LINES is an integer")
+        let lines: usize = raw
+            .parse()
+            .expect("PURRDF_CANON_TIME_LINES is an integer");
+        assert!(
+            lines <= 4_096_000 || std::env::var("PURRDF_CANON_TIME_ALLOW_LARGE").as_deref() == Ok("1"),
+            "PURRDF_CANON_TIME_LINES={lines} exceeds 4096000 lines; set PURRDF_CANON_TIME_ALLOW_LARGE=1"
+        );
+        lines
     });
     let hash = CanonHash::Sha256;
     let mut group = c.benchmark_group("flat_view_canon_load");

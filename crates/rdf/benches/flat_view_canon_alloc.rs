@@ -64,28 +64,61 @@ struct Fixture<'a> {
     scale: usize,
     lines: usize,
     leaves: usize,
+}
+
+/// The identity of one canonical document: its length, line length and digests.
+struct Document {
     doc_bytes: usize,
     mean_line: f64,
     sha256: String,
     blake3: String,
 }
 
-fn line(entry: &str, f: &Fixture<'_>, m: Measurement, pre_output_peak: Option<i64>) {
-    let pre = pre_output_peak.map_or_else(|| "-".to_owned(), |peak| peak.to_string());
+impl Document {
+    fn of(nquads: &str) -> Self {
+        Self {
+            doc_bytes: nquads.len(),
+            mean_line: load::mean_line_len(nquads),
+            sha256: ContentDigest::of(nquads.as_bytes()).to_hex(),
+            blake3: purrdf_hash::hex::encode(
+                purrdf_hash::blake3::hash(nquads.as_bytes()).as_bytes(),
+            ),
+        }
+    }
+}
+
+/// Where a pre-output peak was sampled: the stop index and the run's poll total.
+struct Sample {
+    peak: i64,
+    stop_poll: usize,
+    total_polls: usize,
+}
+
+fn line(entry: &str, f: &Fixture<'_>, d: &Document, m: Measurement, pre: Option<&Sample>) {
+    let (peak, poll, total) = pre.map_or_else(
+        || ("-".to_owned(), "-".to_owned(), "-".to_owned()),
+        |p| {
+            (
+                p.peak.to_string(),
+                p.stop_poll.to_string(),
+                p.total_polls.to_string(),
+            )
+        },
+    );
     println!(
-        "[flat_view_canon_alloc] entry={entry} shape={} scale={} lines={} leaves={} doc_bytes={} mean_line={:.2} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} pre_output_peak={pre} sha256={} blake3={}",
+        "[flat_view_canon_alloc] entry={entry} shape={} scale={} lines={} leaves={} doc_bytes={} mean_line={:.2} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} pre_output_peak={peak} pre_output_poll={poll} total_polls={total} sha256={} blake3={}",
         f.shape,
         f.scale,
         f.lines,
         f.leaves,
-        f.doc_bytes,
-        f.mean_line,
+        d.doc_bytes,
+        d.mean_line,
         m.allocations,
         m.requested_bytes,
         m.retained_bytes,
         m.peak_working_bytes,
-        f.sha256,
-        f.blake3,
+        d.sha256,
+        d.blake3,
     );
 }
 
@@ -105,15 +138,17 @@ fn stopped_phase(
 }
 
 /// Peak working bytes of a run stopped at its first `Output`-phase poll.
-fn pre_output_peak(run: &dyn Fn(&mut CanonicalizationControl<'_>) -> bool) -> i64 {
+fn pre_output_peak(run: &dyn Fn(&mut CanonicalizationControl<'_>) -> bool) -> Sample {
     let stop = StopAfter(AtomicUsize::new(usize::MAX));
     assert!(run(&mut control(Some(&stop))), "the quiet run completes");
     let total = usize::MAX - stop.0.load(Ordering::Relaxed);
     // Phases only advance with a later stop, so "past the search phase or
     // complete" is monotone in n.
     let at_output = |n: usize| {
-        stopped_phase(run, n) != Some(CanonPhase::Preparation)
-            && stopped_phase(run, n) != Some(CanonPhase::Search)
+        !matches!(
+            stopped_phase(run, n),
+            Some(CanonPhase::Preparation | CanonPhase::Search)
+        )
     };
     let (mut lo, mut hi) = (0, total);
     assert!(
@@ -135,7 +170,11 @@ fn pre_output_peak(run: &dyn Fn(&mut CanonicalizationControl<'_>) -> bool) -> i6
     );
     let window = WholeProcessWindow::open();
     let _ = stopped_phase(run, lo);
-    window.close().peak_working_bytes
+    Sample {
+        peak: window.close().peak_working_bytes,
+        stop_poll: lo,
+        total_polls: total,
+    }
 }
 
 fn probe(shape: &str, scale: usize, lines: usize, with_pre_output: bool) {
@@ -156,70 +195,90 @@ fn probe(shape: &str, scale: usize, lines: usize, with_pre_output: bool) {
         |c: &mut CanonicalizationControl<'_>| try_flat_digest_view(ds, HASH, c).is_ok();
 
     let window = WholeProcessWindow::open();
-    let doc = try_canonicalize_flat_view(ds, HASH, &mut control(None)).expect("flat document");
+    let mut quiet = control(None);
+    let doc = try_canonicalize_flat_view(ds, HASH, &mut quiet).expect("flat document");
+    let search_work = quiet.receipts()[0].work.total();
+    drop(quiet);
     let doc_measure = window.close();
+    // The fixtures give every blank a distinct first-degree identity, so no n-degree
+    // search runs; a padding change that collides two blanks would add search work and
+    // make this baseline measure something else.
+    assert_eq!(
+        search_work, 0,
+        "{shape}: the fixture must not trigger an n-degree search"
+    );
+    let flat = Document::of(doc.nquads());
+    drop(doc);
     let f = Fixture {
         shape,
         scale,
         lines,
         leaves: loaded.leaves,
-        doc_bytes: doc.nquads().len(),
-        mean_line: load::mean_line_len(doc.nquads()),
-        sha256: ContentDigest::of(doc.nquads().as_bytes()).to_hex(),
-        blake3: purrdf_hash::hex::encode(
-            purrdf_hash::blake3::hash(doc.nquads().as_bytes()).as_bytes(),
-        ),
     };
-    drop(doc);
     if scale == 1 {
         println!(
             "[flat_view_canon_alloc] mean_line shape={shape} lines={lines} mean_line={:.2}",
-            f.mean_line
+            flat.mean_line
         );
         assert!(
-            (MEAN_LINE_RANGE.0..=MEAN_LINE_RANGE.1).contains(&f.mean_line),
+            (MEAN_LINE_RANGE.0..=MEAN_LINE_RANGE.1).contains(&flat.mean_line),
             "mean line length {} outside {MEAN_LINE_RANGE:?}",
-            f.mean_line
+            flat.mean_line
         );
     }
     let pre_doc = with_pre_output.then(|| pre_output_peak(&doc_run));
-    line("doc", &f, doc_measure, pre_doc);
+    line("doc", &f, &flat, doc_measure, pre_doc.as_ref());
 
     let window = WholeProcessWindow::open();
     let digest = try_flat_digest_view(ds, HASH, &mut control(None)).expect("flat digest");
     let m = window.close();
     assert_eq!(
         digest.to_hex(),
-        f.sha256,
+        flat.sha256,
         "flat digest equals the document digest"
     );
     let pre = with_pre_output.then(|| pre_output_peak(&digest_run));
-    line("flat_sha256", &f, m, pre);
+    line("flat_sha256", &f, &flat, m, pre.as_ref());
 
     let window = WholeProcessWindow::open();
     let doc = try_canonicalize_flat_view(ds, HASH, &mut control(None)).expect("flat document");
     let composed = purrdf_hash::blake3::hash(doc.nquads().as_bytes());
-    let m = window.close();
+    // The document is released before the window closes, so `retained_bytes` is what
+    // the route keeps beyond its digest (comparable with a digest-only route).
     drop(doc);
+    let m = window.close();
     assert_eq!(
         purrdf_hash::hex::encode(composed.as_bytes()),
-        f.blake3,
+        flat.blake3,
         "composed BLAKE3 equals the document BLAKE3"
     );
-    line("flat_blake3_composed", &f, m, None);
+    line("flat_blake3_composed", &f, &flat, m, None);
 
+    // The overlay presentation is a different document on the reifier shape, so its
+    // length and digests come from its own result.
     let window = WholeProcessWindow::open();
-    let overlay = try_canonical_sha256_view(ds, HASH, &mut control(None)).expect("overlay digest");
-    let m = window.close();
-    std::hint::black_box(overlay);
-    line("overlay_sha256", &f, m, None);
-
-    let window = WholeProcessWindow::open();
-    let both =
+    let (both, both_digest) =
         try_canonicalize_sha256_view(ds, HASH, &mut control(None)).expect("overlay document");
-    let m = window.close();
+    let doc_m = window.close();
+    let overlay = Document::of(both.nquads());
+    assert_eq!(
+        both_digest.to_hex(),
+        overlay.sha256,
+        "the overlay digest equals the digest of the overlay document"
+    );
     drop(both);
-    line("overlay_doc_sha256", &f, m, None);
+
+    let window = WholeProcessWindow::open();
+    let overlay_digest =
+        try_canonical_sha256_view(ds, HASH, &mut control(None)).expect("overlay digest");
+    let m = window.close();
+    assert_eq!(
+        overlay_digest.to_hex(),
+        overlay.sha256,
+        "the digest-only overlay entry equals the overlay document's digest"
+    );
+    line("overlay_sha256", &f, &overlay, m, None);
+    line("overlay_doc_sha256", &f, &overlay, doc_m, None);
 }
 
 fn main() {
