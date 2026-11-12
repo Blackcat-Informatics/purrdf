@@ -782,6 +782,10 @@ where
     /// assert_eq!(set.get(&4), None);
     /// ```
     ///
+    #[allow(
+        clippy::manual_map,
+        reason = "deliberate match: Option::map bloats LLVM IR on this hot path; scoped to the function because the match is its tail expression"
+    )]
     pub fn get<Q>(&self, value: &Q) -> Option<&T>
     where
         Q: Hash + Equivalent<T> + ?Sized,
