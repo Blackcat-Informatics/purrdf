@@ -219,6 +219,14 @@ harness = false
 # dataset, one carrying the RDF 1.2 statement layer, and that statement-bearing
 # content read through a composite, a delta, and a paged view. Report-only;
 # observes the drain-multiple-times-vs-freeze-a-second-dataset trade, asserts no
-# magnitude and no speedup.
+# magnitude and no speedup. A second group, `flat_view_canon_load`, times the flat
+# document and digest routes over two load-shaped fixtures.
 name = "flat_view_canon"
+harness = false
+
+[[bench]]
+# Allocation count and peak working bytes of flat canonical output and the
+# digest entries over two load-shaped fixtures. Separate from the timed
+# benches so allocator atomics do not perturb timing. Report-only.
+name = "flat_view_canon_alloc"
 harness = false

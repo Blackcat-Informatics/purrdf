@@ -973,6 +973,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/markdown/benches/slicer.rs` | markdown.lines |
 | `crates/purrdf/benches/multimodal_on_demand_read.rs` | facade.multimodal-read, retrieval.fusion-frontier, retrieval.rrf, text.bm25f, hnsw.search-build, hnsw.distance-cache, distance.exact.dot, distance.exact.sqeuclid |
 | `crates/rdf/benches/flat_view_canon.rs` | core.canon-escape |
+| `crates/rdf/benches/flat_view_canon_alloc.rs` | core.canon-escape |
 | `crates/rdf/benches/gts_ingest.rs` | gts.cbor-writer, blake3.hash-many-dispatch, lex.find-byte2-line-split |
 | `crates/rdf/benches/gts_import_alloc.rs` | gts.cbor-writer, blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf/benches/gts_selected_blobs.rs` | gts.cbor-writer, blake3.hash-many-dispatch |
