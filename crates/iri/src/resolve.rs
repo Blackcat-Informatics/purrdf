@@ -201,7 +201,8 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) 
     }
 }
 
-/// The two RFC-3986 recomposition repairs (§5.3), in one place. The returned
+/// The two RFC-3986 path repairs (§3.3 and §4.2), applied at recomposition (§5.3),
+/// in one place. The returned
 /// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
 /// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
 /// point. It is empty when no repair is needed.

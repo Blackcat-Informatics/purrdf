@@ -179,19 +179,41 @@ fn normalize_adds_no_guard_where_none_is_needed() {
     }
 }
 
+/// What `normalize` guarantees for any parse-accepted input: it returns, its
+/// text re-parses, scheme and authority presence are unchanged, and a second
+/// call is identical.
+fn assert_contract(input: &str) {
+    let original = parse(input).expect("input parses");
+    let n = original.normalize();
+    let reparsed = parse(n.as_str()).expect("normal form re-parses");
+    assert_eq!(
+        reparsed.scheme().is_some(),
+        original.scheme().is_some(),
+        "{input}"
+    );
+    assert_eq!(
+        reparsed.authority().is_some(),
+        original.authority().is_some(),
+        "{input}"
+    );
+    assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
+}
+
 /// A reference whose path reduces to nothing has no empty spelling (`parse`
 /// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
 /// otherwise-empty reference, and a query or fragment keeps the empty path.
 /// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
-/// reference. The inputs `..`, `../` and `./..` reduce to `.` only because dot
-/// removal on scheme-less references is unchanged here; this records current
-/// behaviour pending the separate decision in #1275, not a claim it is correct.
+/// reference. The exact normal form of a reference with a leading `..` is
+/// decided in #1275, so those inputs assert only the contract, not a string.
 #[test]
 fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
-    for input in [".", "..", "./", "../", "./.", "./..", ".././"] {
+    for input in [".", "./", "./."] {
         let n = parse(input).expect("input parses").normalize();
         assert_eq!(n.as_str(), ".", "{input}");
         assert_eq!(n.normalize().as_str(), ".", "{input}");
+    }
+    for input in ["..", "../", "./..", ".././"] {
+        assert_contract(input);
     }
     // Neighbours that must keep their current result: an empty path with a query
     // or fragment is not rewritten, and non-empty results gain nothing.
@@ -210,7 +232,6 @@ fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
 fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
     for (input, expected) in [
         ("./a:b", "./a:b"),
-        ("../a:b", "./a:b"),
         ("./a:b?q#f", "./a:b?q#f"),
         ("./x:y/z", "./x:y/z"),
     ] {
@@ -219,6 +240,7 @@ fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
         assert_eq!(n.scheme(), None, "{input}: became absolute");
         assert_eq!(n.normalize().as_str(), expected, "{input}");
     }
+    assert_contract("../a:b"); // exact form of a leading `..` is decided in #1275
     // Neighbours: no prefix where the colon is not in the first segment, where
     // the path is rooted, or where a scheme is present.
     for (input, expected) in [
