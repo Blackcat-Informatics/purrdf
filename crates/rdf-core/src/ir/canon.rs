@@ -3944,10 +3944,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 return Err(CanonError::SourceInconsistent);
             }
         }
-        Ok(iri_a
-            .bytes()
-            .chain(std::iter::once(b'>'))
-            .cmp(iri_b.bytes().chain(std::iter::once(b'>'))))
+        Ok(order::cmp_bracketed(iri_a.as_bytes(), iri_b.as_bytes()))
     }
 
     /// Comparator C: the bytes of the two symbols' spellings, each read again

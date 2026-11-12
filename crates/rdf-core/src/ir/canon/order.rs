@@ -234,6 +234,22 @@ pub(super) fn reference_is_one_token(bytes: &[u8]) -> bool {
     reference_token_len(bytes.iter().copied()) == Some(bytes.len())
 }
 
+/// The bytewise order of `x` followed by `>` and `y` followed by `>`, without
+/// writing either bracket: the common length decides when it differs, and
+/// otherwise the shorter side's `>` meets the other side's next byte. Equal
+/// bytes there leave the shorter side's text a prefix of the other's, which
+/// orders it first.
+pub(super) fn cmp_bracketed(x: &[u8], y: &[u8]) -> Ordering {
+    let common = x.len().min(y.len());
+    x[..common]
+        .cmp(&y[..common])
+        .then_with(|| match x.len().cmp(&y.len()) {
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Less => b'>'.cmp(&y[common]).then(Ordering::Less),
+            Ordering::Greater => x[common].cmp(&b'>').then(Ordering::Greater),
+        })
+}
+
 /// The distinct symbols of a run and the data needed to spell each again.
 pub(super) struct Symbols<Id> {
     /// The view term of each leaf symbol, from [`FIRST_LEAF`].
@@ -787,6 +803,42 @@ mod tests {
         // A stray quote in a tag cannot make the tokenizer span the next symbol.
         assert!(one_token("\"x\"@a\"b "));
     }
+    /// The bracketed comparison equals comparing `x + ">"` with `y + ">"` byte
+    /// by byte, on every pair of strings up to four bytes over bytes on both
+    /// sides of `>` and `>` itself, so pairs share prefixes and one is often a
+    /// prefix of the other. It protects the order of clean IRIs, which are
+    /// compared without writing their closing brackets.
+    #[test]
+    fn the_bracketed_comparison_equals_comparing_with_the_bracket_written() {
+        const ALPHABET: [u8; 5] = *b"/=>?a";
+        let mut strings = Vec::new();
+        for len in 0..=4_u32 {
+            for mut code in 0..ALPHABET.len().pow(len) {
+                let mut bytes = Vec::new();
+                for _ in 0..len {
+                    bytes.push(ALPHABET[code % ALPHABET.len()]);
+                    code /= ALPHABET.len();
+                }
+                strings.push(bytes);
+            }
+        }
+        let (mut prefixes, mut pairs) = (0, 0);
+        for x in &strings {
+            for y in &strings {
+                let written = |bytes: &[u8]| [bytes, b">"].concat();
+                assert_eq!(
+                    cmp_bracketed(x, y),
+                    written(x).cmp(&written(y)),
+                    "{x:?} {y:?}"
+                );
+                prefixes += usize::from(x.len() < y.len() && y.starts_with(x));
+                pairs += 1;
+            }
+        }
+        assert_eq!(pairs, 781 * 781);
+        assert!(prefixes > 1000, "proper prefixes are compared ({prefixes})");
+    }
+
     /// Ranking is dense and never lets the comparison read a rank as if it were
     /// packed meta: equal texts of different view terms share one rank, ranks
     /// follow the text order with no gaps, and each rank keeps the meta of the
