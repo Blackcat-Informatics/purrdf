@@ -208,20 +208,9 @@ pub(crate) mod bt;
 pub(crate) mod cost_model;
 pub(crate) mod dfast;
 pub(crate) mod hc;
-// LDM uses `twox_hash::XxHash64` (per-window XXH64 over the
-// `min_match_length` byte slice, upstream zstd `zstd_ldm.c:315`). The
-// `twox-hash` dependency is gated behind the `hash` feature so
 pub(crate) mod lazy_parse;
-// `default-features = false` builds (no_std, embedded) don't pull
-// it in. `BtMatcher::ldm_producer` and the `cfg(all())`
-// blocks inside `BtMatcher::prepare_ldm_candidates` /
-// `BtMatcher::reset` carry the same gate; the call site in
-// `match_generator.rs::start_matching_optimal` invokes
-// `prepare_ldm_candidates` unconditionally because the
-// gating is internal to the method body (under
-// `not(all())` the method shrinks to the legacy
-// `ldm_sequences.clear()` stub).
-
+// LDM hashes each `min_match_length` window through the shared native
+// `purrdf_hash::xxh64` home (upstream zstd `zstd_ldm.c:315`).
 pub(crate) mod ldm;
 pub(crate) mod match_table;
 pub(crate) mod opt;

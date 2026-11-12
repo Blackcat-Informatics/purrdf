@@ -151,8 +151,6 @@ pub enum ContentChecksum {
     /// Compute the checksum and compare it against the frame's stored value;
     /// a disagreement fails the decode with
     /// [`FrameDecoderError::ChecksumMismatch`](crate::decoding::errors::FrameDecoderError::ChecksumMismatch).
-    /// Without the `hash` feature there is no way to compute a digest, so
-    /// `Verify` cannot detect a mismatch and behaves like `None`.
     Verify,
 }
 
@@ -1910,12 +1908,9 @@ impl FrameDecoder {
                     state.bytes_read_counter += u64::from(hsize) + n as u64;
                     state.block_counter += 1;
                     // Consume the trailing 4-byte content checksum UNCONDITIONALLY
-                    // when the frame declares one — exactly like the general
-                    // direct loop and `decode_blocks`. Only the hash SEEDING is
-                    // `hash`-gated; the byte consumption / counter / `check_sum`
-                    // must not be, or a no-`hash` build leaves the 4 bytes in
-                    // `*input` (misparsed as the next frame) and never sets
-                    // `check_sum` (so `is_finished` stays false).
+                    // when the frame declares one, like the general direct
+                    // loop and `decode_blocks`. Skipping checksum computation
+                    // must still advance the input and retain `check_sum`.
                     if state.frame_header.descriptor.content_checksum_flag() {
                         let mut chksum = [0u8; 4];
                         Read::read_exact(input, &mut chksum).map_err(err::FailedToReadChecksum)?;
@@ -1927,7 +1922,7 @@ impl FrameDecoder {
 
                         if self.content_checksum != ContentChecksum::None {
                             use core::hash::Hasher;
-                            let mut h = twox_hash::XxHash64::with_seed(0);
+                            let mut h = purrdf_hash::xxh64::Xxh64::with_seed(0);
                             h.write(&output[..n]);
                             match &mut state.decoder_scratch {
                                 DecoderScratchKind::Flat(s) => s.buffer.hash = h,
@@ -2030,11 +2025,11 @@ impl FrameDecoder {
         // 100 MiB all-raw decode and the dominant CI gap on
         // bandwidth-limited hosts.
 
-        let mut running_hash: Option<twox_hash::XxHash64> =
+        let mut running_hash: Option<purrdf_hash::xxh64::Xxh64> =
             if state.frame_header.descriptor.content_checksum_flag()
                 && self.content_checksum != ContentChecksum::None
             {
-                Some(twox_hash::XxHash64::with_seed(0))
+                Some(purrdf_hash::xxh64::Xxh64::with_seed(0))
             } else {
                 None
             };

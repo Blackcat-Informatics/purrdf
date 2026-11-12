@@ -19,7 +19,7 @@ use crate::common::MAX_BLOCK_SIZE;
 
 use core::hash::Hasher;
 
-use twox_hash::XxHash64;
+use purrdf_hash::xxh64::Xxh64;
 
 use crate::encoding::levels::compress_block_encoded;
 use crate::encoding::{
@@ -73,9 +73,8 @@ pub struct StreamingEncoder<W: Write, M: Matcher = MatchGeneratorDriver> {
     magicless: bool,
     /// Whether to emit a trailing XXH64 content checksum and set the frame
     /// header's `Content_Checksum_flag` (upstream `ZSTD_c_checksumFlag`).
-    /// Default `false`, matching the upstream library default; combined with
-    /// the `hash` feature, so without `hash` no checksum is emitted
-    /// regardless. See [`Self::set_content_checksum`].
+    /// Default `false`, matching the upstream library default; when `true`
+    /// the native XXH64 digest is appended. See [`Self::set_content_checksum`].
     content_checksum: bool,
     /// Dictionary applied to the frame (upstream zstd `ZSTD_CCtx_loadDictionary` on a
     /// streaming context). `None` = no dictionary. Set before the first write.
@@ -91,7 +90,7 @@ pub struct StreamingEncoder<W: Write, M: Matcher = MatchGeneratorDriver> {
     /// dictionary is attached so each frame start is a cheap clone.
     dictionary_entropy_cache: Option<CachedDictionaryEntropy>,
 
-    hasher: XxHash64,
+    hasher: Xxh64,
 }
 
 impl<W: Write> StreamingEncoder<W, MatchGeneratorDriver> {
@@ -191,7 +190,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
             dictionary_id_flag: true,
             dictionary_entropy_cache: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
         }
     }
 
@@ -220,8 +219,8 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
     /// upstream library default (`ZSTD_c_checksumFlag = 0`). Must be called
     /// before the first [`write`](Write::write); once the frame header is
     /// emitted the flag is fixed, so a late change returns an error rather
-    /// than producing a header/trailer mismatch. Without the `hash` feature
-    /// no checksum is emitted regardless.
+    /// than producing a header/trailer mismatch. The digest is always
+    /// the native XXH64.
     pub fn set_content_checksum(&mut self, emit: bool) -> Result<(), Error> {
         self.ensure_open()?;
         if self.frame_started {
@@ -597,7 +596,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
         );
 
         {
-            self.hasher = XxHash64::with_seed(0);
+            self.hasher = Xxh64::with_seed(0);
         }
 
         let window_size = self.state.matcher.window_size();

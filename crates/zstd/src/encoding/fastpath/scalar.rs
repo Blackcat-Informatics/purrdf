@@ -35,9 +35,8 @@ pub(crate) const fn mismatch_byte_index(diff: usize) -> usize {
     diff.leading_zeros() as usize / 8
 }
 
-/// Multiplicative hash constant (Knuth golden ratio for 64-bit). Shared across
-/// every variant — upstream zstd parity matches the C zstd value.
-pub(crate) const HASH_MIX_PRIME: u64 = 0x9E37_79B1_85EB_CA87;
+/// The first `XXH64` prime, used as Zstandard's match-hash multiplier on every path.
+pub(crate) use purrdf_hash::xxh64::PRIME_1 as HASH_MIX_PRIME;
 
 /// Pure scalar `hash_mix_u64` — single multiplication. Used by
 /// `FastpathKernel::Scalar` and as the fallback when no CRC instruction is

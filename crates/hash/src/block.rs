@@ -54,6 +54,11 @@ impl<const N: usize> BlockBuffer<N> {
         self.filled = rest.len();
     }
 
+    /// Borrow the incomplete block without consuming or changing the stream.
+    pub(crate) fn pending(&self) -> &[u8] {
+        &self.bytes[..self.filled]
+    }
+
     /// The Merkle–Damgård finish shared by MD5 and SHA-1 (64-byte blocks):
     /// append `0x80`, zeros up to 56 mod 64, then the 8-byte encoded message
     /// bit length, handing the one or two final blocks to `blocks`.

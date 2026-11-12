@@ -111,9 +111,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # Package name -> first-party replacement. Banned on ANY edge (runtime, build,
-# dev/test, transitive) because a first-party replacement exists for every
-# edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
+# dev/test, transitive); a native replacement covers each kind. Cargo.lock is checked.
 BANNED_ANY_EDGE: dict[str, str] = {
+    "twox-hash": "purrdf_hash::xxh64 (seeded one-shot and streaming XXH64)",
     "visual-hashing": "purrdf_lex::visual_fingerprint (admitted native rendering over shared BLAKE3)",
     "structured-zstd": "purrdf_zstd (shared native frame codec and FastCOVER trainer)",
     "hashbrown": "purrdf_core::hash::table (shared native probes and transactional growth)",

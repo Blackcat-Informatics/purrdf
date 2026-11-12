@@ -45,7 +45,7 @@ pub(crate) struct DecodeBuffer<B: BufferBackend = RingBuffer> {
     pub window_size: usize,
     total_output_counter: u64,
 
-    pub hash: twox_hash::XxHash64,
+    pub hash: purrdf_hash::xxh64::Xxh64,
     /// Whether drain hashes the bytes it emits into `hash`. `false` lets a
     /// `FrameDecoder` set to [`ContentChecksum::None`](crate::decoding::ContentChecksum::None)
     /// skip the XXH64 pass on the streaming path. Persists across `reset`
@@ -98,7 +98,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
             window_size,
             total_output_counter: 0,
 
-            hash: twox_hash::XxHash64::with_seed(0),
+            hash: purrdf_hash::xxh64::Xxh64::with_seed(0),
 
             compute_hash: true,
         }
@@ -123,7 +123,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
             window_size,
             total_output_counter: 0,
 
-            hash: twox_hash::XxHash64::with_seed(0),
+            hash: purrdf_hash::xxh64::Xxh64::with_seed(0),
 
             compute_hash: true,
         }
@@ -178,7 +178,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
         self.buffer.set_max_capacity(usize::MAX);
 
         {
-            self.hash = twox_hash::XxHash64::with_seed(0);
+            self.hash = purrdf_hash::xxh64::Xxh64::with_seed(0);
         }
     }
 

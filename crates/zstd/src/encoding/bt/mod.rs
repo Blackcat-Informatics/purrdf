@@ -99,11 +99,7 @@ pub(crate) struct BtMatcher {
     /// consumes the field, it does not construct it. See
     /// [`super::ldm::LdmProducer`].
     ///
-    /// Gated behind the `hash` feature because the producer's
-    /// per-window XXH64 hashing depends on the optional
-    /// `twox-hash` dependency; under `default-features = false`
-    /// the field disappears and the `prepare_ldm_candidates`
-    /// body shrinks to the legacy `ldm_sequences.clear()` stub.
+    /// Per-window hashing uses the shared native `purrdf_hash::xxh64` home.
     pub(crate) ldm_producer: Option<LdmProducer>,
 }
 
@@ -197,8 +193,6 @@ impl BtMatcher {
                 * size_of::<HcOptimalSequence>()
             + self.opt_price_arena.len() * size_of::<[u32; 2]>()
             + self.ldm_sequences.capacity() * size_of::<HcRawSeq>();
-        // The LDM producer is only present under the `hash` feature.
-
         let ldm = self.ldm_producer.as_ref().map_or(0, |p| p.heap_size());
 
         scratch + ldm

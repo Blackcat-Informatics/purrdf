@@ -17,7 +17,7 @@
 use alloc::vec::Vec;
 use core::convert::TryInto;
 
-use twox_hash::XxHash64;
+use purrdf_hash::xxh64::Xxh64;
 
 use core::hash::Hasher;
 
@@ -119,8 +119,8 @@ pub struct FrameCompressor<
     /// Whether to emit a trailing XXH64 content checksum and set the frame
     /// header's `Content_Checksum_flag` (semantics of upstream
     /// `ZSTD_c_checksumFlag`). Default `false`, matching the upstream
-    /// library default; combined with the `hash` feature at frame-build
-    /// time, so without `hash` no checksum is emitted regardless. Set via
+    /// library default; when `true` the native XXH64 digest is appended
+    /// at frame-build time. Set via
     /// [`Self::set_content_checksum`].
     content_checksum: bool,
     /// Whether to record `Frame_Content_Size` in the frame header when the
@@ -144,7 +144,7 @@ pub struct FrameCompressor<
     /// 128 KiB blocks). Set via [`Self::set_target_block_size`].
     target_block_size: Option<u32>,
 
-    hasher: XxHash64,
+    hasher: Xxh64,
 
     /// Effective strategy tag when a public-parameter
     /// [`Strategy`](crate::encoding::Strategy) override is active.
@@ -942,7 +942,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
             dict_id_flag: true,
             target_block_size: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
 
             strategy_override: None,
         }
@@ -1328,7 +1328,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
             dict_id_flag: true,
             target_block_size: None,
 
-            hasher: XxHash64::with_seed(0),
+            hasher: Xxh64::with_seed(0),
 
             strategy_override: None,
         }
@@ -1353,8 +1353,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
     /// When `false`, emitted frames set `Content_Checksum_flag = 0` and carry
     /// no trailing digest; such frames are valid (RFC 8878) and decode
     /// correctly in any [`ContentChecksum`](crate::decoding::ContentChecksum)
-    /// mode. Without the `hash` feature no checksum is emitted regardless of
-    /// this setting.
+    /// mode. The digest is always the native XXH64.
     pub fn set_content_checksum(&mut self, emit: bool) {
         self.content_checksum = emit;
     }
@@ -1692,7 +1691,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
         );
 
         {
-            self.hasher = XxHash64::with_seed(0);
+            self.hasher = Xxh64::with_seed(0);
         }
         let window_size = self.state.matcher.window_size();
         assert!(
@@ -1968,7 +1967,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
         let drain = self.compressed_data.as_mut().unwrap();
         drain.write_all(&header_buf).unwrap();
         drain.write_all(&all_blocks).unwrap();
-        // With the `hash` feature AND the content checksum enabled, the header
+        // With the content checksum enabled, the header
         // set `Content_Checksum_flag` and the 32-bit digest is written at the
         // end of the frame. Disabled => no trailing bytes, flag stays 0.
 

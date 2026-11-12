@@ -30,4 +30,3 @@ crate-type = ["rlib"]
 [dependencies]
 purrdf-hash.workspace = true
 purrdf-lex.workspace = true
-twox-hash.workspace = true

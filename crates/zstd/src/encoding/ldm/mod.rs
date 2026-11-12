@@ -65,8 +65,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use core::hash::Hasher;
-use twox_hash::XxHash64;
+use purrdf_hash::xxh64;
 
 use super::opt::ldm::HcRawSeq;
 
@@ -295,9 +294,7 @@ impl LdmProducer {
 
                 let split_idx = to_idx(split_abs);
                 let window_end_idx = to_idx(window_end_abs);
-                let mut hasher = XxHash64::with_seed(LDM_XXH64_SEED);
-                hasher.write(&live_history[split_idx..window_end_idx]);
-                let xxhash = hasher.finish();
+                let xxhash = xxh64::hash(LDM_XXH64_SEED, &live_history[split_idx..window_end_idx]);
                 let hash_id = (xxhash as u32) & hash_id_mask;
                 let checksum = (xxhash >> 32) as u32;
 

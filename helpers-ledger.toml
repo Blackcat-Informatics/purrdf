@@ -415,6 +415,23 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "xxh64"
+summary = "The seeded and streaming `XXH64` used by Zstandard checksums, LDM windows and Parquet Bloom filters"
+home = "purrdf_hash::xxh64::Xxh64"
+entry_points = ["purrdf_hash::xxh64::hash"]
+spec = "xxHash algorithm specification, XXH64: little-endian lanes, wrapping arithmetic and identical answers for every input partition"
+vectors = ["crates/hash-conformance/tests/vectors/xxh64_differential_vectors.txt"]
+bench = ["purrdf-hash-conformance:xxh64"]
+sites = []
+replaces_external = ["twox-hash"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x9e37_79b1_85eb_ca87", "0xc2b2_ae3d_27d4_eb4f", "0x1656_67b1_9e37_79f9", "0x85eb_ca77_c2b2_ae63", "0x27d4_eb2f_1656_67c5"]
+fingerprints = []
+names = []
+
+[[job]]
 id = "deflate-gzip"
 summary = "DEFLATE and gzip: streaming decoder and deterministic encoder"
 home = "purrdf_deflate::Inflater"
