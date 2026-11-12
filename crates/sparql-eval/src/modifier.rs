@@ -142,27 +142,82 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let schema = if ctx.growth.is_bounded() {
-        VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
-            .shared_admitted(&ctx.growth)?
-    } else {
-        VarSchema::interned(variables)
-    };
-    let width = schema.len();
-    // `VALUES` is 1:1 with its inline bindings, in order, so the pushed row ceiling is
-    // simply how many of them are worth interning. Interning is not free — every ground
-    // term goes through the scratch arena's value hash — so a `VALUES` block of ten
-    // thousand rows under a `LIMIT 5` stops after five.
-    let semantic_ceiling = ctx.row_ceiling();
-    let cell_ceiling = ctx.cell_row_ceiling(width);
+    let mut source = ValuesRows::new(variables, ctx)?;
     let mut rows = RowsBuilder::new(&ctx.growth);
-    for binding in bindings {
-        if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            break;
+    while let Some(row) = source.next(bindings, ctx)? {
+        rows.push_row(row)?;
+    }
+    Ok(SolutionSeq {
+        schema: source.schema,
+        rows: rows.finish()?,
+    })
+}
+
+/// Inline bindings retain their algebra position, never another answer bag.
+pub(crate) struct ValuesRows {
+    pub(crate) schema: crate::solution::SharedSchema,
+    produced: usize,
+    semantic_ceiling: Option<usize>,
+    cell_ceiling: Option<usize>,
+    stopped: bool,
+}
+
+impl ValuesRows {
+    pub(crate) fn new<D: DatasetView + Sync>(
+        variables: &[Variable],
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let schema = if ctx.growth.is_bounded() {
+            VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
+                .shared_admitted(&ctx.growth)?
+        } else {
+            VarSchema::interned(variables)
+        };
+        let cell_ceiling = ctx.cell_row_ceiling(schema.len());
+        Ok(Self {
+            schema,
+            produced: 0,
+            semantic_ceiling: ctx.row_ceiling(),
+            cell_ceiling,
+            stopped: false,
+        })
+    }
+
+    pub(crate) fn stop(&mut self) {
+        self.stopped = true;
+    }
+
+    pub(crate) const fn produced(&self) -> usize {
+        self.produced
+    }
+
+    pub(crate) fn next<D: DatasetView + Sync>(
+        &mut self,
+        bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Option<RetainedRow<D::Id>>, EvalError> {
+        if self.stopped {
+            return Ok(None);
         }
-        if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
-            break;
+        let Some(binding) = bindings.get(self.produced) else {
+            return Ok(None);
+        };
+        let width = self.schema.len();
+        // `VALUES` is 1:1 with its inline bindings, in order, so the pushed row ceiling is
+        // simply how many of them are worth interning. Interning is not free — every ground
+        // term goes through the scratch arena's value hash — so a `VALUES` block of ten
+        // thousand rows under a `LIMIT 5` stops after five.
+        if self
+            .semantic_ceiling
+            .is_some_and(|cap| self.produced >= cap)
+        {
+            self.stop();
+            return Ok(None);
+        }
+        if self.cell_ceiling.is_some_and(|cap| self.produced >= cap) {
+            let _ = ctx.observe_cells(self.produced.saturating_add(1), width);
+            self.stop();
+            return Ok(None);
         }
         let workspace = ctx.growth.clone();
         let row = RetainedRow::try_from_cells(
@@ -192,12 +247,12 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
             }),
             &workspace,
         )?;
-        rows.push_row(row)?;
+        self.produced = self
+            .produced
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        Ok(Some(row))
     }
-    Ok(SolutionSeq {
-        schema,
-        rows: rows.finish()?,
-    })
 }
 
 // Specialize the one projection row loop after the whole-bag physical proof.
@@ -311,6 +366,10 @@ pub(crate) fn finish_dedup<D: DatasetView + Sync, const ADJACENT: bool>(
     // A shared blank's column is not part of a solution: two rows that differ only
     // there are the same solution (see `crate::blank_scope`).
     let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
+    ctx.note_cursor_buffer(crate::eval::CursorBufferReason::DistinctKeys);
+    if ctx.evidence_input.is_some() || seq.rows.may_have_evidence_attachment() {
+        ctx.note_cursor_buffer(crate::eval::CursorBufferReason::EvidenceCoalescing);
+    }
     Ok(lift.finish(dedup::<_, ADJACENT>(
         seq,
         &ctx.growth,
@@ -515,6 +574,7 @@ pub(crate) fn begin_order_child_with_owner<'e, D: DatasetView + Sync>(
     let Some(seq) = lift.absorb(0, child) else {
         return Ok(OrderStart::Complete(lift.withheld()));
     };
+    ctx.note_cursor_buffer(crate::eval::CursorBufferReason::OrderedInput);
     let cells = seq
         .rows
         .len()
@@ -2751,6 +2811,7 @@ pub(crate) fn begin_group_child_with_owner<'e, D: DatasetView + Sync>(
             lift.finish(SolutionSeq::empty(out_schema)),
         ));
     };
+    ctx.note_cursor_buffer(crate::eval::CursorBufferReason::AggregateState);
     let var_count = out_schema
         .len()
         .checked_sub(aggregates.len())
@@ -4064,6 +4125,7 @@ impl<'e, I: ViewTermId> ContextualGroupSequence<'e, I> {
                 "contextual GROUP continuation lost its graph child",
             ));
         };
+        ctx.note_cursor_buffer(crate::eval::CursorBufferReason::AggregateState);
         let in_schema = crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?;
         let var_count = out_schema
             .len()

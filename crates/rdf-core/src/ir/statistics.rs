@@ -216,6 +216,7 @@ impl StatisticsBuilder {
             dictionary.term_id_by_iri_with_memory(purrdf_iri::vocab::rdf::TYPE, memory)?;
         let mut ordinals = Vec::new();
         let mut pending = Vec::new();
+        let mut source_row = crate::source::SourceRowHasher::default();
         let result = (|| {
             memory.admission_mut().checkpoint(0)?;
             memory.reserve(&mut ordinals, count)?;
@@ -308,6 +309,7 @@ impl StatisticsBuilder {
                                 row(ordinal),
                                 dictionary,
                                 &mut pending,
+                                &mut source_row,
                                 memory,
                             )?;
                             let stream = match relation {
@@ -401,7 +403,9 @@ impl StatisticsBuilder {
                             })?
                             .end
                         } else {
-                            ordinals[next..end].partition_point(|&index| row(index).o == object)
+                            purrdf_lex::walk::partition_prefix(&ordinals[next..end], |&index| {
+                                row(index).o == object
+                            })
                         };
                         let stop = next.checked_add(run).ok_or(StorageError::SizeOverflow)?;
                         let rows = (stop - next) as u64;
@@ -802,7 +806,7 @@ impl LocalStatistics {
 
 impl<I: StatisticsId> LocalStatistics<I> {
     /// Release a staged result after a later publication step refuses.
-    fn release_admitted<S: Admission + ?Sized>(
+    pub(crate) fn release_admitted<S: Admission + ?Sized>(
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
@@ -1293,7 +1297,7 @@ impl<I: StatisticsId> LocalStatistics<I> {
     }
 }
 
-pub(super) fn relation(stream: crate::StatisticsStream) -> Relation {
+pub(crate) fn relation(stream: crate::StatisticsStream) -> Relation {
     match stream {
         crate::StatisticsStream::Asserted => Relation::Asserted,
         crate::StatisticsStream::Reifiers => Relation::Reifiers,
@@ -1411,7 +1415,9 @@ mod tests {
         let triple = builder.intern_triple(subject, predicate, object).unwrap();
         builder.push_reifier(reifier, triple).unwrap();
         let dataset = builder.freeze().unwrap();
-        let statistics = dataset.predicate_statistics();
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let statistics = dataset.prepare_statistics_with_memory(&mut memory).unwrap();
         assert!(statistics.effective_directory.is_none());
         assert!(std::ptr::eq(
             statistics.source_directory(),
@@ -1423,7 +1429,8 @@ mod tests {
         let (annotated, _, _) = fixture(false);
         assert!(
             annotated
-                .predicate_statistics()
+                .prepare_statistics_with_memory(&mut memory)
+                .unwrap()
                 .effective_directory
                 .is_some()
         );
@@ -1676,13 +1683,156 @@ mod tests {
                 Some(exact(expected))
             );
         }
+
+        // A live outer visitor owns the reserved buffer. Its nested operation
+        // must preserve a refused temporary checkout without corrupting the
+        // outer ordered domain, and the reservation must return afterward.
+        let expected: BTreeSet<_> = dataset
+            .quads()
+            .filter(|row| row.p == predicates[0])
+            .map(|row| row.o)
+            .collect();
+        let mut observed = Vec::new();
+        stats
+            .visit_distinct(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut |id| {
+                    if observed.is_empty() {
+                        let mut ceiling = purrdf_lex::allocation::Ceiling(0);
+                        let mut memory = Memory::new(&mut ceiling);
+                        let refused = dataset.visit_distinct_with_memory(
+                            predicates[0],
+                            GraphMatch::Any,
+                            StatisticsStream::Asserted,
+                            StatisticsPosition::Object,
+                            &mut memory,
+                            &mut |_| panic!("refusal precedes callbacks"),
+                        );
+                        assert_eq!(
+                            refused,
+                            Err(super::super::pack::bits::PackBitsError::Storage(
+                                StorageError::AdmissionFailed
+                            ))
+                        );
+                        assert_eq!(memory.admitted_bytes(), 0);
+                        let mut nested = None;
+                        stats
+                            .visit_distinct(
+                                predicates[0],
+                                GraphMatch::Any,
+                                StatisticsStream::Asserted,
+                                StatisticsPosition::Object,
+                                &mut |inner| {
+                                    nested = Some(inner);
+                                    ControlFlow::Break(())
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(nested, expected.first().copied());
+                        assert_eq!(
+                            stats
+                                .predicate(
+                                    predicates[0],
+                                    GraphMatch::Any,
+                                    StatisticsStream::Asserted
+                                )
+                                .unwrap()
+                                .objects,
+                            Some(exact(expected.len() as u64))
+                        );
+                    }
+                    observed.push(id);
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert_eq!(observed, expected.iter().copied().collect::<Vec<_>>());
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stats.visit_distinct(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut |_| panic!("visitor unwind"),
+            )
+        }));
+        assert!(unwind.is_err());
+        let mut ceiling = purrdf_lex::allocation::Ceiling(0);
+        let mut memory = Memory::new(&mut ceiling);
+        let mut reused = 0;
+        dataset
+            .visit_distinct_with_memory(
+                predicates[0],
+                GraphMatch::Any,
+                StatisticsStream::Asserted,
+                StatisticsPosition::Object,
+                &mut memory,
+                &mut |_| {
+                    reused += 1;
+                    ControlFlow::Continue(())
+                },
+            )
+            .unwrap();
+        assert_eq!(reused, expected.len());
+        assert_eq!(memory.admitted_bytes(), 0);
+
+        let invalid = TermId::from_index(u32::MAX - 1).unwrap();
+        assert_eq!(
+            stats
+                .predicate(invalid, GraphMatch::Any, StatisticsStream::Asserted)
+                .unwrap()
+                .rows,
+            exact(0)
+        );
+        assert_eq!(
+            stats.predicate_object(
+                predicates[0],
+                invalid,
+                GraphMatch::Any,
+                StatisticsStream::Asserted
+            ),
+            Some(exact(0))
+        );
     }
 
     #[test]
     fn sealed_source_rows_match_independent_owned_projection_and_codec() {
+        // Frozen with independent `b3sum` 1.8.7 over the published length
+        // frame, domain, relation byte and this exact thirty-two-byte row.
+        for (relation, expected) in [
+            (
+                Relation::Asserted,
+                "d7034bfde2887c2cb8f099f512181649878cb0d346c2266d2ed0f0b7bc4c9b7b",
+            ),
+            (
+                Relation::Reifiers,
+                "2205757d7a96ded46ae6d705303291ef62bcedba2d7a2986d272246d4b897405",
+            ),
+            (
+                Relation::Annotations,
+                "dc415b3ace2210576784975db57755b148f65f655594bfbf96a93a71e7a0746b",
+            ),
+            (
+                Relation::Targets,
+                "8a4678deb41a4103fd2bed9af99cbd5bc0d031cd2060727c716c734bfaee3243",
+            ),
+        ] {
+            assert_eq!(
+                purrdf_hash::hex::encode(&crate::source::record_hash(
+                    relation,
+                    *b"0123456789abcdefghijklmnopqrstuv",
+                )),
+                expected,
+            );
+        }
         for named in [false, true] {
             let (dataset, _, _) = fixture(named);
-            let statistics = dataset.predicate_statistics();
+            let mut resident = Resident;
+            let mut memory = Memory::new(&mut resident);
+            let statistics = dataset.prepare_statistics_with_memory(&mut memory).unwrap();
             for (index, entry) in statistics.predicates.iter().enumerate() {
                 let rows: Vec<_> = match entry.key.0 {
                     Relation::Asserted => dataset.quads().collect(),
@@ -1755,6 +1905,8 @@ mod tests {
         let mut builder = RdfDatasetBuilder::new();
         let subject = builder.intern_iri("urn:source:subject").unwrap();
         let predicate = builder.intern_iri("urn:source:predicate").unwrap();
+        let graph = builder.intern_iri("urn:source:graph").unwrap();
+        let short_object = builder.intern_literal(RdfLiteral::simple("short")).unwrap();
         let literal_object = builder
             .intern_literal(RdfLiteral::simple(&lexical))
             .unwrap();
@@ -1764,30 +1916,38 @@ mod tests {
                 .intern_triple(subject, predicate, nested_object)
                 .unwrap();
         }
-        for object in [literal_object, nested_object] {
+        let rows = [
+            (literal_object, None),
+            (nested_object, Some(graph)),
+            (short_object, None),
+            (literal_object, Some(graph)),
+            (short_object, None),
+        ];
+        // The triple fixture supplies the dictionary; the row projection below
+        // independently selects its named or default graph from those terms.
+        for (object, _) in rows {
             builder.push_quad(subject, predicate, object, None).unwrap();
         }
         let dataset = builder.freeze().unwrap();
         let subject_value = dataset.term_value(subject).unwrap();
         let predicate_value = dataset.term_value(predicate).unwrap();
-        let object_values = [
-            dataset.term_value(literal_object).unwrap(),
-            dataset.term_value(nested_object).unwrap(),
-        ];
+        let graph_value = dataset.term_value(graph).unwrap();
+        let object_values: Vec<_> = rows
+            .iter()
+            .map(|&(object, _)| dataset.term_value(object).unwrap())
+            .collect();
         let dataset = Arc::try_unwrap(dataset)
             .unwrap_or_else(|_| panic!("fixture dataset must have one owner"));
         let native = TripleDataset::try_from(dataset).unwrap();
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        for (object, object_value) in [literal_object, nested_object]
-            .into_iter()
-            .zip(&object_values)
-        {
+        let mut source_row = crate::source::SourceRowHasher::default();
+        for ((object, graph), object_value) in rows.into_iter().zip(&object_values) {
             let quad = QuadIds {
                 s: subject,
                 p: predicate,
                 o: object,
-                g: None,
+                g: graph,
             };
             let mut pending = Vec::new();
             let mut expected = SourceSummary::default();
@@ -1797,6 +1957,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory,
                 )
                 .unwrap();
@@ -1813,7 +1974,7 @@ mod tests {
                 subject: &subject_value,
                 predicate: &predicate_value,
                 object: object_value,
-                graph: None,
+                graph: graph.map(|_| &graph_value),
             }
             .hashes(&mut controlled)
             .unwrap();
@@ -1821,7 +1982,7 @@ mod tests {
                 let literal = crate::source::LiteralSourceRow {
                     subject: &subject_value,
                     predicate: &predicate_value,
-                    graph: None,
+                    graph: graph.map(|_| &graph_value),
                     lexical: &lexical,
                     datatype: purrdf_xsd::datatype::XSD_STRING,
                     language: None,
@@ -1856,6 +2017,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory,
                 );
                 let calls = memory.admission().calls;
@@ -1904,6 +2066,7 @@ mod tests {
                     quad,
                     &native.dictionary,
                     &mut pending,
+                    &mut source_row,
                     &mut memory
                 ),
                 Err(StorageError::SizeOverflow)
@@ -2011,11 +2174,13 @@ mod tests {
         let base = u64::from(u32::MAX) + 100;
         let translate = |id: TermId| GlobalTermId::from_index(base - id.index() as u64).unwrap();
         let mut admission = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut admission);
+        let source = native.prepare_statistics_with_memory(&mut memory).unwrap();
         let merged = LocalStatistics::<GlobalTermId>::merge_translated(
-            [&native],
-            |source| source.predicate_statistics(),
+            [&*source],
+            |source| source,
             |_, id| translate(id),
-            &mut Memory::new(&mut admission),
+            &mut memory,
         )
         .unwrap();
         for predicate in predicates {

@@ -2028,11 +2028,15 @@ impl DatasetView for RdfDataset {
     }
 
     fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
-        Ok(Some(self.predicate_statistics().statement_count()))
+        Ok(Some(
+            self.quad_count() as u128
+                + self.reifiers().count() as u128
+                + self.annotations().count() as u128,
+        ))
     }
 
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
-        Some(self.predicate_statistics())
+        Some(self)
     }
 
     fn source_summary(
@@ -2041,10 +2045,14 @@ impl DatasetView for RdfDataset {
         graph: GraphMatch<Self::Id>,
         stream: crate::StatisticsStream,
     ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
-        Ok(Some(
-            self.predicate_statistics()
-                .source_summary(predicate, graph, stream),
-        ))
+        if let Some(statistics) = self.prepared_statistics() {
+            return Ok(Some(statistics.source_summary(predicate, graph, stream)));
+        }
+        Ok(Some(self.native_source_summary(
+            Some(predicate),
+            graph,
+            crate::ir::statistics::relation(stream),
+        )))
     }
 
     frozen_term_nesting_bound_method! {

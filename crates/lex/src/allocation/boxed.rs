@@ -3,6 +3,47 @@
 
 //! The native fallible box allocation shared by grammar and RDF payload owners.
 
+/// Shrink an owned vector fallibly, restoring its original allocation on refusal.
+/// Accounting and progress callbacks belong outside this ownership transition.
+pub(super) fn try_shrink_to_fit<T>(values: &mut Vec<T>) -> Result<(), super::StorageError> {
+    if size_of::<T>() == 0 || values.capacity() == values.len() {
+        return Ok(());
+    }
+    if values.is_empty() {
+        drop(core::mem::take(values));
+        return Ok(());
+    }
+    let old = core::alloc::Layout::array::<T>(values.capacity())
+        .map_err(|_| super::StorageError::SizeOverflow)?;
+    let new = core::alloc::Layout::array::<T>(values.len())
+        .map_err(|_| super::StorageError::SizeOverflow)?;
+    let length = values.len();
+    let capacity = values.capacity();
+    let mut original = core::mem::ManuallyDrop::new(core::mem::take(values));
+    let pointer = original.as_mut_ptr();
+    // SAFETY: this nonempty, non-ZST Vec owns the global allocation described
+    // by its original capacity. Both layouts are checked and have T's alignment;
+    // the new nonzero extent retains every initialized element. No callback or
+    // fallible operation intervenes before exactly one Vec owner is restored.
+    let resized = unsafe { std::alloc::realloc(pointer.cast(), old, new.size()) }.cast::<T>();
+    let refused = resized.is_null();
+    // SAFETY: null preserves the original allocation, length and capacity.
+    // Success transfers that allocation to the returned pointer with exactly
+    // the requested layout. ManuallyDrop never destroys the superseded owner.
+    *values = unsafe {
+        Vec::from_raw_parts(
+            if refused { pointer } else { resized },
+            length,
+            if refused { capacity } else { length },
+        )
+    };
+    if refused {
+        Err(super::StorageError::AllocationFailed)
+    } else {
+        Ok(())
+    }
+}
+
 /// Relocate into an empty, preallocated buffer, retaining the original owner
 /// across every refused or panicking progress callback.
 pub(super) fn relocate<T>(
@@ -92,6 +133,9 @@ mod tests {
     fn relocation_preserves_owning_payloads_across_refusal_and_unwind() {
         use std::cell::Cell;
         use std::rc::Rc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::super::{Memory, Resident};
 
         struct Payload(Rc<Cell<usize>>);
         impl Drop for Payload {
@@ -101,7 +145,7 @@ mod tests {
         }
         let drops = Rc::new(Cell::new(0));
         let mut source: Vec<_> = (0..100).map(|_| Payload(Rc::clone(&drops))).collect();
-        let mut destination = Vec::with_capacity(source.len());
+        let mut destination = Vec::with_capacity(source.len() + 17);
         let pointer = source.as_ptr();
         let mut calls = 0;
         let refused = super::relocate(&mut source, &mut destination, |_| {
@@ -133,7 +177,40 @@ mod tests {
         assert_eq!(destination.len(), 100);
         drop(source);
         assert_eq!(drops.get(), 0);
-        drop(destination);
+        let mut resident = Resident;
+        let mut memory =
+            Memory::resume(&mut resident, destination.capacity() * size_of::<Payload>());
+        let frozen = memory.boxed_slice(destination).unwrap();
+        assert_eq!(frozen.len(), 100);
+        assert_eq!(memory.admitted_bytes(), 100 * size_of::<Payload>());
+        assert_eq!(drops.get(), 0);
+        drop(frozen);
+        memory.release_bytes(100 * size_of::<Payload>()).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
         assert_eq!(drops.get(), 100);
+
+        let empty = Vec::<Payload>::with_capacity(17);
+        let mut memory = Memory::resume(&mut resident, empty.capacity() * size_of::<Payload>());
+        let frozen = memory.boxed_slice(empty).unwrap();
+        assert!(frozen.is_empty());
+        assert_eq!(memory.admitted_bytes(), 0);
+        drop(frozen);
+        assert_eq!(drops.get(), 100);
+
+        static ZST_DROPS: AtomicUsize = AtomicUsize::new(0);
+        struct ZeroSized;
+        impl Drop for ZeroSized {
+            fn drop(&mut self) {
+                ZST_DROPS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let mut zero_sized = Vec::new();
+        zero_sized.resize_with(3, || ZeroSized);
+        let mut memory = Memory::new(&mut resident);
+        let frozen = memory.boxed_slice(zero_sized).unwrap();
+        assert_eq!(frozen.len(), 3);
+        assert_eq!(memory.admitted_bytes(), 0);
+        drop(frozen);
+        assert_eq!(ZST_DROPS.load(Ordering::Relaxed), 3);
     }
 }

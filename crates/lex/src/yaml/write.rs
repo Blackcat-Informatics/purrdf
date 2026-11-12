@@ -1021,8 +1021,7 @@ fn plain_lexical_length(text: &str, context: ScalarContext) -> Option<usize> {
     }
     let mut characters = 0;
     for (at, c) in text.char_indices() {
-        if !super::scalar::printable(c)
-            || matches!(c, '\r' | '\n' | '\u{feff}')
+        if !super::scalar::non_break(c)
             || super::scalar::plain_end_before(bytes, at, flow, after(at))
         {
             return None;
@@ -1082,8 +1081,8 @@ fn emit_scalar_impl(
                 matches!(context, ScalarContext::Root | ScalarContext::Block { .. })
                     && (!needs_hint || hint < 10)
                     && text.chars().all(|c| {
-                        super::scalar::printable(c)
-                            && !matches!(c, '\r' | '\u{85}' | '\u{2028}' | '\u{2029}' | '\u{feff}')
+                        (c == '\n' || super::scalar::non_break(c))
+                            && !matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}')
                     })
             }
         };

@@ -3,16 +3,84 @@
 
 //! Original admission ownership for a reserved-vocabulary refusal.
 
-use purrdf_lex::allocation::{SharedOwned, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, Shared, SharedOwned, StorageError};
 
 use super::ownership::SourceGrant;
 use super::{CanonError, TermPosition};
 use crate::DatasetView;
 
+/// The reserved IRI predicate shared by view and borrowed-value admission.
+pub(super) fn candidate_iri(iri: &str) -> Option<&str> {
+    iri.starts_with(super::RESERVED_NAMESPACE).then_some(iri)
+}
+
 #[derive(Debug, PartialEq, Eq)]
-struct Fields {
+pub(super) struct Fields {
     iri: String,
     position: TermPosition,
+}
+
+impl Fields {
+    pub(super) fn new<S: Admission + ?Sized>(
+        iri: &str,
+        position: TermPosition,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            iri: memory.string(iri)?,
+            position,
+        })
+    }
+
+    pub(super) fn consider<S: Admission + ?Sized>(
+        &mut self,
+        iri: &str,
+        position: TermPosition,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        if (position, iri) < (self.position, self.iri.as_str()) {
+            let next = memory.string(iri)?;
+            let previous = std::mem::replace(&mut self.iri, next);
+            self.position = position;
+            memory.release_string(previous)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<ReservedVocabulary, StorageError> {
+        memory.add_bytes(Shared::<Self>::allocation_layout().size())?;
+        Shared::try_new(self)
+            .map(|payload| ReservedVocabulary {
+                payload: Payload::Caller(payload),
+            })
+            .map_err(|_| StorageError::AllocationFailed)
+    }
+}
+
+#[derive(Clone)]
+enum Payload {
+    Owned(SharedOwned<Fields>),
+    // Memory's caller retains this original grant through every escaped clone.
+    Caller(Shared<Fields>),
+}
+
+impl core::fmt::Debug for Payload {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+impl core::ops::Deref for Payload {
+    type Target = Fields;
+    fn deref(&self) -> &Fields {
+        match self {
+            Self::Owned(fields) => fields,
+            Self::Caller(fields) => fields,
+        }
+    }
 }
 
 /// The input carries an IRI in the profile's [`super::RESERVED_NAMESPACE`]
@@ -23,11 +91,13 @@ struct Fields {
 /// for both parts of that rule.
 ///
 /// The original IRI and position remain immutable under their original admission.
-/// Cloning shares the same payload and grant without copying the IRI.
+/// Native dataset refusals retain their grant in the payload. Borrowed Memory
+/// callers retain the original account and its [`Self::retained_bytes`] through
+/// every escaped clone. Cloning shares the payload without copying the IRI.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReservedVocabulary {
-    payload: SharedOwned<Fields>,
+    payload: Payload,
 }
 
 impl ReservedVocabulary {
@@ -41,6 +111,20 @@ impl ReservedVocabulary {
     #[must_use]
     pub fn position(&self) -> TermPosition {
         self.payload.position
+    }
+
+    /// Heap layouts retained under a borrowed caller's original Memory account.
+    /// Independently owned native grants are excluded. The caller keeps these
+    /// bytes admitted until every clone dies, then releases them through that account.
+    #[must_use]
+    pub fn retained_bytes(&self) -> Option<usize> {
+        match &self.payload {
+            Payload::Owned(_) => Some(0),
+            Payload::Caller(fields) => fields
+                .iri
+                .capacity()
+                .checked_add(Shared::<Fields>::allocation_layout().size()),
+        }
     }
 }
 
@@ -90,16 +174,16 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
         iri: &str,
         position: TermPosition,
     ) -> Result<Self, CanonError<E>> {
-        let grant = SourceGrant::new(view)?;
-        let mut builder = Self {
-            fields: Fields {
-                iri: String::new(),
-                position,
-            },
-            grant,
-        };
-        builder.fields.iri = builder.grant.memory(|memory| memory.string(iri))?;
-        Ok(builder)
+        Self::from_grant(SourceGrant::new(view)?, iri, position)
+    }
+
+    fn from_grant(
+        mut grant: SourceGrant<E>,
+        iri: &str,
+        position: TermPosition,
+    ) -> Result<Self, CanonError<E>> {
+        let fields = grant.memory(|memory| Fields::new(iri, position, memory))?;
+        Ok(Self { fields, grant })
     }
 
     pub(super) fn consider(
@@ -107,21 +191,17 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
         iri: &str,
         position: TermPosition,
     ) -> Result<(), CanonError<E>> {
-        if (position, iri) < (self.fields.position, self.fields.iri.as_str()) {
-            let next = self.grant.memory(|memory| memory.string(iri))?;
-            let previous = std::mem::replace(&mut self.fields.iri, next);
-            self.fields.position = position;
-            self.grant
-                .memory(|memory| memory.release_string(previous))?;
-        }
-        Ok(())
+        self.grant
+            .memory(|memory| self.fields.consider(iri, position, memory))
     }
 
     pub(super) fn finish(mut self) -> Result<ReservedVocabulary, CanonError<E>> {
         let bytes = SharedOwned::<Fields>::allocation_layout::<SourceGrant<E>>().size();
         self.grant.memory(|memory| memory.add_bytes(bytes))?;
         SharedOwned::try_from_admitted(self.fields, self.grant)
-            .map(|payload| ReservedVocabulary { payload })
+            .map(|payload| ReservedVocabulary {
+                payload: Payload::Owned(payload),
+            })
             .map_err(|_| CanonError::Storage(StorageError::AllocationFailed))
     }
 }

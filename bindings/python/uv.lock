@@ -976,7 +976,7 @@ wheels = [
 
 [[package]]
 name = "purrdf"
-version = "4.0.1"
+version = "4.0.2"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1032,14 +1032,14 @@ dev = [
 
 [[package]]
 name = "purrdf-rdflib"
-version = "4.0.1"
+version = "4.0.2"
 source = { directory = "../python-rdflib-shadow" }
 dependencies = [
     { name = "purrdf" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "purrdf", specifier = "==4.0.1" }]
+requires-dist = [{ name = "purrdf", specifier = "==4.0.2" }]
 
 [[package]]
 name = "pyarrow"

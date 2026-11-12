@@ -1038,6 +1038,22 @@ pub enum NumericRenderError {
     },
 }
 
+impl std::fmt::Display for NumericRenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DestinationTooSmall {
+                required_bytes,
+                available_bytes,
+            } => write!(
+                f,
+                "numeric destination requires {required_bytes} bytes; {available_bytes} available"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NumericRenderError {}
+
 impl purrdf_hash::error::StructuredError for NumericRenderError {
     purrdf_hash::error_visit! {
         DestinationTooSmall { required_bytes, available_bytes } => "numeric-render-destination" {

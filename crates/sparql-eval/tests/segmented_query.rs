@@ -203,6 +203,41 @@ fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
                     );
                 }
             }
+            let view = snapshot.query(read_limits).unwrap();
+            let mut cursor = engine
+                .open_select_cursor_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
+                .unwrap();
+            let names = cursor
+                .schema()
+                .vars()
+                .iter()
+                .map(|name| name.as_str().to_owned())
+                .collect::<Vec<_>>();
+            let mut rows = Vec::new();
+            while let Some(row) = cursor.next_row().unwrap() {
+                rows.push(
+                    row.cells()
+                        .iter()
+                        .map(|cell| {
+                            cell.map(|term| {
+                                row.context()
+                                    .scratch
+                                    .try_value_of(row.context().dataset, term)
+                                    .unwrap()
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert!(matches!(
+                cursor.settle().unwrap().query.completion,
+                purrdf_sparql_eval::eval::SelectCompletion::Complete
+            ));
+            assert_eq!(
+                (names, rows),
+                expected,
+                "segmented cursor reinsert={reinsert}: {text}"
+            );
         }
     }
 }

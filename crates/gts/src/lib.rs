@@ -69,6 +69,7 @@ pub mod codec;
 pub mod compact;
 pub mod cose;
 pub mod dict;
+pub mod dictionary;
 pub mod event_stream;
 /// Fallible native visual fingerprints; key callers render original key bytes.
 pub use purrdf_lex::visual_fingerprint as emojihash;

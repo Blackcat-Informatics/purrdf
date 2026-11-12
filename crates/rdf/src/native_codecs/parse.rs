@@ -829,12 +829,9 @@ fn parse_dataset_mode(
 
 /// Run a first-party codec parse under a panic guard, converting any unwind into a
 /// structured `native-codec-panic` diagnostic (mirrors the RDF/XML guard).
-pub(super) fn catch_codec_panic<F>(
-    format: NativeRdfFormat,
-    parse: F,
-) -> Result<Arc<RdfDataset>, RdfDiagnostic>
+pub(super) fn catch_codec_panic<T, F>(format: NativeRdfFormat, parse: F) -> Result<T, RdfDiagnostic>
 where
-    F: FnOnce() -> Result<Arc<RdfDataset>, RdfDiagnostic>,
+    F: FnOnce() -> Result<T, RdfDiagnostic>,
 {
     match catch_unwind(AssertUnwindSafe(parse)) {
         Ok(result) => result,

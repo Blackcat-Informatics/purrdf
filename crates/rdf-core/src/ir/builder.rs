@@ -2735,6 +2735,11 @@ impl RdfDatasetBuilder {
         self.interner.term(id)
     }
 
+    /// Borrow the immutable term table for checked native validation.
+    pub(super) fn terms(&self) -> &[InternedTerm] {
+        &self.interner.terms
+    }
+
     /// Resolve a term's [`StrRange`] to a `&str` borrowed from the builder's arena
     /// (for build-time readers that have an interned term's range).
     pub(crate) fn interned_str(&self, range: StrRange) -> &str {
@@ -3194,10 +3199,18 @@ impl RdfDatasetBuilder {
     fn materialize(self) -> Result<RdfDataset, StorageError> {
         let mut resident = Resident;
         let mut memory = Memory::resume(&mut resident, self.native_buffer_bytes()?);
-        self.materialize_with_memory(&mut memory)
+        self.materialize_admitted(false, &mut memory)
     }
     fn materialize_with_memory<S: Admission + ?Sized>(
         self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, StorageError> {
+        self.materialize_admitted(true, memory)
+    }
+
+    fn materialize_admitted<S: Admission + ?Sized>(
+        self,
+        eager_statistics: bool,
         memory: &mut Memory<'_, S>,
     ) -> Result<RdfDataset, StorageError> {
         let input_bytes = self.native_buffer_bytes()?;
@@ -3374,6 +3387,9 @@ impl RdfDatasetBuilder {
             } else {
                 named_graphs.dedup();
             }
+            // Release the graph enumeration's duplicate-row scratch before
+            // freezing the dictionary and replacing the quad buffer.
+            let named_graphs = memory.boxed_slice(named_graphs)?;
 
             let caps = compute_capabilities(
                 &interner.terms,
@@ -3391,7 +3407,8 @@ impl RdfDatasetBuilder {
                 memory.boxed_slice(annotations)?,
                 memory.boxed_slice(locations)?,
                 caps,
-                memory.boxed_slice(named_graphs)?,
+                named_graphs,
+                eager_statistics,
                 memory,
             )
         })

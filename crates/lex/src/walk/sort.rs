@@ -324,6 +324,30 @@ pub fn try_equal_range_by<T, E>(
     Ok(ends[0]..ends[1])
 }
 
+/// Find the end of a leading run whose predicate is true.
+///
+/// As with slice `partition_point`, the predicate must describe one true prefix
+/// followed by a false suffix. Exponential probes bound the binary search by
+/// the run length, rather than the whole remaining slice. Walking consecutive
+/// sorted runs therefore avoids a full-width search for every distinct value.
+pub fn partition_prefix<T>(values: &[T], mut predicate: impl FnMut(&T) -> bool) -> usize {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut lower = 0;
+    let mut upper = 1;
+    loop {
+        if !predicate(&values[upper - 1]) {
+            return lower + values[lower..upper - 1].partition_point(predicate);
+        }
+        if upper == values.len() {
+            return upper;
+        }
+        lower = upper;
+        upper = upper.saturating_mul(2).min(values.len());
+    }
+}
+
 /// Remove adjacent equal elements using a fallible comparison.
 ///
 /// Keeps the first member of each adjacent run. A sorted vector therefore
@@ -380,9 +404,42 @@ fn sift<T, E>(
 #[cfg(test)]
 mod tests {
     use super::{
-        try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by, try_sort_unstable_by,
+        partition_prefix, try_dedup_by, try_equal_range_by, try_heap_pop_by, try_heap_push_by,
+        try_sort_unstable_by,
     };
     use core::cmp::Ordering;
+
+    #[test]
+    fn prefix_boundaries_use_work_proportional_to_the_equal_run() {
+        for length in [0, 1, 2, 3, 17, 1024, 16384] {
+            let values: Vec<_> = (0..length).collect();
+            for run in [0, 1, 2, 3, 7, 8, 9, 16, 17, 63, 1024, 16383, 16384] {
+                let expected = values.partition_point(|&value| value < run);
+                let mut comparisons = 0;
+                let actual = partition_prefix(&values, |&value| {
+                    comparisons += 1;
+                    value < run
+                });
+                assert_eq!(actual, expected);
+                // Bound growth rather than an exact binary-search schedule;
+                // the standard library can repeat its final comparison.
+                assert!(
+                    comparisons <= 4 * (expected.saturating_add(1).ilog2() + 1),
+                    "length={length}, run={run}, comparisons={comparisons}",
+                );
+            }
+        }
+        let values = vec![(); usize::MAX];
+        let mut comparisons = 0;
+        assert_eq!(
+            partition_prefix(&values, |()| {
+                comparisons += 1;
+                true
+            }),
+            usize::MAX
+        );
+        assert!(comparisons <= usize::BITS + 1);
+    }
 
     #[test]
     fn retained_heap_sort_resumes_every_comparison_cut_without_replay() {

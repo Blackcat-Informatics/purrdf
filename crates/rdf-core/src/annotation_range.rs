@@ -96,6 +96,34 @@ pub struct AnnotationValueRange<'a> {
     pub upper: Option<AnnotationValueBound<'a>>,
 }
 
+/// Retained query bounds and their original admission, lent for one pruning step.
+///
+/// A lazy iterator can own this descriptor between reads without borrowing a
+/// movable evaluation context. Each access lends the same immutable endpoints
+/// and the original workspace; no bounds are re-parsed or weakened.
+pub trait AnnotationRangeSource: Clone + Send + Sync {
+    /// Borrow the original interval and its admission for the current read.
+    fn value_range(&self) -> AnnotationValueRange<'_>;
+}
+
+impl AnnotationRangeSource for AnnotationValueRange<'_> {
+    fn value_range(&self) -> AnnotationValueRange<'_> {
+        *self
+    }
+}
+
+impl<R: AnnotationRangeSource> AnnotationRangeSource for &R {
+    fn value_range(&self) -> AnnotationValueRange<'_> {
+        (**self).value_range()
+    }
+}
+
+impl<R: AnnotationRangeSource> AnnotationRangeSource for std::sync::Arc<R> {
+    fn value_range(&self) -> AnnotationValueRange<'_> {
+        (**self).value_range()
+    }
+}
+
 impl AnnotationValueRange<'_> {
     /// Whether a certified interval can contain an answer. Incomparable bounds
     /// cannot justify pruning. Inputs belong to one homogeneous total-order group.

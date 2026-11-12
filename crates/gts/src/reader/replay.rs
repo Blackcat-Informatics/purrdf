@@ -5,9 +5,49 @@
 
 use super::{
     BLOB_BUDGET_DIAGNOSTIC, BlobContent, BlobPayload, BlobRefusalKind, FoldError, Folder,
-    PayloadCause, PayloadError, Read, StreamingSink, TermIdBase, Value, ValueRef, cbor,
-    digest_label,
+    PayloadCause, PayloadError, Read, TermIdBase, Value, ValueRef, cbor, digest_label,
 };
+
+/// Mark host replay failures at their boundary, leaving codec/source failures
+/// on the production reader's existing damaged-payload diagnostic path.
+struct DictionaryReplay(Box<dyn cbor::ReplayStorage>);
+
+fn replay_io(error: std::io::Error) -> std::io::Error {
+    purrdf_hash::error::io_error(
+        std::io::ErrorKind::Other,
+        crate::dictionary::DictionaryError::from(error),
+    )
+}
+fn replay_transfer(error: std::io::Error) -> std::io::Error {
+    if error.kind() == std::io::ErrorKind::Interrupted && error.get_ref().is_none() {
+        error
+    } else {
+        replay_io(error)
+    }
+}
+impl Read for DictionaryReplay {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(bytes).map_err(replay_transfer)
+    }
+}
+impl std::io::Write for DictionaryReplay {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.write(bytes).map_err(replay_transfer)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush().map_err(replay_io)
+    }
+}
+impl std::io::Seek for DictionaryReplay {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(position).map_err(replay_io)
+    }
+}
+impl cbor::ReplayStorage for DictionaryReplay {
+    fn finish(&mut self) -> std::io::Result<()> {
+        self.0.finish().map_err(replay_io)
+    }
+}
 
 impl Folder<'_, '_, '_> {
     pub(super) fn spool_snapshot(
@@ -18,21 +58,36 @@ impl Folder<'_, '_, '_> {
         ids: &[Value],
         scratch: std::io::Result<Box<dyn cbor::ReplayStorage>>,
     ) -> Result<(), PayloadError> {
-        let mut scratch = scratch?;
+        let stored = self.stored_terms.is_some();
+        let mut scratch: Box<dyn cbor::ReplayStorage> = if stored {
+            Box::new(DictionaryReplay(
+                scratch.map_err(crate::dictionary::DictionaryError::from)?,
+            ))
+        } else {
+            scratch?
+        };
         let bytes = data
             .and_then(ValueRef::byte_chunks)
             .ok_or(PayloadError::Damaged(PayloadCause::TransformedNotBytes))?;
-        let codecs = self.resolve_codecs(ids)?;
-        let limit = self
-            .sink
-            .as_deref()
-            .and_then(StreamingSink::frame_decode_limit)
-            .unwrap_or(usize::MAX);
+        let codecs = super::payload::resolve_codecs(&self.catalog, ids)?;
+        let limit = self.decode_limit(false).unwrap_or(usize::MAX);
         let mut source = crate::codec::decode_chain_reader(&codecs, bytes, limit)?;
         let spooled = cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT)?;
         let mut replay = cbor::ReplayBuffer::new(scratch)?;
-        self.h_snapshot_range(spooled.item(), &mut replay, index)?;
-        spooled.verify(&mut replay)?;
+        self.h_snapshot_range(spooled.item(), &mut replay, index)
+            .map_err(|error| match error {
+                PayloadError::Damaged(PayloadCause::Cbor(cause)) if stored => {
+                    PayloadError::Dictionary(crate::dictionary::DictionaryError::Replay(cause))
+                }
+                error => error,
+            })?;
+        spooled.verify(&mut replay).map_err(|cause| {
+            if stored {
+                PayloadError::Dictionary(crate::dictionary::DictionaryError::Replay(cause))
+            } else {
+                cause.into()
+            }
+        })?;
         replay.into_inner().finish()?;
         Ok(())
     }
@@ -65,7 +120,7 @@ impl Folder<'_, '_, '_> {
             while let Some(row) = rows.next(replay)? {
                 let value = row.decode(replay)?;
                 match kind {
-                    0 => self.h_term_row(&value, index, base),
+                    0 => self.h_term_row(&value, index, base)?,
                     1 => self.h_quad_row(ValueRef::Owned(&value), index, base)?,
                     2 => self.h_reifier_row(ValueRef::Owned(&value), index, base)?,
                     3 => self.h_annotation_row(ValueRef::Owned(&value), index, base)?,
@@ -76,10 +131,7 @@ impl Folder<'_, '_, '_> {
         if let Some(blobs) = blobs
             && let Some(mut entries) = blobs.map(replay)?
         {
-            let ceiling = self
-                .sink
-                .as_deref()
-                .and_then(StreamingSink::blob_decode_limit);
+            let ceiling = self.decode_limit(true);
             while let Some((_, value)) = entries.next(replay)? {
                 let Some(mut bytes) = value.byte_reader(replay)? else {
                     continue;

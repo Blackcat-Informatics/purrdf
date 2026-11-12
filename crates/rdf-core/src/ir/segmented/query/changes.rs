@@ -15,7 +15,7 @@ use super::{
     SourceTerm, hash_of, reserve_table_with_memory,
 };
 use crate::ir::source_directory::{DirectoryChange, DirectoryEntry, DirectoryRead, SourceRecord};
-use crate::ir::statistics::Relation;
+use crate::ir::statistics::{LocalStatistics, Relation};
 use crate::source::{
     SourceChangeWork, SourceFamily, SourceRowRef, SourceSide, SourceVersion, SourceVisit,
     record_hash,
@@ -24,6 +24,8 @@ use crate::{GraphMatch, ProbePattern, QuadIds, RdfDataset};
 
 mod directory;
 use directory::EffectiveDirectory;
+
+type ResidentSource<'a> = (&'a Arc<RdfDataset>, &'a LocalStatistics);
 
 #[derive(Debug)]
 pub(crate) struct SegmentedSourceVersion {
@@ -167,11 +169,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
 
     fn owned_effective_row(&self, key: [u8; 32]) -> Result<OwnedRow, SegmentedError> {
         if let Some(head) = &self.snapshot.head
-            && let Some(record) = head
-                .dataset
-                .predicate_statistics()
-                .effective_source_directory()
-                .find(key)?
+            && let Some(record) = head.statistics().effective_source_directory().find(key)?
         {
             return self.owned_source_row(
                 SegmentedStackSource::Head,
@@ -278,13 +276,14 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                     let Some(head) = head else {
                         return Ok(0);
                     };
-                    head.dataset
-                        .predicate_statistics()
+                    head.statistics()
                         .source_directory()
                         .len()
-                        .checked_add(head.metadata.removals().map_or(0, |data| {
-                            data.predicate_statistics().source_directory().len()
-                        }))
+                        .checked_add(
+                            head.metadata
+                                .removal_source()
+                                .map_or(0, |(_, statistics)| statistics.source_directory().len()),
+                        )
                         .ok_or(SegmentedError::AddressExhausted)
                 };
             let old = rows(before.snapshot.head.as_ref())?;
@@ -602,26 +601,30 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
     fn diff_resident(
         &self,
         before: &Self,
-        carriers: (Option<&Arc<RdfDataset>>, Option<&Arc<RdfDataset>>),
+        carriers: (Option<ResidentSource<'_>>, Option<ResidentSource<'_>>),
         origin: SegmentedStackSource,
         candidates: &mut Candidates,
         work: &mut SourceChangeWork,
     ) -> Result<(), SegmentedError> {
         match carriers {
-            (Some(old), Some(new)) if Arc::ptr_eq(old, new) => {}
-            (Some(old), Some(new)) => {
+            (Some((old, _)), Some((new, _))) if Arc::ptr_eq(old, new) => {}
+            (Some((old, old_statistics)), Some((new, new_statistics))) => {
                 let mut storage = QueryStorage::new(&self.operation)?;
                 let measured = storage.run(|memory| {
-                    old.visit_source_changes_with_memory(new, memory, |side, _, row, _| {
-                        let source = if side == SourceSide::Previous {
-                            before
-                        } else {
-                            self
-                        };
-                        candidates.insert(
-                            source.owned_source_row(origin, row.map_ids(|id| id.index() as u64))?,
-                        )
-                    })
+                    old_statistics.source_directory().visit_changes(
+                        new_statistics.source_directory(),
+                        memory,
+                        |added, record, _| {
+                            let (source, dataset) = if added { (self, new) } else { (before, old) };
+                            let row = dataset.source_record_row(record);
+                            candidates.insert(
+                                source.owned_source_row(
+                                    origin,
+                                    row.map_ids(|id| id.index() as u64),
+                                )?,
+                            )
+                        },
+                    )
                 })?;
                 work.directory.ranges += measured.ranges;
                 work.directory.members += measured.members;
@@ -646,8 +649,8 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
         self.diff_resident(
             before,
             (
-                a.map(crate::SegmentedResidentHead::dataset),
-                b.map(crate::SegmentedResidentHead::dataset),
+                a.map(crate::SegmentedResidentHead::source),
+                b.map(crate::SegmentedResidentHead::source),
             ),
             SegmentedStackSource::Head,
             candidates,
@@ -656,8 +659,8 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
         self.diff_resident(
             before,
             (
-                a.and_then(|head| head.metadata.removals()),
-                b.and_then(|head| head.metadata.removals()),
+                a.and_then(|head| head.metadata.removal_source()),
+                b.and_then(|head| head.metadata.removal_source()),
             ),
             SegmentedStackSource::HeadRemovals,
             candidates,
@@ -665,9 +668,9 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
         )
     }
 
-    fn removal_root(carrier: Option<&Arc<RdfDataset>>) -> Multiset256 {
-        carrier.map_or_else(Multiset256::default, |source| {
-            source.predicate_statistics().source_union()
+    fn removal_root(carrier: Option<ResidentSource<'_>>) -> Multiset256 {
+        carrier.map_or_else(Multiset256::default, |(_, statistics)| {
+            statistics.source_union()
         })
     }
 
@@ -695,12 +698,12 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             })
             && let Some(head) = &old.head
             && self.sessions[new.layers.len() - 1].source_union()?
-                == head.dataset.predicate_statistics().source_union()
+                == head.statistics().source_union()
             && Self::removal_root(
                 new.layers
                     .last()
-                    .and_then(|layer| layer.metadata.removals()),
-            ) == Self::removal_root(head.metadata.removals())
+                    .and_then(|layer| layer.metadata.removal_source()),
+            ) == Self::removal_root(head.metadata.removal_source())
         {
             return Ok(Baseline {
                 snapshot: SegmentedStackSnapshot {
@@ -779,9 +782,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                 self.compare_effective_directory(
                     &before,
                     &previous.0.directory,
-                    head.dataset
-                        .predicate_statistics()
-                        .effective_source_directory(),
+                    head.statistics().effective_source_directory(),
                     SegmentedStackSource::Head,
                     &mut candidates,
                     &mut work,
@@ -1058,17 +1059,16 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                     )?;
                     first.source_union()?
                 } else {
-                    let dataset = &self
+                    let head = &self
                         .snapshot
                         .head
                         .as_ref()
-                        .expect("the first resident source exists")
-                        .dataset;
+                        .expect("the first resident source exists");
                     directory = EffectiveDirectory::from_source(
-                        dataset.predicate_statistics().effective_source_directory(),
+                        head.statistics().effective_source_directory(),
                         &self.operation,
                     )?;
-                    dataset.predicate_statistics().source_union()
+                    head.statistics().source_union()
                 };
             } else {
                 let (source, removals) = if index < self.sessions.len() {
@@ -1082,10 +1082,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                         .head
                         .as_ref()
                         .expect("the resident source exists");
-                    (
-                        head.dataset.predicate_statistics().source_union(),
-                        head.metadata.removals(),
-                    )
+                    (head.statistics().source_union(), head.metadata.removals())
                 };
                 if source == records && removals.is_none() {
                     if index < self.sessions.len() {
@@ -1107,9 +1104,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                             .as_ref()
                             .expect("the resident source exists");
                         directory.with_source_union(
-                            head.dataset
-                                .predicate_statistics()
-                                .effective_source_directory(),
+                            head.statistics().effective_source_directory(),
                             &self.operation,
                         )?
                     };
@@ -1137,9 +1132,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                         .as_ref()
                         .expect("the resident source exists");
                     self.initial_additions(
-                        head.dataset
-                            .predicate_statistics()
-                            .effective_source_directory(),
+                        head.statistics().effective_source_directory(),
                         origin,
                         &directory,
                         &mut candidates,

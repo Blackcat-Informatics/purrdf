@@ -156,9 +156,14 @@ fn sealed_predicate_statistics_and_distinct_domains_allocate_nothing() {
     };
     use std::ops::ControlFlow;
     use std::sync::Arc;
-    fn assert_reads<I: ViewTermId>(statistics: &dyn SnapshotStatistics<I>, predicate: I) {
+    fn assert_reads<I: ViewTermId>(
+        statistics: &dyn SnapshotStatistics<I>,
+        predicate: I,
+    ) -> Option<purrdf_core::StatisticsOwnerToken> {
         let window = CurrentThreadWindow::open();
+        let owner = std::hint::black_box(statistics.cache_identity());
         for _ in 0..16 {
+            assert_eq!(std::hint::black_box(statistics.cache_identity()), owner);
             assert_eq!(
                 statistics
                     .stream_rows(GraphMatch::Any, StatisticsStream::Asserted)
@@ -224,18 +229,29 @@ fn sealed_predicate_statistics_and_distinct_domains_allocate_nothing() {
         assert_eq!(measured.allocations, 0);
         assert_eq!(measured.requested_bytes, 0);
         assert_eq!(measured.retained_bytes, 0);
+        owner
     }
 
     let dataset = build_dataset();
     let predicate = dataset.term_id_by_iri("http://example.org/p").unwrap();
-    assert_reads(dataset.statistics().unwrap(), predicate);
+    let owner = assert_reads(dataset.statistics().unwrap(), predicate)
+        .expect("native statistics retain an owner token");
+    let shared = Arc::clone(&dataset);
+    assert_eq!(shared.cache_identity(), Some(owner));
+    let other_owner = build_dataset();
+    assert_ne!(
+        other_owner
+            .cache_identity()
+            .expect("another native statistics owner"),
+        owner,
+    );
     let paged =
         PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![dataset]))).unwrap();
     let predicate = paged
         .term_id_by_value(&TermValue::iri("http://example.org/p"))
         .unwrap()
         .unwrap();
-    assert_reads(paged.statistics().unwrap(), predicate);
+    let _ = assert_reads(paged.statistics().unwrap(), predicate);
 }
 
 #[test]

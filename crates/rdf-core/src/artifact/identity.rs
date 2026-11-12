@@ -439,6 +439,9 @@ fn read_part<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a [u8], ArtifactE
         PackBitsError::Malformed(_) => {
             ArtifactError::Malformed("artifact identity: length prefix exceeds 64 bits")
         }
+        PackBitsError::Storage(_) => {
+            unreachable!("the borrowed varint decoder allocates no workspace")
+        }
     })?;
     let len = usize::try_from(len)
         .map_err(|_| ArtifactError::Malformed("artifact identity: length exceeds usize"))?;

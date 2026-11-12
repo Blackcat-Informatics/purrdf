@@ -157,6 +157,10 @@ name = "query_eval"
 harness = false
 
 [[bench]]
+name = "native_first_query"
+harness = false
+
+[[bench]]
 name = "prepared_reuse"
 harness = false
 
@@ -333,4 +337,9 @@ harness = false
 [[bench]]
 # The same guarded production calls in separate whole-process allocation windows.
 name = "governor_allocations"
+harness = false
+
+[[bench]]
+# Allocation calls and peak memory through the same thirteen-source prepared SELECT.
+name = "select_cursor_memory"
 harness = false

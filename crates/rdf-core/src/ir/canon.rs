@@ -148,6 +148,8 @@ pub use state::{DatasetStateDigest, DatasetStateError};
 mod ownership;
 mod refusal;
 pub use refusal::ReservedVocabulary;
+mod terms;
+pub use terms::screen_comparison_terms_with_memory;
 mod result;
 pub use result::Canonicalized;
 mod rendering;
@@ -607,13 +609,19 @@ pub(super) fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), Can
     }
 }
 
-pub(super) fn comparison_preparation<T>(
+/// Run structural comparison preparation with the caller's original stop and receipts.
+/// No canonical search events are charged. The callback polls the supplied stop
+/// during its work; successful completion also requires the final native stop check.
+///
+/// # Errors
+/// Preserves the callback's refusal or the final native cancellation refusal.
+pub fn comparison_preparation<T, E: From<CanonError>>(
     control: &mut CanonicalizationControl<'_>,
-    operation: impl FnOnce(Option<&dyn crate::StopSignal>) -> Result<T, CanonError>,
-) -> Result<T, CanonError> {
+    operation: impl FnOnce(Option<&dyn crate::StopSignal>) -> Result<T, E>,
+) -> Result<T, E> {
     control.run(SearchConfiguration::ComparisonPreparation, |run| {
         let result = operation(run.stop())?;
-        run.check_stop().map_err(|_| CanonError::Stopped)?;
+        run.check_stop().map_err(|_| E::from(CanonError::Stopped))?;
         Ok(result)
     })
 }
@@ -2803,7 +2811,7 @@ fn reserved_in_term<D: DatasetView, R: crate::WorkspaceReservation<Error = D::Re
             };
             match guard.term() {
                 TermRef::Iri(iri) => {
-                    if iri.starts_with(RESERVED_NAMESPACE) {
+                    if let Some(iri) = refusal::candidate_iri(iri) {
                         return found(iri);
                     }
                 }

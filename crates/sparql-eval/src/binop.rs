@@ -28,6 +28,11 @@ use crate::governor::lift::{DetachedLift, Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema, compatible};
 
+mod cartesian;
+mod join_cursor;
+pub(crate) use cartesian::CartesianProduct;
+pub(crate) use join_cursor::HashJoinCursor;
+
 /// A hash-join key over the shared columns of two solutions.
 ///
 /// The overwhelmingly common case is a **single** shared variable (a star join on
@@ -50,19 +55,72 @@ pub(crate) struct JoinIndex<I: ViewTermId> {
     _allocation: crate::WorkspaceAllocation,
 }
 impl<I: ViewTermId> JoinIndex<I> {
-    fn get(&self, key: &JoinKey<I>) -> Option<&[usize]> {
+    fn bucket(&self, key: &JoinKey<I>) -> Option<&crate::AdmittedVec<usize>> {
         self.entries
             .find(purrdf_hash::fixed::hash_one(key), |entry| &entry.0 == key)
-            .map(|entry| &*entry.1)
+            .map(|entry| &entry.1)
+    }
+    fn get(&self, key: &JoinKey<I>) -> Option<&[usize]> {
+        self.bucket(key).map(|bucket| &**bucket)
     }
     fn contains_key(&self, key: &JoinKey<I>) -> bool {
         self.get(key).is_some()
     }
 }
 
-/// Execute the ordinary seeded join after one actual child has produced its
-/// driver. A copied correlation supplies the original logical schema; other
-/// joins retain their existing driver-first union schema.
+pub(crate) struct SeededJoinPreparation<I: ViewTermId> {
+    pub(crate) driver: SolutionSeq<I>,
+    pub(crate) plan: Option<crate::bgp::PositivePlan>,
+    pub(crate) output: VarSchema,
+}
+
+/// Share the original bound-mask fast path and seeded driver forecast between
+/// completed joins and the retained final producer. A leaf opens no forecast.
+pub(crate) fn prepare_seeded_join<D: DatasetView + Sync>(
+    driver: SolutionSeq<D::Id>,
+    driven: &GraphPattern,
+    output: Option<&VarSchema>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<SeededJoinPreparation<D::Id>, EvalError> {
+    let plan = if matches!(driven, GraphPattern::Bgp { .. }) {
+        None
+    } else {
+        let seed = crate::bgp::SeedEstimate::from_rows_admitted(&driver, &ctx.growth)?;
+        Some(
+            crate::bgp::PositivePlan::build_seeded_admitted(
+                ctx.dataset,
+                &ctx.active_dataset,
+                ctx.active_graph,
+                driven,
+                &seed,
+                ctx.bgp_order_cache,
+                &ctx.workspace,
+            )?
+            .expect("the driven relation was certified seed eligible"),
+        )
+    };
+    let output = match output {
+        Some(output) => output.clone(),
+        None => {
+            let leaf;
+            let schema = match &plan {
+                Some(plan) => plan.root_schema(),
+                None => {
+                    leaf = crate::eval::syntactic_schema_admitted(driven, &ctx.growth)?;
+                    &leaf
+                }
+            };
+            driver.schema.union_admitted(schema, &ctx.growth)?
+        }
+    };
+    Ok(SeededJoinPreparation {
+        driver,
+        plan,
+        output,
+    })
+}
+
+/// Execute the original seeded join after its actual driver has completed.
 pub(crate) fn finish_seeded_join<D: DatasetView + Sync>(
     mut lift: Lift<'_>,
     driver: SolutionSeq<D::Id>,
@@ -71,63 +129,25 @@ pub(crate) fn finish_seeded_join<D: DatasetView + Sync>(
     output: Option<&VarSchema>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    // A BGP has its original bound-mask/order compiler. Supplying input to the
-    // same leaf kernel needs no positive-region forecast or redundant constant
-    // reverse reads. The node checkpoint and child roles remain unchanged.
-    if let GraphPattern::Bgp { patterns } = driven {
-        let out = match output {
-            Some(output) => output.clone(),
-            None => {
-                let schema = crate::eval::syntactic_schema_admitted(driven, &ctx.growth)?;
-                driver.schema.union_admitted(&schema, &ctx.growth)?
-            }
-        };
-        let Some(joined) = lift.absorb(
-            driven_position,
+    let prepared = prepare_seeded_join(driver, driven, output, ctx)?;
+    let input = Some(crate::eval::PositiveInput::owned(prepared.driver));
+    let evaluated = match prepared.plan {
+        Some(plan) => crate::eval::eval_positive_evaluated(driven, input, &plan, ctx)?,
+        None => {
+            let GraphPattern::Bgp { patterns } = driven else {
+                return Err(EvalError::internal(
+                    "a seed without a forecast must be a BGP leaf",
+                ));
+            };
             crate::eval::eval_evaluated_with(driven, ctx, |ctx| {
-                crate::bgp::eval_bgp_seeded(
-                    patterns,
-                    Some(crate::eval::PositiveInput::owned(driver)),
-                    None,
-                    ctx,
-                )
-                .map(Evaluated::Complete)
-            })?,
-        ) else {
-            return Ok(lift.withheld());
-        };
-        return Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?));
-    }
-    let seed = crate::bgp::SeedEstimate::from_rows_admitted(&driver, &ctx.growth)?;
-    let plan = crate::bgp::PositivePlan::build_seeded_admitted(
-        ctx.dataset,
-        &ctx.active_dataset,
-        ctx.active_graph,
-        driven,
-        &seed,
-        &ctx.workspace,
-    )?
-    .expect("the driven relation was certified seed eligible");
-    let out = match output {
-        Some(output) => output.clone(),
-        None => driver
-            .schema
-            .union_admitted(plan.root_schema(), &ctx.growth)?,
+                crate::bgp::eval_bgp_seeded(patterns, input, None, ctx).map(Evaluated::Complete)
+            })?
+        }
     };
-    let Some(joined) = lift.absorb(
-        driven_position,
-        crate::eval::eval_positive_evaluated(
-            driven,
-            Some(crate::eval::PositiveInput::owned(driver)),
-            &plan,
-            ctx,
-        )?,
-    ) else {
+    let Some(joined) = lift.absorb(driven_position, evaluated) else {
         return Ok(lift.withheld());
     };
-    // The seeded relation already includes its driver occurrence; joining it
-    // back would square multiplicities. Reorder through the same admitted home.
-    Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?))
+    Ok(lift.finish(joined.reorder_like_admitted(&prepared.output, &ctx.growth)?))
 }
 
 /// Evaluate a graph pattern for ONE outer row μ, substituted in — the single seam
@@ -902,6 +922,7 @@ impl<I: ViewTermId> ApplicationRow<I> {
         mut self,
         policy: &purrdf_sparql_algebra::algebra::ApplicationPolicy,
         evaluated: Evaluated<I>,
+        delivered: usize,
         ctx: &EvalCtx<'_, D>,
     ) -> Result<ApplicationRowResult<I>, EvalError> {
         let right = match evaluated {
@@ -917,7 +938,7 @@ impl<I: ViewTermId> ApplicationRow<I> {
             let mut first = self.empty.take().ok_or_else(|| {
                 EvalError::internal("application retry lost its empty first result")
             })?;
-            let padding = right.rows.is_empty();
+            let padding = right.rows.is_empty() && delivered == 0;
             if padding {
                 let mut rows = RowsBuilder::new(&ctx.growth);
                 rows.push_cells(
@@ -931,7 +952,7 @@ impl<I: ViewTermId> ApplicationRow<I> {
                 padding,
             });
         }
-        if policy.optional.is_some() && right.rows.is_empty() {
+        if policy.optional.is_some() && right.rows.is_empty() && delivered == 0 {
             self.empty = Some(right);
             self.retry = true;
             return Ok(ApplicationRowResult::Retry(self));
@@ -1052,7 +1073,7 @@ impl<I: ViewTermId> ApplicationSequence<I> {
             .row
             .take()
             .ok_or_else(|| EvalError::internal("application completion lost its current row"))?
-            .finish(policy, evaluated, ctx)?;
+            .finish(policy, evaluated, 0, ctx)?;
         let (evaluated, padding) = match result {
             ApplicationRowResult::Retry(row) => {
                 self.row = Some(row);
@@ -1625,158 +1646,24 @@ pub(crate) fn hash_join<D: DatasetView + Sync>(
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let out = l.schema.union_admitted(&r.schema, &ctx.growth)?;
-    let out_len = out.len();
-    let left_len = l.schema.len();
-    let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
-    // Shared columns as (left_ordinal, right_ordinal) pairs, in left order.
-    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
-
-    // Build side = right (split into key-indexed + wild rows).
-    let (keyed, wild) = build_index(r, &shared, &ctx.growth)?;
-
-    // Each left row's worker returns its merged matches in the same order as the
-    // sequential path (keyed-bucket matches in `idxs` order, then wild matches; or,
-    // for the unbound-shared-column case, the compatibility scan over `r.rows` in
-    // order); flattening across rows in index order reproduces the exact sequential
-    // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
-    // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
-    // (`Copy`), and `merge`/`compatible` (pure fns).
-    let rows = if ctx.growth.is_bounded() || ctx.cell_row_ceiling(out_len).is_some() {
-        let cell_ceiling = ctx.cell_row_ceiling(out_len).unwrap_or(usize::MAX);
-        // A global allocation bound cannot be divided among parallel chunks without each
-        // chunk receiving (and allocating) the whole allowance. Keep this governed lane in
-        // source order and test the ceiling before `merge` constructs the next row.
-        // A cell ceiling is permission to hold rows, not evidence that the join
-        // produces them. Allocate only when a compatible candidate is emitted;
-        // even two enormous bags can have an empty intersection.
-        let mut rows = RowsBuilder::new(&ctx.growth);
-        'left: for lrow in &l.rows {
-            match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
-                Some(key) => {
-                    if let Some(idxs) = keyed.get(&key) {
-                        for &idx in idxs {
-                            if rows.len() >= cell_ceiling {
-                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                                break 'left;
-                            }
-                            rows.push_row(merge_admitted(
-                                lrow,
-                                &r.rows[idx],
-                                left_len,
-                                &right_to_out,
-                                out_len,
-                                &ctx.growth,
-                            )?)?;
-                        }
-                    }
-                    for &idx in &wild {
-                        if compatible(lrow, &r.rows[idx], &shared) {
-                            if rows.len() >= cell_ceiling {
-                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                                break 'left;
-                            }
-                            rows.push_row(merge_admitted(
-                                lrow,
-                                &r.rows[idx],
-                                left_len,
-                                &right_to_out,
-                                out_len,
-                                &ctx.growth,
-                            )?)?;
-                        }
-                    }
-                }
-                None => {
-                    for rrow in &r.rows {
-                        if compatible(lrow, rrow, &shared) {
-                            if rows.len() >= cell_ceiling {
-                                let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
-                                break 'left;
-                            }
-                            rows.push_row(merge_admitted(
-                                lrow,
-                                rrow,
-                                left_len,
-                                &right_to_out,
-                                out_len,
-                                &ctx.growth,
-                            )?)?;
-                        }
-                    }
-                }
-            }
-        }
-        rows.finish()?
-    } else {
-        let (rows, _) = crate::parallel::par_chunk_try_map_init(
-            ctx.sequential_operation_required(),
-            &l.rows,
-            || (),
-            |(), acc, lrow| {
-                match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
-                    // Probe is fully bound on shared columns: hit the matching bucket
-                    // (exact key ⇒ compatible) plus any wild build rows it is compatible
-                    // with (a wild row's None shared column matches anything).
-                    Some(key) => {
-                        if let Some(idxs) = keyed.get(&key) {
-                            for &idx in idxs {
-                                reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge_admitted(
-                                    lrow,
-                                    &r.rows[idx],
-                                    left_len,
-                                    &right_to_out,
-                                    out_len,
-                                    &ctx.growth,
-                                )?);
-                            }
-                        }
-                        for &idx in &wild {
-                            if compatible(lrow, &r.rows[idx], &shared) {
-                                reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge_admitted(
-                                    lrow,
-                                    &r.rows[idx],
-                                    left_len,
-                                    &right_to_out,
-                                    out_len,
-                                    &ctx.growth,
-                                )?);
-                            }
-                        }
-                    }
-                    // Probe has an unbound shared column: it can match any build row, so
-                    // fall back to a compatibility scan over all of them.
-                    None => {
-                        for rrow in &r.rows {
-                            if compatible(lrow, rrow, &shared) {
-                                reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge_admitted(
-                                    lrow,
-                                    rrow,
-                                    left_len,
-                                    &right_to_out,
-                                    out_len,
-                                    &ctx.growth,
-                                )?);
-                            }
-                        }
-                    }
-                }
-                Ok(())
+    let layout = join_cursor::layout(l, r, &ctx.growth)?;
+    ctx.note_cursor_buffer(crate::eval::CursorBufferReason::ProbeRelation);
+    let rows = if layout.shared.is_empty() {
+        cartesian::drain(
+            &cartesian::CartesianInput {
+                left: &l.rows,
+                right: &r.rows,
+                left_width: l.schema.len(),
+                right_to_out: &layout.right_to_out,
+                output_width: layout.output.len(),
             },
-            |()| (),
-        )?;
-        RowsBuilder::from_storage(
-            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
-            &ctx.growth,
-        )
-        .finish()?
+            ctx,
+        )?
+    } else {
+        join_cursor::drain_keyed(l, r, &layout, ctx)?
     };
-
     Ok(SolutionSeq {
-        schema: out.shared_admitted(&ctx.growth)?,
+        schema: layout.output.shared_admitted(&ctx.growth)?,
         rows,
     })
 }
@@ -2249,6 +2136,7 @@ pub(crate) fn begin_seeded_optional<'e, D: DatasetView + Sync>(
         ctx.active_graph,
         right,
         &seed,
+        ctx.bgp_order_cache,
         &ctx.workspace,
     )?
     else {

@@ -44,10 +44,15 @@ use purrdf_hash::hex;
 use purrdf_lex::cbor::Value;
 
 use crate::{
-    BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
+    BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLocation,
     RdfLookaside, RdfMetadataValue, RdfOpaqueNodeRecord, RdfSegmentRecord, RdfSignatureRecord,
     RdfSuppressionRecord, TermId, TermRef,
 };
+
+mod export;
+mod indexed;
+pub use export::{GtsTextExport, export_gts_rdf_nquads_with_dictionary};
+pub use indexed::import_gts_indexed_term;
 
 /// The immutable-IR emit target for GTS ingestion: an [`RdfDatasetBuilder`] that
 /// interns each segment's blank nodes under a per-segment [`BlankScope`]. The
@@ -64,6 +69,44 @@ struct SinkImporter<'a> {
 }
 
 impl SinkImporter<'_> {
+    fn intern_literal_parts(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+        lexical: &str,
+        datatype: Option<TermId>,
+        lang: Option<&str>,
+        direction: Option<&str>,
+    ) -> Result<TermId, RdfDiagnostic> {
+        let datatype = match datatype {
+            Some(id) => match self.builder.resolve(id) {
+                TermRef::Iri(iri) => Some(iri.to_string()),
+                other => {
+                    return Err(sink_term_error(
+                        RdfDiagnostic::error(
+                            "rdf-ir-literal-datatype-not-iri",
+                            format!("GTS literal datatype must resolve to an IRI, got {other:?}"),
+                        ),
+                        segment_index,
+                        gts_id,
+                    ));
+                }
+            },
+            None => None,
+        };
+        let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let bytes = self.builder.native_buffer_bytes()?;
+        Ok(self.builder.intern_literal_parts_bound_with_memory(
+            lexical,
+            datatype.as_deref(),
+            lang,
+            direction,
+            BlankBinding::Ambient(segment_scope(segment_index)?),
+            &mut purrdf_lex::allocation::Memory::resume(&mut resident, bytes),
+        )?)
+    }
+
     fn new() -> Self {
         Self {
             blobs: None,
@@ -145,39 +188,31 @@ impl ResolvedSink for SinkImporter<'_> {
         lang: Option<String>,
         direction: Option<String>,
     ) -> Result<TermId, RdfDiagnostic> {
-        let datatype = match datatype {
-            Some(dt_id) => match self.builder.resolve(dt_id) {
-                TermRef::Iri(iri) => Some(iri.to_string()),
-                other => {
-                    return Err(RdfDiagnostic::error(
-                        "rdf-ir-literal-datatype-not-iri",
-                        format!("GTS literal datatype must resolve to an IRI, got {other:?}"),
-                    )
-                    .with_location(
-                        RdfLocation::logical("gts:sink")
-                            .with_gts_segment(segment_index)
-                            .with_gts_term(gts_id as u64),
-                    ));
-                }
-            },
-            None => None,
-        };
-        // Parse direction (which requires the language tag) before moving the
-        // owned `lexical`/`lang` strings into the literal.
-        let direction =
-            crate::gts_resolve::parse_gts_direction(direction.as_deref(), lang.as_deref())?;
-        // A composite literal's embedded blank labels bind into the SAME
-        // per-segment scope `intern_blank` puts this segment's bare labels in, so
-        // the segment isolation covers both spellings of a node alike.
-        Ok(self.builder.intern_literal_bound(
-            RdfLiteral {
-                lexical_form: lexical,
-                datatype,
-                language: lang,
-                direction,
-            },
-            BlankBinding::Ambient(segment_scope(segment_index)?),
-        )?)
+        self.intern_literal_parts(
+            segment_index,
+            gts_id,
+            &lexical,
+            datatype,
+            lang.as_deref(),
+            direction.as_deref(),
+        )
+    }
+
+    fn intern_stored_literal(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+        term: purrdf_gts::dictionary::TermLease,
+        datatype: Option<TermId>,
+    ) -> Result<TermId, RdfDiagnostic> {
+        self.intern_literal_parts(
+            segment_index,
+            gts_id,
+            term.value.as_deref().unwrap_or_default(),
+            datatype,
+            term.lang.as_deref(),
+            term.direction.as_deref(),
+        )
     }
 
     fn intern_triple(
@@ -463,29 +498,33 @@ impl ResolvedSink for SinkImporter<'_> {
         // Any other reader diagnostic is a hard fold failure on the IR path (the
         // IR is the authority, no degraded fold). The `SegmentResolver` latches
         // the first one returned here.
-        let failure = RdfDiagnostic::error(
-            "rdf-ir-gts-fold-diagnostic",
-            format!(
-                "GTS fold diagnostic {}: {}",
-                diagnostic.code, diagnostic.detail
-            ),
-        )
-        .with_location({
-            let location = RdfLocation::logical("gts:sink");
-            match diagnostic.frame_index {
-                Some(frame_index) => location.with_gts_frame(frame_index),
-                None => location,
-            }
-        });
-        match &diagnostic.cause {
-            Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
-                let mut resident = purrdf_lex::allocation::Resident;
-                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-                Err(failure.with_native_cause(cause.clone(), &mut memory)?)
-            }
-            Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
-            None => Err(failure),
+        fold_diagnostic_failure(diagnostic)
+    }
+}
+
+fn fold_diagnostic_failure(diagnostic: &Diagnostic) -> Result<(), RdfDiagnostic> {
+    let failure = RdfDiagnostic::error(
+        "rdf-ir-gts-fold-diagnostic",
+        format!(
+            "GTS fold diagnostic {}: {}",
+            diagnostic.code, diagnostic.detail
+        ),
+    )
+    .with_location({
+        let location = RdfLocation::logical("gts:sink");
+        match diagnostic.frame_index {
+            Some(frame_index) => location.with_gts_frame(frame_index),
+            None => location,
         }
+    });
+    match &diagnostic.cause {
+        Some(purrdf_gts::model::DiagnosticCause::Native(cause)) => {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+            Err(failure.with_native_cause(cause.clone(), &mut memory)?)
+        }
+        Some(purrdf_gts::model::DiagnosticCause::Storage(error)) => Err((*error).into()),
+        None => Err(failure),
     }
 }
 
@@ -532,6 +571,73 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
     import_with_collector(bytes, None).map(|(bundle, _)| bundle)
 }
 
+/// Import through the authoritative scoped builder with external dictionary state.
+///
+/// The host owns raw term storage, pending/completed resolution records and the
+/// three numeric replay streams (quads, reifiers, annotations, in that order).
+/// Returned term leases retain their original admission accounts. The final
+/// native dataset and envelope are still the caller's resident output; their
+/// size is separate from dictionary workspace.
+///
+/// # Errors
+/// Preserves original reader, host storage, allocation, cancellation and native
+/// RDF failures. No failed dictionary operation selects the resident reader.
+pub fn import_gts_events_with_dictionary<D>(
+    bytes: &[u8],
+    dictionary: &mut dyn purrdf_gts::dictionary::TermStorage,
+    resolution: &mut D,
+    replay: [Box<dyn purrdf_lex::cbor::ReplayStorage>; 3],
+) -> Result<GtsBundle, RdfDiagnostic>
+where
+    D: purrdf_gts::segment_decode::ResolutionStorage<TermId>,
+    D::Error: purrdf_hash::error::NativeError + 'static,
+{
+    let [quads, reifiers, annotations] = replay;
+    let mut resolver = SegmentResolver::with_storage(
+        SinkImporter::new(),
+        resolution,
+        dictionary_import_failure::<D::Error>,
+    )
+    .with_row_storage(
+        quads,
+        reifiers,
+        annotations,
+        dictionary_import_failure::<std::io::Error>,
+    )?;
+    let read = purrdf_gts::reader::read_to_sink_with_dictionary(
+        bytes,
+        purrdf_gts::reader::ReadOptions::new(true, None),
+        dictionary,
+        &mut resolver,
+    );
+    if let Some(error) = resolver.take_error() {
+        return Err(error);
+    }
+    read.map_err(dictionary_import_failure::<purrdf_gts::dictionary::DictionaryError>)?;
+    resolver.finish()?;
+    finish_importer(resolver.into_sink()).map(|(bundle, _)| bundle)
+}
+
+fn dictionary_import_failure<E: purrdf_hash::error::NativeError + 'static>(
+    cause: E,
+) -> RdfDiagnostic {
+    let result = (|| {
+        let cause = purrdf_gts::model::retain_native_cause(cause)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        RdfDiagnostic::try_error_with_memory(
+            "rdf-ir-gts-dictionary",
+            &"GTS dictionary operation failed",
+            &mut memory,
+        )?
+        .with_native_cause(cause, &mut memory)
+    })();
+    match result {
+        Ok(error) => error,
+        Err(error) => error.into(),
+    }
+}
+
 /// Whether a reader diagnostic reports a blob refused by the sink's byte budget.
 ///
 /// Matches the reader's dedicated code, never its prose. A diagnostic detail can
@@ -562,7 +668,12 @@ pub(crate) fn import_with_collector<'a>(
     // Flush the final segment: resolve its terms and push its rows.
     resolver.finish()?;
 
-    let importer = resolver.into_sink();
+    finish_importer(resolver.into_sink())
+}
+
+fn finish_importer(
+    importer: SinkImporter<'_>,
+) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
     let lookaside = importer.lookaside;
     let dataset = importer.builder.freeze()?;
     Ok((
@@ -585,6 +696,31 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn taking_a_streaming_failure_cannot_make_resolution_complete() {
+        use purrdf_gts::reader::StreamingSink;
+        let mut resolver = SegmentResolver::new(SinkImporter::new());
+        resolver.diagnostic(&Diagnostic {
+            cause: None,
+            code: "DamagedFrame".to_owned(),
+            detail: "a late native reader failure".to_owned(),
+            frame_index: Some(7),
+        });
+        assert!(resolver.take_error().is_some());
+        resolver.term(0, 0, Arc::new(Term::iri("https://example.org/ignored")));
+        assert!(resolver.finish().is_err());
+        assert!(resolver.finish().is_err());
+        assert_eq!(
+            resolver
+                .into_sink()
+                .builder
+                .freeze()
+                .expect("unchanged empty output")
+                .term_count(),
+            0
+        );
+    }
 
     #[test]
     fn segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour() {

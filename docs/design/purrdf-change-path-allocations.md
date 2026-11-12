@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 43 |
-| custom `sh:ask` component | 99 |
-| custom `sh:select` component | 55 |
-| `sh:expression` function call | 97 |
+| `sh:sparql` constraint | 41 |
+| custom `sh:ask` component | 95 |
+| custom `sh:select` component | 53 |
+| `sh:expression` function call | 93 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 46 |
-| custom `sh:ask` component, governed | 101 |
-| custom `sh:select` component, governed | 58 |
-| `sh:expression` function call, governed | 101 |
+| `sh:sparql` constraint, governed | 44 |
+| custom `sh:ask` component, governed | 97 |
+| custom `sh:select` component, governed | 56 |
+| `sh:expression` function call, governed | 97 |
 
 Native ownership retains an unchanged immutable schema through a union or
 projection instead of copying its columns and publishing another outer control.
@@ -110,11 +110,20 @@ The heap driver retains nested operator continuations in an admitted spill
 buffer. A symbolized allocation trace over 512 warmed SELECT calls identifies
 one spill allocation per query. The expression reentry classifier now keeps its
 first 32 pending parts inline, removing its two avoidable allocations on these
-fixtures. Ungoverned costs are therefore 43/99/55/97: one additional allocation
-per query, including the two calls made by ASK and expression. The fallback ASK
-cost is 220. Restored seeded positive execution brings governed costs to
-46/101/58/101. The current governed expression form is
-`37 + 101 N + 3 log2(N / 1280)`, with unchanged entry, doubling and exact-equality
+fixtures. At that revision ungoverned costs were 43/99/55/97: one additional
+allocation per query, including the two calls made by ASK and expression. The
+fallback ASK cost was 220. Restored seeded positive execution brought governed
+costs to 46/101/58/101.
+
+Disjoint joins now drain their Cartesian product without building a hash index.
+Exact native allocation traces identify the two omitted allocations: the index
+table and its row-index bucket. The four surfaces omit one index per query,
+giving current ungoverned costs of 41/95/53/93 and governed costs of 44/97/56/97.
+The repeated-name fallback inserts four single-variable seeds per run: three
+joins are disjoint and one shares the repeated current-shape column. Across two
+ASK runs this omits six indexes and twelve allocations, giving a current cost
+of 208. The current governed expression form is
+`37 + 97 N + 3 log2(N / 1280)`, with unchanged entry, doubling and exact-equality
 assertions.
 
 Historically, short BIND loops moved to the sequential evaluator path rather than constructing

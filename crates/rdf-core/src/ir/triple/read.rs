@@ -252,7 +252,7 @@ impl TripleRead<'_> {
         }
     }
 
-    fn planned_rows(
+    pub(crate) fn planned_rows(
         &self,
         plan: TripleOrder,
         pattern: [Option<TermId>; 3],

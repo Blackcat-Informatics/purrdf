@@ -63,6 +63,11 @@
 //!   [`governor`] and `docs/SPARQL-GOVERNOR-PROFILE.md`.
 //!
 //! The crate builds for `wasm32-unknown-unknown` (the wasm query path).
+
+// The typed query continuation owns nested expression and evidence frames.
+// Checking their derived Send bounds needs more compiler traversal depth;
+// this changes no runtime recursion or stack budget.
+#![recursion_limit = "256"]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

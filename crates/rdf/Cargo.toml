@@ -128,6 +128,8 @@ path = "examples/gen_streamable_vectors.rs"
 test = false
 
 [dev-dependencies]
+# Shared host-side Rust scope inspection for the authorship census.
+helper-census = { path = "../helper-census" }
 # Portable scope fixtures read their expected bags through the results codec.
 purrdf-sparql-results = { workspace = true }
 # Runs the deep-structure tests on a stack of a stated size: a fresh thread

@@ -129,6 +129,7 @@ impl StructuredError for RdfDataset {
         let Self {
             dictionary,
             statistics: _,
+            native_statistics: _,
             snapshot_identity: _,
             quads,
             reifiers,

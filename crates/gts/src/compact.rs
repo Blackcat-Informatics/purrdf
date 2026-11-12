@@ -518,14 +518,38 @@ fn check_utc_timestamp(timestamp: &str) -> Result<(), TimestampError> {
 }
 
 impl ProvenanceSubjects {
-    /// Observe one validated quad in its owning segment's term table.
-    pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
-        self.observe_terms(TermsRef::Owned(&g.terms), s, p, o);
+    pub(crate) fn retained_entries(&self) -> usize {
+        self.subjects.len()
     }
 
-    pub(crate) fn observe_terms(&mut self, terms: TermsRef<'_>, s: usize, p: usize, o: usize) {
-        let predicate = terms.get(p).and_then(Term::iri_value);
-        let class = terms.get(o).and_then(Term::iri_value);
+    pub(crate) fn retained_capacity(&self) -> usize {
+        self.subjects.capacity()
+    }
+
+    /// Observe one validated quad in its owning segment's term table.
+    pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
+        // The resident adapter contains no fallible storage operation.
+        self.observe_terms(TermsRef::Owned(&g.terms), s, p, o)
+            .expect("resident term lookup cannot fail");
+    }
+
+    pub(crate) fn observe_terms(
+        &mut self,
+        terms: TermsRef<'_>,
+        s: usize,
+        p: usize,
+        o: usize,
+    ) -> Result<(), crate::dictionary::DictionaryError> {
+        let predicate_term = terms.get(p)?;
+        let object = terms.get(o)?;
+        let subject = terms.get(s)?;
+        let predicate = predicate_term.as_deref().and_then(Term::iri_value);
+        let class = object.as_deref().and_then(Term::iri_value);
+        let datatype = match object.as_deref().and_then(|term| term.datatype) {
+            Some(id) => terms.get(id)?,
+            None => None,
+        };
+        let datatype = datatype.as_deref().and_then(Term::iri_value);
         let state = self.subjects.entry(s).or_insert((0, 0b111, 0));
         for (index, &(name, allowed)) in PROVENANCE_SHAPES.iter().enumerate() {
             let bit = 1 << index;
@@ -536,35 +560,31 @@ impl ProvenanceSubjects {
                 state.1 &= !bit;
             }
         }
-        if terms.get(s).is_none_or(|term| term.kind != TermKind::Bnode) {
+        if subject.is_none_or(|term| term.kind != TermKind::Bnode) {
             state.1 &= !1;
         }
         let field = match predicate {
             Some(stream::AGENT) => 1,
             Some(stream::TIMESTAMP) => 2,
             Some(stream::SOURCE_HEAD) => 4,
-            _ => return,
+            _ => return Ok(()),
         };
-        let Some(object) = terms.get(o) else {
+        let Some(object) = object else {
             state.1 &= !1;
-            return;
+            return Ok(());
         };
         let string = object.kind == TermKind::Literal
             && object.value.is_some()
             && object.lang.is_none()
             && object.direction.is_none()
-            && object
-                .datatype
-                .is_none_or(|id| iri_is(terms, id, crate::model::XSD_STRING));
+            && (object.datatype.is_none() || datatype == Some(crate::model::XSD_STRING));
         let valid = match field {
             1 => string,
             2 => {
                 object.kind == TermKind::Literal
                     && object.lang.is_none()
                     && object.direction.is_none()
-                    && object
-                        .datatype
-                        .is_some_and(|id| iri_is(terms, id, XSD_DATETIME))
+                    && datatype == Some(XSD_DATETIME)
                     && object
                         .value
                         .as_deref()
@@ -584,6 +604,7 @@ impl ProvenanceSubjects {
             state.1 &= !1;
         }
         state.2 |= field;
+        Ok(())
     }
 
     /// Classify a materialized graph by the same rule as an evented reader.
@@ -635,7 +656,7 @@ pub(crate) fn packaging_role(
     streamable && frame_type == "index" && provenance.has_compaction()
 }
 
-fn iri_is(terms: TermsRef<'_>, id: usize, value: &str) -> bool {
+fn iri_is(terms: &[Term], id: usize, value: &str) -> bool {
     terms.get(id).and_then(Term::iri_value) == Some(value)
 }
 
@@ -646,7 +667,7 @@ fn literal_fields<'a>(
 ) -> Result<Vec<&'a str>, CompactRefusedError> {
     g.quads
         .iter()
-        .filter(|&&(s, p, _, _)| s == node && iri_is(TermsRef::Owned(&g.terms), p, predicate))
+        .filter(|&&(s, p, _, _)| s == node && iri_is(&g.terms, p, predicate))
         .map(|&(_, _, o, _)| {
             g.terms
                 .get(o)
@@ -754,8 +775,7 @@ fn carried_detached_pairs(g: &Graph) -> Result<Vec<DetachedSignaturePair>, Compa
         .quads
         .iter()
         .filter(|&&(_, p, o, _)| {
-            iri_is(TermsRef::Owned(&g.terms), p, RDF_TYPE)
-                && iri_is(TermsRef::Owned(&g.terms), o, stream::DETACHED_SIGNATURE)
+            iri_is(&g.terms, p, RDF_TYPE) && iri_is(&g.terms, o, stream::DETACHED_SIGNATURE)
         })
         .map(|&(s, _, _, _)| s)
         .collect();

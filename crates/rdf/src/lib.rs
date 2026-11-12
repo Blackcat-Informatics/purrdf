@@ -117,7 +117,10 @@ pub use gts_import_blobs::{
     import_gts_events_with_blobs, import_gts_inline_for_export, import_gts_inline_to,
 };
 pub use gts_import_graph::import_gts_graph;
-pub use gts_import_sink::import_gts_events;
+pub use gts_import_sink::{
+    GtsTextExport, export_gts_rdf_nquads_with_dictionary, import_gts_events,
+    import_gts_events_with_dictionary, import_gts_indexed_term,
+};
 pub use native_codecs::jsonld::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
     JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
@@ -142,16 +145,17 @@ pub use purrdf_gts::transport::{
 };
 
 pub use native_codecs::{
-    BorrowedReadError, BorrowedSource, GTS_EXTENSIONS, GtsCodecBackend, NativeParseError,
-    NativeRdfFormat, PACK_EXTENSIONS, ParseControlError, ParseFailure, ParseOptions, ParseOutcome,
-    ParseRefusal, RetainedParse, SerializeOptions, SerializeOutcome, SerializeReport,
-    SourceAssociationError, SourceFormat, SourceOccurrence, SourceOccurrences, SourceOriginId,
-    SourceOriginKind, SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind,
-    SourceTermOrigin, SpanTable, StatementLayer, classify, classify_source,
-    empty_named_graphs_dropped, parse_dataset, parse_dataset_controlled, parse_dataset_from_reader,
-    parse_dataset_reporting_failure, parse_dataset_with, serialize_dataset,
-    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
-    serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
+    BorrowedReadError, BorrowedSource, EncodedReadError, EncodedReadOptions, EncodedReadOutcome,
+    GTS_EXTENSIONS, GtsCodecBackend, NativeParseError, NativeRdfFormat, PACK_EXTENSIONS,
+    ParseControlError, ParseFailure, ParseOptions, ParseOutcome, ParseRefusal, RetainedParse,
+    SerializeOptions, SerializeOutcome, SerializeReport, SourceAssociationError, SourceFormat,
+    SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind, SourceRole, SourceRule,
+    SourceSemanticReference, SourceStatementKind, SourceTermOrigin, SpanTable, StatementLayer,
+    classify, classify_source, empty_named_graphs_dropped, parse_dataset, parse_dataset_controlled,
+    parse_dataset_from_encoded_reader, parse_dataset_from_reader, parse_dataset_reporting_failure,
+    parse_dataset_with, serialize_dataset, serialize_dataset_to_format,
+    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
+    serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options, transcode_under_document_base,
 };
 pub use native_quads::{

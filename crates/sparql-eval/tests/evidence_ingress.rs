@@ -16,6 +16,109 @@ use purrdf_sparql_eval::{
     EvalError, InternedOutcome, InternedRequest, NativeSparqlEngine, QueryOptions,
 };
 
+fn cursor_matches_completed_select_evidence<'d>(
+    engine: &'d NativeSparqlEngine,
+    dataset: &'d purrdf_core::RdfDataset,
+    source: &'d dyn EvidenceSource<TermId>,
+    query: &str,
+    answer: purrdf_core::evidence::AnswerRequest,
+) {
+    let options = QueryOptions::EMPTY.with_entropy_seed(67);
+    let (names, expected, status) = engine
+        .query_evidence_status_view(
+            dataset,
+            request(query),
+            &options,
+            source,
+            answer,
+            |outcome, status| {
+                let InternedOutcome::Solutions(rows) = outcome else {
+                    panic!("SELECT solutions");
+                };
+                let cells = rows
+                    .rows()
+                    .iter()
+                    .map(|row| {
+                        let cells = row
+                            .iter()
+                            .map(|cell| cell.map(|term| rows.value_of(term)))
+                            .collect::<Vec<_>>();
+                        (
+                            cells,
+                            row.evidence()
+                                .with_record(EvidenceRecord::identity)
+                                .unwrap(),
+                            row.evidence().is_undecided(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    rows.variables().to_vec(),
+                    cells,
+                    (
+                        status.information,
+                        status.completeness,
+                        status.established,
+                        status.undecided,
+                        status.reasons.to_vec(),
+                        status.verdict,
+                    ),
+                )
+            },
+        )
+        .unwrap();
+    let prepared = engine.prepare_query(query, None).unwrap();
+    let mut cursor = engine
+        .open_select_cursor_evidence(dataset, &prepared, &[], &options, source, answer)
+        .unwrap();
+    let mut actual = Vec::new();
+    while let Some(row) = cursor.next_row().unwrap() {
+        assert_eq!(row.schema().vars(), names);
+        let cells = row
+            .cells()
+            .iter()
+            .map(|cell| {
+                cell.map(|term| {
+                    row.context()
+                        .scratch
+                        .try_value_of(row.context().dataset, term)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let evidence = row.evidence();
+        actual.push((
+            cells,
+            evidence.with_record(EvidenceRecord::identity).unwrap(),
+            evidence.is_undecided(),
+        ));
+    }
+    assert_eq!(actual, expected, "{query}");
+    let settled = cursor.settle().unwrap();
+    assert_eq!(settled.delivered, actual.len());
+    assert_eq!(
+        settled.undecided,
+        actual.iter().filter(|(_, _, undecided)| *undecided).count()
+    );
+    let purrdf_sparql_eval::eval::CursorAnswerStatus::Settled(actual) =
+        cursor.answer_status().unwrap()
+    else {
+        panic!("fully read query must retain its original native status");
+    };
+    assert_eq!(
+        (
+            actual.information,
+            actual.completeness,
+            actual.established,
+            actual.undecided,
+            actual.reasons.to_vec(),
+            actual.verdict
+        ),
+        status,
+        "{query}"
+    );
+}
+
 struct Claims {
     negative: TermId,
     record: EvidenceRecord,
@@ -66,7 +169,7 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
         builder.push_quad(subject, predicate, value, None).unwrap();
     }
     let dataset = builder.freeze().unwrap();
-    fn check<D: purrdf_core::FallibleDatasetView + Sync>(dataset: &D) {
+    fn check<D: purrdf_core::FallibleDatasetView + purrdf_core::CursorDatasetView>(dataset: &D) {
         let mut source = CountedClaims {
             opposed: dataset
                 .term_id_by_value(&purrdf_core::TermValue::iri("https://example.org/opposed"))
@@ -144,6 +247,41 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
                     )
                     .expect("settled verdict leaves the hard-failing suffix unopened");
                 assert_eq!(source.calls.load(Ordering::Relaxed), calls, "{query}");
+                if form.starts_with("SELECT") {
+                    source.calls.store(0, Ordering::Relaxed);
+                    let prepared = engine.prepare_query(&query, None).unwrap();
+                    let mut cursor = engine
+                        .open_select_cursor_evidence_fallible_view(
+                            dataset,
+                            &prepared,
+                            &[],
+                            &QueryOptions::EMPTY,
+                            &source,
+                            AnswerRequest {
+                                tier: AnswerTier::Verdict,
+                                question: Some(question),
+                                standpoint: StandpointKey::Unscoped,
+                                input_completeness: SearchCompleteness::Complete,
+                                closure_declared: true,
+                            },
+                        )
+                        .unwrap();
+                    while cursor.next_row().unwrap().is_some() {}
+                    cursor.settle().unwrap();
+                    let purrdf_sparql_eval::eval::CursorAnswerStatus::Settled(status) =
+                        cursor.answer_status().unwrap()
+                    else {
+                        panic!("a proven verdict has its original status");
+                    };
+                    assert_eq!(status.verdict, Some(WitnessVerdict::Yes));
+                    assert_eq!(status.information, information);
+                    assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
+                    assert_eq!(
+                        source.calls.load(Ordering::Relaxed),
+                        calls,
+                        "cursor {query}"
+                    );
+                }
             }
             source.calls.store(0, Ordering::Relaxed);
             let query = format!("{form} WHERE {{ {positive_arm} UNION {negative_arm} }}");
@@ -195,6 +333,38 @@ fn verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities()
             0,
             "declared incompleteness settles absence before opening the producer"
         );
+        let prepared = engine
+            .prepare_query(
+                "SELECT ?s WHERE { ?s <https://example.org/poison> ?o }",
+                None,
+            )
+            .unwrap();
+        let mut cursor = engine
+            .open_select_cursor_evidence_fallible_view(
+                dataset,
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &source,
+                AnswerRequest {
+                    tier: AnswerTier::Verdict,
+                    question: Some(WitnessQuestion::ClosedAbsence),
+                    standpoint: StandpointKey::Unscoped,
+                    input_completeness: SearchCompleteness::Complete,
+                    closure_declared: true,
+                },
+            )
+            .unwrap();
+        assert!(cursor.next_row().unwrap().is_none());
+        cursor.settle().unwrap();
+        let purrdf_sparql_eval::eval::CursorAnswerStatus::Settled(status) =
+            cursor.answer_status().unwrap()
+        else {
+            panic!("declared incomplete scope settles the absence question");
+        };
+        assert_eq!(status.verdict, Some(WitnessVerdict::Unknown));
+        assert_eq!(status.established, 0);
+        assert_eq!(source.calls.load(Ordering::Relaxed), 0);
     }
     check(&dataset);
     let paged = purrdf_core::PagedDataset::from_provider(std::sync::Arc::new(
@@ -896,6 +1066,21 @@ fn distinct_coalesces_both_polarities_without_changing_binding_identity() {
             },
         )
         .expect("original engine execution");
+    for query in [query.to_owned(), query.replace(" DISTINCT", "")] {
+        cursor_matches_completed_select_evidence(
+            &engine,
+            &dataset,
+            &source,
+            &query,
+            purrdf_core::evidence::AnswerRequest {
+                tier: purrdf_core::evidence::AnswerTier::Summary,
+                question: Some(purrdf_core::evidence::WitnessQuestion::Support),
+                standpoint: purrdf_core::evidence::StandpointKey::Unscoped,
+                input_completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+            },
+        );
+    }
     drop(engine);
     drop(dataset);
     evidence
@@ -1477,6 +1662,11 @@ fn all_query_forms_publish_original_unknown_status_at_requested_count_tiers() {
                     },
                 )
                 .expect("native original outcome and evidence status");
+            if form.starts_with("SELECT") {
+                cursor_matches_completed_select_evidence(
+                    &engine, &dataset, &source, &query, answer,
+                );
+            }
         }
     }
 }

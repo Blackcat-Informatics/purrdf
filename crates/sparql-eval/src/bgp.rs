@@ -52,8 +52,11 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+mod expansion;
+pub(crate) mod forecast;
 mod positive;
 mod window;
+use expansion::{Expansion, ExpansionInput, ExpansionSource, ExpansionStep};
 pub(crate) use positive::PositivePlan;
 
 /// A selected BGP order carrying its original native array/control admission.
@@ -467,10 +470,407 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     window: Option<&crate::shapes::window::WindowSpec>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    match prepare_compiled_bgp(program, input, selected_order, window, false, ctx)? {
+        BgpPreparation::Complete(rows) => Ok(rows),
+        BgpPreparation::Final(_) => Err(EvalError::internal(
+            "a draining BGP returned a retained final stage",
+        )),
+    }
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one inline preparation handoff preserves admitted ownership without another allocation"
+)]
+enum BgpPreparation<I: ViewTermId, P> {
+    Complete(SolutionSeq<I>),
+    Final(PreparedFinalBgp<I, P>),
+}
+
+/// Interior stages keep their original breadth-first bags and ordered commits.
+/// The final stage retains only its driving relation and source continuation.
+struct PreparedFinalBgp<I: ViewTermId, P> {
+    rows: AdmittedVec<RetainedRow<I>>,
+    pattern: usize,
+    scope: GraphScope<I>,
+    window: Option<window::PreparedWindow<I>>,
+    plan: Option<P>,
+    range: Option<crate::expr::RetainedAnnotationRange>,
+    reifies_id: Option<I>,
+    unit_driven: bool,
+    ceiling: Option<usize>,
+    metered: bool,
+}
+
+pub(crate) type CandidateRows<'a, I> =
+    crate::WorkspaceBox<dyn Iterator<Item = Result<QuadIds<I>, EvalError>> + Send + 'a>;
+
+/// The additive transferable capability is selected at cursor entry. Existing
+/// DatasetView callers keep their original generic contract and scan bodies.
+type OpenCandidateSource<D> =
+    for<'d> fn(
+        &EvalCtx<'d, D>,
+        ExpansionSource<<D as DatasetView>::Id, <D as DatasetView>::ProbePlan>,
+        Option<crate::expr::RetainedAnnotationRange>,
+    ) -> Result<CandidateRows<'d, <D as DatasetView>::Id>, EvalError>;
+
+pub(crate) struct BgpSourceFactory<D: DatasetView + Sync> {
+    open: OpenCandidateSource<D>,
+}
+
+impl<D: DatasetView + Sync> Copy for BgpSourceFactory<D> {}
+impl<D: DatasetView + Sync> Clone for BgpSourceFactory<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: purrdf_core::CursorDatasetView> BgpSourceFactory<D> {
+    pub(crate) fn for_view() -> Self {
+        Self {
+            open: open_retained_candidates::<D>,
+        }
+    }
+}
+
+fn open_retained_candidates<'d, D: purrdf_core::CursorDatasetView>(
+    ctx: &EvalCtx<'d, D>,
+    source: ExpansionSource<D::Id, D::ProbePlan>,
+    range: Option<crate::expr::RetainedAnnotationRange>,
+) -> Result<CandidateRows<'d, D::Id>, EvalError> {
+    match source {
+        ExpansionSource::Ordinary {
+            plan,
+            bounds: [s, p, o],
+            graph,
+        } => {
+            let plan = plan.unwrap_or_else(|| {
+                ctx.dataset
+                    .probe_plan(s.is_some(), p.is_some(), o.is_some(), graph)
+            });
+            retain_candidate_source(
+                ctx,
+                ctx.dataset
+                    .cursor_quads_for_pattern_with_plan(plan, s, p, o, graph)
+                    .map(Ok),
+            )
+        }
+        ExpansionSource::Virtual(probe) => retain_candidate_source(
+            ctx,
+            statement_layer::StatementCursor::new(ctx.dataset, probe, range, ctx),
+        ),
+        ExpansionSource::Window => Err(EvalError::internal(
+            "a window source requires its original prepared candidate owner",
+        )),
+    }
+}
+
+fn retain_candidate_source<'d, D: DatasetView + Sync, T>(
+    ctx: &EvalCtx<'d, D>,
+    mut rows: T,
+) -> Result<CandidateRows<'d, D::Id>, EvalError>
+where
+    T: Iterator<Item = Result<QuadIds<D::Id>, EvalError>> + Send + 'd,
+{
+    let dataset = ctx.dataset;
+    let workspace = ctx.workspace.clone();
+    let mut ended = false;
+    let rows = std::iter::from_fn(move || {
+        if ended {
+            return None;
+        }
+        if let Some(error) = dataset.read_error() {
+            ended = true;
+            return Some(Err(workspace.source_error(error)));
+        }
+        let row = rows.next();
+        if let Some(error) = dataset.read_error() {
+            ended = true;
+            return Some(Err(workspace.source_error(error)));
+        }
+        if !matches!(row, Some(Ok(_))) {
+            ended = true;
+        }
+        row
+    });
+    Ok(
+        crate::WorkspaceBox::new_admitted(rows, &ctx.growth)?.coerce(
+            |rows| -> Box<dyn Iterator<Item = Result<QuadIds<D::Id>, EvalError>> + Send + 'd> {
+                rows
+            },
+        ),
+    )
+}
+
+pub(crate) enum BgpCursorPoll<I: ViewTermId> {
+    Row(SolutionSeq<I>),
+    Complete {
+        header: SolutionSeq<I>,
+        produced: usize,
+    },
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the cursor moves into its admitted producer owner without another allocation"
+)]
+pub(crate) enum BgpStart<'a, I: ViewTermId, P> {
+    Complete(SolutionSeq<I>),
+    Cursor(BgpCursor<'a, I, P>),
+}
+
+pub(crate) fn start_bgp_cursor<'a, D: DatasetView + Sync>(
+    patterns: &[TriplePattern],
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    selected_order: Option<BgpOrder>,
+    ctx: &EvalCtx<'a, D>,
+) -> Result<BgpStart<'a, D::Id, D::ProbePlan>, EvalError> {
+    if patterns.is_empty() {
+        return input
+            .map_or_else(
+                || SolutionSeq::unit_admitted(&ctx.growth),
+                |input| Ok(input.into_sequence()),
+            )
+            .map(BgpStart::Complete);
+    }
+    let schema = input.as_ref().map(|input| input.rows().schema.as_ref());
+    let mut program = compile_bgp(patterns, schema, false, ctx)?;
+    let window = input
+        .is_none()
+        .then_some(ctx.window_bgp.as_ref())
+        .flatten()
+        .filter(|(address, _)| *address == patterns.as_ptr() as usize)
+        .map(|(_, spec)| spec);
+    let retain_final = window.is_none()
+        && ctx.stop_signal().is_none()
+        && ctx.cell_row_ceiling(program.working.len()).is_none()
+        && ctx.governor_state().is_none_or(|state| {
+            state
+                .caller_ceiling(purrdf_core::ResourceDimension::Fuel)
+                .is_none()
+        });
+    if !retain_final && window.is_none() {
+        // Finite fuel settles ordered driver charges before its rows are licensed;
+        // this is the original BGP unit, rather than a staged final query answer.
+        ctx.note_cursor_buffer(crate::eval::CursorBufferReason::GovernorSettlement);
+    }
+    match prepare_compiled_bgp(&program, input, selected_order, window, retain_final, ctx)? {
+        BgpPreparation::Complete(rows) => Ok(BgpStart::Complete(rows)),
+        BgpPreparation::Final(mut stage) => {
+            program.projection = Some(BgpProjection::new_admitted(&program.working, &ctx.growth)?);
+            let rows = std::mem::replace(&mut stage.rows, AdmittedVec::new(&ctx.growth));
+            Ok(BgpStart::Cursor(BgpCursor {
+                program: crate::workspace::NativeSharedWorkspace::new_admitted(
+                    program,
+                    &ctx.growth,
+                )?,
+                stage,
+                remaining: rows.into_iter(),
+                current: None,
+                source: None,
+                expansion: None,
+                ledger: AdmittedVec::new(&ctx.growth),
+                produced: 0,
+                ended: false,
+            }))
+        }
+    }
+}
+
+pub(crate) struct BgpCursor<'a, I: ViewTermId, P> {
+    program: crate::workspace::NativeSharedWorkspace<CompiledBgp<I>>,
+    stage: PreparedFinalBgp<I, P>,
+    remaining: crate::AdmittedVecIntoIter<RetainedRow<I>>,
+    current: Option<RetainedRow<I>>,
+    source: Option<CandidateRows<'a, I>>,
+    expansion: Option<Expansion<I>>,
+    ledger: AdmittedVec<crate::governor::ItemCharge>,
+    produced: usize,
+    ended: bool,
+}
+
+impl<'a, I: ViewTermId, P: Copy + Send + Sync> BgpCursor<'a, I, P> {
+    pub(crate) fn stop<D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        self.source = None;
+        if self.current.is_some() {
+            self.end_driver()?;
+        }
+        self.finish(ctx)
+    }
+
+    pub(crate) fn next<'d: 'a, D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        ctx: &mut EvalCtx<'d, D>,
+        factory: BgpSourceFactory<D>,
+    ) -> Result<BgpCursorPoll<I>, EvalError> {
+        loop {
+            if self.ended {
+                return Ok(BgpCursorPoll::Complete {
+                    header: self.program.empty(&ctx.growth)?,
+                    produced: self.produced,
+                });
+            }
+            if self
+                .stage
+                .ceiling
+                .is_some_and(|ceiling| self.produced >= ceiling)
+            {
+                self.stop(ctx)?;
+                continue;
+            }
+            if self.current.is_none() {
+                self.current = self.remaining.next();
+                if self.current.is_none() {
+                    self.finish(ctx)?;
+                    continue;
+                }
+            }
+            let cp = &self
+                .program
+                .compiled
+                .as_ref()
+                .expect("compiled final pattern")[self.stage.pattern];
+            let row = self.current.as_ref().expect("one current driving row");
+            let input = ExpansionInput {
+                pattern: cp,
+                row,
+                scope: &self.stage.scope,
+                plan: self.stage.plan,
+                reifies: self.stage.reifies_id,
+                unit_driven: self.stage.unit_driven,
+                windowed: self.stage.window.is_some(),
+            };
+            if self.expansion.is_none() {
+                self.expansion = Some(Expansion::new(&input, ctx)?);
+            }
+            if self.source.is_none() {
+                let source = self
+                    .expansion
+                    .as_mut()
+                    .expect("one driving expansion")
+                    .source(&input, ctx);
+                let Some(source) = source else {
+                    self.end_driver()?;
+                    continue;
+                };
+                let range = if matches!(&source, ExpansionSource::Virtual(_)) {
+                    if let Some(range) = self.stage.range.as_mut() {
+                        range.restart_driver()?;
+                    }
+                    self.stage.range.clone()
+                } else {
+                    None
+                };
+                self.source = Some((factory.open)(ctx, source, range)?);
+            }
+            let range = self.stage.range.clone();
+            let read = range.as_ref().map(|range| range.begin_read(ctx));
+            let quad = self
+                .source
+                .as_mut()
+                .expect("one retained source")
+                .next()
+                .transpose();
+            drop(read);
+            let Some(quad) = quad? else {
+                self.source = None;
+                continue;
+            };
+            let extended = match self
+                .expansion
+                .as_mut()
+                .expect("one driving expansion")
+                .candidate(&input, quad, ctx)?
+            {
+                ExpansionStep::Row(row) => row,
+                ExpansionStep::Skip => continue,
+                ExpansionStep::Stop => {
+                    self.end_driver()?;
+                    continue;
+                }
+            };
+            self.expansion
+                .as_mut()
+                .expect("one driving expansion")
+                .committed();
+            self.produced = self
+                .produced
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let mut rows = AdmittedVec::with_capacity(1, &ctx.growth)?;
+            rows.push_reserved(extended);
+            return self
+                .program
+                .project(rows, &ctx.growth)
+                .map(BgpCursorPoll::Row);
+        }
+    }
+
+    fn end_driver(&mut self) -> Result<(), EvalError> {
+        self.source = None;
+        if let Some(error) = self
+            .stage
+            .range
+            .as_ref()
+            .and_then(crate::expr::RetainedAnnotationRange::take_failure)
+        {
+            return Err(error);
+        }
+        let expansion = self
+            .expansion
+            .take()
+            .expect("one finishing driving expansion");
+        if self.stage.metered {
+            self.ledger.push(expansion.charge())?;
+        }
+        self.current = None;
+        Ok(())
+    }
+
+    fn finish<D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        if let Some(window) = &self.stage.window {
+            ctx.shape_state.work.add(0, window.comparisons())?;
+        }
+        if let Some(state) = ctx.governor_state()
+            && state.tripped().is_none()
+            && self.stage.metered
+        {
+            let crossing = if ctx.charge_ledger().is_some() {
+                state.commit_ordered_items_observed(&self.ledger, |units| {
+                    ctx.note_fuel(crate::governor::ChargePoint::BgpCandidateQuad, units);
+                })
+            } else {
+                state.commit_ordered_items(&self.ledger)
+            };
+            if crossing.is_some() {
+                return Err(EvalError::internal(
+                    "a streamed BGP used a finite fuel settlement",
+                ));
+            }
+        }
+        self.ended = true;
+        Ok(())
+    }
+}
+
+fn prepare_compiled_bgp<D: DatasetView + Sync>(
+    program: &CompiledBgp<D::Id>,
+    input: Option<crate::eval::PositiveInput<'_, D::Id>>,
+    selected_order: Option<BgpOrder>,
+    window: Option<&crate::shapes::window::WindowSpec>,
+    retain_final: bool,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<BgpPreparation<D::Id, D::ProbePlan>, EvalError> {
     let working = &program.working;
     let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
     let Some(compiled) = &program.compiled else {
-        return program.empty(&ctx.growth);
+        return program.empty(&ctx.growth).map(BgpPreparation::Complete);
     };
     // A singleton has only one order, regardless of nullable bindings. Retained
     // preparation needs no per-occurrence mask allocation for that fixed order.
@@ -489,7 +889,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     // header, but do not charge or allocate the ordinary unit seed: there is no
     // intermediate row. Ground-term compilation above retains read failures.
     if borrowed.is_some_and(|input| input.rows.is_empty()) {
-        return program.empty(&ctx.growth);
+        return program.empty(&ctx.growth).map(BgpPreparation::Complete);
     }
 
     // The graph scope for this BGP (resolved once — `active_graph` is fixed across a
@@ -555,7 +955,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
             )
             .is_err()
         {
-            return program.empty(&ctx.growth);
+            return program.empty(&ctx.growth).map(BgpPreparation::Complete);
         }
     }
 
@@ -591,7 +991,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(working.len());
     if cell_ceiling == Some(0) {
         let _ = ctx.observe_cells(1, working.len());
-        return program.empty(&ctx.growth);
+        return program.empty(&ctx.growth).map(BgpPreparation::Complete);
     }
     let input_rows = borrowed.map_or(1, |input| input.rows.len());
     if cell_ceiling.is_some_and(|ceiling| input_rows > ceiling) {
@@ -599,7 +999,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
             cell_ceiling.expect("a ceiling exists").saturating_add(1),
             working.len(),
         );
-        return program.empty(&ctx.growth);
+        return program.empty(&ctx.growth).map(BgpPreparation::Complete);
     }
     let unit_driven = input.is_none();
     let mut seed = AdmittedVec::new(&ctx.growth);
@@ -624,7 +1024,10 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     }
     let mut rows = seed;
     if rows.is_empty() {
-        return program.empty(&ctx.growth);
+        return program.empty(&ctx.growth).map(BgpPreparation::Complete);
+    }
+    if order.len() > 1 {
+        ctx.note_cursor_buffer(crate::eval::CursorBufferReason::IntermediateRelation);
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
@@ -655,172 +1058,122 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         } else {
             None
         };
+        if retain_final && stage == last_stage {
+            let range = ctx
+                .annotation_range
+                .as_ref()
+                .and_then(|ranges| {
+                    ranges
+                        .iter()
+                        .position(|range| {
+                            matches!(&cp.o, Pos::Slot(slot)
+                    if working.vars().get(*slot).is_some_and(|variable| range.matches(variable)))
+                        })
+                        .map(|selected| (ranges, selected))
+                })
+                .map(|(ranges, selected)| {
+                    crate::expr::RetainedAnnotationRange::new(ranges, selected, ctx)
+                })
+                .transpose()?;
+            return Ok(BgpPreparation::Final(PreparedFinalBgp {
+                rows,
+                pattern: i,
+                scope,
+                window,
+                plan,
+                range,
+                reifies_id,
+                unit_driven,
+                ceiling,
+                metered,
+            }));
+        }
         let expand = |acc: &mut crate::parallel::RowSink<'_, RetainedRow<D::Id>>,
                       fuel: &mut u64,
                       row: &RetainedRow<D::Id>| {
-            // Scratch identities are absent from the dataset by the interner's
-            // promotion law. Treating one as an unbound probe would scan a whole
-            // index just to reject every candidate during unification. The same
-            // rule covers slots nested inside quoted triple patterns.
-            if !unit_driven {
-                let mut absent = false;
-                for pos in [&cp.s, &cp.p, &cp.o] {
-                    if let Err(error) = for_each_slot_admitted(pos, &ctx.growth, &mut |column| {
-                        absent |= matches!(row[column], Some(SolutionTerm::Computed(_)));
-                        Ok(())
-                    }) {
-                        acc.fail(error);
-                        return;
-                    }
-                }
-                if absent {
+            let input = ExpansionInput {
+                pattern: cp,
+                row,
+                scope: &scope,
+                plan,
+                reifies: reifies_id,
+                unit_driven,
+                windowed: window.is_some(),
+            };
+            let mut expansion = match Expansion::new(&input, ctx) {
+                Ok(expansion) => expansion,
+                Err(error) => {
+                    acc.fail(error);
                     return;
                 }
-            }
-            let s = query_id(&cp.s, row);
-            let p = query_id(&cp.p, row);
-            let o = query_id(&cp.o, row);
-            if let (Some(window), Some(sweep)) = (&window, &sweep) {
-                let candidates = match window.candidates(sweep, i, cp, row, ctx) {
-                    Ok(candidates) => candidates,
-                    Err(error) => {
-                        acc.fail(error);
-                        return;
+            };
+            'sources: while let Some(source) = expansion.source(&input, ctx) {
+                match source {
+                    ExpansionSource::Window => {
+                        let candidates =
+                            match window.as_ref().expect("selected window source").candidates(
+                                sweep.as_ref().expect("prepared window sweep"),
+                                i,
+                                cp,
+                                row,
+                                ctx,
+                            ) {
+                                Ok(candidates) => candidates,
+                                Err(error) => {
+                                    acc.fail(error);
+                                    break;
+                                }
+                            };
+                        for quad in candidates {
+                            if expansion.emit(&input, quad, ctx, acc).is_break() {
+                                break 'sources;
+                            }
+                        }
                     }
-                };
-                for quad in candidates {
-                    if ctx.stop_check().is_some() {
-                        return;
+                    ExpansionSource::Ordinary {
+                        plan: Some(plan),
+                        bounds: [s, p, o],
+                        graph,
+                    } => {
+                        for quad in ctx
+                            .dataset
+                            .quads_for_pattern_with_plan(&plan, s, p, o, graph)
+                        {
+                            if expansion.emit(&input, quad, ctx, acc).is_break() {
+                                break 'sources;
+                            }
+                        }
                     }
-                    *fuel = fuel.saturating_add(1);
-                    match bind_row(row, cp, &quad, ctx) {
-                        Ok(Some(extended)) => acc.push(extended),
-                        Ok(None) => {}
-                        Err(error) => {
+                    ExpansionSource::Ordinary {
+                        plan: None,
+                        bounds: [s, p, o],
+                        graph,
+                    } => {
+                        for quad in ctx.dataset.quads_for_pattern(s, p, o, graph) {
+                            if expansion.emit(&input, quad, ctx, acc).is_break() {
+                                break 'sources;
+                            }
+                        }
+                    }
+                    ExpansionSource::Virtual(probe) => {
+                        let memory = crate::expr::AnnotationRangeMemory::new(ctx);
+                        statement_layer::visit_quads_range(
+                            ctx.dataset,
+                            probe,
+                            annotation_range.map(|range| range.range(&ctx.now, &memory)),
+                            |quad| expansion.emit(&input, quad, ctx, acc),
+                        );
+                        if let Some(error) = memory.take_failure() {
                             acc.fail(error);
-                            return;
+                            break;
                         }
-                    }
-                    if acc.is_full() {
-                        return;
-                    }
-                }
-                return;
-            }
-            match &scope {
-                // Single-graph scope (store default / a named graph): the indexed
-                // partition_point read, unchanged — no de-dup overhead.
-                GraphScope::One(gm) => {
-                    let plan = plan.unwrap_or_else(|| {
-                        ctx.dataset
-                            .probe_plan(s.is_some(), p.is_some(), o.is_some(), *gm)
-                    });
-                    for quad in ctx.dataset.quads_for_pattern_with_plan(&plan, s, p, o, *gm) {
-                        if ctx.stop_check().is_some() {
-                            return;
-                        }
-                        // The `bgp-candidate-quad` charge point: one unit per candidate
-                        // EXAMINED, not per candidate that binds. Charging only the ones
-                        // that bind would let the single most expensive shape in the
-                        // evaluator — a highly selective pattern scanned over a large
-                        // index — cost nothing at all.
-                        *fuel = fuel.saturating_add(1);
-                        match bind_row(row, cp, &quad, ctx) {
-                            Ok(Some(extended)) => acc.push(extended),
-                            Ok(None) => {}
-                            Err(error) => {
-                                acc.fail(error);
-                                return;
-                            }
-                        }
-                        // The pushed row ceiling, applied INSIDE the scan. This is the
-                        // whole point of the pushdown: a `LIMIT 10` over a million-quad
-                        // store stops here, having examined eleven candidates, instead
-                        // of materialising a million rows for the root to discard.
                         if acc.is_full() {
-                            return;
-                        }
-                    }
-                    // The RDF 1.2 reification layer is a side-table outside `quads`, so
-                    // fold its virtual triples in here — additively (no double
-                    // counting). Each reifier/annotation row carries its own graph, so
-                    // the probe binds `?g` under `GRAPH ?g`: a default-graph reifier
-                    // shows only when the scope admits the default graph (unchanged),
-                    // and a `GRAPH :g`-scoped reifier shows only under that named graph.
-                    let components = components_of(&cp.o, |part| query_id(part, row));
-                    let range_admission = crate::expr::AnnotationRangeMemory::new(ctx);
-                    emit_virtual_candidates(
-                        ctx.dataset,
-                        cp,
-                        s,
-                        p,
-                        o,
-                        components,
-                        reifies_id,
-                        *gm,
-                        annotation_range.map(|range| range.range(&ctx.now, &range_admission)),
-                        |quad| {
-                            if acc.is_full() || ctx.stop_check().is_some() {
-                                return ControlFlow::Break(());
-                            }
-                            *fuel = fuel.saturating_add(1);
-                            match bind_row(row, cp, &quad, ctx) {
-                                Ok(Some(extended)) => acc.push(extended),
-                                Ok(None) => {}
-                                Err(error) => {
-                                    acc.fail(error);
-                                    return ControlFlow::Break(());
-                                }
-                            }
-                            if acc.is_full() {
-                                ControlFlow::Break(())
-                            } else {
-                                ControlFlow::Continue(())
-                            }
-                        },
-                    );
-                    if let Some(error) = range_admission.take_failure() {
-                        acc.fail(error);
-                    }
-                }
-                // A FROM/USING-merged default graph: union the per-graph reads, but
-                // RDF-merge unions *triples*, so a triple present in two merged graphs
-                // must bind once — de-dupe by (s, p, o) for this pattern+row. The
-                // reification layer is store-default content (not part of an explicitly
-                // FROM-named merge), so it is not folded into a merged scope. `seen` is
-                // local to this row's worker (each row gets its own), identical to the
-                // sequential path.
-                GraphScope::Merge(gs) => {
-                    let mut seen = crate::AdmittedMap::<(D::Id, D::Id, D::Id), ()>::default();
-                    for &g in gs {
-                        for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
-                            if ctx.stop_check().is_some() {
-                                return;
-                            }
-                            *fuel = fuel.saturating_add(1);
-                            let key = (quad.s, quad.p, quad.o);
-                            if seen.get(&key).is_some() {
-                                continue;
-                            }
-                            if let Err(error) = seen.insert_admitted(key, (), &ctx.growth) {
-                                acc.fail(error);
-                                return;
-                            }
-                            match bind_row(row, cp, &quad, ctx) {
-                                Ok(Some(extended)) => acc.push(extended),
-                                Ok(None) => {}
-                                Err(error) => {
-                                    acc.fail(error);
-                                    return;
-                                }
-                            }
-                            if acc.is_full() {
-                                return;
-                            }
+                            break;
                         }
                     }
                 }
             }
+            *fuel = expansion.charge().fuel;
         };
         // The bounded driver is sequential; see `parallel::bounded_chunk_map_metered` for
         // why a per-chunk ceiling would stop nothing. Every other stage — and every BGP
@@ -925,7 +1278,9 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     if let Some(window) = &window {
         ctx.shape_state.work.add(0, window.comparisons())?;
     }
-    program.project(rows, &ctx.growth)
+    program
+        .project(rows, &ctx.growth)
+        .map(BgpPreparation::Complete)
 }
 
 /// The retired most-constrained-first STRUCTURAL heuristic, reproduced here as
@@ -1042,7 +1397,11 @@ fn plan_or_cached_order<D: DatasetView>(
             .get(&key)
             .cloned()
             .map(BgpOrder::Caller),
-        OrderCacheRef::Bounded(cache) => cache.lock().expect("order cache lock poisoned").get(&key),
+        OrderCacheRef::Bounded(cache) => cache
+            .lock()
+            .expect("order cache lock poisoned")
+            .get(&crate::plan_cache::OrderKey::Order(key))
+            .map(|cached| cached.order),
     };
     if let Some(order) = cached
         && order.len() == compiled.len()
@@ -1067,13 +1426,21 @@ fn plan_or_cached_order<D: DatasetView>(
             let bytes = std::alloc::Layout::array::<usize>(order.len())
                 .map_err(|_| EvalError::WorkspaceBoundOverflow)?
                 .size()
-                .checked_add(size_of::<BgpOrder>())
-                .and_then(|bytes| bytes.checked_add(2 * size_of_val(&key)))
+                .checked_add(size_of::<crate::plan_cache::CachedBgp>())
+                .and_then(|bytes| bytes.checked_add(3 * size_of::<crate::plan_cache::OrderKey>()))
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
             cache
                 .lock()
                 .expect("order cache lock poisoned")
-                .insert_admitted(key, order.clone(), bytes, workspace)?;
+                .insert_admitted(
+                    crate::plan_cache::OrderKey::Order(key),
+                    crate::plan_cache::CachedBgp {
+                        order: order.clone(),
+                        forecast: None,
+                    },
+                    bytes,
+                    workspace,
+                )?;
         }
     }
     Ok(order)
@@ -1260,6 +1627,17 @@ fn cost_based_order_from_admitted<D: DatasetView>(
     initial: &[bool],
     workspace: &crate::WorkspaceCapability,
 ) -> Result<AdmittedVec<usize>, EvalError> {
+    cost_based_order_captured(compiled, dataset, scope, initial, None, workspace)
+}
+
+fn cost_based_order_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    initial: &[bool],
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
     let n = compiled.len();
     if n <= 1 {
         let mut order = AdmittedVec::with_capacity(n, workspace)?;
@@ -1268,7 +1646,7 @@ fn cost_based_order_from_admitted<D: DatasetView>(
         }
         return Ok(order);
     }
-    let base = cost_base(compiled, dataset, scope, workspace)?;
+    let base = cost_base_captured(compiled, dataset, scope, inputs, workspace)?;
     let domains = pattern_domains(
         compiled,
         dataset,
@@ -1527,38 +1905,63 @@ struct PatternCost {
     cardinality_only: bool,
 }
 
+#[cfg(test)]
 fn cost_base<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<AdmittedVec<PatternCost>, EvalError> {
+    cost_base_captured(compiled, dataset, scope, None, workspace)
+}
+
+fn cost_base_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<PatternCost>, EvalError> {
     let mut base = AdmittedVec::with_capacity(compiled.len(), workspace)?;
-    for pattern in compiled {
+    for (index, pattern) in compiled.iter().enumerate() {
         let s = constant_of(&pattern.s);
         let p = constant_of(&pattern.p);
         let o = constant_of(&pattern.o);
         let mut rows = 0_u64;
         let mut work = 0_u128;
         let mut cardinality_only = true;
-        visit_access_costs(pattern, dataset, scope, &mut |probe, cost, statistic| {
-            cardinality_only &= cost.cardinality_fallback().is_some();
-            let cardinality = statistic.map_or_else(
-                || {
-                    cost.cardinality_fallback()
-                        .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, probe.g))
-                },
-                |count| count.value,
-            );
-            // Match the conservative saturation used by base_cardinality over
-            // merged graph scopes. Host work is a separate statistic: every
-            // physically representable graph slice on 32/64-bit targets has
-            // a sum of u64 work estimates below u128::MAX.
-            rows = rows.saturating_add(cardinality);
-            work = work
-                .checked_add(u128::from(cost.work()))
-                .expect("physically representable graph work sum fits u128");
-        });
+        let inputs = inputs.map(|inputs| inputs[index].as_slice());
+        let mut graph_index = 0;
+        visit_access_costs_captured(
+            pattern,
+            dataset,
+            scope,
+            inputs,
+            &mut |probe, cost, statistic| {
+                let input = inputs.map(|inputs| inputs[graph_index]);
+                graph_index += 1;
+                cardinality_only &= cost.cardinality_fallback().is_some();
+                let cardinality = statistic.map_or_else(
+                    || {
+                        cost.cardinality_fallback().unwrap_or_else(|| {
+                            input.map_or_else(
+                                || dataset.cardinality_estimate(s, p, o, probe.g),
+                                |input| input.cardinality,
+                            )
+                        })
+                    },
+                    |count| count.value,
+                );
+                // Match the conservative saturation used by base_cardinality over
+                // merged graph scopes. Host work is a separate statistic: every
+                // physically representable graph slice on 32/64-bit targets has
+                // a sum of u64 work estimates below u128::MAX.
+                rows = rows.saturating_add(cardinality);
+                work = work
+                    .checked_add(u128::from(cost.work()))
+                    .expect("physically representable graph work sum fits u128");
+            },
+        );
         base.push_reserved(PatternCost {
             rows: rows as f64,
             cardinality_only,
@@ -1582,14 +1985,37 @@ fn visit_access_costs<D: DatasetView>(
         Option<purrdf_core::StatisticCount>,
     ),
 ) {
+    visit_access_costs_captured(pattern, dataset, scope, None, visit);
+}
+
+fn visit_access_costs_captured<D: DatasetView>(
+    pattern: &CompiledPattern<D::Id>,
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&[forecast::PhysicalInput<D::Id>]>,
+    visit: &mut dyn FnMut(
+        purrdf_core::ProbePattern<D::Id>,
+        purrdf_core::AccessCost,
+        Option<purrdf_core::StatisticCount>,
+    ),
+) {
     let s = constant_of(&pattern.s);
     let p = constant_of(&pattern.p);
     let o = constant_of(&pattern.o);
+    let mut graph_index = 0;
     let mut graph = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
-        let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-        let cost = dataset.cost(probe, &plan);
-        let statistic = provider_cardinality(dataset, pattern, probe);
+        let input = inputs.map(|inputs| inputs[graph_index]);
+        graph_index += 1;
+        debug_assert!(input.is_none_or(|input| input.graph == g));
+        let cost = input.map_or_else(
+            || {
+                let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+                dataset.cost(probe, &plan)
+            },
+            |input| input.cost,
+        );
+        let statistic = provider_cardinality_captured(dataset, pattern, probe, input.as_ref());
         if cost.cardinality_fallback().is_some()
             && let Some(count) = statistic
         {
@@ -1600,15 +2026,26 @@ fn visit_access_costs<D: DatasetView>(
             );
             return;
         }
-        let statements = dataset
-            .statement_cardinality_estimate(probe, components_of(&pattern.o, constant_of))
+        let statements = input
+            .map_or_else(
+                || {
+                    dataset.statement_cardinality_estimate(
+                        probe,
+                        components_of(&pattern.o, constant_of),
+                    )
+                },
+                |input| input.statements,
+            )
             .unwrap_or(0);
         if statements == 0 {
             visit(probe, cost, statistic);
         } else {
-            let ordinary = cost
-                .cardinality_fallback()
-                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+            let ordinary = cost.cardinality_fallback().unwrap_or_else(|| {
+                input.map_or_else(
+                    || dataset.cardinality_estimate(s, p, o, g),
+                    |input| input.cardinality,
+                )
+            });
             // Statement summaries provide row counts, not a conversion into a
             // host's physical work unit. Use the explicit cardinality fallback
             // for this complete probe instead of inventing a statement page fee.
@@ -1685,19 +2122,45 @@ fn base_cardinality<D: DatasetView>(
     cp: &CompiledPattern<D::Id>,
     scope: &GraphScope<D::Id>,
 ) -> u64 {
+    base_cardinality_captured(dataset, cp, scope, None)
+}
+
+fn base_cardinality_captured<D: DatasetView>(
+    dataset: &D,
+    cp: &CompiledPattern<D::Id>,
+    scope: &GraphScope<D::Id>,
+    inputs: Option<&[forecast::PhysicalInput<D::Id>]>,
+) -> u64 {
     let s = constant_of(&cp.s);
     let p = constant_of(&cp.p);
     let o = constant_of(&cp.o);
-    let cardinality = |g| {
+    let mut graph_index = 0;
+    let mut cardinality = |g| {
         let probe = purrdf_core::ProbePattern { s, p, o, g };
-        if let Some(count) = provider_cardinality(dataset, cp, probe) {
+        let input = inputs.map(|inputs| &inputs[graph_index]);
+        graph_index += 1;
+        debug_assert!(input.is_none_or(|input| input.graph == g));
+        if let Some(count) = provider_cardinality_captured(dataset, cp, probe, input) {
             return count.value;
         }
-        dataset.cardinality_estimate(s, p, o, g).saturating_add(
-            dataset
-                .statement_cardinality_estimate(probe, components_of(&cp.o, constant_of))
-                .unwrap_or(0),
-        )
+        input
+            .map_or_else(
+                || dataset.cardinality_estimate(s, p, o, g),
+                |input| input.cardinality,
+            )
+            .saturating_add(
+                input
+                    .map_or_else(
+                        || {
+                            dataset.statement_cardinality_estimate(
+                                probe,
+                                components_of(&cp.o, constant_of),
+                            )
+                        },
+                        |input| input.statements,
+                    )
+                    .unwrap_or(0),
+            )
     };
     match scope {
         GraphScope::One(gm) => cardinality(*gm),
@@ -1715,14 +2178,29 @@ fn provider_cardinality<D: DatasetView>(
     pattern: &CompiledPattern<D::Id>,
     probe: purrdf_core::ProbePattern<D::Id>,
 ) -> Option<purrdf_core::StatisticCount> {
+    provider_cardinality_captured(dataset, pattern, probe, None)
+}
+
+fn provider_cardinality_captured<D: DatasetView>(
+    dataset: &D,
+    pattern: &CompiledPattern<D::Id>,
+    probe: purrdf_core::ProbePattern<D::Id>,
+    input: Option<&forecast::PhysicalInput<D::Id>>,
+) -> Option<purrdf_core::StatisticCount> {
     let statistics = dataset.statistics()?;
     if matches!(pattern.o, Pos::Triple(_)) {
         let components = components_of(&pattern.o, constant_of);
         let mut count = statistics.structural_pattern(probe, components)?;
         if dataset.statement_indexes().reifier_components {
-            let indexed = dataset
-                .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
-                .saturating_add(dataset.statement_cardinality_estimate(probe, components)?);
+            let indexed = input
+                .map_or_else(
+                    || dataset.cardinality_estimate(probe.s, probe.p, probe.o, probe.g),
+                    |input| input.cardinality,
+                )
+                .saturating_add(input.map_or_else(
+                    || dataset.statement_cardinality_estimate(probe, components),
+                    |input| input.statements,
+                )?);
             count.value = count.value.min(indexed);
         }
         return Some(count);
@@ -1731,9 +2209,15 @@ fn provider_cardinality<D: DatasetView>(
     if count.accuracy == purrdf_core::StatisticsAccuracy::UpperBound
         && dataset.statement_indexes() == purrdf_core::StatementIndexSupport::INDEXED
     {
-        let indexed = dataset
-            .cardinality_estimate(probe.s, probe.p, probe.o, probe.g)
-            .saturating_add(dataset.statement_cardinality_estimate(probe, [None; 3])?);
+        let indexed = input
+            .map_or_else(
+                || dataset.cardinality_estimate(probe.s, probe.p, probe.o, probe.g),
+                |input| input.cardinality,
+            )
+            .saturating_add(input.map_or_else(
+                || dataset.statement_cardinality_estimate(probe, [None; 3]),
+                |input| input.statements,
+            )?);
         count.value = count.value.min(indexed);
     }
     Some(count)
@@ -3011,6 +3495,22 @@ fn emit_virtual_candidates<D: DatasetView>(
     range: Option<purrdf_core::AnnotationValueRange<'_>>,
     emit: impl FnMut(QuadIds<D::Id>) -> ControlFlow<()>,
 ) {
+    statement_layer::visit_quads_range(
+        dataset,
+        virtual_probe(dataset, cp, [s, p, o], components, reifies_id, gm),
+        range,
+        emit,
+    );
+}
+
+fn virtual_probe<D: DatasetView>(
+    dataset: &D,
+    cp: &CompiledPattern<D::Id>,
+    [s, p, o]: [Option<D::Id>; 3],
+    components: [Option<D::Id>; 3],
+    reifies_id: Option<D::Id>,
+    graph: GraphMatch<D::Id>,
+) -> StatementProbe<D::Id> {
     // Reifier layer: only when the predicate can be `rdf:reifies`. The object must also
     // be triple-term-shaped to be worth scanning — a quoted-triple pattern position
     // (`Pos::Triple`), a quoted-triple constant (`Pos::Bound` of a triple id), or a
@@ -3019,19 +3519,14 @@ fn emit_virtual_candidates<D: DatasetView>(
     // object match.
     let predicate_can_reify =
         reifies_id.is_some_and(|reifies| p.is_none_or(|bound| bound == reifies));
-    statement_layer::visit_quads_range(
-        dataset,
-        StatementProbe {
-            s,
-            p,
-            o,
-            components,
-            graph: gm,
-            scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
-        },
-        range,
-        emit,
-    );
+    StatementProbe {
+        s,
+        p,
+        o,
+        components,
+        graph,
+        scan_reifier_rows: predicate_can_reify && object_can_be_triple_term(&cp.o, dataset),
+    }
 }
 
 /// Whether an object position could resolve to a quoted-triple term (so the reifier
@@ -3485,6 +3980,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     graph,
                     right,
                     &seed,
+                    None,
                     account,
                 )? {
                     positive.survey_seeded_admitted(
@@ -3555,6 +4051,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 active_dataset,
                 active_graph,
                 pattern,
+                None,
                 account,
             )?
         {
@@ -3724,6 +4221,7 @@ fn forecast_bgp<D: DatasetView>(
     active_graph: GraphMatch<D::Id>,
     patterns: &[TriplePattern],
     seed: &SeedEstimate,
+    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(VarSchema, PlanEstimate, AdmittedVec<usize>), EvalError> {
     let workspace = account.capability();
@@ -3740,14 +4238,36 @@ fn forecast_bgp<D: DatasetView>(
     let compiled = compile_bgp_admitted(dataset, patterns, &working, account)?;
     let any_absent = compiled.is_none();
     let compiled = compiled.as_deref().unwrap_or(&[]);
+    let preparation = if any_absent {
+        None
+    } else {
+        forecast::prepare(
+            dataset, compiled, &scope, &initial, seed.rows, cache, &workspace,
+        )?
+    };
+    if preparation.is_some() {
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| account.source_error(error))?;
+    }
+    let cached = preparation.as_ref().and_then(forecast::Preparation::get);
     let order = if any_absent {
         let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
         for index in 0..patterns.len() {
             order.push_reserved(index);
         }
         order
+    } else if let Some(cached) = &cached {
+        AdmittedVec::from_iter_admitted(cached.order.iter().copied(), &workspace)?
     } else {
-        cost_based_order_from_admitted(compiled, dataset, &scope, &initial, &workspace)?
+        cost_based_order_captured(
+            compiled,
+            dataset,
+            &scope,
+            &initial,
+            preparation.as_ref().map(|preparation| &preparation.inputs),
+            &workspace,
+        )?
     };
     let schema = VarSchema::from_vars_admitted(
         working
@@ -3761,11 +4281,31 @@ fn forecast_bgp<D: DatasetView>(
         (0, 0)
     } else if patterns.is_empty() {
         (seed.rows, seed.rows)
+    } else if let Some((rows, peak)) = cached.as_ref().and_then(|cached| cached.forecast) {
+        (rows, peak)
     } else {
-        replay_cost_estimate_from_admitted(
-            compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+        replay_cost_estimate_captured(
+            compiled,
+            dataset,
+            &scope,
+            &order,
+            (&initial, seed.rows),
+            preparation.as_ref().map(|preparation| &preparation.inputs),
+            &workspace,
         )?
     };
+    if cached.is_none()
+        && let Some(preparation) = &preparation
+    {
+        dataset
+            .checked_read(|_| ())
+            .map_err(|error| account.source_error(error))?;
+        let retained = BgpOrder::from_admitted(
+            AdmittedVec::from_iter_admitted(order.iter().copied(), &workspace)?,
+            &workspace,
+        )?;
+        preparation.insert(retained, rows, peak_rows, &workspace)?;
+    }
     let estimate = PlanEstimate::new(
         rows,
         peak_rows,
@@ -3889,6 +4429,7 @@ fn survey_bgp_seeded<D: DatasetView>(
         active_graph,
         patterns,
         seed,
+        None,
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
@@ -4005,6 +4546,7 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
 /// Saturating `f64`-to-`u64` conversion: Rust's `as` cast saturates rather than wrapping,
 /// so an estimate beyond `u64::MAX` becomes `u64::MAX` and a negative one — which the
 /// model cannot produce, every factor being non-negative — would become zero.
+#[cfg(test)]
 fn replay_cost_estimate_from_admitted<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
@@ -4014,7 +4556,35 @@ fn replay_cost_estimate_from_admitted<D: DatasetView>(
     driving_rows: u64,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<(u64, u64), EvalError> {
-    let base = cardinality_base(compiled, dataset, scope, workspace)?;
+    replay_cost_estimate_captured(
+        compiled,
+        dataset,
+        scope,
+        order,
+        (initial, driving_rows),
+        None,
+        workspace,
+    )
+}
+
+fn replay_cost_estimate_captured<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    order: &[usize],
+    (initial, driving_rows): (&[bool], u64),
+    inputs: Option<&forecast::PhysicalInputs<D::Id>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(u64, u64), EvalError> {
+    let base = match inputs {
+        None => cardinality_base(compiled, dataset, scope, workspace)?,
+        Some(inputs) => AdmittedVec::from_iter_admitted(
+            compiled.iter().enumerate().map(|(index, pattern)| {
+                base_cardinality_captured(dataset, pattern, scope, Some(&inputs[index])) as f64
+            }),
+            workspace,
+        )?,
+    };
     let known = pattern_domains(compiled, dataset, scope, base.iter().copied(), workspace)?;
     let t = dataset.term_count().max(1) as f64;
     let columns = cost_columns(compiled, workspace)?;
@@ -5019,13 +5589,19 @@ mod tests {
     /// Caller-provided statistics in this fixture's comparable work unit. They
     /// describe a resident hot access path and a cold rare access path; no
     /// library conversion from pages or residency participates in the ranking.
-    struct HostCost<'a> {
+    struct HostCost<'a, E = std::convert::Infallible> {
         inner: &'a RdfDataset,
         predicates: [TermId; 3],
         measured: Option<[purrdf_core::AccessCost; 3]>,
         cardinalities: Option<[u64; 3]>,
         supplied_statistics: bool,
         statistics_accuracy: purrdf_core::StatisticsAccuracy,
+        cacheable_statistics: bool,
+        statistics_owner: Option<purrdf_core::StatisticsOwnerToken>,
+        statistics_reads: std::sync::atomic::AtomicUsize,
+        failure: Option<E>,
+        failed: std::sync::atomic::AtomicBool,
+        fail_statistics: bool,
         first_probe: std::sync::Mutex<Option<TermId>>,
     }
 
@@ -5043,7 +5619,31 @@ mod tests {
                 cardinalities: None,
                 supplied_statistics: false,
                 statistics_accuracy: purrdf_core::StatisticsAccuracy::Exact,
+                cacheable_statistics: false,
+                statistics_owner: purrdf_core::StatisticsOwnerToken::try_new(),
+                statistics_reads: std::sync::atomic::AtomicUsize::new(0),
+                failure: None,
+                failed: std::sync::atomic::AtomicBool::new(false),
+                fail_statistics: false,
                 first_probe: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn with_failure<E>(self, error: E, fail_statistics: bool) -> HostCost<'a, E> {
+            HostCost {
+                inner: self.inner,
+                predicates: self.predicates,
+                measured: self.measured,
+                cardinalities: self.cardinalities,
+                supplied_statistics: self.supplied_statistics,
+                statistics_accuracy: self.statistics_accuracy,
+                cacheable_statistics: self.cacheable_statistics,
+                statistics_owner: self.statistics_owner,
+                statistics_reads: self.statistics_reads,
+                first_probe: self.first_probe,
+                failure: Some(error),
+                failed: self.failed,
+                fail_statistics,
             }
         }
 
@@ -5055,14 +5655,21 @@ mod tests {
         }
     }
 
-    impl DatasetView for HostCost<'_> {
+    impl<E: std::error::Error + Clone + Send + Sync + 'static> DatasetView for HostCost<'_, E> {
         type Id = TermId;
-        type ReadError = std::convert::Infallible;
+        type ReadError = E;
         type TermGuard<'a>
             = TermRef<'a, Self::Id>
         where
             Self: 'a;
         type ProbePlan = purrdf_core::QuadProbePlan;
+
+        fn read_error(&self) -> Option<E> {
+            self.failed
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .then(|| self.failure.clone())
+                .flatten()
+        }
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
             self.inner.quads()
@@ -5107,6 +5714,10 @@ mod tests {
             o: Option<TermId>,
             g: GraphMatch,
         ) -> u64 {
+            if self.failure.is_some() && !self.fail_statistics {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             if let Some(cardinalities) = self.cardinalities
                 && let Some(index) = self.predicates.iter().position(|id| Some(*id) == p)
             {
@@ -5148,7 +5759,9 @@ mod tests {
         }
     }
 
-    impl purrdf_core::SnapshotStatistics<TermId> for HostCost<'_> {
+    impl<E: std::error::Error + Clone + Send + Sync + 'static>
+        purrdf_core::SnapshotStatistics<TermId> for HostCost<'_, E>
+    {
         fn source(&self) -> &'static str {
             "fixture-exact"
         }
@@ -5158,6 +5771,12 @@ mod tests {
                 self.inner.stats_fingerprint(),
                 self.statistics_accuracy,
             ))
+        }
+
+        fn cache_identity(&self) -> Option<purrdf_core::StatisticsOwnerToken> {
+            self.cacheable_statistics
+                .then_some(self.statistics_owner)
+                .flatten()
         }
 
         fn predicate(
@@ -5203,7 +5822,7 @@ mod tests {
         }
     }
 
-    impl HostCost<'_> {
+    impl<E> HostCost<'_, E> {
         fn predicate_object_count(
             &self,
             predicate: TermId,
@@ -5211,6 +5830,12 @@ mod tests {
             graph: GraphMatch,
             stream: purrdf_core::StatisticsStream,
         ) -> purrdf_core::StatisticCount {
+            if self.failure.is_some() && self.fail_statistics {
+                self.failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.statistics_reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             // This original fixture has only asserted rows. Count the native
             // exact p/o prefix; no replacement triple store or wrapper is built.
             let value = match stream {
@@ -5227,6 +5852,141 @@ mod tests {
                 accuracy: self.statistics_accuracy,
             }
         }
+    }
+
+    /// Warm positive UNION forecasts reuse provider reads, while changing the
+    /// provider revision or physical model requires a fresh forecast.
+    #[test]
+    fn numeric_forecast_reuses_statistics_and_rechecks_source_and_access_inputs() {
+        use std::sync::atomic::Ordering;
+        let graph = skewed_graph(false);
+        let mut view = HostCost::over(&graph, false);
+        view.supplied_statistics = true;
+        view.cacheable_statistics = true;
+        let engine = crate::NativeSparqlEngine::new();
+        let query = engine.prepare_query(
+            "SELECT ?s WHERE { { ?s <http://ex/hot> ?a } UNION { ?s <http://ex/mid> ?a } ?s <http://ex/rare> ?b }", None,
+        ).unwrap();
+        let execute = |view: &HostCost<'_>| {
+            let result = engine
+                .query_prepared_view(view, &query, &[], &crate::QueryOptions::EMPTY)
+                .unwrap();
+            let purrdf_core::SparqlResult::Solutions {
+                variables, rows, ..
+            } = result
+            else {
+                panic!("solutions")
+            };
+            assert_eq!(variables, ["s"]);
+            assert_eq!(rows, vec![vec![Some(TermValue::iri("http://ex/hub"))]; 25]);
+            view.statistics_reads.load(Ordering::Relaxed)
+        };
+        let first = execute(&view);
+        assert!(first > 0);
+        assert_eq!(
+            execute(&view),
+            first,
+            "warm UNION planning must not rescan provider statistics"
+        );
+        let mut other_owner = HostCost::over(&graph, false);
+        other_owner.supplied_statistics = true;
+        other_owner.cacheable_statistics = true;
+        let other_first = execute(&other_owner);
+        assert!(
+            other_first > 0,
+            "equal statistics from another owner must not reuse retained forecasts"
+        );
+        assert_eq!(execute(&other_owner), other_first);
+        view.measured = HostCost::over(&graph, true).measured;
+        let changed_work = execute(&view);
+        assert!(
+            changed_work > first,
+            "new physical costs must invalidate numeric forecasts"
+        );
+        assert_eq!(execute(&view), changed_work);
+        view.cardinalities = Some([1000; 3]);
+        let changed_cardinality = execute(&view);
+        assert!(changed_cardinality > changed_work);
+        view.statistics_accuracy = purrdf_core::StatisticsAccuracy::UpperBound;
+        view.statistics_owner = purrdf_core::StatisticsOwnerToken::try_new();
+        let changed_source = execute(&view);
+        assert!(
+            changed_source > changed_cardinality,
+            "provider exactness is part of its identity"
+        );
+        assert_eq!(execute(&view), changed_source);
+        view.cacheable_statistics = false;
+        let uncached = execute(&view);
+        assert!(
+            execute(&view) > uncached,
+            "unknown identities keep the existing planning law"
+        );
+    }
+
+    /// A latched physical or provider failure must not publish numeric forecasts.
+    #[test]
+    fn numeric_forecast_does_not_retain_failed_source_observations() {
+        let graph = skewed_graph(false);
+        let patterns = host_cost_patterns(&graph);
+        let cache = crate::plan_cache::BoundedOrderCache::default();
+        for fail_statistics in [false, true] {
+            let mut view = HostCost::over(&graph, false);
+            view.supplied_statistics = true;
+            view.cacheable_statistics = true;
+            let original = "metadata refusal".parse::<u8>().unwrap_err();
+            let view = view.with_failure(original.clone(), fail_statistics);
+            let account = crate::workspace::QueryWorkspace::resident()
+                .capture_direct_errors()
+                .unwrap();
+            let result = forecast_bgp(
+                &view,
+                &ActiveDataset::store_default(),
+                GraphMatch::Default,
+                &patterns,
+                &SeedEstimate::default(),
+                Some(crate::plan_cache::OrderCacheRef::Bounded(&cache)),
+                &account,
+            );
+            assert!(matches!(result, Err(EvalError::WorkspaceStopped)));
+            assert_eq!(
+                account.take_failure(),
+                Some(original),
+                "original typed source cause"
+            );
+            assert_eq!(
+                cache.lock().unwrap().stats().entries,
+                0,
+                "failed metadata cannot become a future cache hit"
+            );
+        }
+        let mut ready = HostCost::over(&graph, false);
+        ready.supplied_statistics = true;
+        ready.cacheable_statistics = true;
+        let (_, expected, _) = forecast_bgp(
+            &ready,
+            &ActiveDataset::store_default(),
+            GraphMatch::Default,
+            &patterns,
+            &SeedEstimate::default(),
+            None,
+            &crate::workspace::QueryWorkspace::resident(),
+        )
+        .unwrap();
+        let (_, estimate, _) = forecast_bgp(
+            &ready,
+            &ActiveDataset::store_default(),
+            GraphMatch::Default,
+            &patterns,
+            &SeedEstimate::default(),
+            Some(crate::plan_cache::OrderCacheRef::Bounded(&cache)),
+            &crate::workspace::QueryWorkspace::resident(),
+        )
+        .unwrap();
+        assert_eq!(
+            estimate, expected,
+            "the neighboring ready source retains the uncached forecast"
+        );
+        assert_eq!(cache.lock().unwrap().stats().entries, 1);
     }
 
     #[test]

@@ -98,25 +98,27 @@ pub(crate) fn eval_ebv<D: DatasetView + Sync>(
 }
 
 /// The existing lexical owner and numeric meter admit the same transient work.
-pub(crate) struct AnnotationRangeMemory<'a, 'd, D: DatasetView + Sync> {
+pub(crate) struct AnnotationRangeMemory<A: AnnotationRangeAdmission> {
     frame: std::sync::Mutex<crate::workspace::LexicalFrame>,
-    context: &'a EvalCtx<'d, D>,
+    admission: A,
     stopped: std::sync::atomic::AtomicBool,
 }
-impl<D: DatasetView + Sync> std::fmt::Debug for AnnotationRangeMemory<'_, '_, D> {
+impl<A: AnnotationRangeAdmission> std::fmt::Debug for AnnotationRangeMemory<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnnotationRangeMemory")
             .finish_non_exhaustive()
     }
 }
-impl<'a, 'd, D: DatasetView + Sync> AnnotationRangeMemory<'a, 'd, D> {
+impl<'a, 'd, D: DatasetView + Sync> AnnotationRangeMemory<&'a EvalCtx<'d, D>> {
     pub(crate) fn new(context: &'a EvalCtx<'d, D>) -> Self {
         Self {
             frame: std::sync::Mutex::new(crate::workspace::LexicalFrame::new(&context.growth)),
-            context,
+            admission: context,
             stopped: std::sync::atomic::AtomicBool::new(false),
         }
     }
+}
+impl<A: AnnotationRangeAdmission> AnnotationRangeMemory<A> {
     pub(crate) fn take_failure(&self) -> Option<EvalError> {
         self.frame
             .lock()
@@ -124,8 +126,8 @@ impl<'a, 'd, D: DatasetView + Sync> AnnotationRangeMemory<'a, 'd, D> {
             .take_failure()
     }
 }
-impl<D: DatasetView + Sync> purrdf_core::AnnotationRangeWorkspace
-    for AnnotationRangeMemory<'_, '_, D>
+impl<A: AnnotationRangeAdmission> purrdf_core::AnnotationRangeWorkspace
+    for AnnotationRangeMemory<A>
 {
     fn resize(&self, bytes: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
         self.frame
@@ -139,13 +141,10 @@ impl<D: DatasetView + Sync> purrdf_core::AnnotationRangeWorkspace
             return false;
         }
         let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
-        match self
-            .context
-            .charge_exact_numeric(purrdf_xsd::exact::Cost::new(0, bytes))
-        {
+        match self.admission.admit(bytes) {
             Ok(()) => true,
             Err(tripped) => {
-                self.context.record_barrier(tripped);
+                self.admission.record_barrier(tripped);
                 self.stopped
                     .store(true, std::sync::atomic::Ordering::Relaxed);
                 false
@@ -165,6 +164,133 @@ impl<D: DatasetView + Sync> purrdf_core::AnnotationRangeWorkspace
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let error = frame.storage_error(error, "annotation range scratch");
         frame.latch_failure(error);
+    }
+}
+
+pub(crate) trait AnnotationRangeAdmission: Sync {
+    fn admit(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor>;
+    fn record_barrier(&self, tripped: purrdf_core::TrippedGovernor);
+}
+
+impl<D: DatasetView + Sync> AnnotationRangeAdmission for &EvalCtx<'_, D> {
+    fn admit(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        self.charge_exact_numeric(purrdf_xsd::exact::Cost::new(0, bytes))
+    }
+
+    fn record_barrier(&self, tripped: purrdf_core::TrippedGovernor) {
+        EvalCtx::record_barrier(self, tripped);
+    }
+}
+
+/// A scan reads only while its context is exclusively suspended. The checkpoint
+/// is refreshed before that read and reconciled before evaluation can mint again.
+struct RangeScratchCheckpoint {
+    computed: usize,
+    growth: u64,
+    claimed: std::sync::atomic::AtomicBool,
+}
+
+impl RangeScratchCheckpoint {
+    fn new(scratch: &crate::ScratchInterner) -> Self {
+        Self {
+            computed: scratch.computed_count(),
+            growth: scratch.uncharged_growth(),
+            claimed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl crate::eval::NumericScratchCheckpoint for RangeScratchCheckpoint {
+    fn computed_count(&self) -> usize {
+        self.computed
+    }
+
+    fn claim_growth(&self) -> u64 {
+        if self
+            .claimed
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            0
+        } else {
+            self.growth
+        }
+    }
+}
+
+pub(crate) struct RetainedRangeAdmission {
+    governors: Option<crate::workspace::SharedWorkspace<crate::governor::GovernorState>>,
+    deferral: Option<crate::row_checkpoint::WorkerDeferral>,
+    barrier: crate::governor::lift::ExpressionBarrier,
+    scratch: std::sync::Mutex<RangeScratchCheckpoint>,
+}
+
+impl AnnotationRangeAdmission for RetainedRangeAdmission {
+    fn admit(&self, bytes: u64) -> Result<(), purrdf_core::TrippedGovernor> {
+        let scratch = self
+            .scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::eval::admit_numeric_scratch(
+            self.governors.as_deref(),
+            self.deferral.as_ref(),
+            &*scratch,
+            bytes,
+        )
+    }
+
+    fn record_barrier(&self, tripped: purrdf_core::TrippedGovernor) {
+        if self.deferral.is_none() {
+            self.barrier.record(tripped);
+        }
+    }
+}
+
+impl AnnotationRangeMemory<RetainedRangeAdmission> {
+    pub(crate) fn retained<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> Self {
+        Self {
+            frame: std::sync::Mutex::new(crate::workspace::LexicalFrame::new(&ctx.growth)),
+            admission: RetainedRangeAdmission {
+                governors: ctx.governors.clone(),
+                deferral: ctx.exact_deferral.clone(),
+                barrier: ctx.expression_barrier.clone(),
+                scratch: std::sync::Mutex::new(RangeScratchCheckpoint::new(&ctx.scratch)),
+            },
+            stopped: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn begin_read<'a, 'd, D: DatasetView + Sync>(
+        &'a self,
+        ctx: &'a mut EvalCtx<'d, D>,
+    ) -> AnnotationRangeRead<'a, 'd, D> {
+        *self
+            .admission
+            .scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            RangeScratchCheckpoint::new(&ctx.scratch);
+        AnnotationRangeRead { memory: self, ctx }
+    }
+}
+
+/// Reconcile even when the source unwinds: a claimed arena watermark cannot be
+/// charged a second time after the context resumes or is reused.
+pub(crate) struct AnnotationRangeRead<'a, 'd, D: DatasetView + Sync> {
+    memory: &'a AnnotationRangeMemory<RetainedRangeAdmission>,
+    ctx: &'a mut EvalCtx<'d, D>,
+}
+
+impl<D: DatasetView + Sync> Drop for AnnotationRangeRead<'_, '_, D> {
+    fn drop(&mut self) {
+        let scratch = self
+            .memory
+            .admission
+            .scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if scratch.claimed.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = self.ctx.scratch.claim_uncharged_growth();
+        }
     }
 }
 
@@ -216,6 +342,87 @@ impl AnnotationRangeConstraint {
 
 pub(crate) type AnnotationRanges =
     crate::workspace::NativeSharedWorkspace<crate::AdmittedVec<AnnotationRangeConstraint>>;
+
+#[derive(Debug)]
+struct RetainedAnnotationRangeState {
+    constraints: AnnotationRanges,
+    selected: usize,
+    now: crate::parsed_value::ParsedValue,
+    memory: AnnotationRangeMemory<RetainedRangeAdmission>,
+}
+
+/// An iterator-owned interval retains the exact parsed query endpoints and NOW
+/// value, with the original lexical admission and numeric execution receipt.
+#[derive(Debug, Clone)]
+pub(crate) struct RetainedAnnotationRange(
+    crate::workspace::NativeSharedWorkspace<RetainedAnnotationRangeState>,
+);
+
+impl RetainedAnnotationRange {
+    pub(crate) fn restart_driver(&mut self) -> Result<(), EvalError> {
+        let state = self.0.get_mut().ok_or_else(|| {
+            EvalError::internal("annotation source remained live across driving expansions")
+        })?;
+        if let Some(error) = state.memory.take_failure() {
+            return Err(error);
+        }
+        state
+            .memory
+            .stopped
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(crate) fn new<D: DatasetView + Sync>(
+        constraints: &AnnotationRanges,
+        selected: usize,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        if constraints.get(selected).is_none() {
+            return Err(EvalError::internal(
+                "retained annotation interval is absent",
+            ));
+        }
+        let bytes = ctx
+            .now
+            .owned_heap_bytes()
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let allocation = (bytes != 0)
+            .then(|| {
+                ctx.growth
+                    .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
+            })
+            .transpose()?;
+        let now =
+            crate::parsed_value::ParsedValue::from_admitted(ctx.now.clone(), allocation, bytes)?;
+        Ok(Self(crate::workspace::NativeSharedWorkspace::new_admitted(
+            RetainedAnnotationRangeState {
+                constraints: constraints.clone(),
+                selected,
+                now,
+                memory: AnnotationRangeMemory::retained(ctx),
+            },
+            &ctx.growth,
+        )?))
+    }
+
+    pub(crate) fn begin_read<'a, 'd, D: DatasetView + Sync>(
+        &'a self,
+        ctx: &'a mut EvalCtx<'d, D>,
+    ) -> AnnotationRangeRead<'a, 'd, D> {
+        self.0.memory.begin_read(ctx)
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<EvalError> {
+        self.0.memory.take_failure()
+    }
+}
+
+impl purrdf_core::AnnotationRangeSource for RetainedAnnotationRange {
+    fn value_range(&self) -> purrdf_core::AnnotationValueRange<'_> {
+        self.0.constraints[self.0.selected].range(&self.0.now, &self.0.memory)
+    }
+}
 
 pub(crate) fn annotation_range_constraint(
     expression: &Expression,
@@ -3424,6 +3631,7 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
         ctx.active_graph,
         normalized,
         &seed,
+        ctx.bgp_order_cache,
         &ctx.workspace,
     )?
     else {
@@ -8327,6 +8535,63 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder};
     use purrdf_sparql_algebra::{Chain, Child, NonEmpty};
     use purrdf_sparql_algebra::{Literal, NamedNode};
+
+    #[test]
+    fn retained_annotation_scratch_charges_at_pruning_and_reconciles_before_resume() {
+        use purrdf_core::AnnotationRangeWorkspace;
+
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty source");
+        for ceiling in [u64::MAX, 127] {
+            let options = crate::QueryGovernors::METERED.with_max_scratch_bytes(ceiling);
+            let direct_state = Arc::new(crate::governor::GovernorState::new(&options));
+            let retained_state = Arc::new(crate::governor::GovernorState::new(&options));
+            let mut direct = EvalCtx::new(dataset.as_ref()).with_governors(direct_state.clone());
+            let mut retained =
+                EvalCtx::new(dataset.as_ref()).with_governors(retained_state.clone());
+            let memory = AnnotationRangeMemory::retained(&retained);
+            for text in [
+                "first computed lexical value",
+                "second computed lexical value",
+            ] {
+                let value = TermValue::simple_literal(text);
+                direct.scratch.intern(dataset.as_ref(), value.clone());
+                retained.scratch.intern(dataset.as_ref(), value);
+                let growth = retained.scratch.uncharged_growth();
+                {
+                    let _read = memory.begin_read(&mut retained);
+                    // A source read without numeric pruning has no compute charge.
+                }
+                assert_eq!(retained.scratch.uncharged_growth(), growth);
+                assert_eq!(retained_state.evidence(), direct_state.evidence());
+                let expected = direct.charge_exact_numeric(purrdf_xsd::exact::Cost::new(0, 128));
+                let actual = {
+                    let _read = memory.begin_read(&mut retained);
+                    memory.admit_transient(128)
+                };
+                assert_eq!(actual, expected.is_ok());
+                assert_eq!(retained_state.evidence(), direct_state.evidence());
+                assert_eq!(
+                    retained.scratch.uncharged_growth(),
+                    direct.scratch.uncharged_growth()
+                );
+                if !actual {
+                    assert!(memory.take_failure().is_none());
+                    assert_eq!(retained.expression_barrier.observed(), expected.err());
+                    break;
+                }
+                {
+                    let _read = memory.begin_read(&mut retained);
+                    assert!(memory.admit_transient(128));
+                }
+                assert!(
+                    direct
+                        .charge_exact_numeric(purrdf_xsd::exact::Cost::new(0, 128))
+                        .is_ok()
+                );
+                assert_eq!(retained_state.evidence(), direct_state.evidence());
+            }
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct BlockFault;
@@ -15502,11 +15767,18 @@ fn join_selected_values(
     )
 }
 
+/// An immutable query and the original native grants that admitted its tree.
+/// Runtime prebindings and function invocations share this ownership boundary.
+pub(crate) struct AdmittedQuery {
+    pub(crate) query: purrdf_sparql_algebra::Query,
+    pub(crate) _frame: crate::workspace::LexicalFrame,
+}
+
 /// An immutable copied pattern, or the pattern of an admitted function query.
 #[derive(Clone)]
 pub(crate) enum PreparedPattern {
     Pattern(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>),
-    Query(crate::workspace::NativeSharedWorkspace<crate::user_fn::InvocationQuery>),
+    Query(crate::workspace::NativeSharedWorkspace<AdmittedQuery>),
 }
 impl std::ops::Deref for PreparedPattern {
     type Target = GraphPattern;
@@ -15546,7 +15818,7 @@ impl PreparedPattern {
 #[derive(Clone)]
 pub(crate) enum PreparedPatternCursor {
     Pattern(crate::workspace::ProjectedNative<CorrelatedPattern, GraphPattern>),
-    Query(crate::workspace::ProjectedNative<crate::user_fn::InvocationQuery, GraphPattern>),
+    Query(crate::workspace::ProjectedNative<AdmittedQuery, GraphPattern>),
 }
 
 pub(crate) fn immediate_pattern_child<'p>(
