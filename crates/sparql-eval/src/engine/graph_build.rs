@@ -417,6 +417,7 @@ impl NativeSparqlEngine {
             prepared,
             crate::substitute::Prebindings::Owned(substitutions),
             &options,
+            super::coordinates::Consumer::Retained,
         )
         .map_err(GraphBuildError::Evaluation)?;
         let evaluated = (|| {
