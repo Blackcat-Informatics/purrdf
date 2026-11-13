@@ -1498,11 +1498,13 @@ fn xsd_of_term<D: DatasetView + Sync>(
             Ok(parsed)
         }
         SolutionTerm::Computed(sid) => {
-            // A boolean the comparison operators yield is a constant of the query too,
-            // but it joins the memo only once the memo exists, so a query that parses
-            // nothing else does not allocate the table for it.
+            // A boolean the comparison operators yield is a constant of the query too.
+            // It joins the memo only on an unbounded evaluation, so a bounded one is
+            // charged as it always was, and only once a constant is registered, which
+            // only a second use does, so a one-row query allocates nothing for it.
             let constant = ctx.constant_parses.contains(sid)
-                || (ctx.xsd_parse_cache.is_allocated()
+                || (!ctx.growth.is_bounded()
+                    && ctx.constant_parses.any()
                     && ctx.cached_bool_terms.contains(&Some(term)));
             if constant && let Some(cached) = ctx.xsd_parse_cache.get(ParseKey::Constant(sid)) {
                 return Ok(cached.into_value());

@@ -188,12 +188,6 @@ impl<K: Copy + Eq + Hash> ParsedCache<K> {
         })
     }
 
-    /// Whether the table already owns storage, so a further entry shares it instead of
-    /// being the allocation that creates it.
-    pub(crate) fn is_allocated(&self) -> bool {
-        self.entries.capacity() > 0
-    }
-
     pub(crate) fn insert_admitted(
         &mut self,
         key: K,
@@ -229,7 +223,7 @@ pub(crate) enum ParseKey<I> {
 /// This is a few inline ids and nothing else, because it lives in the evaluation
 /// context and that context sits in every nested level's stack frame: a larger one
 /// makes a nested `EXISTS` refuse on a small stack. A program registers its
-/// constants from its second row on, so a query that evaluates one row allocates
+/// constants on their second use, so a query that evaluates one row allocates
 /// nothing for the memo.
 ///
 /// A bounded evaluation registers nothing: its parse is admitted and released on
@@ -239,9 +233,11 @@ pub(crate) struct ConstantParses {
     ids: [u32; CONSTANT_PARSE_SLOTS],
 }
 
-/// Constants one query keeps a parse for: the expression constants of its filters (the
-/// two boolean terms a comparison yields are recognised without a slot). A constant past the last is
-/// parsed per use, as it always was.
+/// Constants one query keeps a parse for.
+///
+/// These are the constants of its filters. The two booleans a comparison yields
+/// need no slot. A constant past the last is parsed on every use. A bounded
+/// evaluation never fills a slot.
 const CONSTANT_PARSE_SLOTS: usize = 2;
 
 impl Default for ConstantParses {
@@ -270,6 +266,11 @@ impl ConstantParses {
         if let Some(slot) = self.ids.iter_mut().find(|slot| **slot == u32::MAX) {
             *slot = raw;
         }
+    }
+
+    /// Whether any constant is registered, which only a second use does.
+    pub(crate) fn any(&self) -> bool {
+        self.ids.iter().any(|slot| *slot != u32::MAX)
     }
 
     /// Whether `id` is a registered constant.

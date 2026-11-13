@@ -72,9 +72,9 @@ fn constant_operand_is_parsed_once_per_query() {
         "the constant must not be parsed again for each of the extra rows"
     );
     assert_eq!(
-        many, 4,
-        "the dataset value and the boolean the comparison yields once each, and the \
-         constant twice: on the first row and on the second, which stores it"
+        many, 5,
+        "the dataset value once, and the constant and the boolean the comparison \
+         yields twice each: on the first row and on the second, which stores them"
     );
 }
 
@@ -84,7 +84,7 @@ fn constant_operand_is_parsed_once_per_query() {
 fn constant_operand_memo_keeps_the_answer() {
     let (kept, parses) = parses_of(400, "?v > 8.5e0");
     assert_eq!(kept, 0);
-    assert_eq!(parses, 4);
+    assert_eq!(parses, 5);
 }
 
 /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a
@@ -147,19 +147,74 @@ fn the_parse_memo_does_not_enlarge_the_evaluation_frame() {
             size_of::<crate::eval::EvalCtx<'static, RdfDataset>>() <= 2448,
             "the evaluation context grew: nested EXISTS would refuse on small stacks"
         );
+        assert!(
+            size_of::<crate::vm::Linked<'static, purrdf_core::TermId>>() <= 344,
+            "the linked expression grew: it sits in the frame of the operator it serves"
+        );
     }
 }
 
 /// **Two computed constants with one lexical form and different datatypes do not share
-/// a parse.** Neither `9` literal is in the dataset, so both are scratch constants.
+/// a parse.** `1.5` is a decimal and an ill-typed integer, so a parse borrowed across
+/// the two would turn the integer's error into an answer.
 #[test]
 fn same_lexical_form_with_different_datatypes_keeps_each_parse() {
     let decimal = "http://www.w3.org/2001/XMLSchema#decimal";
-    let filter = format!(
-        "?v < \"9\"^^<{XSD_INTEGER}> && ?v < \"9\"^^<{decimal}> && \"9.5\"^^<{decimal}> > \"9\"^^<{XSD_INTEGER}>"
+    let good = format!("\"1.5\"^^<{decimal}> < 2");
+    assert_eq!(parses_of(40, &good).0, 40);
+    let ill = format!("\"1.5\"^^<{decimal}> < 2 && \"1.5\"^^<{XSD_INTEGER}> < 2");
+    assert_eq!(parses_of(40, &ill).0, 0, "an ill-typed integer is an error");
+}
+
+/// The smallest limit, in steps of eight bytes, under which `filter` over `values`
+/// completes under a bounded account.
+fn smallest_completing_limit(values: &[&str], filter: &str) -> u64 {
+    use crate::eval::{EvalCtx, evaluate_query_evaluated};
+    use crate::workspace::owned_row_regressions::{Refusal, account};
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri(&format!("{EX}v")).expect("fixture capacity");
+    for (i, v) in values.iter().enumerate() {
+        let s = b
+            .intern_iri(&format!("{EX}s{i}"))
+            .expect("fixture capacity");
+        let o = b
+            .intern_literal(RdfLiteral::typed(*v, XSD_INTEGER.to_owned()))
+            .expect("fixture capacity");
+        b.push_quad(s, p, o, None).expect("fixture capacity");
+    }
+    let dataset = b.freeze().expect("freeze");
+    let query = purrdf_sparql_algebra::SparqlParser::new()
+        .parse_query(&format!(
+            "SELECT ?s WHERE {{ ?s <{EX}v> ?v FILTER({filter}) }}"
+        ))
+        .expect("parse");
+    let base = crate::workspace::QueryWorkspace::<Refusal>::control_bytes().expect("control");
+    let completes = |limit: u64| {
+        let (workspace, _ledger, _) = account(limit);
+        let mut ctx = EvalCtx::new(dataset.as_ref());
+        ctx.growth = workspace.capability();
+        evaluate_query_evaluated(&query, &mut ctx).is_ok()
+    };
+    let found = (base..base + 262_144)
+        .step_by(8)
+        .find(|limit| completes(*limit))
+        .expect("some limit completes");
+    assert!(!completes(found - 8), "the limit below must refuse");
+    found
+}
+
+/// **A bounded evaluation is charged exactly as before the parse memo.** The memo
+/// registers nothing under a bounded account, so the smallest limit that completes
+/// is the one recorded before the memo existed, for a one-value and a three-value
+/// dataset alike; the limit one step below refuses.
+#[test]
+fn a_bounded_evaluation_is_charged_as_before_the_memo() {
+    assert_eq!(
+        smallest_completing_limit(&["7", "7", "7"], "?v > 5.5e0"),
+        8520
     );
-    assert_eq!(parses_of(40, &filter).0, 40);
-    let wrong =
-        format!("?v < \"9\"^^<{XSD_INTEGER}> && \"9.5\"^^<{decimal}> < \"9\"^^<{XSD_INTEGER}>");
-    assert_eq!(parses_of(40, &wrong).0, 0);
+    assert_eq!(
+        smallest_completing_limit(&["3", "7", "9", "3", "7", "9"], "?v > 5.5e0"),
+        10008
+    );
 }
