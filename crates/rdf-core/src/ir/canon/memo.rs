@@ -3,37 +3,46 @@
 
 //! Issuance-local, source-admitted exact subsearch reuse.
 
-use std::alloc::Layout;
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
 
 use super::{CanonError, CanonState, Component, HashHex, IdIssuer};
 use crate::{DatasetView, ViewTermId};
 
-struct Footprint<Id> {
-    component: Component<Id>,
-    blanks: Vec<Id>,
-}
-
-/// Complete blank sets obtained by the existing component walk, not a second
-/// source traversal. The catalog never shrinks after allocation.
+/// The one component table of a search, and the blank sets the existing
+/// component walk obtained for it (not a second source traversal).
+///
+/// Each component that mentions a blank node is stored once. Three flat arrays
+/// hold it: `components`, the end offset of each component's blank set in
+/// `pool`, and `pool` itself (the sorted, distinct blanks of every component,
+/// back to back). A blank node's incident components are a slice of `mentions`,
+/// sorted by `(blank, component index)`, so everything refers to a component by
+/// its index. The three admitted arrays never shrink after allocation;
+/// `mentions` is plain search scratch, like the incidence it replaced.
 pub(super) struct Footprints<Id> {
-    components: Vec<Footprint<Id>>,
+    components: Vec<Component<Id>>,
+    ends: Vec<usize>,
+    pool: Vec<Id>,
+    mentions: Vec<(Id, usize)>,
 }
 
 impl<Id: ViewTermId> Footprints<Id> {
     pub(super) fn new() -> Self {
         Self {
             components: Vec::new(),
+            ends: Vec::new(),
+            pool: Vec::new(),
+            mentions: Vec::new(),
         }
     }
 
+    /// Record `component` with its blank set, which the caller has sorted and
+    /// deduplicated.
     pub(super) fn push<S: Admission + ?Sized>(
         &mut self,
         component: Component<Id>,
-        blanks: BTreeSet<Id>,
+        blanks: &[Id],
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         // No incident entry can refer to a component without a blank. In
@@ -41,47 +50,78 @@ impl<Id: ViewTermId> Footprints<Id> {
         if blanks.is_empty() {
             return Ok(());
         }
-        let blanks = memory.collect(blanks)?;
-        memory.push(&mut self.components, Footprint { component, blanks })
+        let index = self.components.len();
+        memory.extend(&mut self.pool, blanks.iter().copied())?;
+        memory.push(&mut self.ends, self.pool.len())?;
+        memory.push(&mut self.components, component)?;
+        self.mentions
+            .extend(blanks.iter().map(|&blank| (blank, index)));
+        Ok(())
     }
 
     pub(super) fn finish(&mut self) {
-        self.components
-            .sort_unstable_by_key(|entry| entry.component);
+        self.mentions.sort_unstable();
     }
 
-    fn get(&self, component: Component<Id>) -> &[Id] {
-        let index = self
-            .components
-            .binary_search_by_key(&component, |entry| entry.component)
-            .expect("every incident component retained its complete successful blank walk");
-        &self.components[index].blanks
-    }
-
-    fn storage_bytes(&self) -> Result<usize, StorageError> {
-        let mut bytes = Layout::array::<Footprint<Id>>(self.components.capacity())
-            .map_err(|_| StorageError::SizeOverflow)?
-            .size();
-        for entry in &self.components {
-            bytes = bytes
-                .checked_add(
-                    Layout::array::<Id>(entry.blanks.capacity())
-                        .map_err(|_| StorageError::SizeOverflow)?
-                        .size(),
-                )
-                .ok_or(StorageError::SizeOverflow)?;
+    /// Every blank mentioned, ascending and distinct.
+    pub(super) fn blanks(&self) -> Vec<Id> {
+        let mut blanks: Vec<Id> = Vec::new();
+        for &(blank, _) in &self.mentions {
+            if blanks.last() != Some(&blank) {
+                blanks.push(blank);
+            }
         }
-        Ok(bytes)
+        blanks
+    }
+
+    /// The components mentioning `blank`, in collection order, as
+    /// `(blank, component index)` entries borrowed from the table.
+    pub(super) fn incident(&self, blank: Id) -> &[(Id, usize)] {
+        let start = self.mentions.partition_point(|&(id, _)| id < blank);
+        let len = self.mentions[start..].partition_point(|&(id, _)| id == blank);
+        &self.mentions[start..start + len]
+    }
+
+    pub(super) fn component(&self, index: usize) -> Component<Id> {
+        self.components[index]
+    }
+
+    /// The blanks component `index` mentions.
+    fn blanks_of(&self, index: usize) -> &[Id] {
+        let start = if index == 0 { 0 } else { self.ends[index - 1] };
+        &self.pool[start..self.ends[index]]
+    }
+
+    /// The memo's retention ceiling: a fixed charge per component and per blank
+    /// reference, independent of how the table is stored. A component costs one
+    /// row (the component and a blank-list header) in an array whose capacity is
+    /// the amortized growth of `components` pushes (four, then doubling), and a
+    /// blank reference costs one identifier. These are the numbers the ceiling
+    /// has always had, so a given input admits exactly the same memo entries.
+    fn storage_bytes(&self) -> Result<usize, StorageError> {
+        let align = align_of::<Component<Id>>().max(align_of::<Vec<Id>>());
+        let row = (size_of::<Component<Id>>() + size_of::<Vec<Id>>()).next_multiple_of(align);
+        let rows = match self.components.len() {
+            0 => 0,
+            count => count.next_power_of_two().max(4),
+        };
+        rows.checked_mul(row)
+            .and_then(|bytes| {
+                self.pool
+                    .len()
+                    .checked_mul(size_of::<Id>())
+                    .and_then(|refs| bytes.checked_add(refs))
+            })
+            .ok_or(StorageError::SizeOverflow)
     }
 
     pub(super) fn release<S: Admission + ?Sized>(
-        mut self,
+        self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
-        for entry in &mut self.components {
-            memory.release_vec(std::mem::take(&mut entry.blanks))?;
-        }
-        memory.release_vec(self.components)
+        memory.release_vec(self.components)?;
+        memory.release_vec(self.ends)?;
+        memory.release_vec(self.pool)
     }
 }
 
@@ -224,9 +264,9 @@ impl<Id: ViewTermId> Workspace<Id> {
             let id = self.pending[cursor];
             cursor += 1;
             state.check_stop().map_err(CanonError::with_read_error)?;
-            for &component in state.incident.get(&id).map_or_default(Vec::as_slice) {
+            for &(_, component) in footprints.incident(id) {
                 state.check_stop().map_err(CanonError::with_read_error)?;
-                for &related in footprints.get(component) {
+                for &related in footprints.blanks_of(component) {
                     state.check_stop().map_err(CanonError::with_read_error)?;
                     let ordinal = state.blank_ordinal(related);
                     if std::mem::replace(&mut self.visited[ordinal], true) {
@@ -642,5 +682,44 @@ mod tests {
             "outer terminal cleanup still refunds its owners"
         );
         assert_eq!(memory.admission().live, 0);
+    }
+
+    /// The retention ceiling equals the one the earlier two-array table had: rows
+    /// of a component and a blank-list header in an array grown four, then
+    /// doubling, plus one identifier per blank reference. Five components with
+    /// seven blank references grow the array to eight rows (4, then 8), so the
+    /// ceiling is 8 rows + 7 identifiers; four components fit the first four rows.
+    #[test]
+    fn retention_limit_is_a_fixed_charge_per_component_and_blank_reference() {
+        use crate::TermId;
+        struct EarlierRow {
+            _component: Component<TermId>,
+            _blanks: Vec<TermId>,
+        }
+        let id = |n: u32| TermId::from_index(n).expect("a small index");
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        let mut table = Footprints::new();
+        let quad = |n: u32| Component::Quad {
+            s: id(n),
+            p: id(100),
+            o: id(n + 1),
+            g: None,
+        };
+        // Blank references per component: 2, 1, 1, 2 (four components).
+        for (n, blanks) in [(1, 2), (3, 1), (5, 1), (7, 2)] {
+            let set: Vec<_> = (0..blanks).map(|k| id(n + k)).collect();
+            table.push(quad(n), &set, &mut memory).unwrap();
+        }
+        assert_eq!(
+            table.storage_bytes().unwrap(),
+            4 * size_of::<EarlierRow>() + 6 * size_of::<TermId>()
+        );
+        table.push(quad(9), &[id(9)], &mut memory).unwrap();
+        assert_eq!(
+            table.storage_bytes().unwrap(),
+            8 * size_of::<EarlierRow>() + 7 * size_of::<TermId>()
+        );
+        table.release(&mut memory).unwrap();
     }
 }
