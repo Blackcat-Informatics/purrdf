@@ -803,6 +803,11 @@ fn delete_insert(
         *request.finalize().as_bytes(),
         &cfg.options,
         receipt.external_source,
+        if capture_first {
+            crate::engine::coordinates::Consumer::Retained
+        } else {
+            crate::engine::coordinates::Consumer::Discarded
+        },
     )
     .map_err(|error| execution_abort(&error, cfg.governors))?;
     if capture_first && let Some(first) = receipt.first {
