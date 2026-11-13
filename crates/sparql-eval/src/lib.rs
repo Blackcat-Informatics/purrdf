@@ -126,6 +126,8 @@ mod nested_lateral_gate;
 mod op_count;
 pub(crate) mod parallel;
 mod parsed_value;
+#[cfg(test)]
+mod row_loop_accounting;
 mod xpath_regex;
 pub use parallel::chunk_len_for_threads;
 #[cfg(test)]
