@@ -201,3 +201,80 @@ impl<K: Copy + Eq + Hash> ParsedCache<K> {
         Ok(())
     }
 }
+
+/// The key of the per-query parse memo: a dataset term, or a scratch constant a
+/// program registered with [`ConstantParses`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ParseKey<I> {
+    Dataset(I),
+    Constant(crate::scratch::ScratchId),
+}
+
+/// Which scratch values are constant operands whose parse is worth remembering, on
+/// the unbounded evaluation path only.
+///
+/// A constant operand is interned once per program, yet every row that compares
+/// against it would parse the same lexical form again, because a computed scratch
+/// value is not a dataset term. The scratch table is append-only within a query, so
+/// a scratch id names one immutable value and its parse is a pure function of the
+/// id. Only registered ids are remembered (in the same memo as dataset terms, under
+/// [`ParseKey::Constant`]), so the memo never holds one entry per computed row value.
+///
+/// This is a few inline ids and nothing else, because it lives in the evaluation
+/// context and that context sits in every nested level's stack frame: a larger one
+/// makes a nested `EXISTS` refuse on a small stack. A program registers its
+/// constants on their second use, so a query that evaluates one row allocates
+/// nothing for the memo.
+///
+/// A bounded evaluation registers nothing: its parse is admitted and released on
+/// every use, and that accounting stays exactly as it was.
+#[derive(Debug)]
+pub(crate) struct ConstantParses {
+    ids: [u32; CONSTANT_PARSE_SLOTS],
+}
+
+/// Constants one query keeps a parse for.
+///
+/// These are the constants of its filters. The two booleans a comparison yields
+/// need no slot. A constant past the last is parsed on every use. A bounded
+/// evaluation never fills a slot.
+const CONSTANT_PARSE_SLOTS: usize = 2;
+
+impl Default for ConstantParses {
+    fn default() -> Self {
+        Self {
+            ids: [u32::MAX; CONSTANT_PARSE_SLOTS],
+        }
+    }
+}
+
+impl ConstantParses {
+    fn raw(id: crate::scratch::ScratchId) -> u32 {
+        u32::try_from(id.index()).unwrap_or(u32::MAX - 1)
+    }
+
+    /// Record `id` as a constant operand. Does nothing on a bounded path.
+    pub(crate) fn register(
+        &mut self,
+        id: crate::scratch::ScratchId,
+        workspace: &WorkspaceCapability,
+    ) {
+        let raw = Self::raw(id);
+        if workspace.is_bounded() || self.ids.contains(&raw) {
+            return;
+        }
+        if let Some(slot) = self.ids.iter_mut().find(|slot| **slot == u32::MAX) {
+            *slot = raw;
+        }
+    }
+
+    /// Whether any constant is registered, which only a second use does.
+    pub(crate) fn any(&self) -> bool {
+        self.ids.iter().any(|slot| *slot != u32::MAX)
+    }
+
+    /// Whether `id` is a registered constant.
+    pub(crate) fn contains(&self, id: crate::scratch::ScratchId) -> bool {
+        self.ids.contains(&Self::raw(id))
+    }
+}
