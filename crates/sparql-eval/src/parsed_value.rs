@@ -221,22 +221,30 @@ impl<K: Copy + Eq + Hash> ParsedCache<K> {
 /// every use, and that accounting stays exactly as it was.
 #[derive(Debug, Default)]
 pub(crate) struct ConstantParses {
-    slots: [Option<ConstantEntry>; ConstantParses::SLOTS],
+    slots: [Option<ConstantEntry>; CONSTANT_PARSE_SLOTS],
 }
 
 #[derive(Debug)]
 struct ConstantEntry {
     id: crate::scratch::ScratchId,
-    /// `None` until the first parse; then the outcome, `Some(None)` being a value that
-    /// has no XSD value.
-    parsed: Option<Option<ParsedValue>>,
+    parsed: ConstantMemo,
 }
 
-impl ConstantParses {
-    /// Constants one query keeps a parse for: the expression constants of its filters
-    /// and the two boolean terms a comparison yields.
-    const SLOTS: usize = 8;
+/// The outcome of the first parse of a registered constant.
+#[derive(Debug, Default)]
+enum ConstantMemo {
+    #[default]
+    Unparsed,
+    /// A value that has no XSD value.
+    Invalid,
+    Value(ParsedValue),
+}
 
+/// Constants one query keeps a parse for: the expression constants of its filters
+/// and the two boolean terms a comparison yields.
+const CONSTANT_PARSE_SLOTS: usize = 8;
+
+impl ConstantParses {
     fn entry(&self, id: crate::scratch::ScratchId) -> Option<&ConstantEntry> {
         self.slots.iter().flatten().find(|entry| entry.id == id)
     }
@@ -251,22 +259,28 @@ impl ConstantParses {
             return;
         }
         if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(ConstantEntry { id, parsed: None });
+            *slot = Some(ConstantEntry {
+                id,
+                parsed: ConstantMemo::Unparsed,
+            });
         }
     }
 
     /// The remembered parse of a registered constant, if one was stored.
     pub(crate) fn get(&self, id: crate::scratch::ScratchId) -> Option<ParsedCacheHit> {
-        self.entry(id)?.parsed.as_ref().map(|parsed| match parsed {
-            None => ParsedCacheHit::Invalid,
-            Some(value) => ParsedCacheHit::Value(value.clone()),
-        })
+        match &self.entry(id)?.parsed {
+            ConstantMemo::Unparsed => None,
+            ConstantMemo::Invalid => Some(ParsedCacheHit::Invalid),
+            ConstantMemo::Value(value) => Some(ParsedCacheHit::Value(value.clone())),
+        }
     }
 
     /// Remember `parsed` for `id` when `id` is a registered constant.
     pub(crate) fn remember(&mut self, id: crate::scratch::ScratchId, parsed: Option<&ParsedValue>) {
         if let Some(entry) = self.slots.iter_mut().flatten().find(|entry| entry.id == id) {
-            entry.parsed = Some(parsed.cloned());
+            entry.parsed = parsed.map_or(ConstantMemo::Invalid, |value| {
+                ConstantMemo::Value(value.clone())
+            });
         }
     }
 }
