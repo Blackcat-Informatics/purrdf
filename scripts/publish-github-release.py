@@ -333,7 +333,8 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     }
     if release is None:
         release = github.create_draft(tag, title, reviewed["body"])
-        identity(release, tag, title, notes, draft=True)
+        if not isinstance(release, dict) or type(release.get("id")) is not int:
+            raise ReleaseError("created draft record not found in the response")
     else:
         github.edit(release["id"], **reviewed, draft=True)
     rid = release["id"]

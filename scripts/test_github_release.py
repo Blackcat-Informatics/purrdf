@@ -299,8 +299,9 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(set(self.github.events), {"tag", "read"})
 
     def test_created_draft_that_still_differs_is_refused_before_upload(self):
-        create = self.github.create_draft
-        self.github.create_draft = lambda *a: {**create(*a), "prerelease": 0}
+        create = self.github.create_draft  # the stored record diverges after create
+        self.github.create_draft = lambda *a: [create(*a), self.github.record.update(
+            prerelease=0)][0]
         with self.assertRaisesRegex(publisher.ReleaseError, r"in: prerelease \(body"):
             self.publish()
         self.assertNotIn("upload", self.github.events)
@@ -752,8 +753,7 @@ class TransportTests(unittest.TestCase):
         github = publisher.GitHub("owner/repo")
         with patch.object(github, "api", return_value={"id": 7}) as api:
             self.assertEqual(github.create_draft("rust-v3.0.1", "T", "B"), {"id": 7})
-        fields = api.call_args.kwargs["body"]
-        self.assertIs(fields["draft"], True)
+        self.assertIs(api.call_args.kwargs["body"]["draft"], True)
         self.assertEqual(api.call_args.kwargs["method"], "POST")
 
     def test_workflow_uses_single_verified_publisher(self):
