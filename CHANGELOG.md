@@ -13,6 +13,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   prepares the required metadata. Publication with an explicit memory account
   retains its admitted metadata before returning the dataset.
 
+- **Planner statistics on an ordinary freeze:** Planning a multi-pattern query
+  reads the permutation run of each predicate and graph, once a query path has
+  built it, instead of the whole table for every statistic request.
+  `RdfDataset::statistics_rows_scanned` reports the rows those reads cover.
+
 - **Finite nested RDF terms:** Native storage, text ingestion, event transfer,
   GTS resolution and columnar projection preserve finite deep term graphs
   through iterative traversal. Cycles, missing operands and resource refusals

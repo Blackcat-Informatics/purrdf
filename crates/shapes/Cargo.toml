@@ -258,3 +258,10 @@ harness = false
 # Report-only; `make bench` lane only — excluded from `make check`.
 name = "rules_divergence"
 harness = false
+
+[[bench]]
+# Retired user-mode instructions per row of the same workload, one fresh
+# `perf stat` child per sample. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "frozen_eval_counts"
+harness = false

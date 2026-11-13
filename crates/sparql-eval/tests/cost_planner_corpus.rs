@@ -55,6 +55,40 @@ fn repeated_runs_are_stable_under_the_order_cache() {
     }
 }
 
+/// Planning a multi-pattern query on an ordinarily frozen dataset reads the index runs of
+/// the predicates it asks about, never a pass over the whole table per statistic request.
+#[test]
+fn planning_reads_index_runs_not_the_table_on_an_ordinarily_frozen_dataset() {
+    let mut b = RdfDatasetBuilder::new();
+    let hub = b.intern_iri("http://ex/hub").unwrap();
+    for (name, count) in [("hot", 20), ("warm", 10), ("mid", 5), ("rare", 1)] {
+        let pred = b.intern_iri(&format!("http://ex/{name}")).unwrap();
+        for i in 0..count {
+            let leaf = b.intern_iri(&format!("http://ex/{name}{i}")).unwrap();
+            b.push_quad(hub, pred, leaf, None).unwrap();
+        }
+    }
+    // Rows under a predicate the query never mentions: a table pass reads them all.
+    let noise = b.intern_iri("http://ex/noise").unwrap();
+    for i in 0..5000 {
+        let s = b.intern_iri(&format!("http://ex/n{i}")).unwrap();
+        b.push_quad(s, noise, hub, None).unwrap();
+    }
+    let ds = b.freeze().expect("freeze");
+    assert_eq!(ds.statistics_rows_scanned(), 0, "freeze scans nothing");
+    assert_eq!(
+        row_count(&query(&NativeSparqlEngine::new(), &ds, STAR_QUERY)),
+        20 * 10 * 5
+    );
+    let scanned = ds.statistics_rows_scanned();
+    assert!(scanned > 0, "planning asked for statistics");
+    assert!(
+        scanned < ds.quad_count() as u64,
+        "{scanned} statistic rows read for a {}-quad table",
+        ds.quad_count()
+    );
+}
+
 /// A six-pattern connected chain (above the trivial sizes, below the DP ceiling)
 /// evaluates correctly: `?v0 :hot ?v1 . … . ?v5 :hot ?v6` over a short hot path.
 #[test]
