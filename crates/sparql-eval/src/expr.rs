@@ -1510,8 +1510,7 @@ fn xsd_of_term<D: DatasetView + Sync>(
                 } => parse_owned_xsd(lexical_form, datatype, &ctx.growth)?,
                 _ => None,
             };
-            ctx.constant_parses
-                .remember(sid, parsed.as_ref(), &ctx.growth)?;
+            ctx.constant_parses.remember(sid, parsed.as_ref());
             Ok(parsed)
         }
     }

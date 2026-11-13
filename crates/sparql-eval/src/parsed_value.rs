@@ -213,45 +213,60 @@ impl<K: Copy + Eq + Hash> ParsedCache<K> {
 /// constants are kept, so the table holds one entry per constant and never one per
 /// computed row value.
 ///
+/// The entries live inline in a fixed number of slots: a query that evaluates a
+/// single row, as every focus node of a shape does, allocates nothing for the memo.
+/// A constant past the last slot is simply parsed per use, as it always was.
+///
 /// A bounded evaluation registers nothing: its parse is admitted and released on
 /// every use, and that accounting stays exactly as it was.
 #[derive(Debug, Default)]
 pub(crate) struct ConstantParses {
-    registered: Vec<crate::scratch::ScratchId>,
-    parsed: ParsedCache<crate::scratch::ScratchId>,
+    slots: [Option<ConstantEntry>; ConstantParses::SLOTS],
+}
+
+#[derive(Debug)]
+struct ConstantEntry {
+    id: crate::scratch::ScratchId,
+    /// `None` until the first parse; then the outcome, `Some(None)` being a value that
+    /// has no XSD value.
+    parsed: Option<Option<ParsedValue>>,
 }
 
 impl ConstantParses {
+    /// Constants one query keeps a parse for: the expression constants of its filters
+    /// and the two boolean terms a comparison yields.
+    const SLOTS: usize = 8;
+
+    fn entry(&self, id: crate::scratch::ScratchId) -> Option<&ConstantEntry> {
+        self.slots.iter().flatten().find(|entry| entry.id == id)
+    }
+
     /// Record `id` as a constant operand. Does nothing on a bounded path.
     pub(crate) fn register(
         &mut self,
         id: crate::scratch::ScratchId,
         workspace: &WorkspaceCapability,
     ) {
-        if !workspace.is_bounded() && !self.registered.contains(&id) {
-            self.registered.push(id);
+        if workspace.is_bounded() || self.entry(id).is_some() {
+            return;
+        }
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(ConstantEntry { id, parsed: None });
         }
     }
 
     /// The remembered parse of a registered constant, if one was stored.
     pub(crate) fn get(&self, id: crate::scratch::ScratchId) -> Option<ParsedCacheHit> {
-        self.parsed.get(id)
+        self.entry(id)?.parsed.as_ref().map(|parsed| match parsed {
+            None => ParsedCacheHit::Invalid,
+            Some(value) => ParsedCacheHit::Value(value.clone()),
+        })
     }
 
     /// Remember `parsed` for `id` when `id` is a registered constant.
-    ///
-    /// # Errors
-    /// Returns the admission refusal of the underlying table.
-    pub(crate) fn remember(
-        &mut self,
-        id: crate::scratch::ScratchId,
-        parsed: Option<&ParsedValue>,
-        workspace: &WorkspaceCapability,
-    ) -> Result<(), EvalError> {
-        if self.registered.contains(&id) {
-            self.parsed
-                .insert_admitted(id, parsed.cloned(), workspace)?;
+    pub(crate) fn remember(&mut self, id: crate::scratch::ScratchId, parsed: Option<&ParsedValue>) {
+        if let Some(entry) = self.slots.iter_mut().flatten().find(|entry| entry.id == id) {
+            entry.parsed = Some(parsed.cloned());
         }
-        Ok(())
     }
 }
