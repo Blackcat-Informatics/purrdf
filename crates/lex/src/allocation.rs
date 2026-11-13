@@ -452,6 +452,27 @@ pub fn growth_capacity<T>(capacity: usize, required: usize) -> Result<usize, Sto
         .ok_or(StorageError::SizeOverflow)
 }
 
+/// Amortized array capacity for vectors that grow with a whole dataset.
+/// A nonempty buffer grows by a quarter of its capacity, by the required extent
+/// when that is larger, and an empty one starts as [`growth_capacity`] does. At
+/// most a quarter of the buffer is slack, and while a replacement is copied the
+/// old and new buffers together hold at most 2.25 times the stored length,
+/// where doubling would hold up to three times. The returned concrete layout
+/// must be admitted before allocating; this function itself allocates nothing.
+///
+/// # Errors
+/// Returns capacity overflow before any destination allocation.
+pub fn bounded_growth_capacity<T>(capacity: usize, required: usize) -> Result<usize, StorageError> {
+    if required <= capacity {
+        return Ok(capacity);
+    }
+    let first = growth_capacity::<T>(0, 1)?;
+    capacity
+        .checked_add((capacity / 4).max(first))
+        .map(|grown| grown.max(required))
+        .ok_or(StorageError::SizeOverflow)
+}
+
 /// Exact replacement and previous array layouts for a native heap insertion.
 /// The existing backing array remains live while the replacement is born.
 ///

@@ -152,3 +152,34 @@ pub(crate) fn attach_evidence(
         Err(failure) => failure,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The retained original cause publishes its exact fields; a source that
+    /// changed a term's length between reads has its own code there, apart from
+    /// another refusal's.
+    #[test]
+    fn source_inconsistent_cause_publishes_its_own_code() {
+        let inconsistent = CanonicalCause::from(
+            purrdf_core::CanonError::<std::convert::Infallible>::SourceInconsistent,
+        );
+        assert!(
+            inconsistent
+                .json()
+                .ok()
+                .unwrap()
+                .contains("canonical-source-inconsistent")
+        );
+        let stopped =
+            CanonicalCause::from(purrdf_core::CanonError::<std::convert::Infallible>::Stopped);
+        assert!(
+            !stopped
+                .json()
+                .ok()
+                .unwrap()
+                .contains("canonical-source-inconsistent")
+        );
+    }
+}

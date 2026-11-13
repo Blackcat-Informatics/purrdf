@@ -351,12 +351,33 @@ Refusal surfaces as a typed value, never as a message to be parsed:
 |---|---|
 | `CanonError::ReservedVocabulary(ReservedVocabulary)` | §5 violated; carries `iri` and `position` |
 | `CanonError::BudgetExceeded(BudgetExceeded)` | §6 bound reached; carries `blank_count` |
+| `CanonError::SourceInconsistent` | the source spelled a term with a different length when it was read again while the document was built |
 
 The two are separate variants because they oblige a holder differently. A
 budget-exceeded dataset is well-formed and merely uncanonicalizable within bounds;
 a reserved-vocabulary dataset is one whose acceptance would have been an identity
 collision. A consumer auditing a rejection must be able to tell them apart without
 reading English.
+
+A source view must spell a term identically every time a run reads it. The
+document is built from each distinct term's text read more than once, and a
+read that returns a different length is refused as `SourceInconsistent` instead
+of producing bytes. A change that keeps the length cannot be detected without
+holding every text, so stability of a source within a run remains an obligation
+of the view's implementor; the bytes of such a source are undefined.
+
+The lines of the document are never held as text while it is built. Each
+distinct term's spelling is ranked once and a line is sorted as its sequence of
+ranks; the argument that this is the bytewise order of the lines is stated in
+the canonical order module (`crates/rdf-core/src/ir/canon/order.rs`). Ranking
+first sorts by a head key, the first 32 bytes of a spelling padded with zero
+bytes, and then orders each run of equal keys by the full spelling. This yields
+the full order because the key is monotone: if spelling `a` is bytewise below
+`b`, then `key(a) <= key(b)`. If `a` and `b` first differ within their first
+32 bytes, both keys hold that byte and agree before it, so `key(a) < key(b)`;
+otherwise they first differ after their first 32 bytes, or `a` is a proper
+prefix of `b`, and the keys agree on the bytes of `a` while each zero of its
+padding is at most the byte of `b` in the same place, so `key(a) <= key(b)`.
 
 `purrdf_core::check_admissible` applies the §5 predicate alone, so a store may
 screen at **admission** rather than only at the moment identity is minted.

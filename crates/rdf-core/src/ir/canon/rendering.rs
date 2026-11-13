@@ -108,23 +108,3 @@ pub(super) fn release_lines<S: Admission + ?Sized>(
     }
     memory.release_vec(lines)
 }
-
-/// Preserve the final document's bytewise set ordering without admitting a
-/// second line array. First-degree hashing does not call this deduplication.
-pub(super) fn sort_unique<S: Admission + ?Sized>(
-    lines: &mut Vec<String>,
-    memory: &mut Memory<'_, S>,
-) -> Result<(), StorageError> {
-    lines.sort_unstable();
-    let mut kept = 0;
-    for read in 0..lines.len() {
-        if kept > 0 && lines[read] == lines[kept - 1] {
-            memory.release_string(std::mem::take(&mut lines[read]))?;
-        } else {
-            lines.swap(read, kept);
-            kept += 1;
-        }
-    }
-    lines.truncate(kept);
-    Ok(())
-}

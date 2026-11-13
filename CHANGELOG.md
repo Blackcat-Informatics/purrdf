@@ -6,6 +6,14 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+- **Canonical document construction:** The canonical document is built from
+  numbered terms instead of one owned string per line plus a second copy of the
+  whole document. Bytes, digests and blank labels are unchanged for every
+  input. A source that spells a term with a different length when it is read
+  again is refused with the new `CanonError::SourceInconsistent`.
+
 ## [4.0.2] - 2026-11-10
 
 - **Native dataset freezing:** Ordinary freeze prepares query statistics and

@@ -152,6 +152,9 @@ mod terms;
 pub use terms::screen_comparison_terms_with_memory;
 mod result;
 pub use result::Canonicalized;
+mod order;
+#[cfg(test)]
+mod order_tests;
 mod rendering;
 
 use purrdf_lex::allocation::{Admission, Memory};
@@ -2616,6 +2619,11 @@ pub enum CanonError<E = Infallible> {
     CounterCapacity,
     /// The source cannot retain an owned canonical result or refusal.
     OwnedWorkspaceUnavailable,
+    /// The source spelled one term with a different length when it was read
+    /// again during the same run. A source must present the same dataset for the
+    /// whole of a run; this refusal detects only a change of length, not a
+    /// change of bytes that keeps it. No canonical result is returned.
+    SourceInconsistent,
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
@@ -2629,6 +2637,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Stopped => "canonical-stopped" {},
         CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
+        SourceInconsistent => "canonical-source-inconsistent" {},
     }
 }
 
@@ -2650,6 +2659,9 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::OwnedWorkspaceUnavailable => {
                 f.write_str("canonical payload requires source-owned workspace admission")
             }
+            Self::SourceInconsistent => f.write_str(
+                "the source spelled a term with a different length when it was read again",
+            ),
         }
     }
 }
@@ -2662,7 +2674,10 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
-            Self::Stopped | Self::CounterCapacity | Self::OwnedWorkspaceUnavailable => None,
+            Self::Stopped
+            | Self::CounterCapacity
+            | Self::OwnedWorkspaceUnavailable
+            | Self::SourceInconsistent => None,
         }
     }
 }
@@ -2688,6 +2703,7 @@ impl CanonError {
             Self::Stopped => CanonError::Stopped,
             Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
+            Self::SourceInconsistent => CanonError::SourceInconsistent,
         }
     }
 }
@@ -3005,7 +3021,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// symmetric must be refused for the reason that makes it dangerous, and it
     /// must be refused without spending the poison budget deciding so.
     fn run_fallible(self) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
-        let canonical = self.issue_labels()?;
+        let mut canonical = self.issue_labels()?;
+        canonical.drop_search_state();
         canonical.run.phase(CanonPhase::Output);
         let mut result = result::ResultBuilder::new(canonical.ds, canonical.presentation)?;
         let reservation = canonical
@@ -3013,32 +3030,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             .reserve_workspace(0)
             .map_err(CanonError::Read)?;
         rendering::ScratchGrant::new(reservation).run(|memory| {
-            let mut lines = canonical.canonical_lines(memory)?;
-            let bytes = lines
-                .iter()
-                .try_fold(0usize, |bytes, line| bytes.checked_add(line.len()))
-                .ok_or(CanonError::Storage(
-                    purrdf_lex::allocation::StorageError::SizeOverflow,
-                ))?;
-            canonical
-                .check_stop()
-                .map_err(CanonError::with_read_error)?;
-            result.reserve_text(bytes)?;
-            for line in &mut lines {
-                canonical
-                    .check_stop()
-                    .map_err(CanonError::with_read_error)?;
-                result.append(line)?;
-                memory.release_string(std::mem::take(line))?;
-            }
-            memory.release_vec(lines)?;
+            canonical.emit_canonical_lines(memory, &mut result)?;
             result.reserve_labels(canonical.canonical.issued.len())?;
             for (id, label) in canonical.canonical.issued {
                 canonical
                     .run
                     .check_stop()
                     .map_err(|_| CanonError::Stopped)?;
-                result.label(id, &label)?;
+                result.label(id, label)?;
             }
             canonical
                 .run
@@ -3689,30 +3688,329 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    /// §4.4 step 7: serialize every component with canonical labels, sorted + deduped.
-    fn canonical_lines<S: Admission + ?Sized>(
+    /// §4.4 step 7: serialize every component with canonical labels, sorted and
+    /// deduplicated, into `sink`.
+    ///
+    /// A line is never held as text. Each distinct leaf is spelled once and given a
+    /// number; a line is the sequence of its leaves' numbers. The numbers are
+    /// ranked by their text, the sequences are sorted by rank, and only then is
+    /// each line spelled again, one at a time, into a reused buffer. The module
+    /// `order` states why that is the bytewise order of the lines.
+    fn emit_canonical_lines<S: Admission + ?Sized>(
         &self,
         memory: &mut Memory<'_, S>,
-    ) -> Result<Vec<String>, CanonError<D::ReadError>> {
+        sink: &mut result::ResultBuilder<D::Id, D::ReadError>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let (mut symbols, mut lines) = self.discover_symbols(memory)?;
+        let mut first = String::new();
+        let mut second = String::new();
+        memory.reserve_string(&mut first, symbols.max_len())?;
+        memory.reserve_string(&mut second, symbols.max_len())?;
+        let heads = order::head_keys(&symbols, memory, |symbols, memory, symbol| {
+            self.head_key_of(symbols, memory, symbol, &mut first)
+        })?;
+        let ranked = order::rank(&mut symbols, memory, heads, |symbols, memory, a, b| {
+            self.compare_symbols(symbols, memory, a, b, &mut first, &mut second)
+        })?;
+        let term = symbols.rank_of(order::TERM);
+        lines.remap(&symbols);
+        symbols.release_meta(memory)?;
+        lines.order_regular(term);
+        let spelling = symbols.spelling();
+        let len_of = |rank: u32| {
+            let meta = order::Meta::from_bits(ranked.meta[rank as usize]);
+            let len = spelling.len(ranked.symbols[rank as usize], meta);
+            // A leaf is followed by its space; a fixed symbol is its whole text.
+            len + usize::from(meta.kind() != order::Kind::Fixed)
+        };
+        let spell_line = |memory: &mut Memory<'_, S>,
+                          seq: &[u32],
+                          start: usize,
+                          out: &mut String|
+         -> Result<(), CanonError<D::ReadError>> {
+            let mut at = start;
+            loop {
+                let rank = seq[at];
+                let symbol = ranked.symbols[rank as usize];
+                let meta = order::Meta::from_bits(ranked.meta[rank as usize]);
+                self.render_symbol(&spelling, symbol, meta, out, memory)?;
+                if rank == term {
+                    return Ok(());
+                }
+                at += 1;
+            }
+        };
+        if !lines.irregular.is_empty() {
+            let (_, longest) = lines.measure(term, len_of)?;
+            memory.reserve_string(&mut first, longest)?;
+            memory.reserve_string(&mut second, longest)?;
+            lines.place_irregular(&mut first, &mut second, |seq, start, out| {
+                spell_line(memory, seq, start, out)
+            })?;
+        }
+        self.check_stop().map_err(CanonError::with_read_error)?;
+        let (total, longest) = lines.measure(term, len_of)?;
+        self.check_stop().map_err(CanonError::with_read_error)?;
+        memory.reserve_string(&mut first, longest)?;
+        memory.release_string(second)?;
+        sink.reserve_text(total)?;
+        let mut written = 0usize;
+        for start in lines.merged() {
+            self.check_stop().map_err(CanonError::with_read_error)?;
+            first.clear();
+            spell_line(memory, &lines.seq, start, &mut first)?;
+            written = written
+                .checked_add(first.len())
+                .filter(|&written| written <= total)
+                .ok_or(CanonError::SourceInconsistent)?;
+            sink.append(&first)?;
+        }
+        if written != total {
+            return Err(CanonError::SourceInconsistent);
+        }
+        memory.release_string(first)?;
+        lines.release(memory)?;
+        ranked.release(memory)?;
+        symbols.release(memory)?;
+        Ok(())
+    }
+
+    /// Spell one symbol, a leaf with its trailing space, at `out`'s end, from what
+    /// was recorded when it was found.
+    ///
+    /// A leaf is read from the view again, so the view must present the dataset it
+    /// presented while the symbols were found: a different length is refused as
+    /// [`CanonError::SourceInconsistent`], and a read that cannot complete
+    /// returns the view's own latched failure.
+    fn render_symbol<S: Admission + ?Sized>(
+        &self,
+        spelling: &order::Spelling<'_, D::Id>,
+        symbol: u32,
+        meta: order::Meta,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        if meta.kind() == order::Kind::Fixed {
+            return self.write_fixed(symbol, out, memory);
+        }
+        let before = out.len();
+        if meta.arena() {
+            memory.push_str(out, spelling.arena_text(symbol))?;
+        } else {
+            let render = BlankRender::Canonical {
+                issuer: &self.canonical,
+            };
+            match self.write_leaf(spelling.rep(symbol), render, out, memory, None)? {
+                Leaf::Written(_) => {}
+                Leaf::NotReady => return Err(self.latched_read_error()),
+                Leaf::Triple { .. } => return Err(CanonError::SourceInconsistent),
+            }
+        }
+        if out.len() - before != spelling.len(symbol, meta) {
+            return Err(CanonError::SourceInconsistent);
+        }
+        memory.push_char(out, ' ')?;
+        Ok(())
+    }
+
+    /// Spell one of the fixed symbols at `out`'s end.
+    fn write_fixed<S: Admission + ?Sized>(
+        &self,
+        symbol: u32,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let sentinel = match symbol {
+            order::OPEN => {
+                memory.push_str(out, TRIPLE_TERM_OPEN)?;
+                memory.push_char(out, ' ')?;
+                return Ok(());
+            }
+            order::CLOSE => {
+                memory.push_str(out, TRIPLE_TERM_CLOSE)?;
+                memory.push_char(out, ' ')?;
+                return Ok(());
+            }
+            order::TERM => {
+                memory.push_str(out, ".\n")?;
+                return Ok(());
+            }
+            order::SENTINEL_REIFIES => SENTINEL_REIFIES,
+            order::REIFIES => RDF_REIFIES,
+            _ => SENTINEL_ANNOTATION_GRAPH,
+        };
+        memory.append_text(out, |out| write_iri(sentinel, out))?;
+        memory.push_char(out, ' ')?;
+        Ok(())
+    }
+
+    /// The failure a view latched when it could not resolve a term.
+    fn latched_read_error(&self) -> CanonError<D::ReadError> {
+        CanonError::Read(
+            self.ds
+                .read_error()
+                .expect("INVARIANT: a term the view could not resolve latched the view's failure"),
+        )
+    }
+
+    /// Release the search's own tables, which output never reads. They are not
+    /// part of any admitted account, so no charge or poll moves with them.
+    fn drop_search_state(&mut self) {
+        drop(std::mem::take(&mut self.blanks));
+        drop(std::mem::take(&mut self.incident));
+        drop(std::mem::take(&mut self.first_degree));
+        drop(std::mem::take(&mut self.canonical.order));
+    }
+
+    /// Walk every component once, numbering each distinct leaf and recording
+    /// each line as its sequence of numbers. The leaf buffer and the lookup
+    /// table are released before this returns.
+    fn discover_symbols<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<order::Discovered<D::Id>, CanonError<D::ReadError>> {
         let render = BlankRender::Canonical {
             issuer: &self.canonical,
         };
-        let mut lines = Vec::new();
+        let mut flatten = Flatten::new(self, render, memory)?;
         collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
             self.stop,
             &mut |comp| {
-                let mut s = String::new();
-                self.write_component(comp, render, &mut s, memory)?;
-                memory.push(&mut lines, s)?;
-                Ok(())
+                self.walk_component(comp, &mut flatten, memory)?;
+                flatten.check_ready()
             },
         )?;
-        rendering::sort_unique(&mut lines, memory)?;
-        self.check_stop().map_err(CanonError::with_read_error)?;
-        Ok(lines)
+        let Flatten {
+            mut symbols,
+            lines,
+            leaf,
+            ..
+        } = flatten;
+        memory.release_string(leaf)?;
+        symbols.release_table(memory)?;
+        Ok((symbols, lines))
+    }
+
+    /// The head key of `symbol`, read again from the source: a clean IRI is
+    /// borrowed, every other symbol is spelled into `buffer`. A length other
+    /// than the one recorded when the symbol was found is a source that changed
+    /// between reads.
+    fn head_key_of<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        symbol: u32,
+        buffer: &mut String,
+    ) -> Result<[u8; order::HEAD], CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        let meta = symbols.meta_of(symbol);
+        if meta.kind() == order::Kind::Iri && meta.clean() {
+            let Some(guard) = self.ds.resolve_if_ready(spelling.rep(symbol)) else {
+                return Err(self.latched_read_error());
+            };
+            let TermRef::Iri(iri) = guard.term() else {
+                return Err(CanonError::SourceInconsistent);
+            };
+            if iri.len() + 2 != spelling.len(symbol, meta) {
+                return Err(CanonError::SourceInconsistent);
+            }
+            return Ok(order::bracketed_head_key(iri.as_bytes()));
+        }
+        buffer.clear();
+        self.render_symbol(&spelling, symbol, meta, buffer, memory)?;
+        Ok(order::head_key(buffer.as_bytes()))
+    }
+
+    /// Order two symbols by their full spellings: by first-byte class when the
+    /// classes differ, else within the class.
+    fn compare_symbols<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let (class_a, class_b) = (
+            order::first_byte_class(a, symbols.meta_of(a)),
+            order::first_byte_class(b, symbols.meta_of(b)),
+        );
+        if class_a != class_b {
+            return Ok(class_a.cmp(&class_b));
+        }
+        self.compare_within_class(symbols, memory, a, b, first, second)
+    }
+
+    /// Order two symbols whose spellings start with the same byte: the borrowed
+    /// IRIs when both are IRIs written between angle brackets unchanged, else
+    /// comparator C.
+    fn compare_within_class<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let (meta_a, meta_b) = (symbols.meta_of(a), symbols.meta_of(b));
+        let clean_iri = |meta: order::Meta| meta.kind() == order::Kind::Iri && meta.clean();
+        if clean_iri(meta_a) && clean_iri(meta_b) {
+            return self.compare_clean_iris(symbols, a, b);
+        }
+        self.compare_text(symbols, memory, a, b, first, second)
+    }
+
+    /// Two IRIs spelled `<iri>` with nothing escaped compare as `iri` followed by
+    /// `>`: the text after the bracket is the IRI and its closing bracket, and
+    /// the space after each is equal. The IRIs are borrowed from the source, not
+    /// copied; one whose length differs from the length recorded for it is a
+    /// source that changed between reads.
+    fn compare_clean_iris(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        a: u32,
+        b: u32,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        let (Some(guard_a), Some(guard_b)) = (
+            self.ds.resolve_if_ready(spelling.rep(a)),
+            self.ds.resolve_if_ready(spelling.rep(b)),
+        ) else {
+            return Err(self.latched_read_error());
+        };
+        let (TermRef::Iri(iri_a), TermRef::Iri(iri_b)) = (guard_a.term(), guard_b.term()) else {
+            return Err(CanonError::SourceInconsistent);
+        };
+        for (symbol, iri) in [(a, iri_a), (b, iri_b)] {
+            if iri.len() + 2 != spelling.len(symbol, symbols.meta_of(symbol)) {
+                return Err(CanonError::SourceInconsistent);
+            }
+        }
+        Ok(order::cmp_bracketed(iri_a.as_bytes(), iri_b.as_bytes()))
+    }
+
+    /// Comparator C: the bytes of the two symbols' spellings, each read again
+    /// from the source into `first` and `second`.
+    fn compare_text<S: Admission + ?Sized>(
+        &self,
+        symbols: &order::Symbols<D::Id>,
+        memory: &mut Memory<'_, S>,
+        a: u32,
+        b: u32,
+        first: &mut String,
+        second: &mut String,
+    ) -> Result<Ordering, CanonError<D::ReadError>> {
+        let spelling = symbols.spelling();
+        first.clear();
+        second.clear();
+        self.render_symbol(&spelling, a, symbols.meta_of(a), first, memory)?;
+        self.render_symbol(&spelling, b, symbols.meta_of(b), second, memory)?;
+        Ok(first.as_bytes().cmp(second.as_bytes()))
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
@@ -3723,48 +4021,73 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         out: &mut String,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        let (s, p, o, g) = comp.slots();
-        self.write_slot(s, render, out, memory)?;
-        memory.push_char(out, ' ')?;
-        self.write_slot(p, render, out, memory)?;
-        memory.push_char(out, ' ')?;
-        self.write_slot(o, render, out, memory)?;
-        if let Some(g) = g {
-            memory.push_char(out, ' ')?;
-            self.write_slot(g, render, out, memory)?;
-        }
-        memory.push_str(out, " .\n")?;
-        Ok(())
+        self.walk_component(
+            comp,
+            &mut TextAtoms {
+                state: self,
+                render,
+                out,
+            },
+            memory,
+        )
     }
 
-    fn write_slot<S: Admission + ?Sized>(
+    /// Walk one component's spelling atom by atom: the single control flow of a
+    /// canonical line, whatever the caller does with its atoms. The caller's
+    /// [`Atoms`] receive, in order, the quad slots with a separator between each,
+    /// a triple term as `open`, its three terms with a separator after each, then
+    /// `close`, and `end` after the last slot.
+    ///
+    /// Stop polls are made here and nowhere else, so every consumer of a
+    /// component's spelling is polled identically: once per slot, once per held
+    /// step of a triple term, and, inside [`write_leaf`](Self::write_leaf), once
+    /// per literal.
+    fn walk_component<S: Admission + ?Sized, A: Atoms<D>>(
+        &self,
+        comp: Component<D::Id>,
+        atoms: &mut A,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let (s, p, o, g) = comp.slots();
+        self.walk_slot(s, atoms, memory)?;
+        atoms.separator(memory)?;
+        self.walk_slot(p, atoms, memory)?;
+        atoms.separator(memory)?;
+        self.walk_slot(o, atoms, memory)?;
+        if let Some(g) = g {
+            atoms.separator(memory)?;
+            self.walk_slot(g, atoms, memory)?;
+        }
+        atoms.end(memory)
+    }
+
+    fn walk_slot<S: Admission + ?Sized, A: Atoms<D>>(
         &self,
         slot: Slot<D::Id>,
-        render: BlankRender<'_, D::Id>,
-        out: &mut String,
+        atoms: &mut A,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
         self.check_stop().map_err(CanonError::with_read_error)?;
         match slot {
-            Slot::Sentinel(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
-            Slot::Term(id) => self.write_term(id, render, out, memory)?,
+            Slot::Sentinel(iri) => atoms.sentinel(iri, memory)?,
+            Slot::Term(id) => self.walk_term(id, atoms, memory)?,
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
                 // form. `Some(g)`: sentinel then the graph term, so a named-graph
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                memory.append_text(out, |out| write_iri(SENTINEL_ANNOTATION_GRAPH, out))?;
+                atoms.sentinel(SENTINEL_ANNOTATION_GRAPH, memory)?;
                 if let Some(g) = g {
-                    memory.push_char(out, ' ')?;
-                    self.write_term(g, render, out, memory)?;
+                    atoms.separator(memory)?;
+                    self.walk_term(g, atoms, memory)?;
                 }
             }
         }
         Ok(())
     }
 
-    /// Write a term in canonical N-Quads form. Literal lexical forms / datatypes /
+    /// Walk a term in canonical N-Quads order. Literal lexical forms / datatypes /
     /// language / direction are emitted **verbatim** (never normalized), with one
     /// exception that is not a normalization: a composite (`cdt:List` /
     /// `cdt:Map`) literal's embedded `BLANK_NODE_LABEL` tokens are rendered
@@ -3775,85 +4098,53 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// datasets would serialize differently and the oracle would report a false
     /// negative. Every other byte of the lexical form is untouched.
     ///
-    /// A triple term is written over a work list: its opening `<<( ` at once, then
-    /// its subject next, with the separators, the predicate, the object and the
-    /// closing ` )>>` held back in that order until the subject's whole nesting is
-    /// written. A term that is not a triple term pushes nothing.
-    fn write_term<S: Admission + ?Sized>(
+    /// A triple term is walked over a work list: its `open` at once, then its
+    /// subject next, with the separators, the predicate, the object and the
+    /// `close` held back in that order until the subject's whole nesting is
+    /// walked. A term that is not a triple term hands its one leaf to the atoms.
+    fn walk_term<S: Admission + ?Sized, A: Atoms<D>>(
         &self,
         id: D::Id,
-        render: BlankRender<'_, D::Id>,
-        out: &mut String,
+        atoms: &mut A,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
         enum Step<Id> {
             Term(Id),
-            Text(&'static str),
+            Separator,
+            Close,
         }
         let mut held: WorkList<Step<D::Id>, 8> = WorkList::new();
         let mut next = Some(Step::Term(id));
         while let Some(step) = next.take().or_else(|| held.pop()) {
             self.check_stop().map_err(CanonError::with_read_error)?;
             let id = match step {
-                Step::Text(text) => {
-                    memory.push_str(out, text)?;
+                Step::Separator => {
+                    atoms.separator(memory)?;
+                    continue;
+                }
+                Step::Close => {
+                    atoms.close(memory)?;
                     continue;
                 }
                 Step::Term(id) => id,
             };
-            let Some(guard) = self.ds.resolve_if_ready(id) else {
-                held.release_admitted(memory)?;
-                return Ok(());
-            };
-            match guard.term() {
-                TermRef::Iri(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
-                TermRef::Blank { .. } => {
-                    memory.append_text(out, |out| write_blank(render.label(id), out))?;
+            match atoms.leaf(id, memory)? {
+                Leaf::Written(_) => {}
+                Leaf::NotReady => {
+                    held.release_admitted(memory)?;
+                    return Ok(());
                 }
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let rendered =
-                        self.render_composite_lexical(lexical, datatype, render, memory)?;
-                    self.check_stop().map_err(CanonError::with_read_error)?;
-                    let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
-                        if let Cow::Owned(rendered) = rendered {
-                            memory.release_string(rendered)?;
-                        }
-                        held.release_admitted(memory)?;
-                        return Ok(());
-                    };
-                    let TermRef::Iri(dt) = datatype_guard.term() else {
-                        unreachable!("literal datatype must be an IRI")
-                    };
-                    memory.append_text(out, |out| {
-                        write_literal(
-                            &rendered,
-                            dt,
-                            language,
-                            direction.map(crate::RdfTextDirection::as_str),
-                            out,
-                        );
-                    })?;
-                    if let Cow::Owned(rendered) = rendered {
-                        memory.release_string(rendered)?;
-                    }
-                }
-                TermRef::Triple { s, p, o } => {
+                Leaf::Triple { s, p, o } => {
                     // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
                     // N-Quads form).
-                    memory.push_str(out, TRIPLE_TERM_OPEN)?;
-                    memory.push_char(out, ' ')?;
+                    atoms.open(memory)?;
                     for step in [
-                        Step::Text(TRIPLE_TERM_CLOSE),
-                        Step::Text(" "),
+                        Step::Close,
+                        Step::Separator,
                         Step::Term(o),
-                        Step::Text(" "),
+                        Step::Separator,
                         Step::Term(p),
-                        Step::Text(" "),
+                        Step::Separator,
                     ] {
                         held.try_push_admitted(step, memory)?;
                     }
@@ -3863,6 +4154,82 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
         held.release_admitted(memory)?;
         Ok(())
+    }
+
+    /// Write one non-triple term's bytes at `out`'s end, or say what else it is.
+    ///
+    /// The one body of a leaf's spelling. It makes no stop poll of its own.
+    /// With a `between` hook it spells a term as it is found: a composite literal
+    /// has its blank labels rewritten, and the hook is called once, after that
+    /// rendering and before the datatype is read, which is where a literal has
+    /// always been polled. Without one it spells a term already known, reading the
+    /// lexical form as it is, because a rewritten literal was kept when it was
+    /// found. It allocates only through `memory`, and only when `out` lacks
+    /// capacity.
+    fn write_leaf<S: Admission + ?Sized>(
+        &self,
+        id: D::Id,
+        render: BlankRender<'_, D::Id>,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+        between: Option<&mut dyn FnMut() -> Result<(), CanonError<D::ReadError>>>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>> {
+        let Some(guard) = self.ds.resolve_if_ready(id) else {
+            return Ok(Leaf::NotReady);
+        };
+        match guard.term() {
+            TermRef::Iri(iri) => {
+                let before = out.len();
+                memory.append_text(out, |out| write_iri(iri, out))?;
+                // Every escape lengthens the text, so exactly `<` and `>` around
+                // the unchanged IRI means nothing was escaped.
+                let clean = out.len() - before == iri.len() + 2;
+                Ok(Leaf::Written(LeafKind::Iri { clean }))
+            }
+            TermRef::Blank { .. } => {
+                memory.append_text(out, |out| write_blank(render.label(id), out))?;
+                Ok(Leaf::Written(LeafKind::Blank))
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let rendered = if between.is_some() {
+                    self.render_composite_lexical(lexical, datatype, render, memory)?
+                } else {
+                    Cow::Borrowed(lexical)
+                };
+                if let Some(between) = between {
+                    between()?;
+                }
+                let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
+                    if let Cow::Owned(rendered) = rendered {
+                        memory.release_string(rendered)?;
+                    }
+                    return Ok(Leaf::NotReady);
+                };
+                let TermRef::Iri(dt) = datatype_guard.term() else {
+                    unreachable!("literal datatype must be an IRI")
+                };
+                memory.append_text(out, |out| {
+                    write_literal(
+                        &rendered,
+                        dt,
+                        language,
+                        direction.map(crate::RdfTextDirection::as_str),
+                        out,
+                    );
+                })?;
+                let rewritten = matches!(rendered, Cow::Owned(_));
+                if let Cow::Owned(rendered) = rendered {
+                    memory.release_string(rendered)?;
+                }
+                Ok(Leaf::Written(LeafKind::Literal { rewritten }))
+            }
+            TermRef::Triple { s, p, o } => Ok(Leaf::Triple { s, p, o }),
+        }
     }
 
     /// A composite literal's lexical form with every embedded blank label
@@ -3910,6 +4277,311 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             },
             memory,
         )?)
+    }
+}
+
+/// What a term turned out to be when its leaf was asked for.
+enum Leaf<Id> {
+    /// The term's bytes were appended.
+    Written(LeafKind),
+    /// The view could not resolve the term; its failure is latched on the view.
+    NotReady,
+    /// A triple term, whose three components are walked instead. Nothing was written.
+    Triple { s: Id, p: Id, o: Id },
+}
+
+/// What kind of term a written leaf is, with what the writer learned about it.
+#[derive(Clone, Copy)]
+enum LeafKind {
+    /// An IRI; `clean` when nothing was escaped, so its bytes are `<` + the IRI + `>`.
+    Iri {
+        clean: bool,
+    },
+    Blank,
+    /// A literal; `rewritten` when a composite lexical form had blank labels replaced.
+    Literal {
+        rewritten: bool,
+    },
+}
+
+/// The atoms of one component's canonical spelling, in the order
+/// [`CanonState::walk_component`] produces them. An implementor decides what an
+/// atom becomes: text, or a symbol of a line.
+trait Atoms<D: DatasetView> {
+    /// `<<(` and the space after it, opening a triple term.
+    fn open<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// `)>>`, closing a triple term.
+    fn close<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// A fixed IRI that has no term id.
+    fn sentinel<S: Admission + ?Sized>(
+        &mut self,
+        iri: &'static str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// One term, which may turn out to be a triple term and then writes nothing.
+    fn leaf<S: Admission + ?Sized>(
+        &mut self,
+        id: D::Id,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>>;
+    /// The single space between two atoms of a line.
+    fn separator<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+    /// ` .\n`, ending a line.
+    fn end<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>>;
+}
+
+/// A component's canonical line as text, exactly as the quad is spelled.
+struct TextAtoms<'a, 'o, D: DatasetView> {
+    state: &'a CanonState<'a, D>,
+    render: BlankRender<'a, D::Id>,
+    out: &'o mut String,
+}
+
+impl<D: DatasetView> Atoms<D> for TextAtoms<'_, '_, D> {
+    fn open<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, TRIPLE_TERM_OPEN)?;
+        memory.push_char(self.out, ' ')?;
+        Ok(())
+    }
+
+    fn close<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, TRIPLE_TERM_CLOSE)?;
+        Ok(())
+    }
+
+    fn sentinel<S: Admission + ?Sized>(
+        &mut self,
+        iri: &'static str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.append_text(self.out, |out| write_iri(iri, out))?;
+        Ok(())
+    }
+
+    fn leaf<S: Admission + ?Sized>(
+        &mut self,
+        id: D::Id,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>> {
+        let state = self.state;
+        state.write_leaf(
+            id,
+            self.render,
+            self.out,
+            memory,
+            Some(&mut || state.check_stop().map_err(CanonError::with_read_error)),
+        )
+    }
+
+    fn separator<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_char(self.out, ' ')?;
+        Ok(())
+    }
+
+    fn end<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        memory.push_str(self.out, " .\n")?;
+        Ok(())
+    }
+}
+
+/// A component's canonical line as a sequence of symbol numbers, one per distinct
+/// leaf text, found as the walker produces the atoms.
+struct Flatten<'a, D: DatasetView> {
+    state: &'a CanonState<'a, D>,
+    render: BlankRender<'a, D::Id>,
+    symbols: order::Symbols<D::Id>,
+    lines: order::Lines,
+    /// The bytes of the leaf being found; reused for every new leaf.
+    leaf: String,
+    line_start: usize,
+    /// Whether every symbol of the line so far is aligned.
+    line_regular: bool,
+    /// A leaf could not be read; its failure is latched on the view.
+    not_ready: bool,
+}
+
+impl<'a, D: DatasetView> Flatten<'a, D> {
+    fn new<S: Admission + ?Sized>(
+        state: &'a CanonState<'a, D>,
+        render: BlankRender<'a, D::Id>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, CanonError<D::ReadError>> {
+        let mut symbols = order::Symbols::new();
+        let mut leaf = String::new();
+        for (symbol, sentinel) in [
+            (order::OPEN, None),
+            (order::CLOSE, None),
+            (order::TERM, None),
+            (order::SENTINEL_REIFIES, Some(SENTINEL_REIFIES)),
+            (order::REIFIES, Some(RDF_REIFIES)),
+            (order::SENTINEL_ANNOTATION, Some(SENTINEL_ANNOTATION_GRAPH)),
+        ] {
+            leaf.clear();
+            state.write_fixed(symbol, &mut leaf, memory)?;
+            // `<`, the IRI, `>` and the space: nothing was escaped.
+            let clean = sentinel.is_some_and(|iri| leaf.len() == iri.len() + 3);
+            let aligned = order::is_one_token(leaf.as_bytes());
+            symbols.push_fixed(leaf.len(), clean, aligned, memory)?;
+        }
+        Ok(Self {
+            state,
+            render,
+            symbols,
+            lines: order::Lines::new(),
+            leaf,
+            line_start: 0,
+            line_regular: true,
+            not_ready: false,
+        })
+    }
+
+    /// Fail with the view's own error if any leaf of the last component was unreadable.
+    fn check_ready(&self) -> Result<(), CanonError<D::ReadError>> {
+        if self.not_ready {
+            Err(self.state.latched_read_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn push_symbol<S: Admission + ?Sized>(
+        &mut self,
+        symbol: u32,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.line_regular &= self.symbols.meta_of(symbol).aligned();
+        order::push_bounded(memory, &mut self.lines.seq, symbol)?;
+        Ok(())
+    }
+}
+
+impl<D: DatasetView> Atoms<D> for Flatten<'_, D> {
+    fn open<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.push_symbol(order::OPEN, memory)
+    }
+
+    fn close<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.push_symbol(order::CLOSE, memory)
+    }
+
+    fn sentinel<S: Admission + ?Sized>(
+        &mut self,
+        iri: &'static str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let symbol = if iri == SENTINEL_REIFIES {
+            order::SENTINEL_REIFIES
+        } else if iri == RDF_REIFIES {
+            order::REIFIES
+        } else {
+            order::SENTINEL_ANNOTATION
+        };
+        self.push_symbol(symbol, memory)
+    }
+
+    fn leaf<S: Admission + ?Sized>(
+        &mut self,
+        id: D::Id,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Leaf<D::Id>, CanonError<D::ReadError>> {
+        let state = self.state;
+        if let Some(symbol) = self.symbols.find(id) {
+            let meta = self.symbols.meta_of(symbol);
+            let kind = match meta.kind() {
+                order::Kind::Iri | order::Kind::Fixed => LeafKind::Iri {
+                    clean: meta.clean(),
+                },
+                order::Kind::Blank => LeafKind::Blank,
+                order::Kind::Literal => {
+                    // A literal is polled once whenever it is met, so a repeated
+                    // one costs the stop poll it has always cost.
+                    state.check_stop().map_err(CanonError::with_read_error)?;
+                    LeafKind::Literal {
+                        rewritten: meta.arena(),
+                    }
+                }
+            };
+            self.push_symbol(symbol, memory)?;
+            return Ok(Leaf::Written(kind));
+        }
+        self.leaf.clear();
+        let written = state.write_leaf(
+            id,
+            self.render,
+            &mut self.leaf,
+            memory,
+            Some(&mut || state.check_stop().map_err(CanonError::with_read_error)),
+        )?;
+        let kind = match written {
+            Leaf::Written(kind) => kind,
+            Leaf::NotReady => {
+                self.not_ready = true;
+                return Ok(Leaf::NotReady);
+            }
+            triple @ Leaf::Triple { .. } => return Ok(triple),
+        };
+        let (class, clean, rewritten) = match kind {
+            LeafKind::Iri { clean } => (order::Kind::Iri, clean, false),
+            LeafKind::Blank => (order::Kind::Blank, false, false),
+            LeafKind::Literal { rewritten } => (order::Kind::Literal, false, rewritten),
+        };
+        let (symbol, _) = self
+            .symbols
+            .push_leaf(id, class, clean, rewritten, &self.leaf, memory)?;
+        self.push_symbol(symbol, memory)?;
+        Ok(Leaf::Written(kind))
+    }
+
+    fn separator<S: Admission + ?Sized>(
+        &mut self,
+        _: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        Ok(())
+    }
+
+    fn end<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.push_symbol(order::TERM, memory)?;
+        if self.line_regular {
+            order::push_bounded(memory, &mut self.lines.starts, self.line_start)?;
+        } else {
+            order::push_bounded(memory, &mut self.lines.irregular, (self.line_start, 0))?;
+        }
+        self.line_start = self.lines.seq.len();
+        self.line_regular = true;
+        Ok(())
     }
 }
 
@@ -7993,8 +8665,12 @@ mod tests {
         .issue_labels()
         .unwrap();
         signal.0.store(8, std::sync::atomic::Ordering::Relaxed);
+        let mut sink = result::ResultBuilder::new(&*dataset, CanonPresentation::Overlay).unwrap();
         assert!(matches!(
-            state.canonical_lines(&mut Memory::new(&mut purrdf_lex::allocation::Resident)),
+            state.emit_canonical_lines(
+                &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+                &mut sink
+            ),
             Err(CanonError::Stopped)
         ));
     }
