@@ -943,10 +943,10 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
 /// rather than one named graph (this module offers no flat PER-GRAPH digest entry
 /// point). `hash` selects only the RDFC label-issuance algorithm inside the
 /// canonicalization; the digest over the resulting document is unconditionally
-/// SHA-256, exactly as every other [`ContentDigest`] in this module. Equal to
-/// [`ContentDigest::of`] applied to [`try_canonicalize_flat_view`]'s
-/// [`Canonicalized::nquads`] under the same `hash`, because that is exactly what
-/// this function does.
+/// SHA-256, exactly as every other [`ContentDigest`] in this module. The document
+/// is not built: each canonical line is hashed as it is produced, in final order.
+/// Equal to [`ContentDigest::of`] applied to [`try_canonicalize_flat_view`]'s
+/// [`Canonicalized::nquads`] under the same `hash`.
 ///
 /// # Errors
 /// Exactly [`try_canonicalize_flat_view`]'s refusals, unchanged.

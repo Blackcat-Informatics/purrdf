@@ -6,9 +6,10 @@
 //! A canonical document is a stored content identity, and a caller meters it
 //! through two things this file pins from the public surface: how often the
 //! caller's stop signal is polled, and the largest reservation each admission
-//! account ever asks its provider for. Both are frozen against the values the
-//! previous document construction produced: the poll count and the phase
-//! boundary must not move, and a reservation may only shrink.
+//! account ever asks its provider for. Document rows are frozen against the values
+//! the previous document construction produced: the poll count and the phase
+//! boundary must not move, and a reservation may only shrink. Digest-only rows
+//! record the digest route's own totals and keep the earlier maxima as the bound.
 
 use std::fmt;
 use std::sync::Arc;
@@ -693,10 +694,12 @@ fn dataset_of(fixture: &str) -> Arc<RdfDataset> {
 }
 
 /// A caller meters canonicalization through its stop signal, so the number of
-/// polls and where the output phase begins are part of what a run promises:
-/// the document must be built, and its identity computed, under exactly the
-/// checkpoints the caller already budgets for. The digest is the stored content
-/// identity and must not move for any entry.
+/// polls and where the output phase begins are part of what a run promises.
+/// Document entries keep the checkpoints the caller already budgets for; digest
+/// entries hash lines as they are produced and build no document, so their
+/// totals are two lower than when the document was built first, with the phase
+/// boundary unmoved. The digest is the stored content identity and must not move
+/// for any entry.
 #[test]
 fn stop_checkpoints_and_identity_match_the_frozen_construction() {
     for row in FROZEN {
@@ -820,5 +823,47 @@ fn a_digest_run_without_an_owned_workspace_is_refused_like_a_document_run() {
         let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
         let with = Recording::new(&dataset, u64::MAX, u64::MAX);
         run(entry, &with, &mut control).expect("the neighbouring view succeeds");
+    }
+}
+
+/// One line several blocks long: a stop raised on any poll of a digest run, the
+/// polls between the blocks of that line included, refuses, and a stop after the
+/// last poll does not. A digest is never returned from a run whose stop fired.
+#[test]
+fn a_stop_during_a_line_of_several_blocks_is_honoured_by_every_digest_entry() {
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("https://example.org/s").unwrap();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let small = b.intern_iri("https://example.org/o").unwrap();
+    let long = b
+        .intern_literal(RdfLiteral::simple("x".repeat(5 * 64 * 1024 + 17)))
+        .unwrap();
+    b.push_quad(s, p, small, None).unwrap();
+    b.push_quad(s, p, long, None).unwrap();
+    let dataset = b.freeze().unwrap();
+    for entry in ALL_ENTRIES
+        .into_iter()
+        .filter(|e| e.digest_only() || matches!(e, Entry::OverlayDocumentAndSha256))
+        .filter(|e| !matches!(e, Entry::GraphSha256))
+    {
+        let counted = measure(entry, &dataset);
+        for n in 1..=counted.total_polls {
+            let polls = Polls::stopping_at(n);
+            let mut control = CanonicalizationControl::new(
+                RDFC_V2_CORPUS_POLICY,
+                Some(&polls as &dyn StopSignal),
+            );
+            let view = Recording::new(&dataset, u64::MAX, u64::MAX);
+            assert!(
+                run(entry, &view, &mut control).is_err(),
+                "{entry:?} stopped at poll {n} of {} returned a digest",
+                counted.total_polls
+            );
+        }
+        let polls = Polls::stopping_at(counted.total_polls + 1);
+        let mut control =
+            CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+        let view = Recording::new(&dataset, u64::MAX, u64::MAX);
+        assert_eq!(run(entry, &view, &mut control).unwrap(), counted.digest);
     }
 }
