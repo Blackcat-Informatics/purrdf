@@ -140,7 +140,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 
 mod state;
@@ -2213,8 +2213,6 @@ struct CanonState<'a, D: DatasetView> {
     presentation: CanonPresentation,
     /// Every blank, in ascending id order (the deterministic reference set).
     blanks: Vec<D::Id>,
-    /// The components each blank participates in (its "quads", RDFC-1.0 §4.4).
-    incident: BTreeMap<D::Id, Vec<Component<D::Id>>>,
     /// First-degree hash (§4.6) of each blank, computed once.
     first_degree: BTreeMap<D::Id, HashHex>,
     /// The durable canonical issuer.
@@ -2930,7 +2928,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             scope,
             presentation,
             blanks: Vec::new(),
-            incident: BTreeMap::new(),
             first_degree: BTreeMap::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
             hash,
@@ -2944,30 +2941,28 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory: &mut Memory<'_, S>,
     ) -> Result<memo::Footprints<D::Id>, CanonError<D::ReadError>> {
         let mut footprints = memo::Footprints::new();
-        let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
-        let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
+        // One buffer for the distinct blanks of each component in turn.
+        let mut mentioned: Vec<D::Id> = Vec::new();
         collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
             self.stop,
             &mut |comp| {
-                let mut seen: BTreeSet<D::Id> = BTreeSet::new();
+                mentioned.clear();
                 comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
-                    blank_set.insert(b);
-                    if seen.insert(b) {
-                        incident.entry(b).or_default().push(comp);
-                    }
+                    mentioned.push(b);
                     Ok(())
                 })?;
+                mentioned.sort_unstable();
+                mentioned.dedup();
                 footprints
-                    .push(comp, seen, memory)
+                    .push(comp, &mentioned, memory)
                     .map_err(CanonError::Storage)
             },
         )?;
-        self.blanks = blank_set.into_iter().collect();
-        self.incident = incident;
         footprints.finish();
+        self.blanks = footprints.blanks();
         Ok(footprints)
     }
 
@@ -3074,7 +3069,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
             self.check_stop().map_err(CanonError::with_read_error)?;
-            let h = self.hash_first_degree(b)?;
+            let h = self.hash_first_degree(b, footprints)?;
             self.first_degree.insert(b, h);
             by_hash.entry(h).or_default().push(b);
         }
@@ -3134,15 +3129,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError<D::ReadError>> {
+    fn hash_first_degree(
+        &self,
+        b: D::Id,
+        footprints: &memo::Footprints<D::Id>,
+    ) -> Result<HashHex, CanonError<D::ReadError>> {
         let render = BlankRender::FirstDegree { focus: b };
         let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
         rendering::ScratchGrant::new(reservation).run(|memory| {
             let mut lines = Vec::new();
-            for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
+            for &(_, index) in footprints.incident(b) {
+                let comp = footprints.component(index);
                 self.check_stop().map_err(CanonError::with_read_error)?;
                 let mut line = String::new();
-                self.write_component(*comp, render, &mut line, memory)?;
+                self.write_component(comp, render, &mut line, memory)?;
                 memory.push(&mut lines, line)?;
             }
             lines.sort_unstable();
@@ -3161,7 +3161,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         footprints: &memo::Footprints<D::Id>,
         memory: &mut Memory<'_, S>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
-        let mut frame = self.n_degree_frame(identifier, issuer, || {
+        let mut frame = self.n_degree_frame(identifier, issuer, footprints, || {
             (
                 RdfcSearchContext::InitialFrame {
                     root_ordinal: self.blank_ordinal(identifier),
@@ -3187,24 +3187,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             let child_issuer = candidate.issuer.clone();
                             candidate.pending = Some(related);
                             group.candidate = Some(candidate);
-                            let mut child = self.n_degree_frame(related, child_issuer, || {
-                                let depth = parents.len();
-                                let observation = self.refusal_group(
-                                    self.blank_ordinal(frame_identifier),
-                                    depth,
-                                    &frame.issuer,
-                                    group,
-                                );
-                                let parent_group = observation.active.group;
-                                let context = RdfcSearchContext::ChildFrame {
-                                    root_ordinal: self.blank_ordinal(identifier),
-                                    frame_ordinal: self.blank_ordinal(related),
-                                    depth: depth + 1,
-                                    parent_group,
-                                };
-                                let (path, groups) = self.refusal_path(observation, &mut parents);
-                                (context, path, Some(groups))
-                            })?;
+                            let mut child =
+                                self.n_degree_frame(related, child_issuer, footprints, || {
+                                    let depth = parents.len();
+                                    let observation = self.refusal_group(
+                                        self.blank_ordinal(frame_identifier),
+                                        depth,
+                                        &frame.issuer,
+                                        group,
+                                    );
+                                    let parent_group = observation.active.group;
+                                    let context = RdfcSearchContext::ChildFrame {
+                                        root_ordinal: self.blank_ordinal(identifier),
+                                        frame_ordinal: self.blank_ordinal(related),
+                                        depth: depth + 1,
+                                        parent_group,
+                                    };
+                                    let (path, groups) =
+                                        self.refusal_path(observation, &mut parents);
+                                    (context, path, Some(groups))
+                                })?;
                             let permutations = &group.permutations;
                             let candidate = group
                                 .candidate
@@ -3502,6 +3504,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
+        footprints: &memo::Footprints<D::Id>,
         context: impl FnOnce() -> (
             RdfcSearchContext,
             RdfcActivePath,
@@ -3513,9 +3516,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
-        let components = self.incident.get(&identifier).cloned().unwrap_or_default();
-        for comp in &components {
-            self.related_blanks(*comp, identifier, &issuer, &mut |related, related_hash| {
+        for &(_, index) in footprints.incident(identifier) {
+            let comp = footprints.component(index);
+            self.related_blanks(comp, identifier, &issuer, &mut |related, related_hash| {
                 hn.entry(related_hash).or_default().push(related);
             })?;
         }
@@ -3857,7 +3860,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// part of any admitted account, so no charge or poll moves with them.
     fn drop_search_state(&mut self) {
         drop(std::mem::take(&mut self.blanks));
-        drop(std::mem::take(&mut self.incident));
         drop(std::mem::take(&mut self.first_degree));
         drop(std::mem::take(&mut self.canonical.order));
     }
@@ -4691,6 +4693,7 @@ mod tests {
     use crate::dataset_view::ViewOperationStatus;
     use crate::ir::RdfDatasetBuilder;
     use crate::{RdfLiteral, RdfTextDirection};
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
@@ -8136,7 +8139,6 @@ mod tests {
             Err(CanonError::Stopped)
         ));
         assert_eq!(state.blanks, []);
-        assert!(state.incident.is_empty());
     }
 
     /// Deep n-degree traversal suspends owned issuers without native recursion.
@@ -8172,7 +8174,7 @@ mod tests {
             let mut memory = Memory::new(&mut storage);
             let footprints = state.collect_incidence(&mut memory).unwrap();
             for &blank in &state.blanks {
-                let hash = state.hash_first_degree(blank).unwrap();
+                let hash = state.hash_first_degree(blank, &footprints).unwrap();
                 state.first_degree.insert(blank, hash);
             }
             let mut issuer = IdIssuer::new(TEMP_PREFIX);
@@ -8206,7 +8208,7 @@ mod tests {
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &blank in &state.blanks {
-            let hash = state.hash_first_degree(blank).unwrap();
+            let hash = state.hash_first_degree(blank, &footprints).unwrap();
             state.first_degree.insert(blank, hash);
         }
         signal.0.store(1000, std::sync::atomic::Ordering::Relaxed);
@@ -8351,7 +8353,7 @@ mod tests {
                 for &id in &state.blanks {
                     state
                         .first_degree
-                        .insert(id, state.hash_first_degree(id).unwrap());
+                        .insert(id, state.hash_first_degree(id, &footprints).unwrap());
                 }
                 let mut entry = IdIssuer::new(TEMP_PREFIX);
                 entry.issue(root);
@@ -8421,7 +8423,7 @@ mod tests {
         for &id in &state.blanks {
             state
                 .first_degree
-                .insert(id, state.hash_first_degree(id).unwrap());
+                .insert(id, state.hash_first_degree(id, &footprints).unwrap());
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
@@ -8449,7 +8451,7 @@ mod tests {
             )
             .unwrap();
         let mut frame = state
-            .n_degree_frame(fixture.branches[0], alternate.clone(), || {
+            .n_degree_frame(fixture.branches[0], alternate.clone(), &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),
@@ -8563,7 +8565,7 @@ mod tests {
         for &id in &state.blanks {
             state
                 .first_degree
-                .insert(id, state.hash_first_degree(id).unwrap());
+                .insert(id, state.hash_first_degree(id, &footprints).unwrap());
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
@@ -8580,7 +8582,7 @@ mod tests {
         )
         .unwrap();
         let mut frame = state
-            .n_degree_frame(fixture.branches[0], entry, || {
+            .n_degree_frame(fixture.branches[0], entry, &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),

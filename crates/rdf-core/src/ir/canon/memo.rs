@@ -5,35 +5,45 @@
 
 use std::alloc::Layout;
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
 
 use super::{CanonError, CanonState, Component, HashHex, IdIssuer};
 use crate::{DatasetView, ViewTermId};
 
-struct Footprint<Id> {
-    component: Component<Id>,
-    blanks: Vec<Id>,
-}
-
-/// Complete blank sets obtained by the existing component walk, not a second
-/// source traversal. The catalog never shrinks after allocation.
+/// The one component table of a search, and the blank sets the existing
+/// component walk obtained for it (not a second source traversal).
+///
+/// Each component that mentions a blank node is stored once. Three flat arrays
+/// hold it: `components`, the end offset of each component's blank set in
+/// `pool`, and `pool` itself (the sorted, distinct blanks of every component,
+/// back to back). A blank node's incident components are a slice of `mentions`,
+/// sorted by `(blank, component index)`, so everything refers to a component by
+/// its index. The three admitted arrays never shrink after allocation;
+/// `mentions` is plain search scratch, like the incidence it replaced.
 pub(super) struct Footprints<Id> {
-    components: Vec<Footprint<Id>>,
+    components: Vec<Component<Id>>,
+    ends: Vec<usize>,
+    pool: Vec<Id>,
+    mentions: Vec<(Id, usize)>,
 }
 
 impl<Id: ViewTermId> Footprints<Id> {
     pub(super) fn new() -> Self {
         Self {
             components: Vec::new(),
+            ends: Vec::new(),
+            pool: Vec::new(),
+            mentions: Vec::new(),
         }
     }
 
+    /// Record `component` with its blank set, which the caller has sorted and
+    /// deduplicated.
     pub(super) fn push<S: Admission + ?Sized>(
         &mut self,
         component: Component<Id>,
-        blanks: BTreeSet<Id>,
+        blanks: &[Id],
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
         // No incident entry can refer to a component without a blank. In
@@ -41,47 +51,71 @@ impl<Id: ViewTermId> Footprints<Id> {
         if blanks.is_empty() {
             return Ok(());
         }
-        let blanks = memory.collect(blanks)?;
-        memory.push(&mut self.components, Footprint { component, blanks })
+        let index = self.components.len();
+        memory.extend(&mut self.pool, blanks.iter().copied())?;
+        memory.push(&mut self.ends, self.pool.len())?;
+        memory.push(&mut self.components, component)?;
+        self.mentions
+            .extend(blanks.iter().map(|&blank| (blank, index)));
+        Ok(())
     }
 
     pub(super) fn finish(&mut self) {
-        self.components
-            .sort_unstable_by_key(|entry| entry.component);
+        self.mentions.sort_unstable();
     }
 
-    fn get(&self, component: Component<Id>) -> &[Id] {
-        let index = self
-            .components
-            .binary_search_by_key(&component, |entry| entry.component)
-            .expect("every incident component retained its complete successful blank walk");
-        &self.components[index].blanks
+    /// Every blank mentioned, ascending and distinct.
+    pub(super) fn blanks(&self) -> Vec<Id> {
+        let mut blanks: Vec<Id> = Vec::new();
+        for &(blank, _) in &self.mentions {
+            if blanks.last() != Some(&blank) {
+                blanks.push(blank);
+            }
+        }
+        blanks
+    }
+
+    /// The components mentioning `blank`, in collection order, as
+    /// `(blank, component index)` entries borrowed from the table.
+    pub(super) fn incident(&self, blank: Id) -> &[(Id, usize)] {
+        let start = self.mentions.partition_point(|&(id, _)| id < blank);
+        let len = self.mentions[start..].partition_point(|&(id, _)| id == blank);
+        &self.mentions[start..start + len]
+    }
+
+    pub(super) fn component(&self, index: usize) -> Component<Id> {
+        self.components[index]
+    }
+
+    /// The blanks component `index` mentions.
+    fn blanks_of(&self, index: usize) -> &[Id] {
+        let start = if index == 0 { 0 } else { self.ends[index - 1] };
+        &self.pool[start..self.ends[index]]
     }
 
     fn storage_bytes(&self) -> Result<usize, StorageError> {
-        let mut bytes = Layout::array::<Footprint<Id>>(self.components.capacity())
+        let components = Layout::array::<Component<Id>>(self.components.capacity())
             .map_err(|_| StorageError::SizeOverflow)?
             .size();
-        for entry in &self.components {
-            bytes = bytes
-                .checked_add(
-                    Layout::array::<Id>(entry.blanks.capacity())
-                        .map_err(|_| StorageError::SizeOverflow)?
-                        .size(),
-                )
-                .ok_or(StorageError::SizeOverflow)?;
-        }
-        Ok(bytes)
+        let ends = Layout::array::<usize>(self.ends.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let pool = Layout::array::<Id>(self.pool.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        components
+            .checked_add(ends)
+            .and_then(|bytes| bytes.checked_add(pool))
+            .ok_or(StorageError::SizeOverflow)
     }
 
     pub(super) fn release<S: Admission + ?Sized>(
-        mut self,
+        self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
-        for entry in &mut self.components {
-            memory.release_vec(std::mem::take(&mut entry.blanks))?;
-        }
-        memory.release_vec(self.components)
+        memory.release_vec(self.components)?;
+        memory.release_vec(self.ends)?;
+        memory.release_vec(self.pool)
     }
 }
 
@@ -224,9 +258,9 @@ impl<Id: ViewTermId> Workspace<Id> {
             let id = self.pending[cursor];
             cursor += 1;
             state.check_stop().map_err(CanonError::with_read_error)?;
-            for &component in state.incident.get(&id).map_or_default(Vec::as_slice) {
+            for &(_, component) in footprints.incident(id) {
                 state.check_stop().map_err(CanonError::with_read_error)?;
-                for &related in footprints.get(component) {
+                for &related in footprints.blanks_of(component) {
                     state.check_stop().map_err(CanonError::with_read_error)?;
                     let ordinal = state.blank_ordinal(related);
                     if std::mem::replace(&mut self.visited[ordinal], true) {
