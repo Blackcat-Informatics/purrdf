@@ -99,12 +99,39 @@ where
     }
 }
 
-pub(super) fn release_lines<S: Admission + ?Sized>(
-    mut lines: Vec<String>,
-    memory: &mut Memory<'_, S>,
-) -> Result<(), StorageError> {
-    for line in &mut lines {
-        memory.release_string(std::mem::take(line))?;
+/// The first-degree lines of one blank node: all their text in one buffer and
+/// an offset pair per line. Cleared and reused from one blank node to the next;
+/// both buffers are admitted through the caller's `Memory` and released with it.
+#[derive(Default)]
+pub(super) struct LineArena {
+    pub(super) text: String,
+    pub(super) spans: Vec<(usize, usize)>,
+}
+
+impl LineArena {
+    pub(super) fn clear(&mut self) {
+        self.text.clear();
+        self.spans.clear();
     }
-    memory.release_vec(lines)
+
+    /// Order the lines bytewise.
+    pub(super) fn sort(&mut self) {
+        let bytes = self.text.as_bytes();
+        self.spans
+            .sort_unstable_by(|&(a, b), &(c, d)| bytes[a..b].cmp(&bytes[c..d]));
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = &str> + Clone {
+        self.spans
+            .iter()
+            .map(|&(start, end)| &self.text[start..end])
+    }
+
+    pub(super) fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        memory.release_string(self.text)?;
+        memory.release_vec(self.spans)
+    }
 }
