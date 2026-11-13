@@ -599,6 +599,28 @@ pub fn to_json(source: &dyn StructuredError) -> Result<Value, InspectionError> {
 mod tests {
     use super::*;
 
+    /// Every binding publishes a canonical refusal through `to_json` and finds it
+    /// again through `native_canonical_cause`; a source that spells a term with a
+    /// different length on a second read must arrive as its own code, and an
+    /// ordinary refusal must keep its own.
+    #[test]
+    fn source_inconsistent_is_published_with_its_own_code_and_found_again() {
+        let refusal = purrdf_core::CanonError::<std::convert::Infallible>::SourceInconsistent;
+        let fields = to_json(&refusal).unwrap().to_string();
+        assert!(fields.contains("canonical-source-inconsistent"), "{fields}");
+        assert!(matches!(
+            crate::canonical::native_canonical_cause(&refusal),
+            Some(purrdf_core::CanonError::<std::convert::Infallible>::SourceInconsistent)
+        ));
+        let neighbour = to_json(&purrdf_core::CanonError::<std::convert::Infallible>::Stopped)
+            .unwrap()
+            .to_string();
+        assert!(
+            !neighbour.contains("canonical-source-inconsistent"),
+            "{neighbour}"
+        );
+    }
+
     struct ListRefusal(usize);
 
     impl StructuredError for ListRefusal {

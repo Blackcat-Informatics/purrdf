@@ -392,8 +392,19 @@ fn load_benches(c: &mut Bench) {
     let mut group = c.benchmark_group("flat_view_canon_load");
     group.sample_size(10);
     for (shape, loaded) in [
-        ("blank_free", load::blank_free(lines, 1)),
-        ("reifier", load::reifier(lines, 1)),
+        (
+            "blank_free",
+            load::blank_free(lines, 1, load::Order::Sorted),
+        ),
+        ("reifier", load::reifier(lines, 1, load::Order::Sorted)),
+        (
+            "blank_free order=unsorted",
+            load::blank_free(lines, 1, load::Order::Unsorted),
+        ),
+        (
+            "reifier order=unsorted",
+            load::reifier(lines, 1, load::Order::Unsorted),
+        ),
     ] {
         let ds = loaded.dataset;
         let doc = borrowed_route(&*ds, hash);
