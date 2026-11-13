@@ -33,6 +33,14 @@ def http_response(code, body, returncode=0):
     )
 
 
+def reviewed(draft):
+    body = "# PurRDF 3.0.1\n\nComplete reviewed release.\n"
+    return dict(
+        tag_name=f"rust-v{VERSION}", name=f"PurRDF {VERSION}", body=body,
+        prerelease=False, draft=draft,
+    )
+
+
 class FakeGitHub:
     """No transport: a draft/published store retaining the uploaded bytes."""
 
@@ -285,6 +293,18 @@ class PublicationTests(unittest.TestCase):
             self.publish()
         self.assertEqual(set(self.github.events), {"tag", "read"})
 
+    def test_created_draft_with_altered_notes_is_repaired_before_upload(self):
+        create = self.github.create_draft
+        self.github.create_draft = lambda *a: (create(*a), self.github.record.update(body="x"))
+        self.publish()
+        self.assertEqual(self.github.record["body"], reviewed(True)["body"])
+
+    def test_metadata_refusal_names_the_differing_field_only(self):
+        self.published()
+        self.github.record["body"] = "secret"
+        with self.assertRaisesRegex(publisher.ReleaseError, "release: body$"):
+            self.publish()
+
     def test_draft_metadata_is_repaired_before_upload(self):
         self.github.fail_at = "upload"
         with self.assertRaises(publisher.ReleaseError):
@@ -378,23 +398,12 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(
             transport.events.count("download"), 2 * len(publisher.asset_names(VERSION))
         )
-        self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 3)
-        self.assertEqual(transport.paths.count("releases/12"), 3)
+        self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 4)
+        self.assertEqual(transport.paths.count("releases/12"), 5)
         self.assertLess(
             transport.events.index("download"), transport.events.index("publish")
         )
-        self.assertEqual(
-            transport.edits,
-            [
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                    "draft": False,
-                }
-            ],
-        )
+        self.assertEqual(transport.edits, [reviewed(True), reviewed(False)])
 
     def test_real_transport_reuses_draft_and_published_rerun_stays_read_only(self):
         transport = PublishedOnlyTransport()
@@ -407,25 +416,7 @@ class PublicationTests(unittest.TestCase):
         self.transport_publish(transport)
         self.assertNotIn("create", transport.events)
         self.assertIn("edit", transport.events)
-        self.assertEqual(
-            transport.edits,
-            [
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "draft": True,
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                },
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                    "draft": False,
-                },
-            ],
-        )
+        self.assertEqual(transport.edits, [reviewed(True)] * 2 + [reviewed(False)])
         transport.events.clear()
         transport.paths.clear()
         for path in self.inputs:

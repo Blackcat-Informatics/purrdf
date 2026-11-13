@@ -205,18 +205,14 @@ def asset_names(version: str) -> set[str]:
 
 
 def identity(release: dict, tag: str, title: str, notes: bytes, *, draft: bool):
-    if (
-        not isinstance(release, dict)
-        or type(release.get("id")) is not int
-        or release.get("id", 0) <= 0
-        or release.get("tag_name") != tag
-        or release.get("name") != title
-        or release.get("body") != notes.decode("utf-8")
-        or release.get("draft") is not draft
-        or release.get("prerelease") is not False
-    ):
+    wanted = dict(tag_name=tag, name=title, body=notes.decode("utf-8"), draft=draft, prerelease=False)
+    if not isinstance(release, dict) or type(release.get("id")) is not int:
+        raise ReleaseError("GitHub release metadata is not a release record")
+    differing = [k for k, v in wanted.items() if release.get(k) != v]
+    if differing or release["id"] <= 0:
         raise ReleaseError(
-            "GitHub release metadata differs from the reviewed tagged release"
+            "GitHub release metadata differs from the reviewed tagged release: "
+            + ", ".join(differing or ["id"])
         )
     if not draft and release.get("immutable") is not True:
         raise ReleaseError("published release is not immutable")
@@ -337,8 +333,9 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     }
     if release is None:
         github.create_draft(tag, title, notes_path)
-    else:
-        github.edit(release["id"], **reviewed, draft=True)
+        release = github.release(tag) or {}
+    # API edit stores the reviewed bytes exactly, as on a reused draft.
+    github.edit(release.get("id"), **reviewed, draft=True)
     release = github.release(tag)
     identity(release, tag, title, notes, draft=True)
     github.upload(tag, paths)
