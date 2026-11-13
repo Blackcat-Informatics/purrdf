@@ -140,7 +140,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 
 mod state;
@@ -396,9 +396,9 @@ fn digest_hex(hash: CanonHash, bytes: &[u8]) -> HashHex {
 
 /// Hash a sequence of already-serialized lines under the selected algorithm, feeding
 /// each line into one running digest (Hash First Degree Quads, §4.6).
-fn hash_lines(
+fn hash_lines<'a>(
     hash: CanonHash,
-    lines: &[String],
+    lines: impl Iterator<Item = &'a str>,
     stop: Option<&dyn crate::StopSignal>,
 ) -> Result<HashHex, CanonError> {
     let result = match hash {
@@ -2238,6 +2238,38 @@ impl<Id: ViewTermId> IdIssuer<Id> {
     }
 }
 
+/// The position paths of one slot's nested triple terms, written back to back
+/// into one buffer and reused for every slot of a frame. A held entry is a blank
+/// or triple term with the byte range of its path in `text`.
+struct PathScratch<Id> {
+    text: String,
+    held: Vec<(Id, usize, usize)>,
+}
+
+impl<Id> PathScratch<Id> {
+    const fn new() -> Self {
+        Self {
+            text: String::new(),
+            held: Vec::new(),
+        }
+    }
+
+    /// Start a slot: the whole buffer is its root position path.
+    fn begin(&mut self, position: &str) {
+        self.text.clear();
+        self.held.clear();
+        self.text.push_str(position);
+    }
+
+    /// Append the path `text[start..end]` followed by `suffix`; return its range.
+    fn child(&mut self, start: usize, end: usize, suffix: &str) -> (usize, usize) {
+        let at = self.text.len();
+        self.text.extend_from_within(start..end);
+        self.text.push_str(suffix);
+        (at, self.text.len())
+    }
+}
+
 /// One suspended n-degree invocation. Child results resume its current path;
 /// none of these owners recursively contains another frame.
 struct NDegreeFrame<Id> {
@@ -2278,8 +2310,6 @@ struct CanonState<'a, D: DatasetView> {
     presentation: CanonPresentation,
     /// Every blank, in ascending id order (the deterministic reference set).
     blanks: Vec<D::Id>,
-    /// The components each blank participates in (its "quads", RDFC-1.0 §4.4).
-    incident: BTreeMap<D::Id, Vec<Component<D::Id>>>,
     /// First-degree hash (§4.6) of each blank, computed once.
     first_degree: BTreeMap<D::Id, HashHex>,
     /// The durable canonical issuer.
@@ -2995,7 +3025,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             scope,
             presentation,
             blanks: Vec::new(),
-            incident: BTreeMap::new(),
             first_degree: BTreeMap::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
             hash,
@@ -3009,30 +3038,28 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory: &mut Memory<'_, S>,
     ) -> Result<memo::Footprints<D::Id>, CanonError<D::ReadError>> {
         let mut footprints = memo::Footprints::new();
-        let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
-        let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
+        // One buffer for the distinct blanks of each component in turn.
+        let mut mentioned: Vec<D::Id> = Vec::new();
         collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
             self.stop,
             &mut |comp| {
-                let mut seen: BTreeSet<D::Id> = BTreeSet::new();
+                mentioned.clear();
                 comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
-                    blank_set.insert(b);
-                    if seen.insert(b) {
-                        incident.entry(b).or_default().push(comp);
-                    }
+                    mentioned.push(b);
                     Ok(())
                 })?;
+                mentioned.sort_unstable();
+                mentioned.dedup();
                 footprints
-                    .push(comp, seen, memory)
+                    .push(comp, &mentioned, memory)
                     .map_err(CanonError::Storage)
             },
         )?;
-        self.blanks = blank_set.into_iter().collect();
-        self.incident = incident;
         footprints.finish();
+        self.blanks = footprints.blanks();
         Ok(footprints)
     }
 
@@ -3041,7 +3068,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     fn blank_ordinal(&self, identifier: D::Id) -> usize {
-        // Every frame identifier came from the collected blank incidence map.
+        // Every frame identifier came from the collected component table's blanks.
         self.blanks
             .binary_search(&identifier)
             .expect("a search frame identifies a collected blank")
@@ -3166,14 +3193,22 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         footprints: &memo::Footprints<D::Id>,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        // §4.4 step 3: first-degree hash of every blank, grouped by hash.
+        // §4.4 step 3: first-degree hash of every blank, grouped by hash. One scratch
+        // account and one line arena serve every blank in turn.
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
-        for &b in &self.blanks {
-            self.check_stop().map_err(CanonError::with_read_error)?;
-            let h = self.hash_first_degree(b)?;
-            self.first_degree.insert(b, h);
-            by_hash.entry(h).or_default().push(b);
-        }
+        let mut first_degree: BTreeMap<D::Id, HashHex> = BTreeMap::new();
+        let source = self.ds;
+        rendering::ScratchGrant::deferred(|| source.reserve_workspace(0)).run(|scratch| {
+            let mut lines = rendering::LineArena::default();
+            for &b in &self.blanks {
+                self.check_stop().map_err(CanonError::with_read_error)?;
+                let h = self.hash_first_degree(b, footprints, &mut lines, scratch)?;
+                first_degree.insert(b, h);
+                by_hash.entry(h).or_default().push(b);
+            }
+            lines.release(scratch).map_err(CanonError::Storage)
+        })?;
+        self.first_degree = first_degree;
 
         // §4.4 step 4: issue canonical ids to uniquely-hashed blanks, ascending hash.
         // Defer hash-colliding groups to the n-degree pass.
@@ -3229,24 +3264,27 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.check_stop().map_err(CanonError::with_read_error)
     }
 
-    /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError<D::ReadError>> {
+    /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`. The lines of one
+    /// blank node share `lines`, one text buffer with an offset pair per line,
+    /// which is cleared here and reused by the next blank node.
+    fn hash_first_degree<S: Admission + ?Sized>(
+        &self,
+        b: D::Id,
+        footprints: &memo::Footprints<D::Id>,
+        lines: &mut rendering::LineArena,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<HashHex, CanonError<D::ReadError>> {
         let render = BlankRender::FirstDegree { focus: b };
-        let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
-        rendering::ScratchGrant::new(reservation).run(|memory| {
-            let mut lines = Vec::new();
-            for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
-                self.check_stop().map_err(CanonError::with_read_error)?;
-                let mut line = String::new();
-                self.write_component(*comp, render, &mut line, memory)?;
-                memory.push(&mut lines, line)?;
-            }
-            lines.sort_unstable();
-            let hash =
-                hash_lines(self.hash, &lines, self.stop).map_err(CanonError::with_read_error)?;
-            rendering::release_lines(lines, memory)?;
-            Ok(hash)
-        })
+        lines.clear();
+        for &(_, index) in footprints.incident(b) {
+            let comp = footprints.component(index);
+            self.check_stop().map_err(CanonError::with_read_error)?;
+            let start = lines.text.len();
+            self.write_component(comp, render, &mut lines.text, memory)?;
+            memory.push(&mut lines.spans, (start, lines.text.len()))?;
+        }
+        lines.sort();
+        hash_lines(self.hash, lines.iter(), self.stop).map_err(CanonError::with_read_error)
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
@@ -3257,7 +3295,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         footprints: &memo::Footprints<D::Id>,
         memory: &mut Memory<'_, S>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
-        let mut frame = self.n_degree_frame(identifier, issuer, || {
+        let mut frame = self.n_degree_frame(identifier, issuer, footprints, || {
             (
                 RdfcSearchContext::InitialFrame {
                     root_ordinal: self.blank_ordinal(identifier),
@@ -3283,24 +3321,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             let child_issuer = candidate.issuer.clone();
                             candidate.pending = Some(related);
                             group.candidate = Some(candidate);
-                            let mut child = self.n_degree_frame(related, child_issuer, || {
-                                let depth = parents.len();
-                                let observation = self.refusal_group(
-                                    self.blank_ordinal(frame_identifier),
-                                    depth,
-                                    &frame.issuer,
-                                    group,
-                                );
-                                let parent_group = observation.active.group;
-                                let context = RdfcSearchContext::ChildFrame {
-                                    root_ordinal: self.blank_ordinal(identifier),
-                                    frame_ordinal: self.blank_ordinal(related),
-                                    depth: depth + 1,
-                                    parent_group,
-                                };
-                                let (path, groups) = self.refusal_path(observation, &mut parents);
-                                (context, path, Some(groups))
-                            })?;
+                            let mut child =
+                                self.n_degree_frame(related, child_issuer, footprints, || {
+                                    let depth = parents.len();
+                                    let observation = self.refusal_group(
+                                        self.blank_ordinal(frame_identifier),
+                                        depth,
+                                        &frame.issuer,
+                                        group,
+                                    );
+                                    let parent_group = observation.active.group;
+                                    let context = RdfcSearchContext::ChildFrame {
+                                        root_ordinal: self.blank_ordinal(identifier),
+                                        frame_ordinal: self.blank_ordinal(related),
+                                        depth: depth + 1,
+                                        parent_group,
+                                    };
+                                    let (path, groups) =
+                                        self.refusal_path(observation, &mut parents);
+                                    (context, path, Some(groups))
+                                })?;
                             let permutations = &group.permutations;
                             let candidate = group
                                 .candidate
@@ -3598,6 +3638,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
+        footprints: &memo::Footprints<D::Id>,
         context: impl FnOnce() -> (
             RdfcSearchContext,
             RdfcActivePath,
@@ -3609,11 +3650,18 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
-        let components = self.incident.get(&identifier).cloned().unwrap_or_default();
-        for comp in &components {
-            self.related_blanks(*comp, identifier, &issuer, &mut |related, related_hash| {
-                hn.entry(related_hash).or_default().push(related);
-            })?;
+        let mut paths = PathScratch::new();
+        for &(_, index) in footprints.incident(identifier) {
+            let comp = footprints.component(index);
+            self.related_blanks(
+                comp,
+                identifier,
+                &issuer,
+                &mut paths,
+                &mut |related, related_hash| {
+                    hn.entry(related_hash).or_default().push(related);
+                },
+            )?;
         }
 
         Ok(NDegreeFrame {
@@ -3632,16 +3680,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         comp: Component<D::Id>,
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
+        paths: &mut PathScratch<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
     ) -> Result<(), CanonError<D::ReadError>> {
         let (s, p, o, g) = comp.slots();
         // Standard quad positions whose blanks are "related": subject, object, graph.
         // (Predicates are always IRIs / sentinels — never blank.) Blanks nested
         // inside a triple-term slot recurse with a position-path tag (RDF-1.2 ext).
-        self.related_in_slot(s, "s", &p, focus, issuer, f)?;
-        self.related_in_slot(o, "o", &p, focus, issuer, f)?;
+        paths.begin("s");
+        self.related_in_slot(s, &p, focus, issuer, paths, f)?;
+        paths.begin("o");
+        self.related_in_slot(o, &p, focus, issuer, paths, f)?;
         if let Some(g) = g {
-            self.related_in_slot(g, "g", &p, focus, issuer, f)?;
+            paths.begin("g");
+            self.related_in_slot(g, &p, focus, issuer, paths, f)?;
         }
         Ok(())
     }
@@ -3656,10 +3708,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn related_in_slot(
         &self,
         slot: Slot<D::Id>,
-        position: &str,
         predicate: &Slot<D::Id>,
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
+        paths: &mut PathScratch<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
     ) -> Result<(), CanonError<D::ReadError>> {
         // The annotation-overlay graph marker carries a real graph term whose blanks
@@ -3668,9 +3720,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => id,
             Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return Ok(()),
         };
-        let mut held: Vec<(D::Id, Cow<'_, str>)> = Vec::new();
-        let mut next = Some((id, Cow::Borrowed(position)));
-        while let Some((id, position)) = next.take().or_else(|| held.pop()) {
+        let mut next = Some((id, 0, paths.text.len()));
+        while let Some((id, start, end)) = next.take().or_else(|| paths.held.pop()) {
             self.check_stop().map_err(CanonError::with_read_error)?;
             let Some(guard) = self.ds.resolve_if_ready(id) else {
                 return Ok(());
@@ -3678,7 +3729,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             match guard.term() {
                 TermRef::Blank { .. } => {
                     if id != focus {
-                        let h = self.hash_related_blank_node(id, &position, predicate, issuer);
+                        let h = self.hash_related_blank_node(
+                            id,
+                            &paths.text[start..end],
+                            predicate,
+                            issuer,
+                        );
                         f(id, h);
                     }
                 }
@@ -3686,11 +3742,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     // Nested-triple blanks get a position path so role inside the
                     // quoted triple is distinguished (RDF-1.2 extension; never hit by
                     // the W3C suite).
-                    held.extend([
-                        (o, Cow::Owned(format!("{position}.o"))),
-                        (p, Cow::Owned(format!("{position}.p"))),
-                    ]);
-                    next = Some((s, Cow::Owned(format!("{position}.s"))));
+                    let (o_at, o_end) = paths.child(start, end, ".o");
+                    paths.held.push((o, o_at, o_end));
+                    let (p_at, p_end) = paths.child(start, end, ".p");
+                    paths.held.push((p, p_at, p_end));
+                    let (s_at, s_end) = paths.child(start, end, ".s");
+                    next = Some((s, s_at, s_end));
                 }
                 TermRef::Literal {
                     lexical, datatype, ..
@@ -3702,6 +3759,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     // which is what canonicality requires.
                     let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
                     rendering::ScratchGrant::new(reservation).run(|memory| {
+                        let position = &paths.text[start..end];
                         let related = composite_blanks(self.ds, lexical, datatype, memory)?;
                         let mut cdt_position = String::new();
                         let result = (|| {
@@ -3709,7 +3767,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                 self.check_stop().map_err(CanonError::with_read_error)?;
                                 if related != focus {
                                     if cdt_position.is_empty() {
-                                        memory.push_str(&mut cdt_position, &position)?;
+                                        memory.push_str(&mut cdt_position, position)?;
                                         memory.push_str(&mut cdt_position, ".cdt")?;
                                     }
                                     let h = self.hash_related_blank_node(
@@ -3953,7 +4011,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// part of any admitted account, so no charge or poll moves with them.
     fn drop_search_state(&mut self) {
         drop(std::mem::take(&mut self.blanks));
-        drop(std::mem::take(&mut self.incident));
         drop(std::mem::take(&mut self.first_degree));
         drop(std::mem::take(&mut self.canonical.order));
     }
@@ -4787,7 +4844,24 @@ mod tests {
     use crate::dataset_view::ViewOperationStatus;
     use crate::ir::RdfDatasetBuilder;
     use crate::{RdfLiteral, RdfTextDirection};
+    use std::collections::BTreeSet;
     use std::sync::Arc;
+
+    /// One blank node's first-degree hash through its own scratch account.
+    fn first_degree_of<D: DatasetView>(
+        state: &CanonState<'_, D>,
+        blank: D::Id,
+        footprints: &memo::Footprints<D::Id>,
+    ) -> Result<HashHex, CanonError<D::ReadError>> {
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        memory.try_scope(|memory| {
+            let mut lines = rendering::LineArena::default();
+            let hash = state.hash_first_degree(blank, footprints, &mut lines, memory)?;
+            lines.release(memory).map_err(CanonError::Storage)?;
+            Ok(hash)
+        })
+    }
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}")).unwrap()
@@ -6453,7 +6527,7 @@ mod tests {
     /// genuine base quad is emitted exactly once — checked AT THE ID LEVEL (a raw
     /// [`collect_components`] walk, not the rendered-text `BTreeSet` `serialize_canonical`
     /// also deduplicates through) so a would-be duplicate component never reaches
-    /// [`CanonState`]'s incident map. Exercised in both the default graph and a named
+    /// the search's component table. Exercised in both the default graph and a named
     /// graph, matching the two graph slots [`collect_components`]'s two `CanonScope`
     /// arms handle separately.
     #[test]
@@ -6515,7 +6589,7 @@ mod tests {
             component_count(&twice),
             component_count(&once),
             "a row spelled twice must contribute exactly the components a row spelled \
-             once contributes — no duplicate may reach the incident map"
+             once contributes — no duplicate may reach the component table"
         );
         let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_once = CanonState::new(
@@ -8232,7 +8306,6 @@ mod tests {
             Err(CanonError::Stopped)
         ));
         assert_eq!(state.blanks, []);
-        assert!(state.incident.is_empty());
     }
 
     /// Deep n-degree traversal suspends owned issuers without native recursion.
@@ -8268,7 +8341,7 @@ mod tests {
             let mut memory = Memory::new(&mut storage);
             let footprints = state.collect_incidence(&mut memory).unwrap();
             for &blank in &state.blanks {
-                let hash = state.hash_first_degree(blank).unwrap();
+                let hash = first_degree_of(&state, blank, &footprints).unwrap();
                 state.first_degree.insert(blank, hash);
             }
             let mut issuer = IdIssuer::new(TEMP_PREFIX);
@@ -8302,7 +8375,7 @@ mod tests {
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &blank in &state.blanks {
-            let hash = state.hash_first_degree(blank).unwrap();
+            let hash = first_degree_of(&state, blank, &footprints).unwrap();
             state.first_degree.insert(blank, hash);
         }
         signal.0.store(1000, std::sync::atomic::Ordering::Relaxed);
@@ -8447,7 +8520,7 @@ mod tests {
                 for &id in &state.blanks {
                     state
                         .first_degree
-                        .insert(id, state.hash_first_degree(id).unwrap());
+                        .insert(id, first_degree_of(&state, id, &footprints).unwrap());
                 }
                 let mut entry = IdIssuer::new(TEMP_PREFIX);
                 entry.issue(root);
@@ -8517,7 +8590,7 @@ mod tests {
         for &id in &state.blanks {
             state
                 .first_degree
-                .insert(id, state.hash_first_degree(id).unwrap());
+                .insert(id, first_degree_of(&state, id, &footprints).unwrap());
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
@@ -8545,7 +8618,7 @@ mod tests {
             )
             .unwrap();
         let mut frame = state
-            .n_degree_frame(fixture.branches[0], alternate.clone(), || {
+            .n_degree_frame(fixture.branches[0], alternate.clone(), &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),
@@ -8659,7 +8732,7 @@ mod tests {
         for &id in &state.blanks {
             state
                 .first_degree
-                .insert(id, state.hash_first_degree(id).unwrap());
+                .insert(id, first_degree_of(&state, id, &footprints).unwrap());
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
@@ -8676,7 +8749,7 @@ mod tests {
         )
         .unwrap();
         let mut frame = state
-            .n_degree_frame(fixture.branches[0], entry, || {
+            .n_degree_frame(fixture.branches[0], entry, &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),
