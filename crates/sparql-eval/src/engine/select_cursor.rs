@@ -368,6 +368,7 @@ impl NativeSparqlEngine {
             prepared,
             Prebindings::Owned(substitutions),
             options,
+            coordinates::Consumer::Retained,
         )?;
         if let Some(source) = source {
             context = context.with_evidence_source(source)?;

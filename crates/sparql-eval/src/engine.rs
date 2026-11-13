@@ -1989,7 +1989,13 @@ impl NativeSparqlEngine {
     ) -> Result<SparqlResult, EvaluationFailure> {
         let mut ctx = self.query_ctx(dataset, options, workspace)?;
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
-        coordinates::capture_query(&ctx, prepared, Prebindings::Owned(substitutions), options)?;
+        coordinates::capture_query(
+            &ctx,
+            prepared,
+            Prebindings::Owned(substitutions),
+            options,
+            coordinates::Consumer::Discarded,
+        )?;
         let outcome =
             evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?;
         materialize(outcome, &ctx)
@@ -2456,6 +2462,7 @@ impl NativeSparqlEngine {
             prepared,
             Prebindings::Owned(substitutions.values),
             options,
+            coordinates::Consumer::Retained,
         )?;
         let evaluated = evaluate_governed_with_substitutions(
             prepared,
@@ -3851,7 +3858,13 @@ impl NativeSparqlEngine {
             options.now.is_some(),
             options.entropy_seed.is_some(),
         )?;
-        *capture = coordinates::capture_query(&ctx, prepared, substitutions, options)?;
+        *capture = coordinates::capture_query(
+            &ctx,
+            prepared,
+            substitutions,
+            options,
+            coordinates::Consumer::Retained,
+        )?;
         // Every worker reports to this original admitted owner. Installing it
         // before any fork prevents a worker-local report from being lost.
         ctx.shape_state.ensure_reports(&capability)?;
@@ -4621,6 +4634,7 @@ impl NativeSparqlEngine {
             &execution.prepared,
             execution.coordinate_bindings(),
             options,
+            coordinates::Consumer::Discarded,
         )?;
         // This run's scratch interner comes from the execution's retained workspace
         // rather than from the context's own lazy one — emptied by the previous run
@@ -4833,8 +4847,13 @@ impl NativeSparqlEngine {
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
-        let coordinates =
-            coordinates::capture_query(&ctx, &prepared, execution.coordinate_bindings(), options)?;
+        let coordinates = coordinates::capture_query(
+            &ctx,
+            &prepared,
+            execution.coordinate_bindings(),
+            options,
+            coordinates::Consumer::Retained,
+        )?;
         // The retained workspace, exactly as on the ungoverned twin — and taken
         // here rather than inside `governed_ctx` so both lanes spell it at the same
         // level, beside the `substituted` call whose borrow it has to sit outside.
@@ -5284,6 +5303,7 @@ impl NativeSparqlEngine {
             &prepared,
             Prebindings::Borrowed(request.substitutions),
             options,
+            coordinates::Consumer::Discarded,
         )?;
         if let Some(source) = source {
             ctx = ctx.with_evidence_source(source)?;
@@ -5368,6 +5388,7 @@ impl NativeSparqlEngine {
                 &prepared,
                 Prebindings::Borrowed(request.substitutions),
                 &options,
+                coordinates::Consumer::Retained,
             )?;
             let evaluated = evaluate_governed_with_substitutions(
                 &prepared,

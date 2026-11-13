@@ -116,6 +116,10 @@ impl ClassMembershipIndex {
 #[derive(Debug, Default)]
 struct SharedIndex {
     index: OnceLock<Option<ClassMembershipIndex>>,
+    /// The view's source identity, bound on first request. Hashing a frozen
+    /// dataset's content is paid only by a consumer that reads it (a receipt or
+    /// coordinate observer), never by an ordinary bind.
+    snapshot: OnceLock<Option<purrdf_hash::hex::Digest32>>,
     #[cfg(test)]
     builds: std::sync::atomic::AtomicUsize,
 }
@@ -124,7 +128,6 @@ struct SharedIndex {
 #[derive(Debug, Clone)]
 pub(crate) struct ClassMembershipView {
     base: Arc<ShaclDatasetView>,
-    snapshot: Option<purrdf_hash::hex::Digest32>,
     rdf_type: Option<TermId>,
     subclass_of: Option<TermId>,
     /// The supplementary `(subclass, superclass)` edges, sorted and deduplicated;
@@ -162,10 +165,8 @@ impl ClassMembershipView {
             .collect();
         edges.sort_unstable();
         edges.dedup();
-        let snapshot = class_snapshot(&base, &edges);
         Self {
             base,
-            snapshot,
             rdf_type,
             subclass_of,
             supplement: (!edges.is_empty()).then(|| edges.into()),
@@ -477,8 +478,9 @@ impl ClassMembershipView {
     }
 }
 
-/// Bind the asserted-subclass law and its supplementary IRI edges once, without
-/// building or scanning the lazy membership index.
+/// Bind the asserted-subclass law and its supplementary IRI edges, without
+/// building or scanning the lazy membership index. Called on the first request
+/// for the view's identity, not when the view is built.
 fn class_snapshot(
     base: &ShaclDatasetView,
     edges: &[(TermId, TermId)],
@@ -741,7 +743,10 @@ impl DatasetView for ClassMembershipView {
     type ProbePlan = QuadProbePlan;
 
     fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(self.snapshot)
+        Ok(*self
+            .shared
+            .snapshot
+            .get_or_init(|| class_snapshot(&self.base, self.supplement())))
     }
 
     fn reserve_owned_workspace(
@@ -1176,6 +1181,21 @@ mod tests {
             ClassMembershipView::new(dataset),
             [rdf_type, subclass, sub, mid, top, other, alice, bob],
         )
+    }
+
+    /// Building a view hashes nothing; the first read of its identity hashes the base once
+    /// and every clone then reports the same value.
+    #[test]
+    fn the_view_identity_is_bound_on_first_request_and_shared_by_clones() {
+        let (view, _) = fixture();
+        let sealed = |view: &ClassMembershipView| {
+            !format!("{:?}", view.base()).contains("snapshot_identity: OnceLock(<uninit>)")
+        };
+        assert!(!sealed(&view));
+        let clone = view.clone();
+        let identity = clone.snapshot_identity().unwrap().expect("native identity");
+        assert!(sealed(&view));
+        assert_eq!(view.snapshot_identity().unwrap(), Some(identity));
     }
 
     #[test]

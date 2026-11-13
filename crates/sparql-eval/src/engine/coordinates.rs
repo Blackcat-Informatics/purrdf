@@ -138,12 +138,33 @@ impl QueryCoordinates {
     }
 }
 
+/// Whether the identities a capture seals are read by anyone.
+///
+/// The source snapshot identity can hash every row of a frozen dataset, so it is
+/// requested only for a consumer: the caller's coordinate observer, or a result
+/// that carries the coordinates back to the caller (`Retained`). A lane that
+/// drops its capture and has no observer (`Discarded`) never reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Consumer {
+    /// The coordinates are returned to the caller inside the result.
+    Retained,
+    /// The coordinates are dropped unless the options carry an observer.
+    Discarded,
+}
+
+impl Consumer {
+    fn reads_identity(self, options: &super::QueryOptions<'_, '_>) -> bool {
+        self == Self::Retained || options.coordinate_observer.is_some()
+    }
+}
+
 /// Capture the request's exact algebra and effective bindings under its account.
 pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
     ctx: &crate::eval::EvalCtx<'_, D>,
     prepared: &super::PreparedQuery,
     bindings: crate::substitute::Prebindings<'_>,
     options: &super::QueryOptions<'_, '_>,
+    consumer: Consumer,
 ) -> Result<QueryCoordinates, EvalError> {
     let request: Result<[u8; 32], EvalError> = (|| {
         let mut frame = LexicalFrame::new(&ctx.growth);
@@ -186,7 +207,7 @@ pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
         Ok(*request.finalize().as_bytes())
     })();
     match request {
-        Ok(request) => capture_request(ctx, request, options, false),
+        Ok(request) => capture_request(ctx, request, options, false, consumer),
         Err(error) => {
             if let Some(observer) = options.coordinate_observer {
                 observer.observe(&QueryCoordinates::started(
@@ -207,6 +228,7 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
     request: [u8; 32],
     options: &super::QueryOptions<'_, '_>,
     external_source: bool,
+    consumer: Consumer,
 ) -> Result<QueryCoordinates, EvalError> {
     let mut coordinates = QueryCoordinates::started(
         &ctx.now,
@@ -215,6 +237,9 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
         options.entropy_seed.is_some(),
     )?;
     let identity: Result<(), EvalError> = (|| {
+        if !consumer.reads_identity(options) {
+            return Ok(());
+        }
         let QueryCoordinates::Started(value) = &mut coordinates else {
             unreachable!()
         };
