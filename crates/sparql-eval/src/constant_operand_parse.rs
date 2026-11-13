@@ -99,3 +99,38 @@ fn row_dependent_operand_is_still_parsed_per_row() {
         "a computed operand must be parsed for every extra row: {few} then {many}"
     );
 }
+
+/// **The memo never changes an answer**, past its inline slots and across constants
+/// that share a lexical form. Nine distinct constants overflow the eight slots; the
+/// ninth, parsed per use, must still decide the answer in both directions. A boolean
+/// literal `"7"` shares its lexical form with the integer `7` but is not a boolean
+/// value, so it must not borrow the integer's parse: its effective boolean value is
+/// an error and drops the row, while `"1"` keeps it.
+#[test]
+fn memo_answers_match_past_the_slots_and_across_datatypes() {
+    let nine = |last: &str| {
+        let mut parts: Vec<String> = (1..=8).map(|n| format!("?v > 0.{n}e0")).collect();
+        parts.push(format!("?v > {last}"));
+        parts.join(" && ")
+    };
+    assert_eq!(
+        parses_of(40, &nine("6.5e0")).0,
+        40,
+        "the ninth constant holds"
+    );
+    assert_eq!(
+        parses_of(40, &nine("8.5e0")).0,
+        0,
+        "the ninth constant refuses"
+    );
+    let xsd_boolean = "http://www.w3.org/2001/XMLSchema#boolean";
+    assert_eq!(
+        parses_of(40, &format!("?v = 7 && \"7\"^^<{xsd_boolean}>")).0,
+        0,
+        "an ill-formed boolean must not reuse the integer 7 parse"
+    );
+    assert_eq!(
+        parses_of(40, &format!("?v = 7 && \"1\"^^<{xsd_boolean}>")).0,
+        40
+    );
+}

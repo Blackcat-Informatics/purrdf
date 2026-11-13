@@ -1,0 +1,312 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The label search is frozen against its earlier behaviour.
+//!
+//! Each case is a blank-heavy shape: chains, rings, stars, cliques whose members
+//! collide at first degree (so the n-degree search runs), reifier-shaped data with
+//! triple terms, disconnected identical components and blank nodes in graph
+//! position. For every case and both presentations, one digest covers the
+//! canonical document and the issued label of every source blank node.
+//!
+//! The pinned digests are frozen expected values: a change that moves a label or
+//! a byte changes a digest.
+
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use purrdf_core::{
+    BlankScope, CanonHash, CanonicalizationControl, ContentDigest, RDFC_V2_CORPUS_POLICY,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize_flat_view,
+    try_canonicalize_view,
+};
+
+fn iri(b: &mut RdfDatasetBuilder, name: &str) -> TermId {
+    b.intern_iri(&format!("https://example.org/{name}"))
+        .unwrap()
+}
+
+fn blank(b: &mut RdfDatasetBuilder, label: &str) -> TermId {
+    b.intern_blank(label, BlankScope::DEFAULT).unwrap()
+}
+
+/// A path `b0 -p-> b1 -p-> ... -p-> b(n-1)` closed by IRIs at both ends.
+fn chain(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let (head, tail) = (iri(&mut b, "head"), iri(&mut b, "tail"));
+    let nodes: Vec<_> = (0..n).map(|i| blank(&mut b, &format!("c{i}"))).collect();
+    b.push_quad(head, p, nodes[0], None).unwrap();
+    for pair in nodes.windows(2) {
+        b.push_quad(pair[0], p, pair[1], None).unwrap();
+    }
+    b.push_quad(nodes[n - 1], p, tail, None).unwrap();
+    b.freeze().unwrap()
+}
+
+/// A directed ring of `n` identical blank nodes.
+fn ring(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let nodes: Vec<_> = (0..n).map(|i| blank(&mut b, &format!("r{i}"))).collect();
+    for i in 0..n {
+        b.push_quad(nodes[i], p, nodes[(i + 1) % n], None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// A centre blank node with `n` identical blank leaves.
+fn star(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let centre = blank(&mut b, "centre");
+    let anchor = iri(&mut b, "anchor");
+    b.push_quad(anchor, p, centre, None).unwrap();
+    for i in 0..n {
+        let leaf = blank(&mut b, &format!("leaf{i}"));
+        b.push_quad(centre, p, leaf, None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// Every ordered pair of `n` identical blank nodes joined.
+fn clique(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let nodes: Vec<_> = (0..n).map(|i| blank(&mut b, &format!("k{i}"))).collect();
+    for i in 0..n {
+        for j in 0..n {
+            if i != j {
+                b.push_quad(nodes[i], p, nodes[j], None).unwrap();
+            }
+        }
+    }
+    b.freeze().unwrap()
+}
+
+/// `copies` disjoint, identical rings of `size` blank nodes.
+fn disconnected(copies: usize, size: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    for c in 0..copies {
+        let nodes: Vec<_> = (0..size)
+            .map(|i| blank(&mut b, &format!("d{c}_{i}")))
+            .collect();
+        for i in 0..size {
+            b.push_quad(nodes[i], p, nodes[(i + 1) % size], None)
+                .unwrap();
+        }
+    }
+    b.freeze().unwrap()
+}
+
+/// Reifier blank nodes over triple terms; `twins` of them are identical, and a
+/// blank node sits inside the triple term of each.
+fn reifiers(distinct: usize, twins: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let note = iri(&mut b, "note");
+    for j in 0..distinct {
+        let r = blank(&mut b, &format!("rf{j}"));
+        let s = iri(&mut b, &format!("s{j}"));
+        let o = iri(&mut b, &format!("o{j}"));
+        let t = b.intern_triple(s, p, o).unwrap();
+        b.push_reifier_in_graph(r, t, None).unwrap();
+        let v = b
+            .intern_literal(RdfLiteral::simple(format!("value {j}")))
+            .unwrap();
+        b.push_annotation_in_graph(r, note, v, None).unwrap();
+    }
+    let s = iri(&mut b, "shared-s");
+    let o = iri(&mut b, "shared-o");
+    for j in 0..twins {
+        let r = blank(&mut b, &format!("tw{j}"));
+        let inner = blank(&mut b, &format!("in{j}"));
+        let t = b.intern_triple(s, p, inner).unwrap();
+        b.push_reifier_in_graph(r, t, None).unwrap();
+        b.push_quad(inner, p, o, None).unwrap();
+        let v = b
+            .intern_literal(RdfLiteral::simple("same".to_owned()))
+            .unwrap();
+        b.push_annotation_in_graph(r, note, v, None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// Triple terms that nest a triple term, with identical blank members.
+fn nested_triples(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let s = iri(&mut b, "s");
+    for j in 0..n {
+        let r = blank(&mut b, &format!("nr{j}"));
+        let x = blank(&mut b, &format!("nx{j}"));
+        let y = blank(&mut b, &format!("ny{j}"));
+        let inner = b.intern_triple(x, p, y).unwrap();
+        let outer = b.intern_triple(s, p, inner).unwrap();
+        b.push_reifier_in_graph(r, outer, None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// Blank nodes in graph position, identical in pairs.
+fn blank_graphs(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let s = iri(&mut b, "s");
+    let o = iri(&mut b, "o");
+    for i in 0..n {
+        let g = blank(&mut b, &format!("g{i}"));
+        let x = blank(&mut b, &format!("gx{i}"));
+        b.push_quad(s, p, x, Some(g)).unwrap();
+        b.push_quad(x, p, o, Some(g)).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// A ring whose members also carry a distinguishing literal on every other node.
+fn partial_ring(n: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = iri(&mut b, "p");
+    let q = iri(&mut b, "q");
+    let nodes: Vec<_> = (0..n).map(|i| blank(&mut b, &format!("m{i}"))).collect();
+    for i in 0..n {
+        b.push_quad(nodes[i], p, nodes[(i + 1) % n], None).unwrap();
+        if i % 2 == 0 {
+            let v = b
+                .intern_literal(RdfLiteral::simple(format!("v{}", i / 2 % 2)))
+                .unwrap();
+            b.push_quad(nodes[i], q, v, None).unwrap();
+        }
+    }
+    b.freeze().unwrap()
+}
+
+fn cases() -> Vec<(&'static str, Arc<RdfDataset>)> {
+    vec![
+        ("chain-7", chain(7)),
+        ("ring-6", ring(6)),
+        ("star-5", star(5)),
+        ("clique-4", clique(4)),
+        ("clique-5", clique(5)),
+        ("disconnected-3x3", disconnected(3, 3)),
+        ("reifiers-6-twins-3", reifiers(6, 3)),
+        ("reifiers-0-twins-4", reifiers(0, 4)),
+        ("nested-triples-3", nested_triples(3)),
+        ("blank-graphs-3", blank_graphs(3)),
+        ("partial-ring-8", partial_ring(8)),
+    ]
+}
+
+/// One digest over the document and every source blank's issued label.
+fn identity(ds: &RdfDataset, document: &str, labels: Vec<(TermId, String)>) -> String {
+    let mut named: Vec<String> = labels
+        .into_iter()
+        .map(|(id, label)| match ds.term_value(id) {
+            TermValue::Blank { label: source, .. } => format!("{source}={label}"),
+            other => panic!("a label is issued to a blank node, got {other:?}"),
+        })
+        .collect();
+    named.sort();
+    let mut text = String::from(document);
+    text.push_str("--labels--\n");
+    for line in named {
+        writeln!(text, "{line}").unwrap();
+    }
+    ContentDigest::of(text.as_bytes()).to_hex()
+}
+
+fn digests(ds: &RdfDataset) -> [String; 2] {
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let overlay = try_canonicalize_view(ds, CanonHash::Sha256, &mut control).unwrap();
+    let overlay_id = identity(
+        ds,
+        overlay.nquads(),
+        overlay.labels().map(|(id, l)| (id, l.to_owned())).collect(),
+    );
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let flat = try_canonicalize_flat_view(ds, CanonHash::Sha256, &mut control).unwrap();
+    let flat_id = identity(
+        ds,
+        flat.nquads(),
+        flat.labels().map(|(id, l)| (id, l.to_owned())).collect(),
+    );
+    [overlay_id, flat_id]
+}
+
+/// Frozen expected `(case, overlay, flat)` digests.
+const PINNED: &[(&str, &str, &str)] = &[
+    (
+        "chain-7",
+        "d801628135ab840be6e6789973da3504f75050ec0122fde98fc158c43b5e09e0",
+        "d801628135ab840be6e6789973da3504f75050ec0122fde98fc158c43b5e09e0",
+    ),
+    (
+        "ring-6",
+        "21f29ebd5e752e88d5519f775b64023f9e686c2f6d1f1982a3a5d869f56a30ae",
+        "21f29ebd5e752e88d5519f775b64023f9e686c2f6d1f1982a3a5d869f56a30ae",
+    ),
+    (
+        "star-5",
+        "fffe5bee9991beceb47b255e1b84355b0ab4e8f7d160768cf287443e7304666b",
+        "fffe5bee9991beceb47b255e1b84355b0ab4e8f7d160768cf287443e7304666b",
+    ),
+    (
+        "clique-4",
+        "466169eeab589abd8ce07561263cb673aa85188c5eb5e5b1a9e40c62cf9e4e87",
+        "466169eeab589abd8ce07561263cb673aa85188c5eb5e5b1a9e40c62cf9e4e87",
+    ),
+    (
+        "clique-5",
+        "be038aeb5d0541fae132d720a5748c2a8c5c8fdd81bde47f43582e135cba2d80",
+        "be038aeb5d0541fae132d720a5748c2a8c5c8fdd81bde47f43582e135cba2d80",
+    ),
+    (
+        "disconnected-3x3",
+        "807bd69a2554d7d8bd0fe1056606c611ee5cb7319e4506107d79d74549eb3768",
+        "807bd69a2554d7d8bd0fe1056606c611ee5cb7319e4506107d79d74549eb3768",
+    ),
+    (
+        "reifiers-6-twins-3",
+        "fe5431ce49264168bc94fbfdc736440a989c962e333527d2891e89df10c937cb",
+        "68616d8685e824a7c6b4060daa5b42dd50acc353fc39cf753f10ef7c5286fcf9",
+    ),
+    (
+        "reifiers-0-twins-4",
+        "590c3cbe1c876d3f56722cda17fedd70e6b3c47b1aabd831a98f43d67da735a9",
+        "cca11678b6eab7512e8b7a5f0495462b563071fe33912615bd67a56a354062d1",
+    ),
+    (
+        "nested-triples-3",
+        "50ad0db7fcceb0dab856b3b3efb80a5940acc7e7cbb35b632731c6ab26603f52",
+        "aa2dfc560723f6e280da8696a7336edbd4760e62fa4204ab3e7c4f8557122dcb",
+    ),
+    (
+        "blank-graphs-3",
+        "1954bf480f6507fd3932bd5baef3fd7cab9b4785582e2481427a58303b372624",
+        "1954bf480f6507fd3932bd5baef3fd7cab9b4785582e2481427a58303b372624",
+    ),
+    (
+        "partial-ring-8",
+        "ecec8e1dc94e088b434280b9477f66bab108e7c7a57f151dd5ae7c7be69cdad5",
+        "ecec8e1dc94e088b434280b9477f66bab108e7c7a57f151dd5ae7c7be69cdad5",
+    ),
+];
+
+#[test]
+fn the_label_search_keeps_every_byte_and_label_of_its_earlier_behaviour() {
+    let mut actual = String::new();
+    let mut mismatches = 0;
+    for (name, ds) in cases() {
+        let [overlay, flat] = digests(&ds);
+        writeln!(actual, "    (\"{name}\", \"{overlay}\", \"{flat}\"),").unwrap();
+        let pinned = PINNED.iter().find(|row| row.0 == name);
+        if pinned.is_none_or(|row| row.1 != overlay || row.2 != flat) {
+            mismatches += 1;
+        }
+    }
+    assert!(
+        mismatches == 0 && PINNED.len() == cases().len(),
+        "search output moved; current table:\n{actual}"
+    );
+}
