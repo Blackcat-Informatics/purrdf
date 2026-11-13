@@ -33,6 +33,14 @@ def http_response(code, body, returncode=0):
     )
 
 
+def reviewed(draft):
+    body = "# PurRDF 3.0.1\n\nComplete reviewed release.\n"
+    return dict(
+        tag_name=f"rust-v{VERSION}", name=f"PurRDF {VERSION}", body=body,
+        prerelease=False, draft=draft,
+    )
+
+
 class FakeGitHub:
     """No transport: a draft/published store retaining the uploaded bytes."""
 
@@ -56,18 +64,23 @@ class FakeGitHub:
         self.event("read")
         return copy.deepcopy(self.record)
 
-    def create_draft(self, tag, title, notes):
+    def by_id(self, identity):
+        self.event("read")
+        return copy.deepcopy(self.record)
+
+    def create_draft(self, tag, title, body):
         self.event("create")
         self.record = {
             "id": 12,
             "tag_name": tag,
             "name": title,
-            "body": notes.read_text(),
+            "body": body,
             "draft": True,
             "immutable": False,
             "prerelease": False,
             "assets": [],
         }
+        return copy.deepcopy(self.record)
 
     def edit(self, identity, **fields):
         self.event("publish" if fields.get("draft") is False else "edit")
@@ -111,19 +124,19 @@ class PublishedOnlyTransport(FakeGitHub):
         self.edits = []
 
     def __call__(self, arguments, **options):
-        if arguments[:3] == ["gh", "release", "create"]:
-            self.create_draft(
-                arguments[3],
-                arguments[arguments.index("--title") + 1],
-                Path(arguments[arguments.index("--notes-file") + 1]),
-            )
-        elif arguments[:3] == ["gh", "release", "upload"]:
+        if arguments[:3] == ["gh", "release", "upload"]:
             self.upload(arguments[3], list(map(Path, arguments[6:-1])))
         elif arguments[:3] == ["gh", "api", "--include"]:
             path = arguments[3].removeprefix("repos/owner/repo/")
             self.paths.append(path)
             if path in self.responses:
                 return self.responses[path]
+            if path == "releases":
+                fields = json.loads(options["input"])
+                value = self.create_draft(
+                    fields["tag_name"], fields["name"], fields["body"]
+                )
+                return http_response(201, json.dumps(value))
             if path.startswith("git/ref/tags/"):
                 self.event("tag")
                 value = {"object": {"type": "commit", "sha": self.sha}}
@@ -285,6 +298,28 @@ class PublicationTests(unittest.TestCase):
             self.publish()
         self.assertEqual(set(self.github.events), {"tag", "read"})
 
+    def test_created_draft_that_still_differs_is_refused_before_upload(self):
+        create = self.github.create_draft  # the stored record diverges after create
+        self.github.create_draft = lambda *a: [create(*a), self.github.record.update(
+            prerelease=0)][0]
+        with self.assertRaisesRegex(publisher.ReleaseError, r"in: prerelease \(body"):
+            self.publish()
+        self.assertNotIn("upload", self.github.events)
+
+    def test_missing_created_draft_is_an_explicit_error(self):
+        self.github.create_draft = lambda *a: None
+        with self.assertRaisesRegex(publisher.ReleaseError, "record not found"):
+            self.publish()
+        self.assertNotIn("edit", self.github.events)
+
+    def test_metadata_refusal_gives_lengths_and_field_names_only(self):
+        self.published()
+        self.github.record["body"] = "secret"
+        with self.assertRaisesRegex(
+            publisher.ReleaseError, r"in: body \(body length stored 6, reviewed \d+\)$"
+        ):
+            self.publish()
+
     def test_draft_metadata_is_repaired_before_upload(self):
         self.github.fail_at = "upload"
         with self.assertRaises(publisher.ReleaseError):
@@ -378,23 +413,12 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(
             transport.events.count("download"), 2 * len(publisher.asset_names(VERSION))
         )
-        self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 3)
-        self.assertEqual(transport.paths.count("releases/12"), 3)
+        self.assertEqual(transport.paths.count("releases?per_page=100&page=1"), 1)
+        self.assertEqual(transport.paths.count("releases/12"), 4)
         self.assertLess(
             transport.events.index("download"), transport.events.index("publish")
         )
-        self.assertEqual(
-            transport.edits,
-            [
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                    "draft": False,
-                }
-            ],
-        )
+        self.assertEqual(transport.edits, [reviewed(False)])
 
     def test_real_transport_reuses_draft_and_published_rerun_stays_read_only(self):
         transport = PublishedOnlyTransport()
@@ -407,25 +431,7 @@ class PublicationTests(unittest.TestCase):
         self.transport_publish(transport)
         self.assertNotIn("create", transport.events)
         self.assertIn("edit", transport.events)
-        self.assertEqual(
-            transport.edits,
-            [
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "draft": True,
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                },
-                {
-                    "tag_name": f"rust-v{VERSION}",
-                    "name": f"PurRDF {VERSION}",
-                    "body": "# PurRDF 3.0.1\n\nComplete reviewed release.\n",
-                    "prerelease": False,
-                    "draft": False,
-                },
-            ],
-        )
+        self.assertEqual(transport.edits, [reviewed(True), reviewed(False)])
         transport.events.clear()
         transport.paths.clear()
         for path in self.inputs:
@@ -444,11 +450,7 @@ class PublicationTests(unittest.TestCase):
 
     def test_transport_draft_patch_requires_an_explicit_selected_tag(self):
         transport = PublishedOnlyTransport()
-        transport.create_draft(
-            f"rust-v{VERSION}",
-            f"PurRDF {VERSION}",
-            self.root / "docs/releases/3.0.1.md",
-        )
+        transport.create_draft(f"rust-v{VERSION}", f"PurRDF {VERSION}", "body")
         github = publisher.GitHub("owner/repo")
         with patch.object(publisher.subprocess, "run", side_effect=transport):
             github.edit(12, name="repaired notes")
@@ -480,8 +482,7 @@ class PublicationTests(unittest.TestCase):
         ):
             with self.subTest(failure=failure):
                 transport = PublishedOnlyTransport()
-                notes = self.root / "docs/releases/3.0.1.md"
-                transport.create_draft(f"rust-v{VERSION}", f"PurRDF {VERSION}", notes)
+                transport.create_draft(f"rust-v{VERSION}", f"PurRDF {VERSION}", "body")
                 transport.events.clear()
                 if failure == "transport":
                     transport.responses["releases?per_page=100&page=1"] = http_response(
@@ -748,14 +749,12 @@ class TransportTests(unittest.TestCase):
         ):
             self.assertEqual(github.tag_sha("rust-v3.0.1"), SHA)
 
-    def test_create_always_uses_draft_and_existing_tag(self):
-        with patch.object(publisher.subprocess, "run") as run:
-            publisher.GitHub("owner/repo").create_draft(
-                "rust-v3.0.1", "PurRDF 3.0.1", Path("notes.md")
-            )
-        command = run.call_args.args[0]
-        self.assertIn("--draft", command)
-        self.assertIn("--verify-tag", command)
+    def test_create_posts_a_draft_and_returns_its_record(self):
+        github = publisher.GitHub("owner/repo")
+        with patch.object(github, "api", return_value={"id": 7}) as api:
+            self.assertEqual(github.create_draft("rust-v3.0.1", "T", "B"), {"id": 7})
+        self.assertIs(api.call_args.kwargs["body"]["draft"], True)
+        self.assertEqual(api.call_args.kwargs["method"], "POST")
 
     def test_workflow_uses_single_verified_publisher(self):
         workflow = (
