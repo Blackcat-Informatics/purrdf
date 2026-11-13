@@ -72,8 +72,9 @@ fn constant_operand_is_parsed_once_per_query() {
         "the constant must not be parsed again for each of the extra rows"
     );
     assert_eq!(
-        many, 3,
-        "one parse each of the dataset value, the constant and the boolean the comparison yields"
+        many, 4,
+        "the dataset value and the boolean the comparison yields once each, and the \
+         constant twice: on the first row and on the second, which stores it"
     );
 }
 
@@ -83,7 +84,7 @@ fn constant_operand_is_parsed_once_per_query() {
 fn constant_operand_memo_keeps_the_answer() {
     let (kept, parses) = parses_of(400, "?v > 8.5e0");
     assert_eq!(kept, 0);
-    assert_eq!(parses, 3);
+    assert_eq!(parses, 4);
 }
 
 /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a
@@ -133,4 +134,32 @@ fn memo_answers_match_past_the_slots_and_across_datatypes() {
         parses_of(40, &format!("?v = 7 && \"1\"^^<{xsd_boolean}>")).0,
         40
     );
+}
+
+/// **A frame that grows makes nested `EXISTS` refuse on a small stack.** The evaluation
+/// context sits in every nesting level's stack frame, and the parse memo is a field of
+/// it, so the context must stay no larger than it was before the memo existed. The
+/// bound is that size, 2448 bytes on a 64-bit target, with the memo's registry a few inline ids.
+#[test]
+fn the_parse_memo_does_not_enlarge_the_evaluation_frame() {
+    if size_of::<usize>() == 8 {
+        assert!(
+            size_of::<crate::eval::EvalCtx<'static, RdfDataset>>() <= 2448,
+            "the evaluation context grew: nested EXISTS would refuse on small stacks"
+        );
+    }
+}
+
+/// **Two computed constants with one lexical form and different datatypes do not share
+/// a parse.** Neither `9` literal is in the dataset, so both are scratch constants.
+#[test]
+fn same_lexical_form_with_different_datatypes_keeps_each_parse() {
+    let decimal = "http://www.w3.org/2001/XMLSchema#decimal";
+    let filter = format!(
+        "?v < \"9\"^^<{XSD_INTEGER}> && ?v < \"9\"^^<{decimal}> && \"9.5\"^^<{decimal}> > \"9\"^^<{XSD_INTEGER}>"
+    );
+    assert_eq!(parses_of(40, &filter).0, 40);
+    let wrong =
+        format!("?v < \"9\"^^<{XSD_INTEGER}> && \"9.5\"^^<{decimal}> < \"9\"^^<{XSD_INTEGER}>");
+    assert_eq!(parses_of(40, &wrong).0, 0);
 }

@@ -290,6 +290,11 @@ pub(crate) struct Linked<'e, I: Copy> {
     /// A function call's argument values, refilled by every call instruction, so a row
     /// that calls a function reuses one buffer instead of allocating its own.
     args: Arguments,
+    /// Whether an earlier row has already started: only then is a constant or boolean
+    /// term worth a parse memo, so a one-row query allocates nothing for it.
+    warm: bool,
+    /// Whether a row has started on this link.
+    began: bool,
     // The linked buffers are destroyed before their physical admission.
     _allocation: Option<crate::WorkspaceAllocation>,
 }
@@ -1071,6 +1076,8 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
             evidence: None,
             args,
             program,
+            warm: false,
+            began: false,
             _allocation: Some(allocation),
         })
     }
@@ -1087,6 +1094,8 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
             stack: Vec::new(),
             evidence: None,
             args: Arguments::new(&crate::WorkspaceCapability::resident()),
+            warm: false,
+            began: false,
             _allocation: None,
         }
     }
@@ -1174,6 +1183,8 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         ctx: &EvalCtx<'_, D>,
     ) -> Result<(), EvalError> {
         self.stack.clear();
+        self.warm = self.began;
+        self.began = true;
         if ctx.may_have_evidence()
             && self.evidence.is_none()
             && (self.program.has_exists()
@@ -1257,6 +1268,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
             stack,
             evidence,
             args,
+            warm,
             ..
         } = self;
         let mut records = if TRACKING {
@@ -1284,13 +1296,15 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 Op::Const(k) => {
                     let k = k as usize;
                     let term = match consts[k] {
-                        ConstCell::Read(term) => term,
+                        ConstCell::Read(term) => {
+                            if let (true, Some(SolutionTerm::Computed(id))) = (*warm, term) {
+                                ctx.constant_parses.register(id, &ctx.growth);
+                            }
+                            term
+                        }
                         ConstCell::Unread => {
                             let value = program.consts[k].value_admitted(&ctx.growth)?;
                             let term = ctx.intern_workspace_term(value)?;
-                            if let Some(SolutionTerm::Computed(id)) = term {
-                                ctx.constant_parses.register(id, &ctx.growth);
-                            }
                             consts[k] = ConstCell::Read(term);
                             term
                         }

@@ -760,7 +760,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
     /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
     /// scratch values are ephemeral and stay on the borrowed-view path.
-    pub(crate) xsd_parse_cache: crate::parsed_value::ParsedCache<D::Id>,
+    pub(crate) xsd_parse_cache:
+        crate::parsed_value::ParsedCache<crate::parsed_value::ParseKey<D::Id>>,
     /// Parses of the constant operands a program interned into the scratch table
     /// (unbounded evaluation only), so a constant is parsed once per query rather
     /// than once per row. Fresh in every fork, like `xsd_parse_cache`.
