@@ -2732,6 +2732,7 @@ fn exists_apply_first_witness_wrap() -> bool {
 fn exists_use_probe(
     correlated: bool,
     stateful: bool,
+    every_schema: bool,
     normalized: &GraphPattern,
     analysis: &crate::governor::soundness::NodeAnalysisTable,
     outer_schema: &VarSchema,
@@ -2741,7 +2742,7 @@ fn exists_use_probe(
     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
         return Ok(forced == ForcedExistsStrategy::Probe);
     }
-    if !correlated && !stateful {
+    if (!correlated && !stateful) || every_schema {
         return Ok(true);
     }
     crate::governor::soundness::probe_admissible_admitted(
@@ -2750,6 +2751,61 @@ fn exists_use_probe(
         outer_schema,
         workspace,
     )
+}
+
+/// What holds for one prepared `EXISTS` body whatever outer row or schema reaches
+/// it, so a resident evaluation can skip the per-row walks these facts decide.
+///
+/// * The body introduces no binding (no `BIND` or projection target, `UNFOLD`
+///   target, `VALUES` column or `GROUP`): the row-collision walk then answers "no
+///   collision" for every row, since every collision it reports names one of those.
+/// * The memoized probe is admissible with every free variable of the body treated
+///   as a current-row variable: probe admissibility only ever refuses because a
+///   current-row variable is present, and the variables a real outer schema
+///   supplies are a subset of those, so it is then admissible for every schema.
+///
+/// Learned on the site's second visit, so a site reached once allocates nothing
+/// for them. Both are properties of the immutable body alone, which is why a
+/// preparation shared across runs may keep them. Only a workspace without a
+/// storage budget reads them: a bounded run keeps its original per-row walks and
+/// their exact admission.
+#[derive(Debug, Default)]
+pub(crate) struct SiteFacts(std::sync::atomic::AtomicU8);
+
+impl SiteFacts {
+    const VISITED: u8 = 1;
+    const KNOWN: u8 = 2;
+    const NO_BINDING: u8 = 4;
+    const PROBE_EVERY_SCHEMA: u8 = 8;
+
+    /// The facts for `normalized`, or `None` on its first visit.
+    fn read(
+        &self,
+        normalized: &GraphPattern,
+        analysis: &crate::governor::soundness::NodeAnalysisTable,
+        free_vars: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<u8>, EvalError> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let state = self.0.load(Relaxed);
+        if state & Self::KNOWN != 0 {
+            return Ok(Some(state));
+        }
+        if state & Self::VISITED == 0 {
+            self.0.fetch_or(Self::VISITED, Relaxed);
+            return Ok(None);
+        }
+        let mut facts = Self::VISITED | Self::KNOWN;
+        if !crate::governor::soundness::introduces_row_binding(normalized, workspace)? {
+            facts |= Self::NO_BINDING;
+        }
+        if crate::governor::soundness::probe_admissible_admitted(
+            normalized, analysis, free_vars, workspace,
+        )? {
+            facts |= Self::PROBE_EVERY_SCHEMA;
+        }
+        Ok(Some(self.0.fetch_or(facts, Relaxed) | facts))
+    }
 }
 
 /// Evaluate `EXISTS { pattern }` for the current solution.
@@ -3380,7 +3436,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
         plan_map: ledger_source,
         source_owner,
     } = site;
-    let (normalized, analysis, free_vars, stateful) = match prepared.as_ref() {
+    let (normalized, analysis, free_vars, stateful, facts) = match prepared.as_ref() {
         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
         crate::eval::PreparedExists::FoldedFalse => return Ok(ExistsDecision::Complete(false)),
@@ -3389,8 +3445,17 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
             analysis,
             free_vars,
             stateful,
+            facts,
             ..
-        } => (normalized, analysis, free_vars, *stateful),
+        } => (normalized, analysis, free_vars, *stateful, facts),
+    };
+    // A bounded run keeps every per-row walk below with its original admission.
+    let facts = if ctx.growth.is_bounded() {
+        0
+    } else {
+        facts
+            .read(normalized, analysis, free_vars, &ctx.growth)?
+            .unwrap_or(0)
     };
 
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
@@ -3429,7 +3494,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     // deferred ([`exists_deferred_decide`]) and that reaches this function with nothing owed:
     // it is the body the eager copy would have been, reached inside the same window,
     // and skipped exactly as that copy was.
-    if !ctx.in_substituted_exists {
+    if !ctx.in_substituted_exists && facts & SiteFacts::NO_BINDING == 0 {
         // The outer-bound variables (a concrete binding in the current row), built
         // only for this check: it is the one consumer that needs the set itself.
         let outer_bound = VarSchema::from_vars_admitted(
@@ -3486,6 +3551,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     if exists_use_probe(
         correlated,
         stateful,
+        facts & SiteFacts::PROBE_EVERY_SCHEMA != 0,
         normalized,
         analysis,
         schema,
@@ -16016,6 +16082,7 @@ impl crate::eval::PreparedExists {
             )?,
             witness_sites: std::sync::OnceLock::new(),
             normalized_sites: std::sync::OnceLock::new(),
+            facts: SiteFacts::default(),
         })
     }
 }

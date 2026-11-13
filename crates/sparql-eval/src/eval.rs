@@ -445,6 +445,10 @@ pub(crate) enum PreparedExists {
         normalized_sites: std::sync::OnceLock<
             crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
         >,
+        /// What holds for [`Self::Pattern::normalized`] whatever row or outer schema
+        /// reaches it, learned on the site's second visit (see
+        /// [`crate::expr::SiteFacts`]).
+        facts: crate::expr::SiteFacts,
     },
 }
 
