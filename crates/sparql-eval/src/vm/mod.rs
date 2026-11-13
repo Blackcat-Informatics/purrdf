@@ -1288,6 +1288,9 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                         ConstCell::Unread => {
                             let value = program.consts[k].value_admitted(&ctx.growth)?;
                             let term = ctx.intern_workspace_term(value)?;
+                            if let Some(SolutionTerm::Computed(id)) = term {
+                                ctx.constant_parses.register(id, &ctx.growth);
+                            }
                             consts[k] = ConstCell::Read(term);
                             term
                         }

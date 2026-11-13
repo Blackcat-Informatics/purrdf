@@ -761,6 +761,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
     /// scratch values are ephemeral and stay on the borrowed-view path.
     pub(crate) xsd_parse_cache: crate::parsed_value::ParsedCache<D::Id>,
+    /// Parses of the constant operands a program interned into the scratch table
+    /// (unbounded evaluation only), so a constant is parsed once per query rather
+    /// than once per row. Fresh in every fork, like `xsd_parse_cache`.
+    pub(crate) constant_parses: crate::parsed_value::ConstantParses,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -1477,6 +1481,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: crate::workspace::ConstructedCells::default(),
@@ -3025,6 +3030,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: crate::workspace::ConstructedCells::default(),
@@ -3396,6 +3402,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: crate::workspace::ConstructedCells::default(),

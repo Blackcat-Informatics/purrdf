@@ -310,6 +310,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: "The whole `op_count` module is declared under `#[cfg(test)]`.",
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/op_count.rs",
+        name: "PARSES",
+        safety: Safety::NotCompiledIn,
+        reason: "The whole `op_count` module is declared under `#[cfg(test)]`.",
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/parallel.rs",
         name: "FORCE_PARALLEL",
         safety: Safety::NotCompiledIn,

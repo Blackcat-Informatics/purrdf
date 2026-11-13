@@ -1348,6 +1348,11 @@ pub(crate) fn intern_boolean<D: DatasetView + Sync>(
     let term = ctx
         .intern_workspace_term(value)?
         .expect("a boolean without a language tag is well formed");
+    if let SolutionTerm::Computed(id) = term {
+        // One of two fixed values per query; the effective boolean value of a
+        // comparison's result reads it on every row.
+        ctx.constant_parses.register(id, &ctx.growth);
+    }
     ctx.cached_bool_terms[slot] = Some(term);
     Ok(term)
 }
@@ -1464,8 +1469,9 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
 /// Dataset (`Existing`) parses are memoized per query by `TermId` (see
 /// [`EvalCtx::xsd_parse_cache`]): the lexical form and datatype are immutable for a
 /// fixed id, so a comparison/`FILTER` over N rows parses each distinct literal once
-/// instead of once per row. Computed scratch values are ephemeral and stay on the
-/// direct borrowed-view path.
+/// instead of once per row. A computed scratch value is parsed directly, except a
+/// program's constant operand on an unbounded evaluation, which is memoized once
+/// by [`EvalCtx::constant_parses`].
 fn xsd_of_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
@@ -1492,14 +1498,21 @@ fn xsd_of_term<D: DatasetView + Sync>(
                 .insert_admitted(id, parsed.clone(), &ctx.growth)?;
             Ok(parsed)
         }
-        SolutionTerm::Computed(sid) => match ctx.scratch.computed_value(sid) {
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                ..
-            } => parse_owned_xsd(lexical_form, datatype, &ctx.growth),
-            _ => Ok(None),
-        },
+        SolutionTerm::Computed(sid) => {
+            if let Some(cached) = ctx.constant_parses.get(sid) {
+                return Ok(cached.into_value());
+            }
+            let parsed = match ctx.scratch.computed_value(sid) {
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                } => parse_owned_xsd(lexical_form, datatype, &ctx.growth)?,
+                _ => None,
+            };
+            ctx.constant_parses.remember(sid, &parsed, &ctx.growth)?;
+            Ok(parsed)
+        }
     }
 }
 
@@ -1527,6 +1540,8 @@ fn parse_owned_xsd(
     iri: &str,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    #[cfg(test)]
+    crate::op_count::bump_parse();
     match XsdDatatype::from_iri(iri) {
         Some(datatype) => {
             crate::parsed_value::ParsedValue::parse(lexical, datatype, false, workspace)

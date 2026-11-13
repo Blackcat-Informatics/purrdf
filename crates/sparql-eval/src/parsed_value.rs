@@ -201,3 +201,56 @@ impl<K: Copy + Eq + Hash> ParsedCache<K> {
         Ok(())
     }
 }
+
+/// Parsed values of the constant operands a compiled expression reads from the
+/// scratch table, kept for the unbounded evaluation path only.
+///
+/// A constant operand is interned once per program, yet every row that compares
+/// against it would parse the same lexical form again, because a computed scratch
+/// value is not a dataset term and so misses the dataset parse cache. The scratch
+/// table is append-only within a query, so a scratch id names one immutable value
+/// and its parse is a pure function of the id. Only ids a program registered as
+/// constants are kept, so the table holds one entry per constant and never one per
+/// computed row value.
+///
+/// A bounded evaluation registers nothing: its parse is admitted and released on
+/// every use, and that accounting stays exactly as it was.
+#[derive(Debug, Default)]
+pub(crate) struct ConstantParses {
+    registered: Vec<crate::scratch::ScratchId>,
+    parsed: ParsedCache<crate::scratch::ScratchId>,
+}
+
+impl ConstantParses {
+    /// Record `id` as a constant operand. Does nothing on a bounded path.
+    pub(crate) fn register(
+        &mut self,
+        id: crate::scratch::ScratchId,
+        workspace: &WorkspaceCapability,
+    ) {
+        if !workspace.is_bounded() && !self.registered.contains(&id) {
+            self.registered.push(id);
+        }
+    }
+
+    /// The remembered parse of a registered constant, if one was stored.
+    pub(crate) fn get(&self, id: crate::scratch::ScratchId) -> Option<ParsedCacheHit> {
+        self.parsed.get(id)
+    }
+
+    /// Remember `parsed` for `id` when `id` is a registered constant.
+    ///
+    /// # Errors
+    /// Returns the admission refusal of the underlying table.
+    pub(crate) fn remember(
+        &mut self,
+        id: crate::scratch::ScratchId,
+        parsed: &Option<ParsedValue>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        if self.registered.contains(&id) {
+            self.parsed.insert_admitted(id, parsed.clone(), workspace)?;
+        }
+        Ok(())
+    }
+}

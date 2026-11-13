@@ -93,9 +93,26 @@ pub(crate) fn count_copied(node: NodeRef<'_>) {
     }
 }
 
+thread_local! {
+    static PARSES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Count one lexical-form parse of an XSD operand on this thread
+/// (`crate::expr::parse_owned_xsd`). Kept apart from [`OpCounts`]: it counts parsing,
+/// not tree nodes, so it is not part of [`OpCounts::total`].
+pub(crate) fn bump_parse() {
+    PARSES.with(|parses| parses.set(parses.get() + 1));
+}
+
+/// The XSD operand parses this thread has counted since [`reset`].
+pub(crate) fn parses() -> u64 {
+    PARSES.with(Cell::get)
+}
+
 /// Zero every counter on this thread.
 pub(crate) fn reset() {
     COUNTS.with(|counts| counts.set(OpCounts::default()));
+    PARSES.with(|parses| parses.set(0));
 }
 
 /// This thread's counters.
