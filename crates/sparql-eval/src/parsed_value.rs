@@ -245,11 +245,12 @@ impl ConstantParses {
     pub(crate) fn remember(
         &mut self,
         id: crate::scratch::ScratchId,
-        parsed: &Option<ParsedValue>,
+        parsed: Option<&ParsedValue>,
         workspace: &WorkspaceCapability,
     ) -> Result<(), EvalError> {
         if self.registered.contains(&id) {
-            self.parsed.insert_admitted(id, parsed.clone(), workspace)?;
+            self.parsed
+                .insert_admitted(id, parsed.cloned(), workspace)?;
         }
         Ok(())
     }
