@@ -197,3 +197,60 @@ fn the_statement_layer_is_skipped_only_when_the_view_certifies_it_empty() {
     assert_eq!(rows.1.len(), 1, "the annotation is answered");
     assert!(VIRTUAL_SOURCES.with(std::cell::Cell::get) > 0);
 }
+
+/// Float and double literals of every ordering class a direct comparison must keep:
+/// negative, zero of both signs, equal across the two types, infinities and NaN.
+fn float_dataset() -> Arc<RdfDataset> {
+    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    let mut b = RdfDatasetBuilder::new();
+    let f = b.intern_iri(&format!("{EX}f")).unwrap();
+    let values = [
+        ("-1.5", "float"),
+        ("-0", "float"),
+        ("0", "double"),
+        ("1.5", "float"),
+        ("1.5", "double"),
+        ("3", "float"),
+        ("INF", "float"),
+        ("-INF", "double"),
+        ("NaN", "float"),
+        ("0.1", "float"),
+        ("0.1", "double"),
+    ];
+    for (i, (lexical, kind)) in values.iter().enumerate() {
+        let s = b.intern_iri(&format!("{EX}f{i}")).unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::typed(*lexical, format!("{XSD}{kind}")))
+            .unwrap();
+        b.push_quad(s, f, o, None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+const FLOAT_SHAPES: [&str; 4] = [
+    "SELECT ?s WHERE { ?s ex:f ?a . ?t ex:f ?b . FILTER(?a < ?b) }",
+    "SELECT ?s WHERE { ?s ex:f ?a . ?t ex:f ?b . FILTER(?a >= ?b) }",
+    "SELECT ?s WHERE { ?s ex:f ?a . FILTER(?a > \"1.5\"^^<http://www.w3.org/2001/XMLSchema#double>) }",
+    "SELECT ?s WHERE { ?s ex:f ?a . FILTER(?a <= \"0\"^^<http://www.w3.org/2001/XMLSchema#float>) }",
+];
+
+/// The smallest completing account of each float shape, in order.
+const FLOAT_PINNED_LIMIT: [u64; 4] = [37808, 37808, 13584, 13880];
+
+#[test]
+fn float_comparison_is_the_same_directly_and_under_an_account() {
+    let data = float_dataset();
+    let mut pinned = Vec::new();
+    for shape in FLOAT_SHAPES {
+        let direct = unbounded(shape, &data);
+        let limit = smallest_completing_limit(shape, &data);
+        let accounted = bounded(shape, &data, limit).expect("completes at its smallest account");
+        assert_eq!(direct, accounted, "{shape}");
+        assert!(
+            bounded(shape, &data, limit - 8).is_none(),
+            "one step below refuses: {shape}"
+        );
+        pinned.push(limit);
+    }
+    assert_eq!(pinned, FLOAT_PINNED_LIMIT);
+}
