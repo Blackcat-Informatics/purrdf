@@ -23,7 +23,8 @@ use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::{CanonPhase, CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
 use purrdf_rdf::{
     CanonHash, ContentDigest, RdfDataset, StopSignal, try_canonical_sha256_view,
-    try_canonicalize_flat_view, try_canonicalize_sha256_view, try_flat_digest_view,
+    try_canonicalize_flat_view, try_canonicalize_sha256_view, try_flat_blake3_view,
+    try_flat_digest_view,
 };
 
 #[path = "support/canon_load.rs"]
@@ -274,6 +275,20 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
         "composed BLAKE3 equals the document BLAKE3"
     );
     line("flat_blake3_composed", &f, &flat, m, None);
+
+    // The streamed route: the same digest, with no document to build.
+    let window = WholeProcessWindow::open();
+    let streamed = try_flat_blake3_view(ds, HASH, &mut control(None)).expect("flat BLAKE3");
+    let m = window.close();
+    assert_eq!(
+        purrdf_hash::hex::encode(&streamed),
+        flat.blake3,
+        "streamed BLAKE3 equals the document BLAKE3"
+    );
+    let blake3_run =
+        |c: &mut CanonicalizationControl<'_>| try_flat_blake3_view(ds, HASH, c).is_ok();
+    let pre = with_pre_output.then(|| pre_output_peak(&blake3_run));
+    line("flat_blake3_streamed", &f, &flat, m, pre.as_ref());
 
     // The overlay presentation is a different document on the reifier shape, so its
     // length and digests come from its own result.

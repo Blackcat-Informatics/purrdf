@@ -85,7 +85,7 @@ canon(parse(canon(D))) == canon(D)
 
 ### 3.3 平铺断言表示
 
-每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view` 和 `try_flat_digest_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
+每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view`、`try_flat_digest_view` 和 `try_flat_blake3_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
 
 两种表示回答的是同一问题：“这个**可接纳的** RDF 1.2 陈述层生成哪些规范字节？”它们以不同书写形式表达**相同的可接纳内容**。表示选择与可接纳性相互独立：§4 的保留词汇和 §5 的拒绝规则不随调用方选择的表示而改变。不同之处仅在于：已接纳的具体化节点或注解行最终**如何输出**。
 
@@ -201,7 +201,10 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 `CanonError::BudgetExceeded` 携带实际有限上限、已计费工作和输入空白节点数。它只说明本次
 运行到达调用方所选上限，不把图判定为恶意或无法规范化。拒绝或停止的运行不发布部分身份。
 成功规范字节和内容摘要不包含策略或工作计数；执行配置属于独立证据。无限搜索不声称实现了
-整个操作的物理内存准入：成功结果、准备、搜索、输出和回执存储的准入仍是独立工作。
+整个操作的物理内存准入：准备、搜索和回执存储的准入仍是独立工作。输出已纳入准入。文档运行把有序行结构计入
+临时账户，把文档、标签和结果头计入自有账户。仅求摘要的运行（SHA-256 和 BLAKE3 摘要入口）按最终顺序逐行哈希，
+不构建文档：它计入同一临时账户，除创建账户本身外不向自有账户计费。因此，依据文档运行选定的提供方上限，
+对同一输入的摘要运行仍是上界。
 
 ### 6.1 所有入口均返回类型化拒绝
 

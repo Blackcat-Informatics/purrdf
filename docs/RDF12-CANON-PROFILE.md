@@ -167,7 +167,7 @@ second SPELLING: the **flat assertion presentation**, exported as
 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` and reached through
 `purrdf_core::try_canonicalize_flat_view` and its `_flat_` siblings
 (`try_canonicalize_flat_graph_view`, `check_admissible_flat_view`,
-`try_flat_digest_view`). The rendering of §3 is itself a named presentation too,
+`try_flat_digest_view`, `try_flat_blake3_view`). The rendering of §3 is itself a named presentation too,
 exported as `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` /
 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
 WITHOUT a `flat` infix (`try_canonicalize`, `try_canonicalize_view`,
@@ -442,8 +442,14 @@ canonicalize. A refused or stopped run publishes no partial identity.
 
 Successful canonical bytes and their content digests do not incorporate policy
 or observed work. Execution configuration is separate evidence. Unlimited search
-makes no whole-operation physical-memory containment claim: successful-result,
-preparation, search, output and receipt storage admission remain separate work.
+makes no whole-operation physical-memory containment claim: preparation, search
+and receipt storage admission remain separate work. Output is admitted. A document
+run charges its ordered line structures to the scratch account and the document,
+labels and result header to the owned account. A digest-only run (the SHA-256 and
+BLAKE3 digest entries) hashes each line in final order and builds no document: it
+charges the same scratch account and charges the owned account nothing beyond its
+creation. A provider limit chosen from a document run therefore remains an upper
+bound for the digest run over the same input.
 
 ### 6.1 Typed refusal through every entry point
 

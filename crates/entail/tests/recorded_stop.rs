@@ -3,9 +3,7 @@
 
 //! One stop signal covers recorded identity, preparation and decision search.
 
-use purrdf_core::{
-    BlankScope, CanonError, CanonHash, RdfDataset, RdfDatasetBuilder, RdfLiteral, StopSignal,
-};
+use purrdf_core::{BlankScope, CanonError, RdfDataset, RdfDatasetBuilder, RdfLiteral, StopSignal};
 use purrdf_entail::reasoner::SchemaPreparationBudget;
 use purrdf_entail::{EntailError, Question, Reasoner, StopCause, Verdict};
 use purrdf_iri::vocab::{owl, rdf, rdfs};
@@ -200,21 +198,23 @@ fn recorded_stop_retains_the_signal_after_identity() {
     ));
 }
 
-/// Canonical bytes being ready does not permit publishing a partial input digest.
+/// A stop raised while the identity digest is being produced, up to the last
+/// poll before the digest is returned, is honoured; the neighbouring signal that
+/// never trips on that run completes. The stop position is derived from a
+/// counting run of the identity itself.
 fn recorded_stop_covers_identity_digest_streaming() {
     let dataset = taxonomy(false);
     let counter = Signal::after(usize::MAX);
-    purrdf_core::try_canonicalize_view(
-        &*dataset,
-        CanonHash::Sha256,
+    purrdf_entail::try_ontology_identity(
+        &dataset,
         &mut purrdf_core::CanonicalizationControl::new(
             purrdf_core::RDFC_V2_CORPUS_POLICY,
             Some(&counter),
         ),
     )
     .unwrap();
-    let canonical_polls = counter.calls.load(Ordering::Relaxed);
-    let signal = Signal::after(canonical_polls + 1);
+    let polls = counter.calls.load(Ordering::Relaxed);
+    let signal = Signal::after(polls - 1);
     assert!(matches!(
         purrdf_entail::try_ontology_identity(
             &dataset,
@@ -225,7 +225,16 @@ fn recorded_stop_covers_identity_digest_streaming() {
         ),
         Err(CanonError::Stopped)
     ));
-    assert!(signal.calls.load(Ordering::Relaxed) > canonical_polls + 1);
+    assert_eq!(signal.calls.load(Ordering::Relaxed), polls);
+    let late = Signal::after(polls);
+    purrdf_entail::try_ontology_identity(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(&late),
+        ),
+    )
+    .unwrap();
 }
 
 /// A later cancelled decision retains an honest unknown certificate and receipt.
