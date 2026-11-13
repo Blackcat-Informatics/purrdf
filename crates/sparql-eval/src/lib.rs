@@ -89,6 +89,8 @@ mod cdt_fn;
 mod cdt_unfold;
 mod clock;
 mod composite_value;
+#[cfg(test)]
+mod constant_operand_parse;
 mod construct;
 mod contain;
 pub mod convert;

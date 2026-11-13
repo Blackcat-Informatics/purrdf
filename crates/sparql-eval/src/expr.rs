@@ -30,6 +30,7 @@
 //! `heldIn` called without a caller-supplied standpoint-predicate configuration
 //! (`UnsupportedKind::HeldInUnconfigured`).
 
+use crate::parsed_value::ParseKey;
 #[cfg(test)]
 use purrdf_core::TermBox;
 use purrdf_sparql_algebra::{Chain, Child, NonEmpty};
@@ -1464,15 +1465,16 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
 /// Dataset (`Existing`) parses are memoized per query by `TermId` (see
 /// [`EvalCtx::xsd_parse_cache`]): the lexical form and datatype are immutable for a
 /// fixed id, so a comparison/`FILTER` over N rows parses each distinct literal once
-/// instead of once per row. Computed scratch values are ephemeral and stay on the
-/// direct borrowed-view path.
+/// instead of once per row. A computed scratch value is parsed directly, except a
+/// program's constant operand on an unbounded evaluation, which is memoized once
+/// by [`EvalCtx::xsd_parse_cache`] once registered.
 fn xsd_of_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
     match term {
         SolutionTerm::Existing(id) => {
-            if let Some(cached) = ctx.xsd_parse_cache.get(id) {
+            if let Some(cached) = ctx.xsd_parse_cache.get(ParseKey::Dataset(id)) {
                 return Ok(cached.into_value());
             }
             let parsed = ctx
@@ -1488,18 +1490,42 @@ fn xsd_of_term<D: DatasetView + Sync>(
                 })
                 .map_err(|error| ctx.workspace.source_error(error))?
                 .map_err(|error| ctx.workspace.source_error(error))??;
-            ctx.xsd_parse_cache
-                .insert_admitted(id, parsed.clone(), &ctx.growth)?;
+            ctx.xsd_parse_cache.insert_admitted(
+                ParseKey::Dataset(id),
+                parsed.clone(),
+                &ctx.growth,
+            )?;
             Ok(parsed)
         }
-        SolutionTerm::Computed(sid) => match ctx.scratch.computed_value(sid) {
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                ..
-            } => parse_owned_xsd(lexical_form, datatype, &ctx.growth),
-            _ => Ok(None),
-        },
+        SolutionTerm::Computed(sid) => {
+            // A boolean the comparison operators yield is a constant of the query too.
+            // It joins the memo only on an unbounded evaluation, so a bounded one is
+            // charged as it always was, and only once a constant is registered, which
+            // only a second use does, so a one-row query allocates nothing for it.
+            let constant = ctx.constant_parses.contains(sid)
+                || (!ctx.growth.is_bounded()
+                    && ctx.constant_parses.any()
+                    && ctx.cached_bool_terms.contains(&Some(term)));
+            if constant && let Some(cached) = ctx.xsd_parse_cache.get(ParseKey::Constant(sid)) {
+                return Ok(cached.into_value());
+            }
+            let parsed = match ctx.scratch.computed_value(sid) {
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                } => parse_owned_xsd(lexical_form, datatype, &ctx.growth)?,
+                _ => None,
+            };
+            if constant {
+                ctx.xsd_parse_cache.insert_admitted(
+                    ParseKey::Constant(sid),
+                    parsed.clone(),
+                    &ctx.growth,
+                )?;
+            }
+            Ok(parsed)
+        }
     }
 }
 
@@ -1527,6 +1553,8 @@ fn parse_owned_xsd(
     iri: &str,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    #[cfg(test)]
+    crate::op_count::bump_parse();
     match XsdDatatype::from_iri(iri) {
         Some(datatype) => {
             crate::parsed_value::ParsedValue::parse(lexical, datatype, false, workspace)

@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **GTS snapshot emission:** `emit_gts` encodes the snapshot payload once,
+  straight from the builder's tables, instead of building a copy of every term
+  and encoding the result twice. Its signature and the emitted bytes are
+  unchanged for every transform chain. The new `emit_gts_owned` takes the
+  builder by value and releases its tables before the transform runs; after a
+  refusal the builder is gone and a retry ingests again, where `emit_gts` still
+  allows the retry.
+
 - **Canonical document construction:** The canonical document is built from
   numbered terms instead of one owned string per line plus a second copy of the
   whole document. Bytes, digests and blank labels are unchanged for every

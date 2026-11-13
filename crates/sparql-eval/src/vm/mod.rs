@@ -1284,7 +1284,13 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 Op::Const(k) => {
                     let k = k as usize;
                     let term = match consts[k] {
-                        ConstCell::Read(term) => term,
+                        ConstCell::Read(term) => {
+                            // Read before: a later row, or a later use in this one.
+                            if let Some(SolutionTerm::Computed(id)) = term {
+                                ctx.constant_parses.register(id, &ctx.growth);
+                            }
+                            term
+                        }
                         ConstCell::Unread => {
                             let value = program.consts[k].value_admitted(&ctx.growth)?;
                             let term = ctx.intern_workspace_term(value)?;
