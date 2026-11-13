@@ -44,10 +44,10 @@ class GitHub:
         self.repository = repository
         self.base = f"repos/{repository}"
 
-    def api(self, path: str, *, body: dict | None = None, absent=False, expected=dict):
+    def api(self, path: str, *, body=None, method="PATCH", absent=False, expected=dict):
         arguments = ["gh", "api", "--include", f"{self.base}/{path}"]
         if body is not None:
-            arguments += ["--method", "PATCH", "--input", "-"]
+            arguments += ["--method", method, "--input", "-"]
         result = subprocess.run(
             arguments,
             input=None if body is None else json.dumps(body).encode(),
@@ -63,7 +63,7 @@ class GitHub:
         code = int(status[1])
         if absent and body is None and code == 404:
             return None
-        if result.returncode or code != 200:
+        if result.returncode or code not in (200, 201):
             raise ReleaseError(f"GitHub {path} failed with HTTP {code}")
         try:
             value = json.loads(payload)
@@ -138,24 +138,13 @@ class GitHub:
             target = self.api(f"git/tags/{target.get('sha', '')}").get("object", {})
         raise ReleaseError("release tag does not resolve to a commit")
 
-    def create_draft(self, tag: str, title: str, notes: Path):
-        subprocess.run(
-            [
-                "gh",
-                "release",
-                "create",
-                tag,
-                "--repo",
-                self.repository,
-                "--verify-tag",
-                "--draft",
-                "--title",
-                title,
-                "--notes-file",
-                str(notes),
-            ],
-            check=True,
-        )
+    def create_draft(self, tag: str, title: str, body: str):
+        """Create a draft through the REST call that returns the new record."""
+        fields = dict(tag_name=tag, name=title, body=body, draft=True, prerelease=False)
+        return self.api("releases", body=fields, method="POST")
+
+    def by_id(self, identity: int):
+        return self.api(f"releases/{identity}")
 
     def upload(self, tag: str, paths: list[Path]):
         subprocess.run(
@@ -205,14 +194,27 @@ def asset_names(version: str) -> set[str]:
 
 
 def identity(release: dict, tag: str, title: str, notes: bytes, *, draft: bool):
-    wanted = dict(tag_name=tag, name=title, body=notes.decode("utf-8"), draft=draft, prerelease=False)
-    if not isinstance(release, dict) or type(release.get("id")) is not int:
-        raise ReleaseError("GitHub release metadata is not a release record")
-    differing = [k for k, v in wanted.items() if release.get(k) != v]
-    if differing or release["id"] <= 0:
+    if not isinstance(release, dict):
+        raise ReleaseError("GitHub release record not found for the reviewed tag")
+    body = notes.decode("utf-8")
+    differing = [
+        k
+        for k, v in (("tag_name", tag), ("name", title), ("body", body))
+        if release.get(k) != v
+    ]
+    differing += [
+        k
+        for k, v in (("draft", draft), ("prerelease", False))
+        if release.get(k) is not v
+    ]
+    if type(release.get("id")) is not int or release["id"] <= 0:
+        differing.append("id")
+    if differing:
+        stored = release.get("body")
         raise ReleaseError(
-            "GitHub release metadata differs from the reviewed tagged release: "
-            + ", ".join(differing or ["id"])
+            "GitHub release record found but its metadata differs from the reviewed "
+            f"tagged release in: {', '.join(differing)} (body length stored "
+            f"{len(stored) if isinstance(stored, str) else None}, reviewed {len(body)})"
         )
     if not draft and release.get("immutable") is not True:
         raise ReleaseError("published release is not immutable")
@@ -304,8 +306,6 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     manifest = notes_module.checksum_bytes(root, version)
     manifest_path = root / "target/dist/SHA256SUMS"
     notes_module.write_output(manifest_path, manifest)
-    notes_path = root / "target/release-notes.md"
-    notes_module.write_output(notes_path, notes)
     paths = []
     for name in sorted(asset_names(version)):
         directory = (
@@ -332,20 +332,21 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
         "prerelease": False,
     }
     if release is None:
-        github.create_draft(tag, title, notes_path)
-        release = github.release(tag) or {}
-    # API edit stores the reviewed bytes exactly, as on a reused draft.
-    github.edit(release.get("id"), **reviewed, draft=True)
-    release = github.release(tag)
+        release = github.create_draft(tag, title, reviewed["body"])
+        identity(release, tag, title, notes, draft=True)
+    else:
+        github.edit(release["id"], **reviewed, draft=True)
+    rid = release["id"]
+    release = github.by_id(rid)
     identity(release, tag, title, notes, draft=True)
     github.upload(tag, paths)
-    release = github.release(tag)
+    release = github.by_id(rid)
     identity(release, tag, title, notes, draft=True)
     verify_assets(github, release, version, expected)
     if github.tag_sha(tag) != sha:
         raise ReleaseError("release tag moved before publication")
-    github.edit(release["id"], **reviewed, draft=False)
-    release = github.release(tag)
+    github.edit(rid, **reviewed, draft=False)
+    release = github.by_id(rid)
     identity(release, tag, title, notes, draft=False)
     verify_assets(github, release, version, expected)
     print(f"OK: immutable {tag} published with all {len(paths)} verified assets")
