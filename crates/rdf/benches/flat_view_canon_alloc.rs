@@ -61,6 +61,7 @@ fn control(stop: Option<&StopAfter>) -> CanonicalizationControl<'_> {
 
 struct Fixture<'a> {
     shape: &'a str,
+    order: load::Order,
     scale: usize,
     lines: usize,
     leaves: usize,
@@ -105,8 +106,13 @@ fn line(entry: &str, f: &Fixture<'_>, d: &Document, m: Measurement, pre: Option<
             )
         },
     );
+    // A sorted row is the original format byte for byte; an unsorted row names its order.
+    let order = match f.order {
+        load::Order::Sorted => String::new(),
+        load::Order::Unsorted => format!(" order={}", f.order.label()),
+    };
     println!(
-        "[flat_view_canon_alloc] entry={entry} shape={} scale={} lines={} leaves={} doc_bytes={} mean_line={:.2} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} pre_output_peak={peak} pre_output_poll={poll} total_polls={total} sha256={} blake3={}",
+        "[flat_view_canon_alloc] entry={entry} shape={}{order} scale={} lines={} leaves={} doc_bytes={} mean_line={:.2} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} pre_output_peak={peak} pre_output_poll={poll} total_polls={total} sha256={} blake3={}",
         f.shape,
         f.scale,
         f.lines,
@@ -177,10 +183,10 @@ fn pre_output_peak(run: &dyn Fn(&mut CanonicalizationControl<'_>) -> bool) -> Sa
     }
 }
 
-fn probe(shape: &str, scale: usize, lines: usize, with_pre_output: bool) {
+fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_output: bool) {
     let loaded = match shape {
-        "blank_free" => load::blank_free(lines, scale),
-        _ => load::reifier(lines, scale),
+        "blank_free" => load::blank_free(lines, scale, order),
+        _ => load::reifier(lines, scale, order),
     };
     let ds: &RdfDataset = &loaded.dataset;
     let lines = if shape == "reifier" {
@@ -208,16 +214,31 @@ fn probe(shape: &str, scale: usize, lines: usize, with_pre_output: bool) {
         "{shape}: the fixture must not trigger an n-degree search"
     );
     let flat = Document::of(doc.nquads());
+    // The order the walk presents lines to the output stage, observed over the
+    // first 4,096 rows before anything else is measured.
+    let (descents, pairs) = load::arrival_descents(shape, ds, doc.nquads(), 4096);
     drop(doc);
+    println!(
+        "[flat_view_canon_alloc] arrival shape={shape} order={} scale={scale} lines={lines} descents={descents} pairs={pairs}",
+        order.label()
+    );
+    if order == load::Order::Unsorted {
+        assert!(
+            descents * 4 >= pairs,
+            "{shape}: an unsorted walk has at least a quarter of its pairs out of order"
+        );
+    }
     let f = Fixture {
         shape,
+        order,
         scale,
         lines,
         leaves: loaded.leaves,
     };
     if scale == 1 {
         println!(
-            "[flat_view_canon_alloc] mean_line shape={shape} lines={lines} mean_line={:.2}",
+            "[flat_view_canon_alloc] mean_line shape={shape} order={} lines={lines} mean_line={:.2}",
+            order.label(),
             flat.mean_line
         );
         assert!(
@@ -299,7 +320,9 @@ fn main() {
     for (lines, pre) in sizes {
         for shape in ["blank_free", "reifier"] {
             for scale in [1, 2] {
-                probe(shape, scale, lines, pre);
+                for order in [load::Order::Sorted, load::Order::Unsorted] {
+                    probe(shape, order, scale, lines, pre);
+                }
             }
         }
     }

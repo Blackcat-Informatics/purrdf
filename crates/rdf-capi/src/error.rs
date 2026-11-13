@@ -471,6 +471,23 @@ pub unsafe extern "C" fn purrdf_error_free(err: *mut PurrdfError) {
 mod tests {
     use super::*;
 
+    /// A canonical refusal the document path can now raise reaches a C caller as
+    /// a canonicalization failure that keeps the original cause, and an ordinary
+    /// service failure keeps its own status.
+    #[test]
+    fn source_inconsistent_maps_to_a_canonicalization_error_with_its_cause() {
+        let error = PurrdfError::service(
+            purrdf_core::CanonError::<std::convert::Infallible>::SourceInconsistent,
+        );
+        assert_eq!(error.code, PurrdfStatus::CanonicalizationError);
+        assert!(matches!(
+            std::error::Error::source(&error).and_then(|cause| cause.downcast_ref()),
+            Some(purrdf_core::CanonError::<std::convert::Infallible>::SourceInconsistent)
+        ));
+        let ordinary = PurrdfError::service(std::fmt::Error);
+        assert_eq!(ordinary.code, PurrdfStatus::ParseError);
+    }
+
     #[test]
     fn shapes_capacity_refusal_preserves_native_fields() {
         let cause: purrdf_lex::allocation::StorageError = purrdf_core::TermId::from_index(u32::MAX)
