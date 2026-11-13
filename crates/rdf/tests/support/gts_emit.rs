@@ -123,7 +123,7 @@ pub(super) fn emit(
     let (secret, kid, armor) = signer();
     let doc_blobs = if with_blobs { blobs() } else { Vec::new() };
     emit_gts(
-        &builder,
+        builder,
         "dist",
         chain,
         doc_blobs,

@@ -254,7 +254,7 @@ fn the_view_surface_and_the_flat_surface_mint_one_snapshot() {
     assert_eq!(flat.snapshot_payload(), delta.snapshot_payload());
 
     // …and the emitted container bytes, which is what actually ships.
-    let bytes = |builder: &SnapshotBuilder| {
+    let bytes = |builder: SnapshotBuilder| {
         emit_gts(
             builder,
             "dist",
@@ -269,8 +269,9 @@ fn the_view_surface_and_the_flat_surface_mint_one_snapshot() {
         )
         .expect("the fixture emits")
     };
-    assert_eq!(bytes(&flat), bytes(&composite));
-    assert_eq!(bytes(&flat), bytes(&delta));
+    let flat_bytes = bytes(flat);
+    assert_eq!(flat_bytes, bytes(composite));
+    assert_eq!(flat_bytes, bytes(delta));
 }
 
 #[test]
@@ -616,7 +617,7 @@ fn native_snapshot_quoted_objects_preserve_structure_identity_and_scopes() {
         reversed.ingest_totals().terms_interned,
         "equal quoted structures are interned once per scoped identity"
     );
-    let restored = import_gts_events(&emitted(&forward)).expect("strict native snapshot import");
+    let restored = import_gts_events(&emitted(forward)).expect("strict native snapshot import");
     assert_eq!(restored.dataset.quads().count(), 6);
     assert_eq!(restored.dataset.reifier_quads().count(), 2);
     assert_eq!(restored.dataset.annotation_quads().count(), 2);
@@ -683,7 +684,7 @@ fn quoted_term_cycles_refuse_while_deep_finite_terms_ingest() {
             let _ = valid
                 .add_view(&quoted_chain_view(levels, false))
                 .expect("finite nesting is admitted");
-            let imported = import_gts_events(&emitted(&valid)).expect("deep snapshot imports");
+            let imported = import_gts_events(&emitted(valid)).expect("deep snapshot imports");
             let mut id = imported.dataset.quads().next().expect("ordinary row").o;
             for _ in 0..levels {
                 let TermRef::Triple { o, .. } = imported.dataset.as_ref().resolve(id) else {
@@ -796,10 +797,9 @@ fn quoted_terms_remain_forbidden_in_non_object_positions() {
 
 #[test]
 fn emission_retains_native_writer_failure_and_dictionary_transform_operands() {
-    let builder = SnapshotBuilder::new();
     let emit = |plan: &MediumPlan| {
         emit_gts(
-            &builder,
+            SnapshotBuilder::new(),
             "dist",
             Some(vec!["not-a-codec".to_owned()]),
             Vec::new(),
@@ -897,7 +897,7 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
 
         // …and publication refuses rather than shipping the partial ingestion.
         let err = emit_gts(
-            &builder,
+            builder,
             "dist",
             Some(vec!["identity".to_owned()]),
             Vec::new(),
@@ -924,7 +924,7 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
     let _ = healthy.add_view(&source_b()).expect("source B ingests");
     assert!(healthy.poison().is_none());
     emit_gts(
-        &healthy,
+        healthy,
         "dist",
         Some(vec!["identity".to_owned()]),
         Vec::new(),
@@ -1041,7 +1041,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     // …and publication still refuses, complete tables notwithstanding: a full
     // description of content the caller did not ask for is not the snapshot.
     let refused = emit_gts(
-        &builder,
+        builder,
         "dist",
         Some(vec!["identity".to_owned()]),
         Vec::new(),
@@ -1798,7 +1798,6 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     let delta_report = measured
         .add_view_scoped(delta_carrier.view(), Some(SELECTED), Some("delta"))
         .expect("the delta carrier ingests");
-    let measured_bytes = emitted(&measured);
 
     // NOTHING WAS COPIED TO PUBLISH IT.
     assert_eq!(
@@ -1891,9 +1890,10 @@ fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
         reference.snapshot_payload(),
         "term table included"
     );
+    let measured_bytes = emitted(measured);
     assert_eq!(
         measured_bytes,
-        emitted(&reference),
+        emitted(reference),
         "and the emitted container bytes — blank wire values included — must be equal"
     );
 }

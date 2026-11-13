@@ -260,7 +260,7 @@ fn snapshot_gts_bytes(
     builder.add_dataset(&dataset).map_err(native_gts_error)?;
     let plan = MediumPlan::dist_default(transform.as_deref());
     emit_gts(
-        &builder,
+        builder,
         profile,
         transform,
         Vec::new(),
@@ -763,7 +763,7 @@ fn compile_gts_core(
 
         let plan = MediumPlan::dist_default(transform.as_deref());
         let bytes = emit_gts(
-            &builder,
+            builder,
             "dist",
             transform,
             all_doc_blobs,
@@ -982,7 +982,7 @@ fn feedback_bundle_native(
         let mut builder = SnapshotBuilder::default();
         builder.add_dataset(&dataset).map_err(native_gts_error)?;
         emit_gts(
-            &builder,
+            builder,
             "dist",
             None,
             Vec::new(),

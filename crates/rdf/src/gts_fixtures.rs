@@ -164,7 +164,7 @@ pub fn keystone_loadout() -> (RdfLookaside, Arc<ContentStore>, DatasetProvenance
 /// The emitted container bytes — what actually ships. `identity` rather than
 /// `zstd` so compression is neither inside a measurement nor between a byte
 /// comparison and the tables it is really about.
-pub fn emitted(builder: &SnapshotBuilder) -> Vec<u8> {
+pub fn emitted(builder: SnapshotBuilder) -> Vec<u8> {
     emit_gts(
         builder,
         "dist",

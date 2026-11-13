@@ -29,10 +29,10 @@ use std::hash::BuildHasher;
 
 use purrdf_core::hash::table::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::{canonical, digest_str};
+use purrdf_gts::wire::digest_str;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
-use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::{Value, head};
 use purrdf_lex::walk::WorkList;
 
 use crate::{
@@ -1048,6 +1048,15 @@ impl SnapshotBuilder {
     /// snapshot payload. Scalars retain their content order, with IRIs before
     /// literals; quoted terms follow all their component dependencies.
     fn canonical_tables(&self) -> CanonTables {
+        let (order, remap) = self.canonical_order();
+        let wire_terms = self.wire_terms(&order, &remap);
+        let (quads, reifies, annot) = self.canonical_rows(&remap);
+        (wire_terms, quads, reifies, annot)
+    }
+
+    /// The content order of the term table: `order[new_id]` is the old id, and
+    /// `remap[old_id]` is the new one.
+    fn canonical_order(&self) -> (Vec<usize>, Vec<usize>) {
         let n = self.terms.len();
         let mut order: Vec<usize> = (0..n).collect();
         // Scalars keep their existing order. Every quoted term follows its
@@ -1072,19 +1081,27 @@ impl SnapshotBuilder {
             }
             first = end;
         }
+        (order, remap)
+    }
 
-        // Wire terms in new-id order; the datatype field becomes the remapped id
-        // of its IRI term (interned earlier, so it has an old id and thus a new id).
-        let wire_terms: Vec<Term> = order
+    /// The new id of a term row's datatype IRI term (interned earlier, so it has
+    /// an old id and thus a new id).
+    fn datatype_id(&self, row: &TermRow, remap: &[usize]) -> Option<usize> {
+        row.datatype.as_deref().map(|dt| {
+            let key = (TermKind::Iri as u8, dt, "", "", "", None);
+            let old_dt = lookup_term_row(&self.terms, &self.index, key)
+                .expect("a literal's datatype IRI is interned before the literal");
+            remap[old_dt]
+        })
+    }
+
+    /// Wire terms in new-id order.
+    fn wire_terms(&self, order: &[usize], remap: &[usize]) -> Vec<Term> {
+        order
             .iter()
             .map(|&old| {
                 let row = &self.terms[old];
-                let datatype = row.datatype.as_deref().map(|dt| {
-                    let key = (TermKind::Iri as u8, dt, "", "", "", None);
-                    let old_dt = lookup_term_row(&self.terms, &self.index, key)
-                        .expect("a literal's datatype IRI is interned before the literal");
-                    remap[old_dt]
-                });
+                let datatype = self.datatype_id(row, remap);
                 Term {
                     kind: row.kind,
                     value: Some(row.value.clone()),
@@ -1095,8 +1112,15 @@ impl SnapshotBuilder {
                     triple: row.triple.map(|(s, p, o)| (remap[s], remap[p], remap[o])),
                 }
             })
-            .collect();
+            .collect()
+    }
 
+    /// The quad, reifier and annotation tables under `remap`: remapped, deduplicated
+    /// and sorted.
+    fn canonical_rows(
+        &self,
+        remap: &[usize],
+    ) -> (Vec<CanonQuad>, Vec<ReifierRow>, Vec<AnnotationRow>) {
         // Quads: remap, dedup, sort by (graph[None=-1], s, p, o).
         let mut quad_set: std::collections::BTreeSet<(i64, usize, usize, usize, Option<usize>)> =
             std::collections::BTreeSet::new();
@@ -1136,7 +1160,7 @@ impl SnapshotBuilder {
         }
         let annot: Vec<AnnotationRow> = annot_set.into_iter().collect();
 
-        (wire_terms, quads, reifies, annot)
+        (quads, reifies, annot)
     }
 
     /// Feed the legacy canonical writer from the same flat native interner.
@@ -1252,8 +1276,140 @@ impl SnapshotBuilder {
     /// domain cannot be added without breaking every recorded id for an
     /// existing archive.
     pub fn snapshot_content_id(&self) -> String {
-        let bytes = canonical(&self.snapshot_payload());
-        digest_str(&bytes)
+        digest_str(&self.snapshot_canonical_bytes())
+    }
+
+    /// The canonical CBOR encoding of [`Self::snapshot_payload`], written straight
+    /// from the tables: no intermediate `Value` tree and no copy of any term
+    /// string. The encoder runs twice over the same tables, once to count and once
+    /// to fill a buffer of exactly that size, so the buffer never grows.
+    ///
+    /// Byte-for-byte `canonical(&self.snapshot_payload())`; the pinned bundle
+    /// digests and `snapshot_canonical_bytes_match_the_payload_tree` hold it there.
+    pub(crate) fn snapshot_canonical_bytes(&self) -> Vec<u8> {
+        let (order, remap) = self.canonical_order();
+        let (quads, reifies, annot) = self.canonical_rows(&remap);
+        let mut len = Count(0);
+        self.write_snapshot(&mut len, &order, &remap, &quads, &reifies, &annot)
+            .expect("counting accepts every write");
+        let mut out = Vec::with_capacity(len.0);
+        self.write_snapshot(&mut out, &order, &remap, &quads, &reifies, &annot)
+            .expect("a Vec accepts every write");
+        debug_assert_eq!(out.len(), len.0);
+        out
+    }
+
+    /// The canonical payload map. Keys sit in the order of their encodings (RFC
+    /// 8949 §4.2.1): equal-length text keys bytewise, shorter before longer.
+    fn write_snapshot<W: std::io::Write>(
+        &self,
+        out: &mut W,
+        order: &[usize],
+        remap: &[usize],
+        quads: &[CanonQuad],
+        reifies: &[ReifierRow],
+        annot: &[AnnotationRow],
+    ) -> std::io::Result<()> {
+        let entries = 2 + u64::from(!reifies.is_empty()) + u64::from(!annot.is_empty());
+        head::write_head(out, head::MAP, entries)?;
+        if !annot.is_empty() {
+            head::write_text(out, "annot")?;
+            head::write_head(out, head::ARRAY, annot.len() as u64)?;
+            for &(r, p, v, g) in annot {
+                write_id_row(out, &[r, p, v], g)?;
+            }
+        }
+        head::write_text(out, "quads")?;
+        head::write_head(out, head::ARRAY, quads.len() as u64)?;
+        for &(s, p, o, g) in quads {
+            write_id_row(out, &[s, p, o], g)?;
+        }
+        head::write_text(out, "terms")?;
+        head::write_head(out, head::ARRAY, order.len() as u64)?;
+        for &old in order {
+            self.write_term(out, &self.terms[old], remap)?;
+        }
+        if !reifies.is_empty() {
+            head::write_text(out, "reifies")?;
+            head::write_head(out, head::ARRAY, reifies.len() as u64)?;
+            for &(rid, (s, p, o), g) in reifies {
+                write_id_row(out, &[rid, s, p, o], g)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One term as the writer spells it: the map [`term_into_wire`] builds, keys
+    /// in canonical order (`k`, `l`, `v`, `dt`, `tt`, `dir`; `rf` is never set).
+    fn write_term<W: std::io::Write>(
+        &self,
+        out: &mut W,
+        row: &TermRow,
+        remap: &[usize],
+    ) -> std::io::Result<()> {
+        let datatype = self.datatype_id(row, remap);
+        let direction = row
+            .direction
+            .as_deref()
+            .filter(|direction| is_literal_direction(direction));
+        let entries = 2
+            + u64::from(row.lang.is_some())
+            + u64::from(datatype.is_some())
+            + u64::from(row.triple.is_some())
+            + u64::from(direction.is_some());
+        head::write_head(out, head::MAP, entries)?;
+        head::write_text(out, "k")?;
+        head::write_head(out, head::UNSIGNED, row.kind as u64)?;
+        if let Some(lang) = &row.lang {
+            head::write_text(out, "l")?;
+            head::write_text(out, lang)?;
+        }
+        head::write_text(out, "v")?;
+        head::write_text(out, &row.value)?;
+        if let Some(datatype) = datatype {
+            head::write_text(out, "dt")?;
+            head::write_head(out, head::UNSIGNED, datatype as u64)?;
+        }
+        if let Some((s, p, o)) = row.triple {
+            head::write_text(out, "tt")?;
+            write_id_row(out, &[remap[s], remap[p], remap[o]], None)?;
+        }
+        if let Some(direction) = direction {
+            head::write_text(out, "dir")?;
+            head::write_text(out, direction)?;
+        }
+        Ok(())
+    }
+}
+
+/// An array of term ids, with the graph id appended when there is one.
+fn write_id_row<W: std::io::Write>(
+    out: &mut W,
+    ids: &[usize],
+    graph: Option<usize>,
+) -> std::io::Result<()> {
+    head::write_head(
+        out,
+        head::ARRAY,
+        (ids.len() + usize::from(graph.is_some())) as u64,
+    )?;
+    for &id in ids.iter().chain(graph.as_ref()) {
+        head::write_head(out, head::UNSIGNED, id as u64)?;
+    }
+    Ok(())
+}
+
+/// A sink that keeps only how many bytes it was given.
+struct Count(usize);
+
+impl std::io::Write for Count {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1428,9 +1584,12 @@ impl MediumPlan {
 }
 
 /// Emit the snapshot bundle bytes from an accumulated builder (`_Builder.to_gts`).
+///
+/// Consumes the builder: its tables are released once the snapshot payload is
+/// encoded, before the transform runs.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_gts(
-    builder: &SnapshotBuilder,
+    builder: SnapshotBuilder,
     profile: &str,
     transform: Option<Vec<String>>,
     doc_blobs: Vec<BlobRow>,
@@ -1547,12 +1706,22 @@ pub fn emit_gts(
         writer.add_frame_with_options("blob", options)?;
     }
 
-    let payload = builder.snapshot_payload();
-    let snapshot_bytes = canonical(&payload);
-    let chain = choose_transform(&base_chain, snapshot_bytes.len(), rsyncable_threshold);
+    // The payload is encoded once. With a transform the canonical bytes go to the
+    // writer as the frame's source and the builder is released before they are
+    // compressed. With the empty chain the frame embeds the payload unencoded, so
+    // the writer takes the tree.
+    let (payload, raw, chain) = if base_chain.is_empty() {
+        (Some(builder.snapshot_payload()), None, Vec::new())
+    } else {
+        let bytes = builder.snapshot_canonical_bytes();
+        let chain = choose_transform(&base_chain, bytes.len(), rsyncable_threshold);
+        (None, Some(bytes), chain)
+    };
+    drop(builder);
     let snapshot_dict = plan.select(&FrameSlot::Snapshot)?;
     let options = purrdf_gts::writer::FrameOptions {
-        payload: Some(payload),
+        payload,
+        raw,
         transform: chain,
         zstd_level,
         dict: snapshot_dict.map(str::to_string),
@@ -1569,6 +1738,7 @@ mod tests {
     //! interning order, content sort, the snapshot payload, and the content-id.
     use super::*;
     use crate::parse_dataset;
+    use purrdf_gts::wire::canonical;
 
     /// The by-value wire encoder must be indistinguishable from the writer's own
     /// by-reference one — it exists only to MOVE the staged strings, never to
@@ -1655,6 +1825,32 @@ mod tests {
                 "…and its canonical bytes drifted for {term:?}"
             );
         }
+    }
+
+    /// The direct encoder is the canonical encoding of the payload tree: the
+    /// frame's source bytes, its content id and the embedded empty-chain tree all
+    /// describe one payload, over every term kind the builder holds.
+    #[test]
+    fn snapshot_canonical_bytes_match_the_payload_tree() {
+        let builder = ingest(
+            &format!(
+                "<https://e/g> {{ <https://e/s> <https://e/p> \"a\"@en--rtl . }}\n\
+                 _:b <https://e/p> \"1\"^^<{}> .\n\
+                 <https://e/s> <https://e/p> \"plain\" .\n\
+                 <https://e/r> <{RDF_REIFIES}> <<( <https://e/a> <https://e/b> <<( <https://e/c> <https://e/d> \"x\" )>> )>> ;\n\
+                    <https://e/evidence> \"e\" .\n",
+                purrdf_xsd::datatype::XSD_INTEGER
+            ),
+            "application/trig",
+        );
+        assert_eq!(
+            builder.snapshot_canonical_bytes(),
+            canonical(&builder.snapshot_payload())
+        );
+        assert_eq!(
+            SnapshotBuilder::new().snapshot_canonical_bytes(),
+            canonical(&SnapshotBuilder::new().snapshot_payload())
+        );
     }
 
     fn ingest(text: &str, media_type: &str) -> SnapshotBuilder {
@@ -1946,7 +2142,7 @@ mod tests {
         );
         assert_eq!(annotations.len(), 3);
         let bytes = emit_gts(
-            &builder,
+            builder,
             "dist",
             Some(vec!["identity".to_owned()]),
             Vec::new(),
@@ -2046,7 +2242,7 @@ mod tests {
         let mut builder = SnapshotBuilder::default();
         builder.add_dataset(&ds).expect("add_dataset");
         let bytes = emit_gts(
-            &builder,
+            builder,
             "dist",
             Some(vec!["identity".to_string()]),
             Vec::new(),
@@ -2066,9 +2262,9 @@ mod tests {
 
     #[test]
     fn blobs_are_additive_and_do_not_change_the_graph() {
-        let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
+        let ingest = || ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
         let base = emit_gts(
-            &builder,
+            ingest(),
             "dist",
             Some(vec!["identity".to_string()]),
             Vec::new(),
@@ -2081,7 +2277,7 @@ mod tests {
         )
         .expect("emit base");
         let with_blobs = emit_gts(
-            &builder,
+            ingest(),
             "dist",
             Some(vec!["identity".to_string()]),
             vec![BlobRow {
@@ -2167,7 +2363,7 @@ mod tests {
             zstd_level: Some(12),
         };
         let bytes = emit_gts(
-            &builder,
+            builder,
             "dist",
             Some(vec!["zstd".to_string()]),
             vec![BlobRow {
@@ -2249,10 +2445,9 @@ mod tests {
     /// by whether the chain carries a zstd-family codec.
     #[test]
     fn the_declared_zstd_level_is_chain_gated_not_profile_gated() {
-        let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
         let emit = |profile: &str, chain: Vec<String>, plan: &MediumPlan| {
             emit_gts(
-                &builder,
+                ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n"),
                 profile,
                 Some(chain),
                 Vec::new(),
@@ -2357,7 +2552,7 @@ mod tests {
     fn partial_signing_configuration_is_rejected() {
         let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
         let err = emit_gts(
-            &builder,
+            builder,
             "dist",
             None,
             Vec::new(),
