@@ -156,6 +156,8 @@ mod order;
 #[cfg(test)]
 mod order_tests;
 mod output;
+mod prepared;
+pub use prepared::{CanonRequest, PreparedCanon, PreparedRefusal};
 mod rendering;
 
 use purrdf_lex::allocation::{Admission, Memory};
@@ -791,6 +793,12 @@ type FlatViewResult<D> = Result<
     ViewCanonError<<D as FallibleDatasetView>::Error, <D as FallibleDatasetView>::Evidence>,
 >;
 
+/// The `Result` shape of [`prepare_canon_view`].
+type PrepareResult<D> = Result<
+    PreparedCanon<<D as DatasetView>::Id>,
+    ViewCanonError<<D as FallibleDatasetView>::Error, <D as FallibleDatasetView>::Evidence>,
+>;
+
 /// Canonicalize any [`FallibleDatasetView`] under profile [`CANON_PROFILE_ID`] in the
 /// [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation
 /// ([`CANON_PRESENTATION_FLAT_ASSERTION_ID`] /
@@ -1014,6 +1022,200 @@ pub fn try_flat_blake3_view<D: FallibleDatasetView>(
                 run,
             )
             .digest_fallible(purrdf_hash::blake3::Hasher::new())
+        }) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )
+}
+
+/// The binding checked before a prepared state serves a request: the view's own
+/// snapshot identity must equal the one the state was built from, and the request
+/// must name the hash, presentation and scope it was built for.
+fn prepared_state<'a, D: DatasetView>(
+    view: &'a D,
+    request: CanonRequest<'_>,
+    prepared: &'a PreparedCanon<D::Id>,
+    run: &'a SearchRun<'a>,
+) -> Result<CanonState<'a, D>, CanonError<D::ReadError>> {
+    run.check_stop().map_err(|_| CanonError::Stopped)?;
+    let snapshot = view
+        .snapshot_identity()
+        .map_err(CanonError::Read)?
+        .ok_or(CanonError::Prepared(PreparedRefusal::SnapshotUnavailable))?;
+    prepared
+        .fields()
+        .key
+        .check(request, snapshot)
+        .map_err(CanonError::Prepared)?;
+    // The scope is not read again: the state already holds the selected lines.
+    Ok(CanonState::new(
+        view,
+        CanonScope::Dataset,
+        request.presentation,
+        request.hash,
+        run,
+    )
+    .reusing(prepared.fields()))
+}
+
+/// Canonicalize `view` once and keep the result of the label search and the line
+/// order, so that later document and digest runs over the same snapshot do not
+/// repeat them.
+///
+/// The product is bound to the view's [`DatasetView::snapshot_identity`] and to
+/// `request` (label hash, presentation, and whole dataset or one named graph). It is
+/// admitted to the source's owned account, like [`Canonicalized`], and released when
+/// its last clone is dropped. The run is recorded as one receipt that states a
+/// [`CanonOutput::Document`] run; nothing is spelled, hashed or published.
+///
+/// A view that returns no snapshot identity cannot be bound and is refused. A view
+/// must give its identity the strength [`DatasetView::snapshot_identity`] states:
+/// the blank and term identifiers the product keeps are meaningful only for the
+/// snapshot it names.
+///
+/// # Errors
+/// Exactly the refusals of [`try_canonicalize_flat_view`] (or of
+/// [`try_canonicalize_flat_graph_view`] for a graph request), and
+/// [`CanonError::Prepared`] with [`PreparedRefusal::SnapshotUnavailable`].
+pub fn prepare_canon_view<D: FallibleDatasetView>(
+    view: &D,
+    request: CanonRequest<'_>,
+    control: &mut CanonicalizationControl<'_>,
+) -> PrepareResult<D> {
+    control.run(
+        SearchConfiguration::rdfc(
+            request.hash,
+            request.presentation,
+            request.graph,
+            CanonOutput::Document,
+        ),
+        |run| match checkpointed_drain(view, |view| prepare_run(view, request, run)) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )
+}
+
+fn prepare_run<D: DatasetView>(
+    view: &D,
+    request: CanonRequest<'_>,
+    run: &SearchRun<'_>,
+) -> Result<PreparedCanon<D::Id>, CanonError<D::ReadError>> {
+    run.check_stop().map_err(|_| CanonError::Stopped)?;
+    let snapshot = view
+        .snapshot_identity()
+        .map_err(CanonError::Read)?
+        .ok_or(CanonError::Prepared(PreparedRefusal::SnapshotUnavailable))?;
+    let key = prepared::Key::new(request, snapshot);
+    let scope = match request.graph {
+        None => Some(CanonScope::Dataset),
+        Some(graph) => graph_scope(view, graph),
+    };
+    match scope {
+        Some(scope) => CanonState::new(view, scope, request.presentation, request.hash, run)
+            .prepare_fallible(key),
+        None => {
+            run.phase(CanonPhase::Output);
+            prepared::Builder::new(view, key)?.finish(run.stop())
+        }
+    }
+}
+
+/// The canonical document of `view` from a [`PreparedCanon`], with the labels, bytes
+/// and refusals of the matching entry that takes no product
+/// ([`try_canonicalize_flat_view`], [`try_canonicalize_view`] and their graph forms,
+/// by `request`).
+///
+/// The label search, symbol discovery and ranking are not repeated; each line is
+/// spelled from the view again. The receipt states the same configuration as the
+/// matching entry, phase [`CanonPhase::Output`] and no charged search work. The stop
+/// signal is polled once at the start, once per line and once per label.
+///
+/// # Errors
+/// [`CanonError::Prepared`] naming the first of hash, presentation, scope and
+/// snapshot in which the product differs from `request` and `view`, before any work
+/// is done; then the output refusals of the matching entry. A view that spells a
+/// term at a different length than at preparation is refused with
+/// [`CanonError::SourceInconsistent`].
+pub fn try_canonicalize_prepared_view<D: FallibleDatasetView>(
+    view: &D,
+    request: CanonRequest<'_>,
+    prepared: &PreparedCanon<D::Id>,
+    control: &mut CanonicalizationControl<'_>,
+) -> FlatViewResult<D> {
+    control.run(
+        SearchConfiguration::rdfc(
+            request.hash,
+            request.presentation,
+            request.graph,
+            CanonOutput::Document,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            prepared_state(view, request, prepared, run)?.document_prepared(prepared.fields())
+        }) {
+            Ok(Ok(canonicalized)) => Ok(canonicalized),
+            Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
+            Err(failure) => Err(failure.into()),
+        },
+    )
+}
+
+/// The SHA-256 [`ContentDigest`] of `view`'s canonical document from a
+/// [`PreparedCanon`]: equal to [`ContentDigest::of`] applied to the document
+/// [`try_canonicalize_prepared_view`] returns, and to the matching entry that takes
+/// no product ([`try_flat_digest_view`], [`try_canonical_sha256_view`],
+/// [`try_graph_digest_view`] by `request`). The document is not built.
+///
+/// # Errors
+/// Exactly [`try_canonicalize_prepared_view`]'s, except that no document is admitted
+/// to the owned account.
+pub fn try_digest_prepared_view<D: FallibleDatasetView>(
+    view: &D,
+    request: CanonRequest<'_>,
+    prepared: &PreparedCanon<D::Id>,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
+    control.run(
+        SearchConfiguration::rdfc(
+            request.hash,
+            request.presentation,
+            request.graph,
+            CanonOutput::Sha256Digest,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            prepared_state(view, request, prepared, run)?
+                .digest_prepared(prepared.fields(), Sha256::new())
+                .map(ContentDigest::from_raw)
+        }) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )
+}
+
+/// BLAKE3-256 over the canonical document of `view` from a [`PreparedCanon`], as
+/// [`try_flat_blake3_view`] and [`try_canonical_blake3_view`] compute it. The
+/// document is not built.
+///
+/// # Errors
+/// Exactly [`try_digest_prepared_view`]'s.
+pub fn try_blake3_prepared_view<D: FallibleDatasetView>(
+    view: &D,
+    request: CanonRequest<'_>,
+    prepared: &PreparedCanon<D::Id>,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<[u8; 32], ViewCanonError<D::Error, D::Evidence>> {
+    control.run(
+        SearchConfiguration::rdfc(
+            request.hash,
+            request.presentation,
+            request.graph,
+            CanonOutput::Blake3Digest,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            prepared_state(view, request, prepared, run)?
+                .digest_prepared(prepared.fields(), purrdf_hash::blake3::Hasher::new())
         }) {
             Ok(result) => result.map_err(ViewCanonError::Refused),
             Err(failure) => Err(failure.into()),
@@ -2167,6 +2369,9 @@ enum BlankRender<'a, Id> {
     FirstDegree { focus: Id },
     /// Final output (§4.4 step 7): each blank → its issued `_:c14nN` label.
     Canonical { issuer: &'a IdIssuer<Id> },
+    /// Final output of a run that reuses a prepared state: each blank → the
+    /// label that state kept for it.
+    Prepared { labels: &'a prepared::Labels<Id> },
 }
 
 impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
@@ -2185,6 +2390,9 @@ impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
             BlankRender::Canonical { issuer } => issuer
                 .issued_for(id)
                 .expect("every blank has a canonical id at output time"),
+            BlankRender::Prepared { labels } => labels
+                .get(id)
+                .expect("a prepared state labels every blank of the snapshot it is bound to"),
         }
     }
 }
@@ -2320,6 +2528,9 @@ struct CanonState<'a, D: DatasetView> {
     run: &'a SearchRun<'a>,
     /// One caller signal shared with the operation using this identity.
     stop: Option<&'a dyn crate::StopSignal>,
+    /// The labels of a prepared state when this run reuses one; output then
+    /// renders blanks through them instead of through `canonical`.
+    prepared: Option<&'a prepared::Labels<D::Id>>,
 }
 
 /// Related-ID multiplicity in the already-built group at a search refusal.
@@ -2719,6 +2930,9 @@ pub enum CanonError<E = Infallible> {
     /// whole of a run; this refusal detects only a change of length, not a
     /// change of bytes that keeps it. No canonical result is returned.
     SourceInconsistent,
+    /// A prepared canonical state cannot be built or cannot serve this request.
+    /// Nothing was recomputed and nothing was reused.
+    Prepared(PreparedRefusal),
 }
 
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for CanonError<E> {
@@ -2733,6 +2947,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
         SourceInconsistent => "canonical-source-inconsistent" {},
+        Prepared(cause) => "canonical-prepared" { "cause" => Cause(cause) },
     }
 }
 
@@ -2757,6 +2972,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::SourceInconsistent => f.write_str(
                 "the source spelled a term with a different length when it was read again",
             ),
+            Self::Prepared(err) => err.fmt(f),
         }
     }
 }
@@ -2768,6 +2984,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::Storage(error) => Some(error),
             Self::BudgetExceeded(err) => Some(err),
             Self::ReservedVocabulary(err) => Some(err),
+            Self::Prepared(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
             Self::Stopped
             | Self::CounterCapacity
@@ -2781,7 +2998,8 @@ purrdf_lex::variant_from!(impl<E> CanonError<E> {
     Storage(purrdf_lex::allocation::StorageError),
     Invalid(crate::RdfDiagnostic),
     BudgetExceeded(BudgetExceeded),
-    ReservedVocabulary(ReservedVocabulary)
+    ReservedVocabulary(ReservedVocabulary),
+    Prepared(PreparedRefusal)
 });
 
 impl CanonError {
@@ -2799,6 +3017,7 @@ impl CanonError {
             Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
             Self::SourceInconsistent => CanonError::SourceInconsistent,
+            Self::Prepared(error) => CanonError::Prepared(error),
         }
     }
 }
@@ -3030,6 +3249,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             hash,
             run,
             stop: run.stop(),
+            prepared: None,
         }
     }
 
@@ -3168,6 +3388,113 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             }
             sink.finish()
         })
+    }
+
+    /// Issue labels and order the lines once, and keep both in a [`PreparedCanon`]
+    /// admitted to the source's owned account. Nothing is spelled.
+    fn prepare_fallible(
+        self,
+        key: prepared::Key,
+    ) -> Result<PreparedCanon<D::Id>, CanonError<D::ReadError>> {
+        let mut canonical = self.issue_labels()?;
+        canonical.drop_search_state();
+        canonical.run.phase(CanonPhase::Output);
+        let mut builder = prepared::Builder::new(canonical.ds, key)?;
+        builder.labels(&canonical.canonical.issued)?;
+        let reservation = canonical
+            .ds
+            .reserve_workspace(0)
+            .map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation)
+            .run(|memory| canonical.emit_lines(memory, &mut output::Discard, Some(&mut builder)))?;
+        canonical
+            .run
+            .check_stop()
+            .map_err(|_| CanonError::Stopped)?;
+        builder.finish(canonical.stop)
+    }
+
+    /// Render this run's blanks through the labels of a prepared state.
+    const fn reusing(mut self, prepared: &'a prepared::Fields<D::Id>) -> Self {
+        self.prepared = Some(&prepared.labels);
+        self
+    }
+
+    /// The document of a prepared state, spelled from the view with its labels.
+    fn document_prepared(
+        self,
+        prepared: &prepared::Fields<D::Id>,
+    ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
+        self.run.phase(CanonPhase::Output);
+        let mut result = result::ResultBuilder::new(self.ds, self.presentation)?;
+        let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            self.emit_prepared_lines(&prepared.lines, memory, &mut result)?;
+            result.reserve_labels(prepared.labels.len())?;
+            for (id, label) in prepared.labels.iter() {
+                self.run.check_stop().map_err(|_| CanonError::Stopped)?;
+                result.label(id, Box::from(label))?;
+            }
+            self.run.check_stop().map_err(|_| CanonError::Stopped)?;
+            result.finish(self.stop)
+        })
+    }
+
+    /// The digest of a prepared state's document, hashed as its lines are spelled.
+    /// The owned workspace is required as a digest run requires it, and nothing is
+    /// charged to it.
+    fn digest_prepared<H: output::Absorb>(
+        self,
+        prepared: &prepared::Fields<D::Id>,
+        hasher: H,
+    ) -> Result<[u8; 32], CanonError<D::ReadError>> {
+        self.run.phase(CanonPhase::Output);
+        let _owned = ownership::SourceGrant::new(self.ds)?;
+        let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
+        let mut sink = output::Streamed::new(hasher, self.run)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            self.emit_prepared_lines(&prepared.lines, memory, &mut sink)?;
+            // One poll per label, as the document run makes, over nothing.
+            for _ in 0..prepared.labels.len() {
+                self.run.check_stop().map_err(|_| CanonError::Stopped)?;
+            }
+            sink.finish()
+        })
+    }
+
+    /// Spell the lines a prepared state kept, in their kept order, into `sink`.
+    /// A leaf is read from the view again, so a term whose length differs from the
+    /// one recorded is refused as [`CanonError::SourceInconsistent`].
+    fn emit_prepared_lines<S: Admission + ?Sized>(
+        &self,
+        retained: &order::Retained<D::Id>,
+        memory: &mut Memory<'_, S>,
+        sink: &mut dyn output::LineSink<D::ReadError>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let spelling = retained.spelling();
+        let table = retained.table();
+        let ranks = retained.ranks();
+        let mut line = String::new();
+        memory.reserve_string(&mut line, retained.longest())?;
+        self.check_stop().map_err(CanonError::with_read_error)?;
+        sink.begin(retained.total())?;
+        let mut written = 0usize;
+        let mut at = 0usize;
+        while at < ranks.len() {
+            self.check_stop().map_err(CanonError::with_read_error)?;
+            line.clear();
+            at = self.spell_line(&spelling, table, ranks, at, &mut line, memory)?;
+            written = written
+                .checked_add(line.len())
+                .filter(|&written| written <= retained.total())
+                .ok_or(CanonError::SourceInconsistent)?;
+            sink.line(&line)?;
+        }
+        if written != retained.total() {
+            return Err(CanonError::SourceInconsistent);
+        }
+        memory.release_string(line)?;
+        Ok(())
     }
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
@@ -3855,6 +4182,18 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory: &mut Memory<'_, S>,
         sink: &mut dyn output::LineSink<D::ReadError>,
     ) -> Result<(), CanonError<D::ReadError>> {
+        self.emit_lines(memory, sink, None)
+    }
+
+    /// [`emit_canonical_lines`](Self::emit_canonical_lines), or, with a `capture`,
+    /// the same run stopped once the lines are ordered and measured: they are kept
+    /// in the builder's account instead of being spelled.
+    fn emit_lines<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+        sink: &mut dyn output::LineSink<D::ReadError>,
+        capture: Option<&mut prepared::Builder<D::Id, D::ReadError>>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         let (mut symbols, mut lines) = self.discover_symbols(memory)?;
         let mut first = String::new();
         let mut second = String::new();
@@ -3877,22 +4216,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             // A leaf is followed by its space; a fixed symbol is its whole text.
             len + usize::from(meta.kind() != order::Kind::Fixed)
         };
+        let table = ranked.table(term);
         let spell_line = |memory: &mut Memory<'_, S>,
                           seq: &[u32],
                           start: usize,
                           out: &mut String|
          -> Result<(), CanonError<D::ReadError>> {
-            let mut at = start;
-            loop {
-                let rank = seq[at];
-                let symbol = ranked.symbols[rank as usize];
-                let meta = order::Meta::from_bits(ranked.meta[rank as usize]);
-                self.render_symbol(&spelling, symbol, meta, out, memory)?;
-                if rank == term {
-                    return Ok(());
-                }
-                at += 1;
-            }
+            self.spell_line(&spelling, table, seq, start, out, memory)
+                .map(|_| ())
         };
         if !lines.irregular.is_empty() {
             let (_, longest) = lines.measure(term, len_of)?;
@@ -3905,6 +4236,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.check_stop().map_err(CanonError::with_read_error)?;
         let (total, longest) = lines.measure(term, len_of)?;
         self.check_stop().map_err(CanonError::with_read_error)?;
+        if let Some(builder) = capture {
+            builder.retain(|owned| {
+                order::Retained::capture(&symbols, &ranked, &lines, table, (total, longest), owned)
+            })?;
+            memory.release_string(first)?;
+            memory.release_string(second)?;
+            lines.release(memory)?;
+            ranked.release(memory)?;
+            symbols.release(memory)?;
+            return Ok(());
+        }
         memory.reserve_string(&mut first, longest)?;
         memory.release_string(second)?;
         sink.begin(total)?;
@@ -3929,6 +4271,30 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         Ok(())
     }
 
+    /// Spell the line whose rank sequence starts at `start` in `seq`, appended to
+    /// `out`, and return the index just past its terminator.
+    fn spell_line<S: Admission + ?Sized>(
+        &self,
+        spelling: &order::Spelling<'_, D::Id>,
+        ranks: order::RankTable<'_>,
+        seq: &[u32],
+        start: usize,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<usize, CanonError<D::ReadError>> {
+        let mut at = start;
+        loop {
+            let rank = seq[at];
+            let symbol = ranks.symbols[rank as usize];
+            let meta = order::Meta::from_bits(ranks.meta[rank as usize]);
+            self.render_symbol(spelling, symbol, meta, out, memory)?;
+            at += 1;
+            if rank == ranks.term {
+                return Ok(at);
+            }
+        }
+    }
+
     /// Spell one symbol, a leaf with its trailing space, at `out`'s end, from what
     /// was recorded when it was found.
     ///
@@ -3951,9 +4317,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         if meta.arena() {
             memory.push_str(out, spelling.arena_text(symbol))?;
         } else {
-            let render = BlankRender::Canonical {
-                issuer: &self.canonical,
-            };
+            let render = self.output_render();
             match self.write_leaf(spelling.rep(symbol), render, out, memory, None)? {
                 Leaf::Written(_) => {}
                 Leaf::NotReady => return Err(self.latched_read_error()),
@@ -3996,6 +4360,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         memory.append_text(out, |out| write_iri(sentinel, out))?;
         memory.push_char(out, ' ')?;
         Ok(())
+    }
+
+    /// How a blank is spelled in the final output of this run.
+    fn output_render(&self) -> BlankRender<'_, D::Id> {
+        match self.prepared {
+            Some(labels) => BlankRender::Prepared { labels },
+            None => BlankRender::Canonical {
+                issuer: &self.canonical,
+            },
+        }
     }
 
     /// The failure a view latched when it could not resolve a term.

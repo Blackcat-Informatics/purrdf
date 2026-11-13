@@ -562,6 +562,158 @@ impl Ranked {
     }
 }
 
+impl Ranked {
+    /// The rank table a line is spelled from, with the rank of the terminator.
+    pub(super) fn table(&self, term: u32) -> RankTable<'_> {
+        RankTable {
+            symbols: &self.symbols,
+            meta: &self.meta,
+            term,
+        }
+    }
+}
+
+/// The symbol and packed meta standing for each rank, and the rank of `.\n`,
+/// which ends every line's rank sequence.
+#[derive(Clone, Copy)]
+pub(super) struct RankTable<'a> {
+    pub(super) symbols: &'a [u32],
+    pub(super) meta: &'a [u32],
+    pub(super) term: u32,
+}
+
+/// What spelling the ordered document again needs, kept after a run: the symbol
+/// table, the rank table and every line as its rank sequence, back to back in
+/// document order with irregular lines already placed. Nothing here is text of
+/// the document except the rewritten literals the symbol table already kept.
+pub(super) struct Retained<Id> {
+    reps: Vec<Id>,
+    long_lens: Vec<(u32, u64)>,
+    arena: String,
+    arena_index: Vec<(u32, u64)>,
+    rank_symbols: Vec<u32>,
+    rank_meta: Vec<u32>,
+    ranks: Vec<u32>,
+    term: u32,
+    total: usize,
+    longest: usize,
+    lines: usize,
+}
+
+impl<Id: Copy> Retained<Id> {
+    /// No lines and no symbols: the canonical form of an empty selection.
+    pub(super) const fn empty() -> Self {
+        Self {
+            reps: Vec::new(),
+            long_lens: Vec::new(),
+            arena: String::new(),
+            arena_index: Vec::new(),
+            rank_symbols: Vec::new(),
+            rank_meta: Vec::new(),
+            ranks: Vec::new(),
+            term: 0,
+            total: 0,
+            longest: 0,
+            lines: 0,
+        }
+    }
+
+    /// Copy what the ordered document needs into `memory`'s account. `lines` is
+    /// ordered and measured; `total` and `longest` are its measured byte lengths.
+    ///
+    /// # Errors
+    /// The first admission or allocation refusal; what was copied is dropped.
+    pub(super) fn capture<S: Admission + ?Sized>(
+        symbols: &Symbols<Id>,
+        ranked: &Ranked,
+        ordered: &Lines,
+        table: RankTable<'_>,
+        measured: (usize, usize),
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        let term = table.term;
+        let mut words = 0usize;
+        let mut lines = 0usize;
+        for start in ordered.merged() {
+            let mut at = start;
+            while ordered.seq[at] != term {
+                at += 1;
+            }
+            words = words
+                .checked_add(at - start + 1)
+                .ok_or(StorageError::SizeOverflow)?;
+            lines += 1;
+        }
+        let mut retained = Self::empty();
+        retained.term = term;
+        retained.total = measured.0;
+        retained.longest = measured.1;
+        retained.lines = lines;
+        memory.reserve(&mut retained.ranks, words)?;
+        for start in ordered.merged() {
+            let mut at = start;
+            while ordered.seq[at] != term {
+                at += 1;
+            }
+            memory.extend(&mut retained.ranks, ordered.seq[start..=at].iter().copied())?;
+        }
+        memory.reserve(&mut retained.reps, symbols.reps.len())?;
+        memory.extend(&mut retained.reps, symbols.reps.iter().copied())?;
+        memory.reserve(&mut retained.long_lens, symbols.long_lens.len())?;
+        memory.extend(&mut retained.long_lens, symbols.long_lens.iter().copied())?;
+        memory.reserve(&mut retained.arena_index, symbols.arena_index.len())?;
+        memory.extend(
+            &mut retained.arena_index,
+            symbols.arena_index.iter().copied(),
+        )?;
+        memory.reserve_string(&mut retained.arena, symbols.arena.len())?;
+        memory.push_str(&mut retained.arena, &symbols.arena)?;
+        memory.reserve(&mut retained.rank_symbols, ranked.symbols.len())?;
+        memory.extend(&mut retained.rank_symbols, ranked.symbols.iter().copied())?;
+        memory.reserve(&mut retained.rank_meta, ranked.meta.len())?;
+        memory.extend(&mut retained.rank_meta, ranked.meta.iter().copied())?;
+        Ok(retained)
+    }
+
+    /// The symbol data a line is spelled from.
+    pub(super) fn spelling(&self) -> Spelling<'_, Id> {
+        Spelling {
+            reps: &self.reps,
+            long_lens: &self.long_lens,
+            arena: &self.arena,
+            arena_index: &self.arena_index,
+        }
+    }
+
+    pub(super) fn table(&self) -> RankTable<'_> {
+        RankTable {
+            symbols: &self.rank_symbols,
+            meta: &self.rank_meta,
+            term: self.term,
+        }
+    }
+
+    /// Every line's rank sequence, each ending in the terminator rank.
+    pub(super) fn ranks(&self) -> &[u32] {
+        &self.ranks
+    }
+
+    /// The canonical document's length in bytes.
+    pub(super) const fn total(&self) -> usize {
+        self.total
+    }
+
+    /// The longest canonical line in bytes.
+    pub(super) const fn longest(&self) -> usize {
+        self.longest
+    }
+
+    /// The number of canonical lines.
+    pub(super) const fn lines(&self) -> usize {
+        self.lines
+    }
+}
+
 /// Order all symbols by their text and give equal text one dense rank.
 ///
 /// `heads` holds every symbol's head key (see [`head_keys`]). They are sorted

@@ -50,6 +50,11 @@ impl<E> SourceGrant<E> {
         })
     }
 
+    /// Bytes admitted so far under the source's owned account.
+    pub(super) const fn live(&self) -> usize {
+        self.live
+    }
+
     pub(super) fn memory<T>(
         &mut self,
         operation: impl FnOnce(&mut Memory<'_, Self>) -> Result<T, StorageError>,

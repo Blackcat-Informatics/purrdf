@@ -40,6 +40,19 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> LineSink<E> for ResultBuilder<Id,
     }
 }
 
+/// The sink of a run that stops before any line is spelled.
+pub(super) struct Discard;
+
+impl<E> LineSink<E> for Discard {
+    fn begin(&mut self, _: usize) -> Result<(), CanonError<E>> {
+        Ok(())
+    }
+
+    fn line(&mut self, _: &str) -> Result<(), CanonError<E>> {
+        Ok(())
+    }
+}
+
 /// A running 256-bit hash.
 pub(super) trait Absorb {
     fn absorb(&mut self, bytes: &[u8]);
