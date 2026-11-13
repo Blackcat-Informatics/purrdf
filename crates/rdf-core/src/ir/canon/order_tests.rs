@@ -70,7 +70,12 @@ fn document<D: DatasetView>(view: &D) -> Result<String, CanonError<D::ReadError>
     .map(|canonical| canonical.nquads().to_owned())
 }
 
-/// The document equals the oracle's; returns it for a case that also pins bytes.
+fn control() -> CanonicalizationControl<'static> {
+    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+}
+
+/// The document equals the oracle's, and every dataset-scoped digest entry equals
+/// the hash of that document; returns it for a case that also pins bytes.
 fn check<D: DatasetView>(view: &D) -> String {
     let expected = oracle(view);
     let actual = document(view).expect("the view canonicalizes");
@@ -78,7 +83,34 @@ fn check<D: DatasetView>(view: &D) -> String {
         actual == expected,
         "the document differs from the sorted, deduplicated rendering of its lines"
     );
+    let hash = CanonHash::Sha256;
+    let sha = ContentDigest::of(actual.as_bytes());
+    assert_eq!(
+        try_canonical_sha256_view(view, hash, &mut control()).unwrap(),
+        sha
+    );
+    let (both, both_sha) = try_canonicalize_sha256_view(view, hash, &mut control()).unwrap();
+    assert_eq!((both.nquads(), both_sha), (actual.as_str(), sha));
+    assert_eq!(
+        try_canonical_blake3_view(view, hash, &mut control()).unwrap(),
+        *purrdf_hash::blake3::hash(actual.as_bytes()).as_bytes()
+    );
     actual
+}
+
+/// The flat document's digest entries equal the hash of the flat document.
+fn check_flat<D: FallibleDatasetView>(view: &D) {
+    for hash in [CanonHash::Sha256, CanonHash::Sha384] {
+        let flat = try_canonicalize_flat_view(view, hash, &mut control()).expect("flat document");
+        assert_eq!(
+            try_flat_digest_view(view, hash, &mut control()).unwrap(),
+            ContentDigest::of(flat.nquads().as_bytes())
+        );
+        assert_eq!(
+            try_flat_blake3_view(view, hash, &mut control()).unwrap(),
+            *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -536,8 +568,10 @@ fn statements() -> [Arc<RdfDataset>; 2] {
 #[test]
 fn flat_datasets_with_nested_terms_escapes_and_many_blanks_match_the_oracle() {
     check(&*mixed());
+    check_flat(&*mixed());
     for dataset in statements() {
         check(&*dataset);
+        check_flat(&*dataset);
     }
 }
 
@@ -555,6 +589,7 @@ fn a_composite_view_matches_the_oracle() {
     let sources = vec![mixed(), statements()[0].clone(), statements()[1].clone()];
     let view = CompositeDatasetView::new(sources, ViewLimits::default()).unwrap();
     check(&view);
+    check_flat(&view);
 }
 
 /// A delta view over a base: added rows with blanks and removed base rows.
@@ -579,6 +614,7 @@ fn a_delta_view_matches_the_oracle() {
     assert!(delta.remove(&gone));
     let view = delta.snapshot_view().unwrap();
     check(&view);
+    check_flat(&view);
 }
 
 /// A line far longer than any buffer a short fixture would size, in a document
@@ -595,7 +631,9 @@ fn long_lines_match_the_oracle() {
         b.push_quad(if k % 2 == 0 { s } else { blank }, p, o, None)
             .unwrap();
     }
-    check(&*b.freeze().unwrap());
+    let dataset = b.freeze().unwrap();
+    check(&*dataset);
+    check_flat(&*dataset);
 }
 
 // ---------------------------------------------------------------------------
