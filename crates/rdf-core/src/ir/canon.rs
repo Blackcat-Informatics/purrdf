@@ -3068,7 +3068,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     fn blank_ordinal(&self, identifier: D::Id) -> usize {
-        // Every frame identifier came from the collected blank incidence map.
+        // Every frame identifier came from the collected component table's blanks.
         self.blanks
             .binary_search(&identifier)
             .expect("a search frame identifies a collected blank")
@@ -6527,7 +6527,7 @@ mod tests {
     /// genuine base quad is emitted exactly once — checked AT THE ID LEVEL (a raw
     /// [`collect_components`] walk, not the rendered-text `BTreeSet` `serialize_canonical`
     /// also deduplicates through) so a would-be duplicate component never reaches
-    /// [`CanonState`]'s incident map. Exercised in both the default graph and a named
+    /// the search's component table. Exercised in both the default graph and a named
     /// graph, matching the two graph slots [`collect_components`]'s two `CanonScope`
     /// arms handle separately.
     #[test]
@@ -6589,7 +6589,7 @@ mod tests {
             component_count(&twice),
             component_count(&once),
             "a row spelled twice must contribute exactly the components a row spelled \
-             once contributes — no duplicate may reach the incident map"
+             once contributes — no duplicate may reach the component table"
         );
         let run = SearchRun::new(SearchPolicy::Unlimited, None);
         let flat_once = CanonState::new(

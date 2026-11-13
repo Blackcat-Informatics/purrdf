@@ -3,7 +3,6 @@
 
 //! Issuance-local, source-admitted exact subsearch reuse.
 
-use std::alloc::Layout;
 use std::cmp::Ordering;
 
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
@@ -93,19 +92,26 @@ impl<Id: ViewTermId> Footprints<Id> {
         &self.pool[start..self.ends[index]]
     }
 
+    /// The memo's retention ceiling: a fixed charge per component and per blank
+    /// reference, independent of how the table is stored. A component costs one
+    /// row (the component and a blank-list header) in an array whose capacity is
+    /// the amortized growth of `components` pushes (four, then doubling), and a
+    /// blank reference costs one identifier. These are the numbers the ceiling
+    /// has always had, so a given input admits exactly the same memo entries.
     fn storage_bytes(&self) -> Result<usize, StorageError> {
-        let components = Layout::array::<Component<Id>>(self.components.capacity())
-            .map_err(|_| StorageError::SizeOverflow)?
-            .size();
-        let ends = Layout::array::<usize>(self.ends.capacity())
-            .map_err(|_| StorageError::SizeOverflow)?
-            .size();
-        let pool = Layout::array::<Id>(self.pool.capacity())
-            .map_err(|_| StorageError::SizeOverflow)?
-            .size();
-        components
-            .checked_add(ends)
-            .and_then(|bytes| bytes.checked_add(pool))
+        let align = align_of::<Component<Id>>().max(align_of::<Vec<Id>>());
+        let row = (size_of::<Component<Id>>() + size_of::<Vec<Id>>()).next_multiple_of(align);
+        let rows = match self.components.len() {
+            0 => 0,
+            count => count.next_power_of_two().max(4),
+        };
+        rows.checked_mul(row)
+            .and_then(|bytes| {
+                self.pool
+                    .len()
+                    .checked_mul(size_of::<Id>())
+                    .and_then(|refs| bytes.checked_add(refs))
+            })
             .ok_or(StorageError::SizeOverflow)
     }
 
@@ -676,5 +682,44 @@ mod tests {
             "outer terminal cleanup still refunds its owners"
         );
         assert_eq!(memory.admission().live, 0);
+    }
+
+    /// The retention ceiling equals the one the earlier two-array table had: rows
+    /// of a component and a blank-list header in an array grown four, then
+    /// doubling, plus one identifier per blank reference. Five components with
+    /// seven blank references grow the array to eight rows (4, then 8), so the
+    /// ceiling is 8 rows + 7 identifiers; four components fit the first four rows.
+    #[test]
+    fn retention_limit_is_a_fixed_charge_per_component_and_blank_reference() {
+        use crate::TermId;
+        struct EarlierRow {
+            _component: Component<TermId>,
+            _blanks: Vec<TermId>,
+        }
+        let id = |n: u32| TermId::from_index(n).expect("a small index");
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        let mut table = Footprints::new();
+        let quad = |n: u32| Component::Quad {
+            s: id(n),
+            p: id(100),
+            o: id(n + 1),
+            g: None,
+        };
+        // Blank references per component: 2, 1, 1, 2 (four components).
+        for (n, blanks) in [(1, 2), (3, 1), (5, 1), (7, 2)] {
+            let set: Vec<_> = (0..blanks).map(|k| id(n + k)).collect();
+            table.push(quad(n), &set, &mut memory).unwrap();
+        }
+        assert_eq!(
+            table.storage_bytes().unwrap(),
+            4 * size_of::<EarlierRow>() + 6 * size_of::<TermId>()
+        );
+        table.push(quad(9), &[id(9)], &mut memory).unwrap();
+        assert_eq!(
+            table.storage_bytes().unwrap(),
+            8 * size_of::<EarlierRow>() + 7 * size_of::<TermId>()
+        );
+        table.release(&mut memory).unwrap();
     }
 }
