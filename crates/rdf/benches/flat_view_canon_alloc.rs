@@ -16,7 +16,11 @@
 //!   needs `PURRDF_CANON_ALLOC_ALLOW_LARGE=1`.
 //! * `PURRDF_CANON_ALLOC_PRE_OUTPUT_LARGE=1` also measures the pre-output peak
 //!   at that added size (routine sizes always measure it).
+//! * `PURRDF_CANON_ALLOC_CALLS=<shape>:<n>` skips the rows and runs only `n`
+//!   flat document calls over the `reifier` (32,768 lines, sorted) or `collision`
+//!   fixture, so an external instruction counter can compare `n` calls with none.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
@@ -302,7 +306,80 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
     line("overlay_doc_sha256", &f, &overlay, doc_m, None);
 }
 
+/// Rings of identical blank nodes: every blank collides at first degree, so the
+/// n-degree search runs for each of them. Many small rings and one long one.
+fn collision() -> RdfDataset {
+    use purrdf_rdf::{BlankScope, RdfDatasetBuilder};
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p").expect("predicate");
+    let mut ring = |tag: &str, size: usize| {
+        let nodes: Vec<_> = (0..size)
+            .map(|i| {
+                b.intern_blank(&format!("{tag}_{i}"), BlankScope::DEFAULT)
+                    .expect("blank interns")
+            })
+            .collect();
+        for i in 0..size {
+            b.push_quad(nodes[i], p, nodes[(i + 1) % size], None)
+                .expect("quad pushes");
+        }
+    };
+    for r in 0..500 {
+        ring(&format!("s{r}"), 4);
+    }
+    ring("long", 40);
+    let frozen = b.freeze().expect("collision fixture freezes");
+    Arc::try_unwrap(frozen).unwrap_or_else(|_| panic!("the fixture is uniquely owned"))
+}
+
+/// One row for the collision fixture: allocations and peak of the flat document
+/// entry, and the poll total (search work is asserted nonzero).
+fn probe_collision() {
+    let ds = collision();
+    let window = WholeProcessWindow::open();
+    let mut quiet = control(None);
+    let doc = try_canonicalize_flat_view(&ds, HASH, &mut quiet).expect("flat document");
+    let work = quiet.receipts()[0].work.total();
+    drop(quiet);
+    let m = window.close();
+    assert!(
+        work > 0,
+        "the collision fixture must run an n-degree search"
+    );
+    let d = Document::of(doc.nquads());
+    println!(
+        "[flat_view_canon_alloc] entry=doc shape=collision lines={} search_work={work} doc_bytes={} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} sha256={} blake3={}",
+        doc.nquads().lines().count(),
+        d.doc_bytes,
+        m.allocations,
+        m.requested_bytes,
+        m.retained_bytes,
+        m.peak_working_bytes,
+        d.sha256,
+        d.blake3,
+    );
+}
+
+/// `n` flat document calls and nothing else, for an external instruction counter.
+fn calls(spec: &str) {
+    let (shape, n) = spec.split_once(':').expect("<shape>:<n>");
+    let n: usize = n.parse().expect("n is an integer");
+    let ds: Arc<RdfDataset> = match shape {
+        "reifier" => load::reifier(32_768, 1, load::Order::Sorted).dataset,
+        "collision" => Arc::new(collision()),
+        other => panic!("unknown shape {other}"),
+    };
+    for _ in 0..n {
+        let doc = try_canonicalize_flat_view(&*ds, HASH, &mut control(None)).expect("document");
+        std::hint::black_box(doc);
+    }
+}
+
 fn main() {
+    if let Ok(spec) = std::env::var("PURRDF_CANON_ALLOC_CALLS") {
+        calls(&spec);
+        return;
+    }
     let extra = std::env::var("PURRDF_CANON_ALLOC_LINES").ok().map(|raw| {
         let lines: usize = raw.parse().expect("PURRDF_CANON_ALLOC_LINES is an integer");
         assert!(
@@ -317,6 +394,7 @@ fn main() {
         .into_iter()
         .map(|n| (n, true))
         .chain(extra.map(|n| (n, large_pre)));
+    probe_collision();
     for (lines, pre) in sizes {
         for shape in ["blank_free", "reifier"] {
             for scale in [1, 2] {
