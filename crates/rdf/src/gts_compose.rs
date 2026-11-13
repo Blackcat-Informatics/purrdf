@@ -1115,29 +1115,33 @@ impl SnapshotBuilder {
             .collect()
     }
 
-    /// The quad, reifier and annotation tables under `remap`: remapped, deduplicated
-    /// and sorted.
-    fn canonical_rows(
-        &self,
-        remap: &[usize],
-    ) -> (Vec<CanonQuad>, Vec<ReifierRow>, Vec<AnnotationRow>) {
-        // Quads: remap, dedup, sort by (graph[None=-1], s, p, o).
-        let mut quad_set: std::collections::BTreeSet<(i64, usize, usize, usize, Option<usize>)> =
-            std::collections::BTreeSet::new();
-        for &(s, p, o, g) in &self.quads {
-            let g = g.map(|g| remap[g]);
-            let gkey = g.map_or(-1, |g| g as i64);
-            quad_set.insert((gkey, remap[s], remap[p], remap[o], g));
-        }
-        let quads: Vec<(usize, usize, usize, Option<usize>)> = quad_set
-            .into_iter()
-            .map(|(_, s, p, o, g)| (s, p, o, g))
+    /// The quad table under `remap`, packed as `[graph + 1 (0 for the default
+    /// graph), s, p, o]` in 32-bit ids, deduplicated and sorted by that key.
+    ///
+    /// The key orders the default graph first, then graphs by id, then `(s, p, o)`:
+    /// the order the wire fixes. One flat vector sorted in place, 16 bytes a row,
+    /// is all the memory this holds; term ids index a `u32` table, so they fit.
+    fn canonical_quad_keys(&self, remap: &[usize]) -> Vec<[u32; 4]> {
+        let id = |term: usize| {
+            u32::try_from(remap[term]).expect("INVARIANT: term ids index a u32 table")
+        };
+        let mut keys: Vec<[u32; 4]> = self
+            .quads
+            .iter()
+            .map(|&(s, p, o, g)| [g.map_or(0, |g| id(g) + 1), id(s), id(p), id(o)])
             .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
 
-        // Reifies: remap, then sort by the WHOLE row. One reifier id may carry
-        // several bindings (`rdf:reifies` is not functional), so sorting by the
-        // reifier id alone would leave their order to the ingestion order —
-        // and the emitted bytes must be a pure function of the content.
+    /// The reifier and annotation tables under `remap`: remapped, sorted by the
+    /// whole row and deduplicated.
+    fn canonical_binding_rows(&self, remap: &[usize]) -> (Vec<ReifierRow>, Vec<AnnotationRow>) {
+        // Reifies: sort by the WHOLE row. One reifier id may carry several
+        // bindings (`rdf:reifies` is not functional), so sorting by the reifier
+        // id alone would leave their order to the ingestion order — and the
+        // emitted bytes must be a pure function of the content.
         let mut reifies: Vec<ReifierRow> = self
             .reifies
             .iter()
@@ -1152,14 +1156,35 @@ impl SnapshotBuilder {
         reifies.sort_unstable();
         reifies.dedup();
 
-        // Annot: remap, dedup, sort.
-        let mut annot_set: std::collections::BTreeSet<AnnotationRow> =
-            std::collections::BTreeSet::new();
-        for &(r, p, v, g) in &self.annot {
-            annot_set.insert((remap[r], remap[p], remap[v], g.map(|g| remap[g])));
-        }
-        let annot: Vec<AnnotationRow> = annot_set.into_iter().collect();
+        let mut annot: Vec<AnnotationRow> = self
+            .annot
+            .iter()
+            .map(|&(r, p, v, g)| (remap[r], remap[p], remap[v], g.map(|g| remap[g])))
+            .collect();
+        annot.sort_unstable();
+        annot.dedup();
+        (reifies, annot)
+    }
 
+    /// The quad, reifier and annotation tables under `remap`: remapped, deduplicated
+    /// and sorted.
+    fn canonical_rows(
+        &self,
+        remap: &[usize],
+    ) -> (Vec<CanonQuad>, Vec<ReifierRow>, Vec<AnnotationRow>) {
+        let quads = self
+            .canonical_quad_keys(remap)
+            .into_iter()
+            .map(|[g, s, p, o]| {
+                (
+                    s as usize,
+                    p as usize,
+                    o as usize,
+                    g.checked_sub(1).map(|g| g as usize),
+                )
+            })
+            .collect();
+        let (reifies, annot) = self.canonical_binding_rows(remap);
         (quads, reifies, annot)
     }
 
@@ -1288,7 +1313,8 @@ impl SnapshotBuilder {
     /// digests and `snapshot_canonical_bytes_match_the_payload_tree` hold it there.
     pub(crate) fn snapshot_canonical_bytes(&self) -> Vec<u8> {
         let (order, remap) = self.canonical_order();
-        let (quads, reifies, annot) = self.canonical_rows(&remap);
+        let quads = self.canonical_quad_keys(&remap);
+        let (reifies, annot) = self.canonical_binding_rows(&remap);
         let mut len = Count(0);
         self.write_snapshot(&mut len, &order, &remap, &quads, &reifies, &annot)
             .expect("counting accepts every write");
@@ -1306,7 +1332,7 @@ impl SnapshotBuilder {
         out: &mut W,
         order: &[usize],
         remap: &[usize],
-        quads: &[CanonQuad],
+        quads: &[[u32; 4]],
         reifies: &[ReifierRow],
         annot: &[AnnotationRow],
     ) -> std::io::Result<()> {
@@ -1321,8 +1347,9 @@ impl SnapshotBuilder {
         }
         head::write_text(out, "quads")?;
         head::write_head(out, head::ARRAY, quads.len() as u64)?;
-        for &(s, p, o, g) in quads {
-            write_id_row(out, &[s, p, o], g)?;
+        for &[g, s, p, o] in quads {
+            let graph = g.checked_sub(1).map(|g| g as usize);
+            write_id_row(out, &[s as usize, p as usize, o as usize], graph)?;
         }
         head::write_text(out, "terms")?;
         head::write_head(out, head::ARRAY, order.len() as u64)?;
@@ -1585,11 +1612,96 @@ impl MediumPlan {
 
 /// Emit the snapshot bundle bytes from an accumulated builder (`_Builder.to_gts`).
 ///
-/// Consumes the builder: its tables are released once the snapshot payload is
-/// encoded, before the transform runs.
+/// The snapshot payload is encoded once, straight from the builder's tables, and
+/// handed to the writer as the frame source. The builder is only borrowed, so it
+/// stays alive until the call returns and can be reused after a refusal; a caller
+/// that owns a builder it is done with should use [`emit_gts_owned`], which
+/// releases the tables before the transform runs.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_gts(
+    builder: &SnapshotBuilder,
+    profile: &str,
+    transform: Option<Vec<String>>,
+    doc_blobs: Vec<BlobRow>,
+    report_blobs: Vec<BlobRow>,
+    signer_secret: Option<[u8; 32]>,
+    signer_kid: Option<String>,
+    public_key_armor: Option<String>,
+    rsyncable_threshold: usize,
+    plan: &MediumPlan,
+) -> Result<Vec<u8>, GtsEmitError> {
+    emit_held(
+        Held {
+            borrowed: Some(builder),
+            owned: None,
+        },
+        profile,
+        transform,
+        doc_blobs,
+        report_blobs,
+        signer_secret,
+        signer_kid,
+        public_key_armor,
+        rsyncable_threshold,
+        plan,
+    )
+}
+
+/// [`emit_gts`] for a caller that is done with its builder.
+///
+/// Byte-for-byte the same bundle. The builder's tables are released once the
+/// payload is encoded, before the transform runs, so compression does not run on
+/// top of them. The cost is the retry: the builder is gone after a refusal, and a
+/// caller that wants to try again ingests again.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_gts_owned(
     builder: SnapshotBuilder,
+    profile: &str,
+    transform: Option<Vec<String>>,
+    doc_blobs: Vec<BlobRow>,
+    report_blobs: Vec<BlobRow>,
+    signer_secret: Option<[u8; 32]>,
+    signer_kid: Option<String>,
+    public_key_armor: Option<String>,
+    rsyncable_threshold: usize,
+    plan: &MediumPlan,
+) -> Result<Vec<u8>, GtsEmitError> {
+    emit_held(
+        Held {
+            borrowed: None,
+            owned: Some(builder),
+        },
+        profile,
+        transform,
+        doc_blobs,
+        report_blobs,
+        signer_secret,
+        signer_kid,
+        public_key_armor,
+        rsyncable_threshold,
+        plan,
+    )
+}
+
+/// The builder an emission reads: borrowed, or owned and released early. Exactly
+/// one of the two is set.
+struct Held<'a> {
+    borrowed: Option<&'a SnapshotBuilder>,
+    owned: Option<SnapshotBuilder>,
+}
+
+impl Held<'_> {
+    fn get(&self) -> &SnapshotBuilder {
+        self.owned
+            .as_ref()
+            .or(self.borrowed)
+            .expect("INVARIANT: a held builder is borrowed or owned")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_held(
+    held: Held<'_>,
     profile: &str,
     transform: Option<Vec<String>>,
     doc_blobs: Vec<BlobRow>,
@@ -1603,7 +1715,7 @@ pub fn emit_gts(
     // TERMINAL POISON. Rollback restored the last accepted tables, but publishing
     // that accepted subset would omit content the caller requested. Refuse before
     // inspecting any authoring configuration, retaining the original failure.
-    if let Some(poison) = builder.poison() {
+    if let Some(poison) = held.get().poison() {
         let cause = purrdf_lex::allocation::retain_native_cause(poison.clone())
             .map_err(GtsEmitError::Storage)?;
         return Err(GtsEmitError::Poisoned(cause));
@@ -1711,13 +1823,15 @@ pub fn emit_gts(
     // compressed. With the empty chain the frame embeds the payload unencoded, so
     // the writer takes the tree.
     let (payload, raw, chain) = if base_chain.is_empty() {
-        (Some(builder.snapshot_payload()), None, Vec::new())
+        (Some(held.get().snapshot_payload()), None, Vec::new())
     } else {
-        let bytes = builder.snapshot_canonical_bytes();
+        let bytes = held.get().snapshot_canonical_bytes();
         let chain = choose_transform(&base_chain, bytes.len(), rsyncable_threshold);
         (None, Some(bytes), chain)
     };
-    drop(builder);
+    // An owned builder is released here, before the transform; a borrowed one
+    // is the caller's and this drops nothing.
+    drop(held);
     let snapshot_dict = plan.select(&FrameSlot::Snapshot)?;
     let options = purrdf_gts::writer::FrameOptions {
         payload,
@@ -1851,6 +1965,104 @@ mod tests {
             SnapshotBuilder::new().snapshot_canonical_bytes(),
             canonical(&SnapshotBuilder::new().snapshot_payload())
         );
+    }
+
+    /// Text is measured in bytes, not characters, on the wire: multi-byte IRIs
+    /// and literals, and a literal long enough to need a wider length head, encode
+    /// as the payload tree encodes them.
+    #[test]
+    fn snapshot_canonical_bytes_match_the_payload_tree_for_non_ascii_text() {
+        let long = "ü日".repeat(200);
+        let builder = ingest(
+            &format!(
+                "<http://example.org/s/é日本> <http://example.org/p/ß> \"ünï 日本語 🐈\"@de .\n\
+                 <http://example.org/s/é日本> <http://example.org/p/ß> \"{long}\" .\n\
+                 <http://example.org/s/é日本> <http://example.org/p/ß> \"مرحبا\"@ar--rtl <http://example.org/g/ü> .\n"
+            ),
+            "application/n-quads",
+        );
+        assert!(builder.snapshot_canonical_bytes().len() > 600);
+        assert_eq!(
+            builder.snapshot_canonical_bytes(),
+            canonical(&builder.snapshot_payload())
+        );
+    }
+
+    /// A direction token the wire does not admit is left off the term, as the tree
+    /// builder leaves it off; the neighbouring valid token is written.
+    #[test]
+    fn a_direction_that_is_not_a_base_direction_is_left_off_the_wire() {
+        let builder = SnapshotBuilder::new();
+        for (direction, written) in [("rtl", true), ("sideways", false)] {
+            let row = TermRow {
+                kind: TermKind::Literal,
+                value: "x".to_owned(),
+                datatype: None,
+                lang: Some("en".to_owned()),
+                direction: Some(direction.to_owned()),
+                triple: None,
+                nesting: 0,
+            };
+            let mut bytes = Vec::new();
+            builder
+                .write_term(&mut bytes, &row, &[])
+                .expect("a Vec accepts every write");
+            let tree = term_into_wire(Term {
+                kind: TermKind::Literal,
+                value: Some("x".to_owned()),
+                datatype: None,
+                lang: Some("en".to_owned()),
+                direction: Some(direction.to_owned()),
+                reifier: None,
+                triple: None,
+            });
+            assert_eq!(bytes, canonical(&tree), "{direction}");
+            assert_eq!(tree.get("dir").is_some(), written, "{direction}");
+        }
+    }
+
+    /// The borrowing and the consuming entry points emit one bundle, and the
+    /// borrowing one leaves the builder usable for another emission.
+    #[test]
+    fn borrowing_and_consuming_emission_agree_and_only_borrowing_keeps_the_builder() {
+        let text = "<https://e/s> <https://e/p> \"v\"@en <https://e/g> .\n";
+        let builder = ingest_nq(text);
+        let emit = |chain: Option<Vec<String>>, owned: Option<SnapshotBuilder>| {
+            let plan = MediumPlan::dist_default(chain.as_deref());
+            match owned {
+                None => emit_gts(
+                    &builder,
+                    "dist",
+                    chain,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                    DEFAULT_RSYNCABLE_THRESHOLD,
+                    &plan,
+                ),
+                Some(owned) => emit_gts_owned(
+                    owned,
+                    "dist",
+                    chain,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                    DEFAULT_RSYNCABLE_THRESHOLD,
+                    &plan,
+                ),
+            }
+        };
+        for chain in [None, Some(vec!["identity".to_owned()]), Some(Vec::new())] {
+            let borrowed = emit(chain.clone(), None).expect("borrowed emits");
+            let again = emit(chain.clone(), None).expect("a borrowed builder emits again");
+            let owned = emit(chain.clone(), Some(ingest_nq(text))).expect("owned emits");
+            assert_eq!(borrowed, again, "{chain:?}");
+            assert_eq!(borrowed, owned, "{chain:?}");
+        }
     }
 
     fn ingest(text: &str, media_type: &str) -> SnapshotBuilder {
@@ -2141,7 +2353,7 @@ mod tests {
             "the same binding belongs to three graphs"
         );
         assert_eq!(annotations.len(), 3);
-        let bytes = emit_gts(
+        let bytes = emit_gts_owned(
             builder,
             "dist",
             Some(vec!["identity".to_owned()]),
@@ -2241,7 +2453,7 @@ mod tests {
         .expect("parse");
         let mut builder = SnapshotBuilder::default();
         builder.add_dataset(&ds).expect("add_dataset");
-        let bytes = emit_gts(
+        let bytes = emit_gts_owned(
             builder,
             "dist",
             Some(vec!["identity".to_string()]),
@@ -2263,7 +2475,7 @@ mod tests {
     #[test]
     fn blobs_are_additive_and_do_not_change_the_graph() {
         let ingest = || ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
-        let base = emit_gts(
+        let base = emit_gts_owned(
             ingest(),
             "dist",
             Some(vec!["identity".to_string()]),
@@ -2276,7 +2488,7 @@ mod tests {
             &MediumPlan::undicted(None),
         )
         .expect("emit base");
-        let with_blobs = emit_gts(
+        let with_blobs = emit_gts_owned(
             ingest(),
             "dist",
             Some(vec!["identity".to_string()]),
@@ -2362,7 +2574,7 @@ mod tests {
             ]),
             zstd_level: Some(12),
         };
-        let bytes = emit_gts(
+        let bytes = emit_gts_owned(
             builder,
             "dist",
             Some(vec!["zstd".to_string()]),
@@ -2446,7 +2658,7 @@ mod tests {
     #[test]
     fn the_declared_zstd_level_is_chain_gated_not_profile_gated() {
         let emit = |profile: &str, chain: Vec<String>, plan: &MediumPlan| {
-            emit_gts(
+            emit_gts_owned(
                 ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n"),
                 profile,
                 Some(chain),
@@ -2551,7 +2763,7 @@ mod tests {
     #[test]
     fn partial_signing_configuration_is_rejected() {
         let builder = ingest_nq("<https://e/s> <https://e/p> <https://e/o> .\n");
-        let err = emit_gts(
+        let err = emit_gts_owned(
             builder,
             "dist",
             None,

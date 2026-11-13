@@ -34,7 +34,7 @@ use crate::bundle::{RdfBundle, UnitMetadata};
 // The byte-emitting compose core now lives in the pyo3-free `gts_compose` module;
 // this surface is the thin pyo3 wrapper that delegates to it.
 use crate::gts_compose::{
-    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, IngestReport, MediumPlan, SnapshotBuilder, emit_gts,
+    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, IngestReport, MediumPlan, SnapshotBuilder, emit_gts_owned,
 };
 use crate::ir::RdfDataset;
 use crate::provenance::{DatasetProvenance, OriginKind};
@@ -259,7 +259,7 @@ fn snapshot_gts_bytes(
     let mut builder = SnapshotBuilder::default();
     builder.add_dataset(&dataset).map_err(native_gts_error)?;
     let plan = MediumPlan::dist_default(transform.as_deref());
-    emit_gts(
+    emit_gts_owned(
         builder,
         profile,
         transform,
@@ -762,7 +762,7 @@ fn compile_gts_core(
         }
 
         let plan = MediumPlan::dist_default(transform.as_deref());
-        let bytes = emit_gts(
+        let bytes = emit_gts_owned(
             builder,
             "dist",
             transform,
@@ -981,7 +981,7 @@ fn feedback_bundle_native(
         let dataset = parse_rdf_dataset(raw, format, base.as_deref())?;
         let mut builder = SnapshotBuilder::default();
         builder.add_dataset(&dataset).map_err(native_gts_error)?;
-        emit_gts(
+        emit_gts_owned(
             builder,
             "dist",
             None,

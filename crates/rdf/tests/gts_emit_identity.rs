@@ -3,10 +3,10 @@
 
 //! The emitted snapshot bundle is a pure function of the builder's content.
 //!
-//! The wire format is frozen, so the bytes `emit_gts` writes for a given content
-//! and chain must never move with how the writer is fed. Each case pins the
-//! digest of the whole bundle, taken before the emission path was restructured,
-//! over content that carries IRIs, plain, language, directional and typed
+//! The wire format is frozen, so the bytes `emit_gts` and `emit_gts_owned` write
+//! for a given content and chain must never move with how the writer is fed. Each
+//! case holds the frozen expected digest of its whole bundle, and both entry
+//! points must produce it, over content that carries IRIs, plain, language, directional and typed
 //! literals, blank nodes, named graphs, reifiers with annotations and nested
 //! triple terms. The chains cover the default, a named pass-through, the empty
 //! chain (which embeds the payload unencoded) and an explicit rsyncable chain;
@@ -15,12 +15,28 @@
 #[path = "support/gts_emit.rs"]
 mod fixture;
 
+/// Non-ASCII text in an IRI, a graph name and literals, one literal long enough
+/// to need a wider length head.
+fn non_ascii_datasets() -> Vec<std::sync::Arc<purrdf_rdf::RdfDataset>> {
+    let long = "ü日".repeat(200);
+    let nquads = format!(
+        "<http://example.org/s/é日本> <http://example.org/p/ß> \"ünï 日本語 🐈\"@de .\n\
+         <http://example.org/s/é日本> <http://example.org/p/ß> \"{long}\" .\n\
+         <http://example.org/s/é日本> <http://example.org/p/ß> \"مرحبا\"@ar--rtl <http://example.org/g/ü> .\n"
+    );
+    vec![
+        purrdf_rdf::parse_dataset(nquads.as_bytes(), "application/n-quads", None)
+            .expect("fixture parses"),
+    ]
+}
+
 struct Case {
     name: &'static str,
     quads: usize,
     chain: Option<&'static [&'static str]>,
     signed: bool,
     blobs: bool,
+    non_ascii: bool,
     digest: &'static str,
 }
 
@@ -31,6 +47,7 @@ const CASES: &[Case] = &[
         chain: None,
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:7aba6cd613b90cdbd8d56dbb1f1e6e93593b93b4c6284697b9762a2a0d3c2b8a",
     },
     Case {
@@ -39,6 +56,7 @@ const CASES: &[Case] = &[
         chain: Some(&["identity"]),
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:1ac437d26ba1d348c21ec42b2cd2d5a31f006810795ddf99d0bc949c31265b68",
     },
     Case {
@@ -47,6 +65,7 @@ const CASES: &[Case] = &[
         chain: Some(&[]),
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:4e9553792b66864e836963f4510ac42fe0e49d8fb4f78ae02b8931f34e78c6a9",
     },
     Case {
@@ -55,6 +74,7 @@ const CASES: &[Case] = &[
         chain: Some(&["zstd-rsyncable"]),
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:4445fc67f0f0a85450f086ff687b0a355d88a1a11d3a3c28dcd43b4b288f8c90",
     },
     Case {
@@ -63,6 +83,7 @@ const CASES: &[Case] = &[
         chain: None,
         signed: true,
         blobs: true,
+        non_ascii: false,
         digest: "blake3:147be29d8e9e0fac2aad6d8f03a6552ffad35b6d46820e778ad3ea67a9cb63d1",
     },
     Case {
@@ -71,6 +92,7 @@ const CASES: &[Case] = &[
         chain: None,
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:2e70e32d8a664b4e117a0406d67502acb5bef6b20b9198d499a95ca07bfb6970",
     },
     Case {
@@ -79,23 +101,39 @@ const CASES: &[Case] = &[
         chain: None,
         signed: false,
         blobs: false,
+        non_ascii: false,
         digest: "blake3:cabde71aaf2b2acc10e3c3af2b3d6033679fec2e2a48b7331d2cd75ed2fe48f7",
+    },
+    Case {
+        name: "non-ASCII text",
+        quads: 0,
+        chain: None,
+        signed: false,
+        blobs: false,
+        non_ascii: true,
+        digest: "blake3:7fd1a6c55f91e404f98517e0276c51f58597dec8997e30f3a1c62c59c3f1da3c",
     },
 ];
 
 #[test]
-fn emitted_bundle_bytes_are_pinned_for_every_chain() {
+fn emitted_bundle_bytes_are_pinned_for_every_chain_and_entry_point() {
     let mut mismatches = Vec::new();
     for case in CASES {
-        let datasets = fixture::datasets(case.quads);
-        let builder = fixture::builder(&datasets);
-        let chain = case
-            .chain
-            .map(|names| names.iter().map(|&name| name.to_owned()).collect());
-        let bytes = fixture::emit(builder, chain, case.signed, case.blobs);
-        let actual = purrdf_gts::writer::digest_string(&bytes);
-        if actual != case.digest {
-            mismatches.push(format!("{}: {actual}", case.name));
+        let datasets = if case.non_ascii {
+            non_ascii_datasets()
+        } else {
+            fixture::datasets(case.quads)
+        };
+        for form in [fixture::Form::Borrowed, fixture::Form::Owned] {
+            let builder = fixture::builder(&datasets);
+            let chain = case
+                .chain
+                .map(|names| names.iter().map(|&name| name.to_owned()).collect());
+            let bytes = fixture::emit(builder, form, chain, case.signed, case.blobs);
+            let actual = purrdf_gts::writer::digest_string(&bytes);
+            if actual != case.digest {
+                mismatches.push(format!("{} ({form:?}): {actual}", case.name));
+            }
         }
     }
     assert!(

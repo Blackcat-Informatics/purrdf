@@ -189,11 +189,10 @@ fn run_flat(
     builder
         .add_dataset_scoped(&frozen, Some(SELECTED), Some("base"))
         .expect("the materialized carrier ingests flat");
-    let scratch_bytes = builder.ingest_totals().scratch_bytes;
-    let bytes = emitted(builder);
+    let bytes = emitted(&builder);
     let observed = observation(
         &carrier.accounting(),
-        scratch_bytes,
+        builder.ingest_totals().scratch_bytes,
         frozen.rdf_payload_bytes(),
     );
     (observed, bytes)
@@ -210,10 +209,13 @@ fn run_view(
     let _ = builder
         .add_view_scoped(carrier.view(), Some(SELECTED), Some("base"))
         .expect("the composed carrier ingests");
-    let scratch_bytes = builder.ingest_totals().scratch_bytes;
-    let bytes = emitted(builder);
+    let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let observed = observation(&carrier.accounting(), scratch_bytes, 0);
+    let observed = observation(
+        &carrier.accounting(),
+        builder.ingest_totals().scratch_bytes,
+        0,
+    );
     (observed, bytes)
 }
 
@@ -228,10 +230,13 @@ fn run_delta(
     let _ = builder
         .add_view_scoped(carrier.view(), Some(SELECTED), Some("base"))
         .expect("the delta carrier ingests");
-    let scratch_bytes = builder.ingest_totals().scratch_bytes;
-    let bytes = emitted(builder);
+    let bytes = emitted(&builder);
     // Nothing was frozen to publish this, so no out-of-ledger copy is charged.
-    let observed = observation(&carrier.accounting(), scratch_bytes, 0);
+    let observed = observation(
+        &carrier.accounting(),
+        builder.ingest_totals().scratch_bytes,
+        0,
+    );
     (observed, bytes)
 }
 

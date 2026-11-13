@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use purrdf_iri::vocab::rdf::REIFIES;
 use purrdf_rdf::gts_compose::{
-    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts,
+    BlobRow, DEFAULT_RSYNCABLE_THRESHOLD, MediumPlan, SnapshotBuilder, emit_gts, emit_gts_owned,
 };
 use purrdf_rdf::{RdfDataset, parse_dataset};
 use purrdf_xsd::datatype::XSD_INTEGER;
@@ -111,10 +111,20 @@ pub(super) fn signer() -> ([u8; 32], String, String) {
     )
 }
 
+/// Which public emission entry point a call goes through.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Form {
+    /// `emit_gts`: the builder is borrowed and lives to the end of the call.
+    Borrowed,
+    /// `emit_gts_owned`: the builder is released before the transform.
+    Owned,
+}
+
 /// The one emission call. `signed` adds the transport-key meta frame and
 /// signatures; `with_blobs` adds the two blob frames.
 pub(super) fn emit(
     builder: SnapshotBuilder,
+    form: Form,
     chain: Option<Vec<String>>,
     signed: bool,
     with_blobs: bool,
@@ -122,17 +132,36 @@ pub(super) fn emit(
     let plan = MediumPlan::dist_default(chain.as_deref());
     let (secret, kid, armor) = signer();
     let doc_blobs = if with_blobs { blobs() } else { Vec::new() };
-    emit_gts(
-        builder,
-        "dist",
-        chain,
-        doc_blobs,
-        Vec::new(),
+    let (secret, kid, armor) = (
         signed.then_some(secret),
         signed.then_some(kid),
         signed.then_some(armor),
-        DEFAULT_RSYNCABLE_THRESHOLD,
-        &plan,
-    )
+    );
+    match form {
+        Form::Borrowed => emit_gts(
+            &builder,
+            "dist",
+            chain,
+            doc_blobs,
+            Vec::new(),
+            secret,
+            kid,
+            armor,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &plan,
+        ),
+        Form::Owned => emit_gts_owned(
+            builder,
+            "dist",
+            chain,
+            doc_blobs,
+            Vec::new(),
+            secret,
+            kid,
+            armor,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            &plan,
+        ),
+    }
     .expect("fixture emits")
 }
