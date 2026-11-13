@@ -155,6 +155,7 @@ pub use result::Canonicalized;
 mod order;
 #[cfg(test)]
 mod order_tests;
+mod output;
 mod rendering;
 
 use purrdf_lex::allocation::{Admission, Memory};
@@ -527,21 +528,14 @@ pub fn try_canonical_blake3_view<D: DatasetView>(
         ),
         |run| {
             view.checked_read(|view| {
-                let canonical = CanonState::new(
+                CanonState::new(
                     view,
                     CanonScope::Dataset,
                     CanonPresentation::Overlay,
                     hash,
                     run,
                 )
-                .run_fallible()?;
-                let mut digest = purrdf_hash::blake3::Hasher::new();
-                for chunk in canonical.nquads().as_bytes().chunks(64 * 1024) {
-                    run.check_stop().map_err(|_| CanonError::Stopped)?;
-                    digest.update(chunk);
-                }
-                run.check_stop().map_err(|_| CanonError::Stopped)?;
-                Ok(*digest.finalize().as_bytes())
+                .digest_fallible(purrdf_hash::blake3::Hasher::new())
             })
             .map_err(CanonError::Read)?
         },
@@ -558,7 +552,28 @@ pub fn try_canonical_sha256_view<D: DatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, CanonError<D::ReadError>> {
-    canonical_sha256_view(view, hash, control, CanonOutput::Sha256Digest).map(|(_, digest)| digest)
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::Sha256Digest,
+        ),
+        |run| {
+            view.checked_read(|view| {
+                CanonState::new(
+                    view,
+                    CanonScope::Dataset,
+                    CanonPresentation::Overlay,
+                    hash,
+                    run,
+                )
+                .digest_fallible(Sha256::new())
+                .map(ContentDigest::from_raw)
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
 }
 
 /// The document and digest produced within one canonical search boundary.
@@ -574,17 +589,21 @@ pub fn try_canonicalize_sha256_view<D: DatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> CanonicalDigestResult<D::Id, D::ReadError> {
-    canonical_sha256_view(view, hash, control, CanonOutput::DocumentSha256Digest)
+    canonical_sha256_view(view, hash, control)
 }
 
 fn canonical_sha256_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
-    output: CanonOutput,
 ) -> CanonicalDigestResult<D::Id, D::ReadError> {
     control.run(
-        SearchConfiguration::rdfc(hash, CanonPresentation::Overlay, None, output),
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::Overlay,
+            None,
+            CanonOutput::DocumentSha256Digest,
+        ),
         |run| {
             view.checked_read(|view| {
                 let canonical = CanonState::new(
@@ -710,7 +729,7 @@ pub fn try_graph_digest_view<D: DatasetView>(
         |run| {
             view.checked_read(|view| {
                 run.check_stop().map_err(|_| CanonError::Stopped)?;
-                let canonical = match graph_scope(view, graph) {
+                match graph_scope(view, graph) {
                     Some(scope) => CanonState::new(
                         view,
                         scope,
@@ -718,10 +737,14 @@ pub fn try_graph_digest_view<D: DatasetView>(
                         CanonHash::Sha256,
                         run,
                     )
-                    .run_fallible()?,
-                    None => empty_canonicalized(view, CanonPresentation::Overlay, run.stop())?,
-                };
-                digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
+                    .digest_fallible(Sha256::new())
+                    .map(ContentDigest::from_raw),
+                    None => {
+                        let empty =
+                            empty_canonicalized(view, CanonPresentation::Overlay, run.stop())?;
+                        digest_document(empty.nquads(), run).map_err(CanonError::with_read_error)
+                    }
+                }
             })
             .map_err(CanonError::Read)?
         },
@@ -920,10 +943,10 @@ pub fn check_admissible_flat_view<D: FallibleDatasetView>(
 /// rather than one named graph (this module offers no flat PER-GRAPH digest entry
 /// point). `hash` selects only the RDFC label-issuance algorithm inside the
 /// canonicalization; the digest over the resulting document is unconditionally
-/// SHA-256, exactly as every other [`ContentDigest`] in this module. Equal to
-/// [`ContentDigest::of`] applied to [`try_canonicalize_flat_view`]'s
-/// [`Canonicalized::nquads`] under the same `hash`, because that is exactly what
-/// this function does.
+/// SHA-256, exactly as every other [`ContentDigest`] in this module. The document
+/// is not built: each canonical line is hashed as it is produced, in final order.
+/// Equal to [`ContentDigest::of`] applied to [`try_canonicalize_flat_view`]'s
+/// [`Canonicalized::nquads`] under the same `hash`.
 ///
 /// # Errors
 /// Exactly [`try_canonicalize_flat_view`]'s refusals, unchanged.
@@ -940,15 +963,57 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
             CanonOutput::Sha256Digest,
         ),
         |run| match checkpointed_drain(view, |view| {
-            let canonical = CanonState::new(
+            CanonState::new(
                 view,
                 CanonScope::Dataset,
                 CanonPresentation::FlatAssertion,
                 hash,
                 run,
             )
-            .run_fallible()?;
-            digest_document(canonical.nquads(), run).map_err(CanonError::with_read_error)
+            .digest_fallible(Sha256::new())
+            .map(ContentDigest::from_raw)
+        }) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )
+}
+
+/// BLAKE3-256 (unkeyed) over exactly the bytes of the flat canonical N-Quads
+/// document, which [`try_canonicalize_flat_view`] would return as
+/// [`Canonicalized::nquads`]: every line in the
+/// [`FlatAssertion`](CanonPresentation::FlatAssertion) presentation, in final
+/// sorted, deduplicated order, `'\n'`-terminated. The lines are fed to the hasher
+/// as they are produced and the document is never built. `hash` selects only the
+/// RDFC blank-label hash inside the canonicalization, as on
+/// [`try_flat_digest_view`]; the output digest is always BLAKE3. The run's
+/// receipt records [`CanonOutput::Blake3Digest`].
+///
+/// # Errors
+/// Exactly [`try_canonicalize_flat_view`]'s refusals, except that no document or
+/// label payload is admitted to the owned workspace, so a run refused only for
+/// that admission succeeds here.
+pub fn try_flat_blake3_view<D: FallibleDatasetView>(
+    view: &D,
+    hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<[u8; 32], ViewCanonError<D::Error, D::Evidence>> {
+    control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::FlatAssertion,
+            None,
+            CanonOutput::Blake3Digest,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            CanonState::new(
+                view,
+                CanonScope::Dataset,
+                CanonPresentation::FlatAssertion,
+                hash,
+                run,
+            )
+            .digest_fallible(purrdf_hash::blake3::Hasher::new())
         }) {
             Ok(result) => result.map_err(ViewCanonError::Refused),
             Err(failure) => Err(failure.into()),
@@ -3047,6 +3112,37 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         })
     }
 
+    /// The digest of the canonical document, computed as its lines are produced.
+    ///
+    /// The document is neither reserved nor built. The owned workspace is still
+    /// required, and created at the point the document run creates it, so a view
+    /// without one is refused as it is there; nothing is charged to it.
+    fn digest_fallible<H: output::Absorb>(
+        self,
+        hasher: H,
+    ) -> Result<[u8; 32], CanonError<D::ReadError>> {
+        let mut canonical = self.issue_labels()?;
+        canonical.drop_search_state();
+        canonical.run.phase(CanonPhase::Output);
+        let _owned = ownership::SourceGrant::new(canonical.ds)?;
+        let reservation = canonical
+            .ds
+            .reserve_workspace(0)
+            .map_err(CanonError::Read)?;
+        let mut sink = output::Streamed::new(hasher, canonical.run)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            canonical.emit_canonical_lines(memory, &mut sink)?;
+            // One poll per issued label, as the document run makes, over nothing.
+            for _ in 0..canonical.canonical.issued.len() {
+                canonical
+                    .run
+                    .check_stop()
+                    .map_err(|_| CanonError::Stopped)?;
+            }
+            sink.finish()
+        })
+    }
+
     /// Admit and issue labels once for both typed relabeling and canonical text.
     fn issue_labels(mut self) -> Result<Self, CanonError<D::ReadError>> {
         self.check_stop().map_err(CanonError::with_read_error)?;
@@ -3699,7 +3795,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn emit_canonical_lines<S: Admission + ?Sized>(
         &self,
         memory: &mut Memory<'_, S>,
-        sink: &mut result::ResultBuilder<D::Id, D::ReadError>,
+        sink: &mut dyn output::LineSink<D::ReadError>,
     ) -> Result<(), CanonError<D::ReadError>> {
         let (mut symbols, mut lines) = self.discover_symbols(memory)?;
         let mut first = String::new();
@@ -3753,7 +3849,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.check_stop().map_err(CanonError::with_read_error)?;
         memory.reserve_string(&mut first, longest)?;
         memory.release_string(second)?;
-        sink.reserve_text(total)?;
+        sink.begin(total)?;
         let mut written = 0usize;
         for start in lines.merged() {
             self.check_stop().map_err(CanonError::with_read_error)?;
@@ -3763,7 +3859,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 .checked_add(first.len())
                 .filter(|&written| written <= total)
                 .ok_or(CanonError::SourceInconsistent)?;
-            sink.append(&first)?;
+            sink.line(&first)?;
         }
         if written != total {
             return Err(CanonError::SourceInconsistent);

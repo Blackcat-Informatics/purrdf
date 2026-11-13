@@ -246,8 +246,8 @@ pub use ir::{
     deskolemize, fold_term, skolemize, try_blank_count_view, try_canonical_blake3_view,
     try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
     try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
-    try_graph_digest_view, visit_nested,
+    try_canonicalize_view, try_canonicalize_with, try_flat_blake3_view, try_flat_digest_view,
+    try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,
