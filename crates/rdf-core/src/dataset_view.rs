@@ -795,6 +795,17 @@ pub trait DatasetView {
         None
     }
 
+    /// Whether this view certifies that it holds no RDF 1.2 reifier binding and no
+    /// statement annotation in any graph, so the virtual statement-layer quads it could
+    /// contribute to a pattern probe are none.
+    ///
+    /// `false` makes no claim, and is the default: a consumer that cannot rely on the
+    /// certificate probes the statement layer as it always has. A view returns `true`
+    /// only when both statement side-tables are empty for every graph it can serve.
+    fn statement_layer_is_empty(&self) -> bool {
+        false
+    }
+
     /// The operational session's total inclusive live ceiling, if it has one.
     fn storage_live_budget(&self) -> Option<u64> {
         None
@@ -946,6 +957,30 @@ pub trait DatasetView {
     /// operation reserves their certified footprint before calling this method and
     /// retains that reservation until those values are released.
     fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError<Self::ReadError>> {
+        // A term that is not a triple term needs neither the nested walk's work list nor
+        // its storage closures: copy it from its single resolution. The copy is the same
+        // `owned_term_leaf` the walk applies to such a term, with the same typed errors
+        // and the same panic on allocator exhaustion; only a triple term takes the walk.
+        {
+            let guard = self.resolve(id).map_err(TermLookupError::Read)?;
+            match guard.term() {
+                TermRef::Triple { .. } => {}
+                leaf => {
+                    return owned_term_leaf(
+                        self,
+                        leaf,
+                        &mut (),
+                        |(), source| {
+                            Ok(crate::ir::try_owned_text(source).unwrap_or_else(|error| {
+                                panic!("resident term value allocation: {error}")
+                            }))
+                        },
+                        |error| error,
+                        false,
+                    );
+                }
+            }
+        }
         self.term_value_with_storage(
             id,
             |error| error,
@@ -2020,6 +2055,12 @@ impl DatasetView for RdfDataset {
         Ok(Some(self.frozen_snapshot_identity()))
     }
 
+    #[inline]
+    fn statement_layer_is_empty(&self) -> bool {
+        self.reifiers_with_graph().next().is_none()
+            && self.annotations_with_graph().next().is_none()
+    }
+
     fn reserve_owned_workspace(
         &self,
         _: u64,
@@ -2484,6 +2525,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         ) -> std::ops::ControlFlow<B>,
     ) -> Result<crate::source::SourceVisit<B>, Self::ReadError> {
         (**self).visit_source_changes(previous, visit)
+    }
+
+    #[inline]
+    fn statement_layer_is_empty(&self) -> bool {
+        (**self).statement_layer_is_empty()
     }
 
     #[inline]
@@ -3019,6 +3065,54 @@ mod term_value_tests {
         builder.push_quad(blank, p, s, None).unwrap();
         let dataset = builder.freeze().expect("the fixture freezes");
         (dataset, empty, quoted, blank)
+    }
+
+    /// The direct copy of a non-triple term and the nested walk answer identically, for
+    /// every term kind the model has, so no caller can observe which one ran.
+    #[test]
+    fn the_direct_leaf_copy_equals_the_nested_walk_for_every_term_kind() {
+        use crate::RdfTextDirection;
+        let terms = [
+            TermValue::iri(format!("{EX}iri")),
+            TermValue::blank("label"),
+            TermValue::simple_literal("plain"),
+            TermValue::simple_literal(""),
+            TermValue::typed_literal("7", format!("{EX}integer")),
+            TermValue::lang_literal("chat", "FR-ca"),
+            TermValue::Literal {
+                lexical_form: "salam".to_owned(),
+                datatype: purrdf_iri::vocab::language_datatype_iri(true).to_owned(),
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            },
+            TermValue::Triple {
+                s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                o: TermBox::new(TermValue::Triple {
+                    s: TermBox::new(TermValue::blank("inner")),
+                    p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                    o: TermBox::new(TermValue::lang_literal("x", "en")),
+                }),
+            },
+        ];
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri(&format!("{EX}p")).unwrap();
+        let ids: Vec<TermId> = terms
+            .iter()
+            .map(|term| builder.intern_value(term).unwrap())
+            .collect();
+        let subject = builder.intern_iri(&format!("{EX}subject")).unwrap();
+        for id in &ids {
+            builder.push_quad(subject, p, *id, None).unwrap();
+        }
+        let dataset = builder.freeze().expect("the fixture freezes");
+        for (id, term) in ids.iter().zip(&terms) {
+            let walked = dataset
+                .term_value_with_storage(*id, |error| error, |error| panic!("{error}"))
+                .expect("the nested walk resolves a minted id");
+            assert_eq!(dataset.term_value(*id).as_ref(), Ok(&walked), "{term:?}");
+            assert_eq!(&walked, term, "the dataset keeps the value it was given");
+        }
     }
 
     #[test]

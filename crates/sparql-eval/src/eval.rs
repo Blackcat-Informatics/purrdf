@@ -11210,6 +11210,33 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Result<MaterializedSolutions, EvalError> {
     let names = seq.schema.vars();
+    if !ctx.growth.is_bounded() {
+        // Nothing is admitted, so nothing is retained or sized for admission: the same
+        // fallible reservations and copies, without the accounting arithmetic.
+        let mut variables = crate::workspace::vector(names.len(), "materialized solution names")?;
+        for name in names {
+            variables.push(crate::workspace::string(
+                name.as_str(),
+                "materialized solution name",
+            )?);
+        }
+        let mut rows = crate::workspace::vector(seq.rows.len(), "materialized solution bag")?;
+        for row in &seq.rows {
+            let mut out = crate::workspace::vector(row.len(), "materialized solution row")?;
+            for cell in row {
+                out.push(
+                    cell.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
+                        .transpose()
+                        .map_err(EvalError::source_read)?,
+                );
+            }
+            rows.push(out);
+        }
+        return ctx
+            .dataset
+            .checked_read(|_| (variables, rows))
+            .map_err(|error| ctx.workspace.source_error(error));
+    }
     let names_bytes = names
         .len()
         .checked_mul(size_of::<String>())
