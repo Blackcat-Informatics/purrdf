@@ -1008,6 +1008,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/retrieval/benches/fusion_frontier_alloc.rs` | retrieval.fusion-frontier, retrieval.rrf |
 | `crates/purrdf/benches/retrieval_on_demand_read.rs` | retrieval.fusion-frontier, retrieval.rrf, distance.exact.dot, distance.exact.sqeuclid |
 | `crates/shapes/benches/canonical_sort.rs` | shapes.finish-report |
+| `crates/shapes/benches/frozen_eval_counts.rs` | blake3.hash-many-dispatch, blake3.single-block, eval.bgp-join-probe, shapes.path-eval, shapes.finish-report |
 | `crates/shapes/benches/graph_membership.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/shapes/benches/instance_projection.rs` | shapes.instance-projection |
 | `crates/shapes/benches/pattern_lookup.rs` | shapes.path-eval, shapes.frontier-dedup |
