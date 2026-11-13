@@ -2189,6 +2189,13 @@ impl<Id> PathScratch<Id> {
         }
     }
 
+    /// Start a slot: the whole buffer is its root position path.
+    fn begin(&mut self, position: &str) {
+        self.text.clear();
+        self.held.clear();
+        self.text.push_str(position);
+    }
+
     /// Append the path `text[start..end]` followed by `suffix`; return its range.
     fn child(&mut self, start: usize, end: usize, suffix: &str) -> (usize, usize) {
         let at = self.text.len();
@@ -3584,10 +3591,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         // Standard quad positions whose blanks are "related": subject, object, graph.
         // (Predicates are always IRIs / sentinels — never blank.) Blanks nested
         // inside a triple-term slot recurse with a position-path tag (RDF-1.2 ext).
-        self.related_in_slot(s, "s", &p, focus, issuer, paths, f)?;
-        self.related_in_slot(o, "o", &p, focus, issuer, paths, f)?;
+        paths.begin("s");
+        self.related_in_slot(s, &p, focus, issuer, paths, f)?;
+        paths.begin("o");
+        self.related_in_slot(o, &p, focus, issuer, paths, f)?;
         if let Some(g) = g {
-            self.related_in_slot(g, "g", &p, focus, issuer, paths, f)?;
+            paths.begin("g");
+            self.related_in_slot(g, &p, focus, issuer, paths, f)?;
         }
         Ok(())
     }
@@ -3602,7 +3612,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn related_in_slot(
         &self,
         slot: Slot<D::Id>,
-        position: &str,
         predicate: &Slot<D::Id>,
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
@@ -3615,9 +3624,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => id,
             Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return Ok(()),
         };
-        paths.text.clear();
-        paths.held.clear();
-        paths.text.push_str(position);
         let mut next = Some((id, 0, paths.text.len()));
         while let Some((id, start, end)) = next.take().or_else(|| paths.held.pop()) {
             self.check_stop().map_err(CanonError::with_read_error)?;
