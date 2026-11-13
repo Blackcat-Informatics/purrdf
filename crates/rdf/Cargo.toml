@@ -180,6 +180,13 @@ name = "gts_import_alloc"
 harness = false
 
 [[bench]]
+# Allocation count, requested bytes and peak working bytes of snapshot emission
+# through `SnapshotBuilder`, with instruction counts per call taken by the host's
+# `perf stat` over the same binary. Report-only; asserts nothing, measures no time.
+name = "gts_emit_alloc"
+harness = false
+
+[[bench]]
 # One-shot allocation/count/retained/peak-byte baseline for expanded JSON-LD parse and
 # serialization. Separate from the timed benches so allocator atomics do not perturb timing.
 name = "jsonld_alloc"
