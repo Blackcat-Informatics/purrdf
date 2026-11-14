@@ -172,6 +172,52 @@ fn the_direct_row_path_answers_as_the_accounted_row_path_does() {
     }
 }
 
+/// The answer on the unbounded workspace under a stop signal that never fires and a
+/// cell ceiling nothing reaches: every stage, the last one included, scans into the
+/// row sink instead of the retained cursor.
+fn unbounded_into_the_sink(text: &str, dataset: &Arc<RdfDataset>) -> Rows {
+    let governors = crate::QueryGovernors::UNBOUNDED
+        .with_max_intermediate_cells(1 << 40)
+        .with_stop_signal(Arc::new(crate::CancellationFlag::new()));
+    let mut ctx = EvalCtx::new(dataset.as_ref())
+        .with_governors(Arc::new(crate::governor::GovernorState::new(&governors)));
+    ctx.options.force_sequential = true;
+    assert!(!ctx.growth.is_bounded());
+    assert!(ctx.stop_signal().is_some());
+    run(text, &mut ctx).expect("the governed unbounded run completes")
+}
+
+/// INVARIANT: a candidate binds to the same row whichever scan loop offers it. The
+/// sink loop and the retained cursor share one binder, and its direct form for a
+/// pattern with no nested position equals the general one: a constant, a slot the
+/// driving row binds, a variable repeated inside one pattern (`?s ex:w ?s`, which
+/// must reject every candidate here) and a nested triple pattern all answer alike.
+#[test]
+fn the_sink_scan_binds_as_the_cursor_scan_does() {
+    let repeated = "SELECT ?s ?o WHERE { ?s ex:w ?o . ?o ex:w ?o }";
+    let data = dataset(true);
+    for shape in SHAPES.into_iter().chain([repeated]) {
+        let cursor = unbounded(shape, &data);
+        let sink = unbounded_into_the_sink(shape, &data);
+        assert_eq!(cursor, sink, "{shape}");
+        let limit = smallest_completing_limit(shape, &data);
+        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
+    }
+    // The neighbour that binds: a variable repeated inside one pattern is not refused
+    // when the candidate does agree with itself.
+    let mut b = RdfDatasetBuilder::new();
+    let knows = b.intern_iri(&format!("{EX}w")).unwrap();
+    let narcissus = b.intern_iri(&format!("{EX}n")).unwrap();
+    let echo = b.intern_iri(&format!("{EX}e")).unwrap();
+    b.push_quad(narcissus, knows, narcissus, None).unwrap();
+    b.push_quad(echo, knows, narcissus, None).unwrap();
+    let data = b.freeze().unwrap();
+    let shape = "SELECT ?s WHERE { ?s ex:w ?s }";
+    let rows = unbounded_into_the_sink(shape, &data);
+    assert_eq!(rows.1, vec![vec![Some(TermValue::Iri(format!("{EX}n")))]]);
+    assert_eq!(unbounded(shape, &data), rows);
+}
+
 #[test]
 fn the_statement_layer_is_skipped_only_when_the_view_certifies_it_empty() {
     use crate::bgp::VIRTUAL_SOURCES;

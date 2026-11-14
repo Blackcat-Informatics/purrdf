@@ -41,6 +41,13 @@ pub(super) enum ExpansionStep<I: ViewTermId> {
     Stop,
 }
 
+/// What a candidate is before its row is bound.
+enum Examined {
+    Bind,
+    Skip,
+    Stop,
+}
+
 #[cfg(test)]
 thread_local! {
     /// Virtual statement-layer sources opened on this thread, for tests that pin when
@@ -161,22 +168,37 @@ impl<I: ViewTermId> Expansion<I> {
         quad: QuadIds<I>,
         ctx: &EvalCtx<'_, D>,
     ) -> Result<ExpansionStep<I>, EvalError> {
+        Ok(match self.examine(&quad, ctx)? {
+            Examined::Stop => ExpansionStep::Stop,
+            Examined::Skip => ExpansionStep::Skip,
+            Examined::Bind => match bind_row(input.row, input.pattern, &quad, ctx)? {
+                Some(row) => ExpansionStep::Row(row),
+                None => ExpansionStep::Skip,
+            },
+        })
+    }
+
+    /// The stop poll, the candidate charge and the merged-scope de-duplication: every
+    /// step of a candidate before its row is bound.
+    #[inline]
+    fn examine<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        quad: &QuadIds<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Examined, EvalError> {
         if ctx.stop_check().is_some() {
             self.stopped = true;
-            return Ok(ExpansionStep::Stop);
+            return Ok(Examined::Stop);
         }
         self.charge.fuel = self.charge.fuel.saturating_add(1);
         if self.merged {
             let key = (quad.s, quad.p, quad.o);
             if self.seen.get(&key).is_some() {
-                return Ok(ExpansionStep::Skip);
+                return Ok(Examined::Skip);
             }
             self.seen.insert_admitted(key, (), &ctx.growth)?;
         }
-        Ok(match bind_row(input.row, input.pattern, &quad, ctx)? {
-            Some(row) => ExpansionStep::Row(row),
-            None => ExpansionStep::Skip,
-        })
+        Ok(Examined::Bind)
     }
 
     pub(super) fn committed(&mut self) {
@@ -190,14 +212,21 @@ impl<I: ViewTermId> Expansion<I> {
         ctx: &EvalCtx<'_, D>,
         sink: &mut crate::parallel::RowSink<'_, RetainedRow<I>>,
     ) -> std::ops::ControlFlow<()> {
-        match self.candidate(input, quad, ctx) {
-            Ok(ExpansionStep::Row(row)) => {
+        // The bound row moves straight into the sink; `candidate` hands the same row
+        // to a caller that keeps it.
+        let bound = match self.examine(&quad, ctx) {
+            Ok(Examined::Bind) => bind_row(input.row, input.pattern, &quad, ctx),
+            Ok(Examined::Skip) => Ok(None),
+            Ok(Examined::Stop) => return std::ops::ControlFlow::Break(()),
+            Err(error) => Err(error),
+        };
+        match bound {
+            Ok(Some(row)) => {
                 if sink.push(row) {
                     self.committed();
                 }
             }
-            Ok(ExpansionStep::Skip) => {}
-            Ok(ExpansionStep::Stop) => return std::ops::ControlFlow::Break(()),
+            Ok(None) => {}
             Err(error) => {
                 sink.fail(error);
                 return std::ops::ControlFlow::Break(());

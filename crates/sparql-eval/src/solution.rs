@@ -715,12 +715,18 @@ impl<I: ViewTermId> RetainedRow<I> {
         }
     }
 
-    /// A resident copy of `cells` for a workspace that admits nothing: one exact
-    /// reservation and one copy, the same typed refusal `try_build` gives an allocator
-    /// that cannot supply the cells.
+    /// A resident copy of `cells` for a workspace that admits nothing. A row that fits
+    /// the inline capacity is copied in place: nothing is allocated, so there is no
+    /// refusal to report. A wider row takes one exact reservation and one copy, with
+    /// the same typed refusal `try_build` gives an allocator that cannot supply the
+    /// cells.
+    #[inline]
     pub(crate) fn resident_copy(
         cells: &[Option<SolutionTerm<I>>],
     ) -> Result<Solution<I>, crate::EvalError> {
+        if cells.len() <= Solution::<I>::new().inline_size() {
+            return Ok(Solution::from_slice(cells));
+        }
         let mut row = Solution::new();
         row.try_reserve_exact(cells.len())
             .map_err(|_| crate::EvalError::AllocationFailed {
