@@ -232,7 +232,8 @@ workflow, qualification-driver, runner, package and Worker entry points,
 regardless of origin. It removed 312 of 359 Makefile case executions, retaining
 47 executions across 23 scalar/SIMD invocations. Semantic-only WASM jobs in the
 segmented-storage, Datalog and entailment workflows were removed. Their native
-jobs and test bodies remain. Coordinate jobs retain the actual host-seal cases.
+jobs and test bodies remain. Coordinate jobs retain the cases that run with no
+host source, where a default clock or entropy read is refused.
 
 Runner preflight exercises planted failure, rejected flags and sealed host
 imports. After preflight, `PURRDF_TEST_REQUIRE_EXACT=1` requires each named case
@@ -252,10 +253,11 @@ exactly once; missing, ignored, duplicate or skipped selections fail.
 | `purrdf-stack` / `on_stack` | scalar | `an_in_floor_request_runs`, `a_scoped_in_floor_request_borrows_the_caller_s_locals`, `an_over_floor_request_is_refused`, `an_over_floor_scoped_request_is_refused` | Actual WASM shadow-stack floor |
 | `purrdf-deflate` / `deflate_conformance` | scalar | `selected_backend_is_reported` | Actual WASM codec backend dispatch |
 | `purrdf-xsd` / `exact_wasm_determinism` | scalar | `the_transcript_digest_is_reproduced_on_this_target`, `large_binary_products_match_the_schoolbook_oracle` | Pinned native wide-arithmetic transcript digests |
-| `purrdf-sparql-eval` / `query_coordinates` | scalar | `supplied_inputs_repeat_complete_results_without_host_reads`, `supplied_large_fraction_and_timezone_survive_repeated_now`, `prepared_executions_select_fresh_inputs_without_changing_the_plan`, `bounded_coordinate_owners_price_real_allocations_and_release_after_last_output` | Sealed WASM host clock and entropy imports |
+| `purrdf-sparql-eval` / `query_coordinates` | scalar | `supplied_inputs_repeat_complete_results_without_host_reads`, `supplied_large_fraction_and_timezone_survive_repeated_now`, `prepared_executions_select_fresh_inputs_without_changing_the_plan`, `bounded_coordinate_owners_price_real_allocations_and_release_after_last_output` | No operating-system clock or entropy and no installed host source: a default read is refused on this target, so each context these cases create (materialised, prepared and bounded) must take the supplied inputs; a native run would read the operating system unnoticed |
+| `purrdf-sparql-eval` / `host_source` | scalar | `the_installed_source_is_the_only_host_read_and_its_absence_is_a_typed_refusal` | The evaluator's host interface on a target with no operating system: with no source installed every entry point refuses a default clock or entropy read with the typed cause and runs with supplied inputs, an in-process `SERVICE` clause included; an installed source is the only read |
 | `purrdf-sparql-eval` / `numeric_wasm_determinism` | scalar | `the_hand_answers_are_reproduced_on_this_target`, `the_numeric_transcript_digest_is_reproduced_on_this_target` | Pinned native numeric answers and transcript digest |
 | `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Pinned native UTF-8 segment bytes and offsets |
-| `purrdf-shapes` / `rule_coordinates` | scalar | `shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes`, `parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal` | Sealed WASM host clock and entropy imports |
+| `purrdf-shapes` / `rule_coordinates` | scalar | `shacl_queries_keep_time_and_distinct_reproducible_seeds_across_focus_nodes`, `parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal` | No operating-system clock or entropy and no installed host source: every query a rule or constraint evaluates per focus node must receive the request's supplied inputs, since one that fell back to a default read is refused on this target and reads the operating system unnoticed natively |
 | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Pinned native MIME/transcoding byte transcript |
 | `purrdf` / `knn_wasm_reassociated` | SIMD | `the_reassociated_path_is_the_one_this_build_was_made_for`, `the_reassociated_distance_is_within_the_error_bound_of_the_exact_one` | Actual WASM dispatch and SIMD kernel |
 | `purrdf-hnsw` / `wasm_reassociated` | SIMD | `an_image_recorded_on_another_wasm_path_is_refused_by_name`, `the_image_records_the_path_and_shape_this_build_was_made_for` | Actual WASM arithmetic backend identity |
@@ -277,7 +279,7 @@ selects only the named records it compares against frozen native digests:
 | `purrdf-xsd` / `certified_numerical` | `certified_elementary_replay`, `directed_endpoint_product_replay` |
 
 The geographic-errors workflow selects only `public_geo_capability_replay` on
-WASM. Coordinate-inputs selects the same host-seal query/rule cases as the table.
+WASM. Coordinate-inputs selects the same query/rule cases as the table.
 The package JavaScript/TypeScript, identity transport, JSPI, Worker and playground
 checks exercise shipped host interfaces. The runner fixture exercises actual
 WASM imports, traps, rejected options and status propagation. Release/package

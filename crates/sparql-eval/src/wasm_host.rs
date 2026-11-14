@@ -1,34 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The two JavaScript host reads needed by SPARQL evaluation on wasm32, and the one home
-//! of the `Date.now` import for every crate that reaches this one (`purrdf-wasm` reads
-//! its job clock here). Hidden from the documented API: it is shared plumbing, not a
-//! surface. A second `Date.now` import elsewhere fails `check-shared-helpers.py`.
+//! The wasm32 host clock and random draw, as this module has always offered them.
 //!
-//! Each call looks up the current global `Date.now` or `Math.random`. The wasm
-//! test runner temporarily replaces those globals inside its host seal, so a
-//! prohibited clock or entropy read must still trap after module startup.
+//! This crate imports nothing from a host. Both functions read the source the embedder
+//! installed through [`crate::host_source`]; a browser binding installs one that reads
+//! `Date.now` and `Math.random`. They are kept, with their signatures, for callers of
+//! earlier releases. [`crate::host_source::installed`] is the read that can answer
+//! "there is no source" as a value.
 
-use wasm_bindgen::prelude::wasm_bindgen;
+use crate::host_source::{self, HostInput, HostSource, HostSourceMissing};
 
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = Date, js_name = now)]
-    fn date_now_import() -> f64;
-
-    #[wasm_bindgen(js_namespace = Math, js_name = random)]
-    fn math_random_import() -> f64;
+/// The installed source, or the refusal a signature without an error channel can only
+/// raise.
+fn source(input: HostInput) -> &'static dyn HostSource {
+    host_source::installed().unwrap_or_else(|| panic!("{}", HostSourceMissing::new(input)))
 }
 
-/// Unix epoch milliseconds from the browser or Node host.
+/// Unix epoch milliseconds from the installed host source.
+///
+/// # Panics
+///
+/// When no source is installed: there is no clock to read and no value to stand in
+/// for one.
 #[inline]
+#[must_use]
 pub fn date_now() -> f64 {
-    date_now_import()
+    source(HostInput::Clock).unix_millis()
 }
 
-/// One host pseudorandom draw in `[0, 1)`.
+/// One pseudorandom draw in `[0, 1)`, from the installed host source's entropy.
+///
+/// # Panics
+///
+/// When no source is installed: there is no entropy to read and no value to stand in
+/// for it.
 #[inline]
+#[must_use]
 pub fn math_random() -> f64 {
-    math_random_import()
+    // The top 53 bits are exactly representable, so the quotient is in `[0, 1)`.
+    #[allow(clippy::cast_precision_loss)]
+    let draw = (source(HostInput::Entropy).entropy_seed() >> 11) as f64;
+    draw / 9_007_199_254_740_992.0
 }

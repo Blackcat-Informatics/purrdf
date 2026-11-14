@@ -411,7 +411,7 @@ fn run_job(id: u32) -> RunStatus {
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_ms() -> f64 {
-    purrdf_sparql_eval::wasm_host::date_now()
+    crate::host::date_now()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
@@ -1952,6 +1952,28 @@ impl ServiceResolver for JobServiceSource {
         } else {
             remote.resolve(request)
         }
+    }
+
+    /// A local endpoint is evaluated under the calling execution's coordinates, so it
+    /// reads no host clock or entropy; every other request takes the ordinary route.
+    fn resolve_coordinated(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+        coordinates: purrdf_sparql_eval::remote::ServiceCoordinates<'_>,
+    ) -> Result<
+        purrdf_sparql_eval::remote::AdmittedResolvedBindings,
+        purrdf_sparql_eval::remote::ServiceResolutionError,
+    > {
+        if let Some((local, endpoints)) = &self.local
+            && endpoints
+                .iter()
+                .any(|endpoint| endpoint == request.endpoint)
+        {
+            // The local resolver polls the stop signal first, as `resolve` does.
+            return local.resolve_coordinated(request, workspace, coordinates);
+        }
+        self.resolve_admitted(request, workspace)
     }
 }
 

@@ -223,6 +223,14 @@ Design pillars:
   `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`). A
   correlated substitution copies its subtree inside a scope that discards the
   half-built copy and refuses the same way when the stack runs low.
+- **No host imports.** The crate imports nothing on `wasm32-unknown-unknown`.
+  The default query time, the default entropy seed and `WallDeadline` read a
+  source the embedder installs once with `host_source::install`; with none
+  installed a native build reads the operating system, and a `wasm32` build
+  refuses the read with `EvalError::HostSourceMissing`
+  (`native-sparql-host-source-missing`), naming the input to supply. A request
+  that supplies `QueryOptions::with_now` and `QueryOptions::with_entropy_seed`
+  reads no host at all.
 - **One per-row checkpoint.** `FILTER`, `BIND`, `UNFOLD` and aggregate loops pass
   every row through the same checkpoint: a latched trip is observed first, and a
   loop that forks across threads forks only the rows the remaining fuel admits

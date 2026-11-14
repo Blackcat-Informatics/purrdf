@@ -147,7 +147,9 @@ pub use xsd::{xsd_canonical_lexical, xsd_value_compare};
 
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
 /// in [`purrdf_stack`], the measurement the SPARQL evaluator's stack guards refuse
-/// against, and the panic hook that poisons the instance (the `panic_poison` module).
+/// against, the panic hook that poisons the instance (the `panic_poison` module), and
+/// the JavaScript clock and entropy as the evaluator's host source, so a request that
+/// supplies no query time or seed reads `Date.now` and `Math.random` as it always has.
 ///
 /// The floor's default is address 0, the floor rustc's `--stack-first` layout gives the
 /// stack; this reads the linker's own record of it instead (`shadow_stack`), so the
@@ -159,6 +161,10 @@ pub use xsd::{xsd_canonical_lexical, xsd_value_compare};
 pub fn install_stack_floor() {
     purrdf_stack::replace_floor(shadow_stack::read().low);
     panic_poison::install();
+    // The start function runs once per instance, and nothing else in this module
+    // installs a source, so the only refusal is a second start of the same instance:
+    // the source already installed is this one.
+    let _ = purrdf_sparql_eval::host_source::install(&host::JS_HOST_SOURCE);
 }
 
 /// Test-only: panics when the host has armed it, so the Node lane can prove that a panic
