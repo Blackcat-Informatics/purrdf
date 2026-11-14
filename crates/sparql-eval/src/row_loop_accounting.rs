@@ -194,6 +194,61 @@ fn metered_runs_report_the_pinned_totals_and_the_unbounded_answer() {
     }
 }
 
+/// The governors of a host that sets a scratch ceiling, an intermediate-cell ceiling and a
+/// stop signal, as a SHACL host does: a cell ceiling keeps GROUP BY on its sequential,
+/// suspendable aggregate route.
+fn host_governors(scratch: u64) -> QueryGovernors {
+    QueryGovernors::UNBOUNDED
+        .with_max_scratch_bytes(scratch)
+        .with_max_intermediate_cells(1 << 40)
+        .with_stop_signal(Arc::new(crate::CancellationFlag::new()))
+}
+
+/// The rendered answer under the host's governors with `scratch` bytes of scratch, and the
+/// scratch it consumed, or `None` when a governor refuses it.
+fn host_governed(dataset: &RdfDataset, text: &str, scratch: u64) -> Option<(String, u64)> {
+    let state = Arc::new(GovernorState::new(&host_governors(scratch)));
+    let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
+    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).ok()?;
+    let evidence = state.evidence();
+    if evidence.tripped().is_some() {
+        return None;
+    }
+    Some((
+        render(&outcome, &ctx),
+        evidence.consumed_in(ResourceDimension::ScratchBytes),
+    ))
+}
+
+/// The smallest scratch ceiling each query completes under the host's governors.
+const HOST_SCRATCH_MINIMUM: [u64; 8] = [153, 153, 153, 153, 153, 784, 1328, 2318];
+
+#[test]
+fn host_governed_runs_complete_at_the_pinned_scratch_minimum_and_refuse_one_byte_below() {
+    let dataset = dataset();
+    for (text, minimum) in QUERIES.into_iter().zip(HOST_SCRATCH_MINIMUM) {
+        let expected = answer(&dataset, text);
+        let (rendered, consumed) = host_governed(&dataset, text, 1 << 40).unwrap();
+        assert_eq!(rendered, expected, "{text}: the host-governed answer");
+        assert_eq!(
+            consumed, minimum,
+            "{text}: scratch consumed under the host's governors"
+        );
+        assert_eq!(
+            host_governed(&dataset, text, minimum).map(|(rendered, _)| rendered),
+            Some(expected),
+            "{text}: completes at {minimum} bytes of scratch"
+        );
+        if minimum > 0 {
+            assert_eq!(
+                host_governed(&dataset, text, minimum - 1),
+                None,
+                "{text}: refused one byte below"
+            );
+        }
+    }
+}
+
 /// Hand-built algebra the parser would refuse: `FILTER NOT EXISTS { BIND("x" AS ?o) }`
 /// over rows of which only the last binds `?o`.
 fn collision_pattern(with_binding_row: bool) -> GraphPattern {

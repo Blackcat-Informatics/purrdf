@@ -2225,63 +2225,89 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
         rows: &[RetainedRow<I>],
         ctx: &mut EvalCtx<'d, D>,
     ) -> Result<BuiltinAggregateStep<'e, 'd, I>, EvalError> {
+        // A resident run reads a lone variable argument straight from the row and copies
+        // each dataset value without a native admission frame: an unbounded workspace
+        // admits and charges nothing, so the value, the scratch charge and every
+        // refusal are those of the frame route, in the same order.
+        let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
         loop {
-            let mut frame = match self.active.take() {
-                Some(frame) => frame,
-                None => {
-                    let Some(&index) = indices.get(self.ordinal) else {
-                        break;
-                    };
-                    crate::vm::RowExpressionFrame::begin(
-                        self.linked.take().expect("available aggregate link"),
-                        rows.get(index)
-                            .ok_or_else(|| EvalError::internal("aggregate source row missing"))?
-                            .clone_admitted(&ctx.growth)?,
-                        ctx,
-                    )?
+            let direct = if resident && self.active.is_none() {
+                indices
+                    .get(self.ordinal)
+                    .and_then(|&index| {
+                        let linked = self.linked.as_ref()?;
+                        Some(linked.sole_variable(rows.get(index)?))
+                    })
+                    .flatten()
+            } else {
+                None
+            };
+            let term = if let Some(term) = direct {
+                self.ordinal += 1;
+                term
+            } else {
+                let mut frame = match self.active.take() {
+                    Some(frame) => frame,
+                    None => {
+                        let Some(&index) = indices.get(self.ordinal) else {
+                            break;
+                        };
+                        crate::vm::RowExpressionFrame::begin(
+                            self.linked.take().expect("available aggregate link"),
+                            rows.get(index)
+                                .ok_or_else(|| EvalError::internal("aggregate source row missing"))?
+                                .clone_admitted(&ctx.growth)?,
+                            ctx,
+                        )?
+                    }
+                };
+                match frame.poll(ctx)? {
+                    crate::vm::VmStep::Suspend(request) => {
+                        self.active = Some(frame);
+                        return Ok(BuiltinAggregateStep::Suspend(self, request));
+                    }
+                    crate::vm::VmStep::Value(value) => {
+                        let (linked, _row, term, _evidence) = frame.finish_term(value)?;
+                        self.linked = Some(linked);
+                        self.ordinal += 1;
+                        term
+                    }
                 }
             };
-            match frame.poll(ctx)? {
-                crate::vm::VmStep::Suspend(request) => {
-                    self.active = Some(frame);
-                    return Ok(BuiltinAggregateStep::Suspend(self, request));
-                }
-                crate::vm::VmStep::Value(value) => {
-                    let (linked, _row, term, _evidence) = frame.finish_term(value)?;
-                    self.linked = Some(linked);
-                    self.ordinal += 1;
-                    let Some(term) = term else {
-                        continue;
-                    };
-                    // The original schedule is argument, checkpoint, DISTINCT,
-                    // destination admission, owned value, ScratchBytes, retain.
-                    if let Err(tripped) = self.checkpoint.pass(ctx) {
-                        ctx.record_barrier(tripped);
-                        return Ok(self.complete(None));
-                    }
-                    if let Some(seen) = &mut self.seen {
-                        if seen.get(&term).is_some() {
-                            continue;
-                        }
-                        let _ = seen.insert_admitted(term, (), &ctx.growth)?;
-                    }
-                    self.survivors.reserve_next()?;
-                    let value = ctx.scratch.try_owned_value_of(
-                        ctx.dataset,
-                        term,
-                        &ctx.growth,
-                        |error| ctx.workspace.source_error(error),
-                    )?;
-                    if let Err(tripped) = ctx.charge_amount(
-                        purrdf_core::ResourceDimension::ScratchBytes,
-                        crate::scratch::value_bytes(&value),
-                    ) {
-                        ctx.record_barrier(tripped);
-                        return Ok(self.complete(None));
-                    }
-                    self.survivors.push(value)?;
-                }
+            let Some(term) = term else {
+                continue;
+            };
+            // The original schedule is argument, checkpoint, DISTINCT,
+            // destination admission, owned value, ScratchBytes, retain.
+            if let Err(tripped) = self.checkpoint.pass(ctx) {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(None));
             }
+            if let Some(seen) = &mut self.seen {
+                if seen.get(&term).is_some() {
+                    continue;
+                }
+                let _ = seen.insert_admitted(term, (), &ctx.growth)?;
+            }
+            self.survivors.reserve_next()?;
+            let value = if resident {
+                resident_aggregate_value(ctx.dataset, &ctx.scratch, term, |error| {
+                    ctx.workspace.source_error(error)
+                })?
+            } else {
+                ctx.scratch
+                    .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+                        ctx.workspace.source_error(error)
+                    })?
+            };
+            if let Err(tripped) = ctx.charge_amount(
+                purrdf_core::ResourceDimension::ScratchBytes,
+                crate::scratch::value_bytes(&value),
+            ) {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(None));
+            }
+            self.survivors.push(value)?;
         }
         let value = finish_builtin_aggregate(aggregate, &self.survivors, ctx)?;
         Ok(self.complete(value))
