@@ -17,8 +17,12 @@
 //! * `PURRDF_CANON_ALLOC_PRE_OUTPUT_LARGE=1` also measures the pre-output peak
 //!   at that added size (routine sizes always measure it).
 //! * `PURRDF_CANON_ALLOC_CALLS=<shape>:<n>` skips the rows and runs only `n`
-//!   flat document calls over the `reifier` (32,768 lines, sorted) or `collision`
-//!   fixture, so an external instruction counter can compare `n` calls with none.
+//!   calls over a sorted fixture of `PURRDF_CANON_ALLOC_CALL_LINES` lines (default
+//!   32,768; the `collision` fixture ignores it), so an external instruction
+//!   counter can compare `n` calls with none. `<shape>` is `blank_free`, `reifier`
+//!   or `collision`, optionally followed by `_digest` (flat SHA-256 digest),
+//!   `_prepared` (flat document against a state prepared once, before the calls)
+//!   or `_prepared_digest`; with no suffix each call is a flat document run.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,9 +30,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::{CanonPhase, CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
 use purrdf_rdf::{
-    CanonHash, ContentDigest, RdfDataset, StopSignal, try_canonical_sha256_view,
-    try_canonicalize_flat_view, try_canonicalize_sha256_view, try_flat_blake3_view,
-    try_flat_digest_view,
+    CanonHash, CanonPresentation, CanonRequest, ContentDigest, PreparedCanon, RdfDataset,
+    StopSignal, prepare_canon_view, try_blake3_prepared_view, try_canonical_sha256_view,
+    try_canonicalize_flat_view, try_canonicalize_prepared_view, try_canonicalize_sha256_view,
+    try_digest_prepared_view, try_flat_blake3_view, try_flat_digest_view,
 };
 
 #[path = "support/canon_load.rs"]
@@ -319,6 +324,67 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
     );
     line("overlay_sha256", &f, &overlay, m, None);
     line("overlay_doc_sha256", &f, &overlay, doc_m, None);
+
+    prepared_rows(ds, &f, &flat);
+}
+
+/// The flat request every prepared row uses: the presentation and label hash of
+/// the flat rows above.
+const FLAT_REQUEST: CanonRequest<'static> =
+    CanonRequest::new(HASH, CanonPresentation::FlatAssertion);
+
+/// The cost of preparing once, and of a second run of each flat output against
+/// that product. Each reuse row must give the flat row's bytes and digests.
+fn prepared_rows(ds: &RdfDataset, f: &Fixture<'_>, flat: &Document) {
+    let window = WholeProcessWindow::open();
+    let prepared = prepare_canon_view(ds, FLAT_REQUEST, &mut control(None)).expect("prepare");
+    let m = window.close();
+    line("prepare", f, flat, m, None);
+    println!(
+        "[flat_view_canon_alloc] product shape={} order={} scale={} lines={} product_bytes={} product_lines={} product_blanks={} product_bytes_per_line={:.2}",
+        f.shape,
+        f.order.label(),
+        f.scale,
+        f.lines,
+        prepared.retained_bytes(),
+        prepared.line_count(),
+        prepared.blank_count(),
+        prepared.retained_bytes() as f64 / prepared.line_count().max(1) as f64,
+    );
+
+    let window = WholeProcessWindow::open();
+    let doc = try_canonicalize_prepared_view(ds, FLAT_REQUEST, &prepared, &mut control(None))
+        .expect("prepared document");
+    let m = window.close();
+    assert_eq!(
+        Document::of(doc.nquads()).sha256,
+        flat.sha256,
+        "the prepared document equals the flat document"
+    );
+    drop(doc);
+    line("prepared_doc", f, flat, m, None);
+
+    let window = WholeProcessWindow::open();
+    let digest = try_digest_prepared_view(ds, FLAT_REQUEST, &prepared, &mut control(None))
+        .expect("prepared digest");
+    let m = window.close();
+    assert_eq!(
+        digest.to_hex(),
+        flat.sha256,
+        "the prepared digest equals the flat digest"
+    );
+    line("prepared_sha256", f, flat, m, None);
+
+    let window = WholeProcessWindow::open();
+    let streamed = try_blake3_prepared_view(ds, FLAT_REQUEST, &prepared, &mut control(None))
+        .expect("prepared BLAKE3");
+    let m = window.close();
+    assert_eq!(
+        purrdf_hash::hex::encode(&streamed),
+        flat.blake3,
+        "the prepared BLAKE3 equals the flat BLAKE3"
+    );
+    line("prepared_blake3", f, flat, m, None);
 }
 
 /// Rings of identical blank nodes: every blank collides at first degree, so the
@@ -373,20 +439,73 @@ fn probe_collision() {
         d.sha256,
         d.blake3,
     );
+    let prepared = prepare_canon_view(&ds, FLAT_REQUEST, &mut control(None)).expect("prepare");
+    let window = WholeProcessWindow::open();
+    let doc = try_canonicalize_prepared_view(&ds, FLAT_REQUEST, &prepared, &mut control(None))
+        .expect("prepared document");
+    let m = window.close();
+    let again = Document::of(doc.nquads());
+    assert_eq!(
+        again.sha256, d.sha256,
+        "the prepared document equals the flat document"
+    );
+    println!(
+        "[flat_view_canon_alloc] entry=prepared_doc shape=collision lines={} product_bytes={} product_blanks={} allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={} sha256={}",
+        prepared.line_count(),
+        prepared.retained_bytes(),
+        prepared.blank_count(),
+        m.allocations,
+        m.requested_bytes,
+        m.retained_bytes,
+        m.peak_working_bytes,
+        again.sha256,
+    );
 }
 
-/// `n` flat document calls and nothing else, for an external instruction counter.
+/// `n` calls and nothing else, for an external instruction counter.
 fn calls(spec: &str) {
     let (shape, n) = spec.split_once(':').expect("<shape>:<n>");
     let n: usize = n.parse().expect("n is an integer");
-    let ds: Arc<RdfDataset> = match shape {
-        "reifier" => load::reifier(32_768, 1, load::Order::Sorted).dataset,
+    let lines: usize = std::env::var("PURRDF_CANON_ALLOC_CALL_LINES")
+        .map_or(32_768, |raw| raw.parse().expect("a line count"));
+    let (fixture, mode) = ["_prepared_digest", "_prepared", "_digest"]
+        .into_iter()
+        .find_map(|suffix| shape.strip_suffix(suffix).map(|name| (name, suffix)))
+        .unwrap_or((shape, ""));
+    let ds: Arc<RdfDataset> = match fixture {
+        "reifier" => load::reifier(lines, 1, load::Order::Sorted).dataset,
+        "blank_free" => load::blank_free(lines, 1, load::Order::Sorted).dataset,
         "collision" => Arc::new(collision()),
         other => panic!("unknown shape {other}"),
     };
+    // Prepared once, before the calls, so that `n` calls less none is one run.
+    let prepared: Option<PreparedCanon> = mode
+        .starts_with("_prepared")
+        .then(|| prepare_canon_view(&*ds, FLAT_REQUEST, &mut control(None)).expect("prepare"));
     for _ in 0..n {
-        let doc = try_canonicalize_flat_view(&*ds, HASH, &mut control(None)).expect("document");
-        std::hint::black_box(doc);
+        match (mode, &prepared) {
+            ("_prepared", Some(state)) => {
+                let doc =
+                    try_canonicalize_prepared_view(&*ds, FLAT_REQUEST, state, &mut control(None))
+                        .expect("prepared document");
+                std::hint::black_box(doc);
+            }
+            ("_prepared_digest", Some(state)) => {
+                let digest =
+                    try_digest_prepared_view(&*ds, FLAT_REQUEST, state, &mut control(None))
+                        .expect("prepared digest");
+                std::hint::black_box(digest);
+            }
+            ("_digest", _) => {
+                let digest = try_flat_digest_view(&*ds, HASH, &mut control(None)).expect("digest");
+                std::hint::black_box(digest);
+            }
+            _ => {
+                let doc =
+                    try_canonicalize_flat_view(&*ds, HASH, &mut control(None)).expect("document");
+                std::hint::black_box(doc);
+            }
+        }
     }
 }
 

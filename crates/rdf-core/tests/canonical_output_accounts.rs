@@ -16,13 +16,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    BlankScope, CanonHash, CanonPhase, CanonicalizationControl, ContentDigest, DatasetView,
-    FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RDFC_V2_CORPUS_POLICY,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, StopSignal,
-    TermId, TermRef, TermValue, ViewOperationStatus, WorkspaceReservation,
-    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize_flat_view,
-    try_canonicalize_sha256_view, try_canonicalize_view, try_flat_blake3_view,
-    try_flat_digest_view, try_graph_digest_view,
+    BlankScope, CanonError, CanonHash, CanonOutput, CanonPhase, CanonPresentation, CanonRequest,
+    CanonSelection, CanonicalizationControl, ContentDigest, DatasetView, FallibleDatasetView,
+    GraphMatch, OwnedWorkspaceReservation, PreparedRefusal, QuadIds, RDFC_V2_CORPUS_POLICY,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection,
+    SearchConfiguration, StopSignal, TermId, TermRef, TermValue, ViewCanonError,
+    ViewOperationStatus, WorkspaceReservation, prepare_canon_view, try_blake3_prepared_view,
+    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_prepared_view, try_canonicalize_sha256_view,
+    try_canonicalize_view, try_digest_prepared_view, try_flat_blake3_view, try_flat_digest_view,
+    try_graph_digest_view,
 };
 
 const GRAPH: &str = "https://example.org/g/1";
@@ -148,6 +151,7 @@ fn fixtures() -> [(&'static str, Arc<RdfDataset>); 3] {
 #[derive(Debug)]
 struct Account {
     max: AtomicU64,
+    live: AtomicU64,
     limit: u64,
 }
 
@@ -155,11 +159,16 @@ impl Account {
     fn new(limit: u64) -> Arc<Self> {
         Arc::new(Self {
             max: AtomicU64::new(0),
+            live: AtomicU64::new(0),
             limit,
         })
     }
     fn max(&self) -> u64 {
         self.max.load(Ordering::Relaxed)
+    }
+    /// What the provider holds for reservations that are still alive.
+    fn live(&self) -> u64 {
+        self.live.load(Ordering::Relaxed)
     }
 }
 
@@ -182,7 +191,14 @@ impl WorkspaceReservation for Reservation {
             return Err(Refused(bytes));
         }
         self.0.max.fetch_max(bytes, Ordering::Relaxed);
+        self.0.live.store(bytes, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.0.live.store(0, Ordering::Relaxed);
     }
 }
 
@@ -192,6 +208,7 @@ struct Recording {
     scratch: Arc<Account>,
     owned: Arc<Account>,
     has_owned: bool,
+    identified: bool,
 }
 
 impl Recording {
@@ -201,7 +218,14 @@ impl Recording {
             scratch: Account::new(scratch_limit),
             owned: Account::new(owned_limit),
             has_owned: true,
+            identified: false,
         }
+    }
+
+    /// The same view presenting its dataset's snapshot identity.
+    fn identified(mut self) -> Self {
+        self.identified = true;
+        self
     }
 }
 
@@ -250,6 +274,15 @@ impl DatasetView for Recording {
     }
     fn term_count(&self) -> u64 {
         self.inner.term_count()
+    }
+    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Refused> {
+        if !self.identified {
+            return Ok(None);
+        }
+        match DatasetView::snapshot_identity(self.inner.as_ref()) {
+            Ok(identity) => Ok(identity),
+            Err(never) => match never {},
+        }
     }
     fn reserve_workspace(
         &self,
@@ -865,5 +898,486 @@ fn a_stop_during_a_line_of_several_blocks_is_honoured_by_every_digest_entry() {
             CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
         let view = Recording::new(&dataset, u64::MAX, u64::MAX);
         assert_eq!(run(entry, &view, &mut control).unwrap(), counted.digest);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// A canonical state kept between calls over the same snapshot.
+// -----------------------------------------------------------------------------
+
+const FLAT_REQUEST: CanonRequest<'static> =
+    CanonRequest::new(CanonHash::Sha256, CanonPresentation::FlatAssertion);
+const OVERLAY_REQUEST: CanonRequest<'static> =
+    CanonRequest::new(CanonHash::Sha256, CanonPresentation::Overlay);
+
+type Viewed<T> = Result<T, ViewCanonError<Refused, ()>>;
+
+fn quiet() -> CanonicalizationControl<'static> {
+    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+}
+
+fn identified(dataset: &Arc<RdfDataset>) -> Recording {
+    Recording::new(dataset, u64::MAX, u64::MAX).identified()
+}
+
+/// The refusal a prepared-state call returned, if it was that kind.
+fn prepared_refusal<T>(result: Viewed<T>) -> Option<PreparedRefusal> {
+    match result {
+        Err(ViewCanonError::Refused(CanonError::Prepared(cause))) => Some(cause),
+        _ => None,
+    }
+}
+
+/// The three outputs a prepared state serves, for one request: document text,
+/// labels, SHA-256 and BLAKE3.
+type Served = (String, Vec<(TermId, String)>, ContentDigest, [u8; 32]);
+
+fn fresh_outputs(request: CanonRequest<'_>, view: &Recording) -> Served {
+    let hash = request.hash;
+    let (document, sha, blake3) = match request.presentation {
+        CanonPresentation::Overlay => (
+            try_canonicalize_view(view, hash, &mut quiet()).unwrap(),
+            try_canonical_sha256_view(view, hash, &mut quiet()).unwrap(),
+            try_canonical_blake3_view(view, hash, &mut quiet()).unwrap(),
+        ),
+        CanonPresentation::FlatAssertion => (
+            try_canonicalize_flat_view(view, hash, &mut quiet()).unwrap(),
+            try_flat_digest_view(view, hash, &mut quiet()).unwrap(),
+            try_flat_blake3_view(view, hash, &mut quiet()).unwrap(),
+        ),
+    };
+    let labels = document
+        .labels()
+        .map(|(id, label)| (id, label.to_owned()))
+        .collect();
+    (document.nquads().to_owned(), labels, sha, blake3)
+}
+
+fn reused_outputs(
+    request: CanonRequest<'_>,
+    view: &Recording,
+    prepared: &purrdf_core::PreparedCanon,
+) -> Viewed<Served> {
+    let document = try_canonicalize_prepared_view(view, request, prepared, &mut quiet())?;
+    let sha = try_digest_prepared_view(view, request, prepared, &mut quiet())?;
+    let blake3 = try_blake3_prepared_view(view, request, prepared, &mut quiet())?;
+    let labels = document
+        .labels()
+        .map(|(id, label)| (id, label.to_owned()))
+        .collect();
+    Ok((document.nquads().to_owned(), labels, sha, blake3))
+}
+
+/// Through a metered provider, on fixtures with graphs, nested triple terms,
+/// composite literals that embed blank labels and every literal form, a prepared
+/// state serves the document, labels and both digests of a run that takes no
+/// state, in both presentations.
+#[test]
+fn a_prepared_state_serves_the_outputs_of_a_fresh_run_on_every_fixture() {
+    for (name, dataset) in fixtures() {
+        for request in [FLAT_REQUEST, OVERLAY_REQUEST] {
+            let view = identified(&dataset);
+            let prepared = prepare_canon_view(&view, request, &mut quiet()).unwrap();
+            let expected = fresh_outputs(request, &view);
+            let reused = reused_outputs(request, &view, &prepared).unwrap();
+            assert_eq!(
+                reused, expected,
+                "{name} {:?} differs from a fresh run",
+                request.presentation
+            );
+        }
+    }
+}
+
+/// Each key component of a prepared state is checked, and a state is refused for a
+/// request or a view differing in that component alone, with its own cause. Each
+/// refusal sits beside the neighbouring request that is served: the same snapshot
+/// rebuilt as a separate dataset, the same request, and the same graph.
+#[test]
+fn a_prepared_state_is_refused_for_the_key_component_that_differs_and_served_otherwise() {
+    let dataset = reifier();
+    let prepared = prepare_canon_view(&identified(&dataset), FLAT_REQUEST, &mut quiet()).unwrap();
+    // A separate dataset holding the same snapshot is served.
+    let rebuilt = reifier();
+    let sha384 = CanonRequest::new(CanonHash::Sha384, CanonPresentation::FlatAssertion);
+    let cases: [(&str, CanonRequest<'_>, Recording, Option<PreparedRefusal>); 7] = [
+        (
+            "same request and snapshot",
+            FLAT_REQUEST,
+            identified(&dataset),
+            None,
+        ),
+        (
+            "same snapshot, separate dataset",
+            FLAT_REQUEST,
+            identified(&rebuilt),
+            None,
+        ),
+        (
+            "label hash",
+            sha384,
+            identified(&dataset),
+            Some(PreparedRefusal::Hash),
+        ),
+        (
+            "presentation",
+            OVERLAY_REQUEST,
+            identified(&dataset),
+            Some(PreparedRefusal::Presentation),
+        ),
+        (
+            "scope",
+            FLAT_REQUEST.in_graph(GRAPH),
+            identified(&dataset),
+            Some(PreparedRefusal::Selection),
+        ),
+        (
+            "snapshot",
+            FLAT_REQUEST,
+            identified(&mixed()),
+            Some(PreparedRefusal::Snapshot),
+        ),
+        (
+            "no snapshot identity",
+            FLAT_REQUEST,
+            Recording::new(&dataset, u64::MAX, u64::MAX),
+            Some(PreparedRefusal::SnapshotUnavailable),
+        ),
+    ];
+    for (what, request, view, expected) in cases {
+        let document = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet());
+        let digest = try_digest_prepared_view(&view, request, &prepared, &mut quiet());
+        let blake3 = try_blake3_prepared_view(&view, request, &prepared, &mut quiet());
+        assert_eq!(expected, prepared_refusal(document), "document: {what}");
+        assert_eq!(expected, prepared_refusal(digest), "digest: {what}");
+        assert_eq!(expected, prepared_refusal(blake3), "blake3: {what}");
+    }
+}
+
+/// A state prepared for one named graph is served for that graph and refused for the
+/// whole dataset and for another graph, and the empty selection of a graph the view
+/// does not hold is prepared and served as the empty document.
+#[test]
+fn a_graph_scoped_state_is_refused_for_another_scope_and_matches_the_graph_entry() {
+    let dataset = blank_free();
+    let view = identified(&dataset);
+    let request = FLAT_REQUEST.in_graph(GRAPH);
+    let prepared = prepare_canon_view(&view, request, &mut quiet()).unwrap();
+    let fresh =
+        try_canonicalize_flat_graph_view(&view, GRAPH, CanonHash::Sha256, &mut quiet()).unwrap();
+    let reused = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet()).unwrap();
+    assert_eq!(reused.nquads(), fresh.nquads());
+    assert!(!fresh.nquads().is_empty(), "the graph holds rows");
+    for (what, other) in [
+        ("whole dataset", FLAT_REQUEST),
+        (
+            "another graph",
+            FLAT_REQUEST.in_graph("https://example.org/g/2"),
+        ),
+    ] {
+        let refused = try_canonicalize_prepared_view(&view, other, &prepared, &mut quiet());
+        assert_eq!(
+            Some(PreparedRefusal::Selection),
+            prepared_refusal(refused),
+            "{what}"
+        );
+    }
+    let absent = FLAT_REQUEST.in_graph("https://example.org/g/absent");
+    let empty = prepare_canon_view(&view, absent, &mut quiet()).unwrap();
+    assert_eq!(empty.line_count(), 0);
+    let document = try_canonicalize_prepared_view(&view, absent, &empty, &mut quiet()).unwrap();
+    assert_eq!(document.nquads(), "");
+    let fresh_empty = try_canonicalize_flat_graph_view(
+        &view,
+        "https://example.org/g/absent",
+        CanonHash::Sha256,
+        &mut quiet(),
+    )
+    .unwrap();
+    assert_eq!(document.nquads(), fresh_empty.nquads());
+    assert_eq!(
+        try_digest_prepared_view(&view, absent, &empty, &mut quiet()).unwrap(),
+        ContentDigest::of(b"")
+    );
+}
+
+/// A refused reuse is neither a rebuild nor a reuse: its receipt shows a run that
+/// never left preparation, charged no search work and did not complete; the
+/// neighbouring request that is served completes in the output phase.
+#[test]
+fn a_refused_reuse_does_no_canonical_work() {
+    let dataset = reifier();
+    let view = identified(&dataset);
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    let polls = Polls::counting();
+    let mut control =
+        CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+    let refused = try_digest_prepared_view(&view, OVERLAY_REQUEST, &prepared, &mut control);
+    assert!(refused.is_err());
+    let receipt = &control.receipts()[0];
+    assert_eq!(receipt.phase, CanonPhase::Preparation);
+    assert_eq!(receipt.work.total(), 0);
+    assert!(!receipt.completed);
+    assert_eq!(
+        polls.seen.load(Ordering::Relaxed),
+        1,
+        "one poll, then refusal"
+    );
+    let served = try_digest_prepared_view(&view, FLAT_REQUEST, &prepared, &mut control).unwrap();
+    assert_eq!(
+        served,
+        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet()).unwrap()
+    );
+    let receipt = &control.receipts()[1];
+    assert_eq!(receipt.phase, CanonPhase::Output);
+    assert!(receipt.completed);
+}
+
+/// Rings of identical blank nodes collide at first degree, so a fresh run searches.
+fn symmetric() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    for ring in 0..6 {
+        let nodes: Vec<_> = (0..4)
+            .map(|i| {
+                b.intern_blank(&format!("r{ring}_{i}"), BlankScope::DEFAULT)
+                    .unwrap()
+            })
+            .collect();
+        for i in 0..4 {
+            b.push_quad(nodes[i], p, nodes[(i + 1) % 4], None).unwrap();
+        }
+    }
+    b.freeze().unwrap()
+}
+
+/// The label search is paid once, by the call that prepares. A fresh run over a
+/// symmetric dataset charges search work; the preparing call charges it; each call
+/// that reuses charges none, states the configuration of the matching entry, and
+/// ends in the output phase.
+#[test]
+fn a_reusing_run_charges_no_search_work_and_states_its_configuration() {
+    let dataset = symmetric();
+    let view = identified(&dataset);
+    let mut fresh = quiet();
+    try_flat_digest_view(&view, CanonHash::Sha256, &mut fresh).unwrap();
+    assert!(fresh.receipts()[0].work.total() > 0, "the fixture searches");
+    let mut preparing = quiet();
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut preparing).unwrap();
+    assert_eq!(preparing.receipts()[0].work, fresh.receipts()[0].work);
+    let mut reusing = quiet();
+    let digest = try_digest_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
+    try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
+    try_blake3_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
+    assert_eq!(
+        digest,
+        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet()).unwrap()
+    );
+    for (receipt, output) in reusing.receipts().iter().zip([
+        CanonOutput::Sha256Digest,
+        CanonOutput::Document,
+        CanonOutput::Blake3Digest,
+    ]) {
+        assert_eq!(receipt.work.total(), 0, "{output:?} repeated no search");
+        assert_eq!(receipt.phase, CanonPhase::Output);
+        assert!(receipt.completed);
+        assert_eq!(
+            receipt.configuration,
+            SearchConfiguration::Rdfc {
+                profile_version: purrdf_core::CANON_PROFILE_VERSION,
+                hash: CanonHash::Sha256,
+                presentation: CanonPresentation::FlatAssertion,
+                selection: CanonSelection::Dataset,
+                output,
+            }
+        );
+    }
+}
+
+/// The caller's stop is honoured at every poll of a reusing run, ending it in a
+/// receipt that says it did not complete, and a stop after the last poll does not
+/// prevent the same result a run without a stop returns.
+#[test]
+fn a_stop_on_any_poll_of_a_reusing_run_refuses_and_one_after_the_last_does_not() {
+    let dataset = reifier();
+    let view = identified(&dataset);
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    type Entry =
+        fn(&Recording, &purrdf_core::PreparedCanon, &mut CanonicalizationControl<'_>) -> bool;
+    let entries: [(&str, Entry); 3] = [
+        ("document", |v, p, c| {
+            try_canonicalize_prepared_view(v, FLAT_REQUEST, p, c).is_ok()
+        }),
+        ("sha256", |v, p, c| {
+            try_digest_prepared_view(v, FLAT_REQUEST, p, c).is_ok()
+        }),
+        ("blake3", |v, p, c| {
+            try_blake3_prepared_view(v, FLAT_REQUEST, p, c).is_ok()
+        }),
+    ];
+    for (name, entry) in entries {
+        let counting = Polls::counting();
+        let mut control =
+            CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&counting as &dyn StopSignal));
+        assert!(entry(&view, &prepared, &mut control), "{name} completes");
+        let total = counting.seen.load(Ordering::Relaxed);
+        for n in 1..=total {
+            let polls = Polls::stopping_at(n);
+            let mut control = CanonicalizationControl::new(
+                RDFC_V2_CORPUS_POLICY,
+                Some(&polls as &dyn StopSignal),
+            );
+            assert!(
+                !entry(&view, &prepared, &mut control),
+                "{name} stopped at poll {n} of {total} returned a result"
+            );
+            assert!(!control.receipts()[0].completed, "{name} at {n}");
+        }
+        let polls = Polls::stopping_at(total + 1);
+        let mut control =
+            CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+        assert!(
+            entry(&view, &prepared, &mut control),
+            "{name} after the last poll"
+        );
+    }
+}
+
+/// A prepared state is charged to the source's owned account when built, stays
+/// charged while any clone lives, is released with the last, and is refused by an
+/// account below its size while an account of exactly its size admits it.
+#[test]
+fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
+    let dataset = reifier();
+    let view = identified(&dataset);
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    let held = prepared.retained_bytes() as u64;
+    assert!(held > 0);
+    assert_eq!(view.owned.live(), held, "the account holds the product");
+    assert_eq!(view.scratch.live(), 0, "no scratch outlives the call");
+    let clone = prepared.clone();
+    drop(prepared);
+    assert_eq!(view.owned.live(), held, "a clone keeps the charge");
+    drop(clone);
+    assert_eq!(view.owned.live(), 0, "the last clone releases it");
+
+    let exact = Recording::new(&dataset, u64::MAX, held).identified();
+    prepare_canon_view(&exact, FLAT_REQUEST, &mut quiet()).expect("the exact size is admitted");
+    let below = Recording::new(&dataset, u64::MAX, held - 1).identified();
+    let refused = prepare_canon_view(&below, FLAT_REQUEST, &mut quiet());
+    assert!(
+        matches!(
+            refused,
+            Err(ViewCanonError::Refused(CanonError::OwnedAdmission(
+                Refused(_)
+            )))
+        ),
+        "{refused:?}"
+    );
+    let without = Recording::without_owned(&dataset);
+    let unavailable = prepare_canon_view(&without, FLAT_REQUEST, &mut quiet());
+    assert!(
+        matches!(
+            unavailable,
+            Err(ViewCanonError::Refused(
+                CanonError::OwnedWorkspaceUnavailable
+            ))
+        ),
+        "{unavailable:?}"
+    );
+}
+
+/// Quad data with `lines` rows and `blanks` blank nodes, every blank told apart by
+/// its own literal; no graphs and no triple terms.
+fn quads_with_blanks(lines: usize, blanks: usize) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let q = b.intern_iri("https://example.org/q").unwrap();
+    let nodes: Vec<_> = (0..blanks)
+        .map(|i| {
+            b.intern_blank(&format!("n{i}"), BlankScope::DEFAULT)
+                .unwrap()
+        })
+        .collect();
+    for (i, &node) in nodes.iter().enumerate() {
+        let tag = b
+            .intern_literal(RdfLiteral::simple(format!("tag-{i}")))
+            .unwrap();
+        b.push_quad(node, q, tag, None).unwrap();
+    }
+    for i in blanks..lines {
+        let s = b
+            .intern_iri(&format!("https://example.org/s/{i:06}"))
+            .unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(format!("value {}", i % 97)))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+    }
+    b.freeze().unwrap()
+}
+
+/// The stated bound holds: with `W` rank words, `S` distinct symbols, `B` blank
+/// nodes and `T` label bytes the product holds at most `4W + 12S + (id + 4)B + T` plus a
+/// fixed header, and for quad data without graphs or triple terms at most `68` bytes per
+/// line plus the blank-node terms. The product is smaller than the document it
+/// stands for.
+#[test]
+fn the_prepared_state_stays_within_its_stated_bound_in_lines_and_blank_nodes() {
+    const HEADER: usize = 1024;
+    for (lines, blanks) in [(200, 0), (200, 40), (2000, 300), (2000, 1)] {
+        let dataset = quads_with_blanks(lines, blanks);
+        let view = identified(&dataset);
+        let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+        let document =
+            try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut quiet()).unwrap();
+        let rows: Vec<&str> = document.nquads().lines().collect();
+        assert_eq!(rows.len(), lines);
+        assert_eq!(prepared.line_count(), lines);
+        assert_eq!(prepared.blank_count(), blanks);
+        // Words: one per space-separated token, the `.` terminator included. Symbols:
+        // the distinct tokens other than the terminator. Literals here hold a space,
+        // so tokens are counted with the literal as one.
+        let tokens = |row: &str| {
+            let mut found = Vec::new();
+            let mut rest = row;
+            while !rest.is_empty() {
+                let end = if rest.starts_with('"') {
+                    rest[1..].find('"').map(|at| at + 2).unwrap()
+                } else {
+                    rest.find(' ').unwrap_or(rest.len())
+                };
+                found.push(&rest[..end]);
+                rest = rest[end..].trim_start();
+            }
+            found
+        };
+        let mut words = 0usize;
+        let mut symbols = std::collections::BTreeSet::new();
+        for row in &rows {
+            for token in tokens(row) {
+                words += 1;
+                if token != "." {
+                    symbols.insert(token.to_owned());
+                }
+            }
+        }
+        let label_bytes: usize = document.labels().map(|(_, label)| label.len()).sum();
+        let blank_term = size_of::<TermId>() + size_of::<u32>();
+        let stated = 4 * words + 12 * symbols.len() + blank_term * blanks + label_bytes + HEADER;
+        let per_line = 68 * lines + blank_term * blanks + label_bytes + HEADER;
+        let held = prepared.retained_bytes();
+        assert!(
+            held <= stated,
+            "{lines} lines {blanks} blanks: {held} > {stated}"
+        );
+        assert!(
+            held <= per_line,
+            "{lines} lines {blanks} blanks: {held} > {per_line}"
+        );
+        assert!(
+            held < prepared.document_len(),
+            "{lines} lines: the product ({held}) is no smaller than the document"
+        );
     }
 }

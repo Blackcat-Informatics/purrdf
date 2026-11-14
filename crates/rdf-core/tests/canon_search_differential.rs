@@ -16,9 +16,11 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CanonHash, CanonicalizationControl, ContentDigest, RDFC_V2_CORPUS_POLICY,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize_flat_view,
-    try_canonicalize_view,
+    BlankScope, CanonHash, CanonPresentation, CanonRequest, CanonicalizationControl, ContentDigest,
+    RDFC_V2_CORPUS_POLICY, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue,
+    prepare_canon_view, try_blake3_prepared_view, try_canonical_blake3_view,
+    try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_prepared_view,
+    try_canonicalize_view, try_digest_prepared_view, try_flat_blake3_view, try_flat_digest_view,
 };
 
 fn iri(b: &mut RdfDatasetBuilder, name: &str) -> TermId {
@@ -309,4 +311,73 @@ fn the_label_search_keeps_every_byte_and_label_of_its_earlier_behaviour() {
         mismatches == 0 && PINNED.len() == cases().len(),
         "search output moved; current table:\n{actual}"
     );
+}
+
+fn fresh_control() -> CanonicalizationControl<'static> {
+    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+}
+
+/// A prepared state serves the document, the label table and both digests of
+/// the case it was built from exactly as a run that takes no product does, for
+/// every case of the set, both presentations and both label hashes, and keeps
+/// doing so on a second use.
+#[test]
+fn a_prepared_state_reproduces_every_byte_label_and_digest_of_a_fresh_run() {
+    for (name, ds) in cases() {
+        for hash in [CanonHash::Sha256, CanonHash::Sha384] {
+            for presentation in [CanonPresentation::Overlay, CanonPresentation::FlatAssertion] {
+                let ds: &RdfDataset = &ds;
+                let request = CanonRequest::new(hash, presentation);
+                let (fresh, fresh_sha, fresh_blake3) = match presentation {
+                    CanonPresentation::Overlay => (
+                        try_canonicalize_view(ds, hash, &mut fresh_control()).unwrap(),
+                        try_canonical_sha256_view(ds, hash, &mut fresh_control()).unwrap(),
+                        try_canonical_blake3_view(ds, hash, &mut fresh_control()).unwrap(),
+                    ),
+                    CanonPresentation::FlatAssertion => (
+                        try_canonicalize_flat_view(ds, hash, &mut fresh_control()).unwrap(),
+                        try_flat_digest_view(ds, hash, &mut fresh_control()).unwrap(),
+                        try_flat_blake3_view(ds, hash, &mut fresh_control()).unwrap(),
+                    ),
+                };
+                let prepared = prepare_canon_view(ds, request, &mut fresh_control()).unwrap();
+                assert_eq!(
+                    prepared.line_count(),
+                    fresh.nquads().lines().count(),
+                    "{name}"
+                );
+                assert_eq!(prepared.blank_count(), fresh.label_count(), "{name}");
+                assert_eq!(prepared.document_len(), fresh.nquads().len(), "{name}");
+                for use_number in 0..2 {
+                    let context = format!("{name} {hash:?} {presentation:?} use {use_number}");
+                    let reused = try_canonicalize_prepared_view(
+                        ds,
+                        request,
+                        &prepared,
+                        &mut fresh_control(),
+                    )
+                    .unwrap();
+                    assert_eq!(reused.nquads(), fresh.nquads(), "{context}");
+                    assert_eq!(reused.presentation(), fresh.presentation(), "{context}");
+                    assert_eq!(
+                        reused.labels().collect::<Vec<_>>(),
+                        fresh.labels().collect::<Vec<_>>(),
+                        "{context}"
+                    );
+                    assert_eq!(
+                        try_digest_prepared_view(ds, request, &prepared, &mut fresh_control())
+                            .unwrap(),
+                        fresh_sha,
+                        "{context}"
+                    );
+                    assert_eq!(
+                        try_blake3_prepared_view(ds, request, &prepared, &mut fresh_control())
+                            .unwrap(),
+                        fresh_blake3,
+                        "{context}"
+                    );
+                }
+            }
+        }
+    }
 }
