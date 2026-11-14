@@ -53,6 +53,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 mod expansion;
+#[cfg(test)]
+pub(crate) use expansion::VIRTUAL_SOURCES;
 pub(crate) mod forecast;
 mod positive;
 mod window;
@@ -3314,6 +3316,17 @@ fn bind_row<D: DatasetView + Sync>(
         }
     }
 
+    // A workspace that admits nothing and a row with no evidence to carry: bind a
+    // plain copy of the cells in place. The accounted build below is the same row.
+    if !workspace.is_bounded() && ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+        let mut out = RetainedRow::resident_copy(cells)?;
+        for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+            if !bind_pos_admitted(&mut out, pos, id, dataset, workspace)? {
+                return Ok(None);
+            }
+        }
+        return Ok(Some(RetainedRow::from_resident(out)));
+    }
     let mut matched = true;
     let out = RetainedRow::try_build(cells.len(), workspace, |out| {
         out.copy_from_slice(cells);
