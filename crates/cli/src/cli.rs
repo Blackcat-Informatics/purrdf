@@ -389,47 +389,13 @@ pub(crate) struct GlobRdfArgs {
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Expand JSON-LD/YAML-LD document structure without creating an RDF dataset.
-    DocumentExpand {
-        /// Closed version-one request JSON path, or - for standard input.
-        #[arg(long)]
-        request: String,
-        /// Original source path, or - for standard input.
-        input: String,
-        /// Expanded JSON destination, or - for standard output.
-        output: String,
-    },
+    DocumentExpand(DocumentExpandArgs),
     /// Compact JSON-LD/YAML-LD document structure under an explicit output context.
-    DocumentCompact {
-        /// Closed version-one request JSON path, or - for standard input.
-        #[arg(long)]
-        request: String,
-        /// Original source path, or - for standard input.
-        input: String,
-        /// Compacted JSON destination, or - for standard output.
-        output: String,
-    },
+    DocumentCompact(DocumentCompactArgs),
     /// Flatten JSON-LD/YAML-LD, optionally compacting under an output context.
-    DocumentFlatten {
-        /// Closed version-one request JSON path, or - for standard input.
-        #[arg(long)]
-        request: String,
-        /// Original source path, or - for standard input.
-        input: String,
-        /// Flattened JSON destination, or - for standard output.
-        output: String,
-    },
+    DocumentFlatten(DocumentFlattenArgs),
     /// Frame original source and frame documents without constructing an RDF dataset.
-    DocumentFrame {
-        /// Closed version-one request JSON path, or - for standard input.
-        #[arg(long)]
-        request: String,
-        /// Original source path, or - for standard input.
-        input: String,
-        /// Original frame path, or - for standard input.
-        frame: String,
-        /// Framed JSON destination, or - for standard output.
-        output: String,
-    },
+    DocumentFrame(DocumentFrameArgs),
     /// Export and reconstruct exact YAML presentation through RDF metadata.
     YamlSource {
         #[command(subcommand)]
@@ -442,64 +408,15 @@ pub(crate) enum Command {
         command: crate::word_id::Command,
     },
     /// Present a full BLAKE3 identity with native emoji, spoken labels and randomart.
-    Fingerprint {
-        /// Complete 64-digit hexadecimal digest; either case is accepted.
-        #[arg(long)]
-        digest: String,
-        /// Positive number of emoji and corresponding spoken labels.
-        #[arg(long)]
-        symbols: usize,
-        /// Inclusive live UTF-8 rendering-storage allowance.
-        #[arg(long)]
-        max_bytes: usize,
-        /// Inclusive native parse, scan and output-copy work allowance.
-        #[arg(long)]
-        max_work: u64,
-    },
+    Fingerprint(FingerprintArgs),
     /// Execute an RDF-authored plan and emit its description and membership provenance.
     GlobRdf(GlobRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
-    GlobSet {
-        /// Verbatim literal value or IRI reference.
-        value: String,
-        /// Source pattern, repeatable; order and duplicate occurrences survive.
-        #[arg(long = "pattern")]
-        patterns: Vec<String>,
-        /// Treat slashes as ordinary text or path-component boundaries.
-        #[arg(long, value_enum)]
-        mode: GlobMode,
-        /// Select the literal or an exact lexical component of a parsed IRI.
-        #[arg(long, value_enum)]
-        surface: GlobSurface,
-        /// Aggregate work allowance; exhaustion publishes no result.
-        #[arg(long)]
-        max_work: u64,
-    },
+    GlobSet(GlobSetArgs),
     /// Match one complete literal or explicitly selected IRI surface.
-    Glob {
-        /// Unicode pattern in the purrdf-glob-v2 language.
-        pattern: String,
-        /// Verbatim literal value or IRI reference.
-        value: String,
-        /// Treat slashes as ordinary text or path-component boundaries.
-        #[arg(long, value_enum)]
-        mode: GlobMode,
-        /// Select the literal or an exact lexical component of a parsed IRI.
-        #[arg(long, value_enum)]
-        surface: GlobSurface,
-        /// Maximum deterministic work units; exhaustion publishes no decision.
-        #[arg(long)]
-        max_work: u64,
-    },
+    Glob(GlobArgs),
     /// Execute a strict geographic scalar, batch, conversion, cover or index request.
-    Geo {
-        /// Request JSON source; `-` reads standard input.
-        #[arg(default_value = "-")]
-        input: String,
-        /// Canonical response; `-` writes stdout. Operational failures use stderr.
-        #[arg(default_value = "-")]
-        output: String,
-    },
+    Geo(GeoArgs),
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert(ConvertArgs),
     /// Evaluate a SPARQL query over an RDF or pack data source.
@@ -788,6 +705,129 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ShapesCommand,
     },
+}
+
+// The arguments of the `DocumentExpand` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DocumentExpandArgs {
+    /// Closed version-one request JSON path, or - for standard input.
+    #[arg(long)]
+    pub request: String,
+    /// Original source path, or - for standard input.
+    pub input: String,
+    /// Expanded JSON destination, or - for standard output.
+    pub output: String,
+}
+
+// The arguments of the `DocumentCompact` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DocumentCompactArgs {
+    /// Closed version-one request JSON path, or - for standard input.
+    #[arg(long)]
+    pub request: String,
+    /// Original source path, or - for standard input.
+    pub input: String,
+    /// Compacted JSON destination, or - for standard output.
+    pub output: String,
+}
+
+// The arguments of the `DocumentFlatten` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DocumentFlattenArgs {
+    /// Closed version-one request JSON path, or - for standard input.
+    #[arg(long)]
+    pub request: String,
+    /// Original source path, or - for standard input.
+    pub input: String,
+    /// Flattened JSON destination, or - for standard output.
+    pub output: String,
+}
+
+// The arguments of the `DocumentFrame` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DocumentFrameArgs {
+    /// Closed version-one request JSON path, or - for standard input.
+    #[arg(long)]
+    pub request: String,
+    /// Original source path, or - for standard input.
+    pub input: String,
+    /// Original frame path, or - for standard input.
+    pub frame: String,
+    /// Framed JSON destination, or - for standard output.
+    pub output: String,
+}
+
+// The arguments of the `Fingerprint` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct FingerprintArgs {
+    /// Complete 64-digit hexadecimal digest; either case is accepted.
+    #[arg(long)]
+    pub digest: String,
+    /// Positive number of emoji and corresponding spoken labels.
+    #[arg(long)]
+    pub symbols: usize,
+    /// Inclusive live UTF-8 rendering-storage allowance.
+    #[arg(long)]
+    pub max_bytes: usize,
+    /// Inclusive native parse, scan and output-copy work allowance.
+    #[arg(long)]
+    pub max_work: u64,
+}
+
+// The arguments of the `GlobSet` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobSetArgs {
+    /// Verbatim literal value or IRI reference.
+    pub value: String,
+    /// Source pattern, repeatable; order and duplicate occurrences survive.
+    #[arg(long = "pattern")]
+    pub patterns: Vec<String>,
+    /// Treat slashes as ordinary text or path-component boundaries.
+    #[arg(long, value_enum)]
+    pub mode: GlobMode,
+    /// Select the literal or an exact lexical component of a parsed IRI.
+    #[arg(long, value_enum)]
+    pub surface: GlobSurface,
+    /// Aggregate work allowance; exhaustion publishes no result.
+    #[arg(long)]
+    pub max_work: u64,
+}
+
+// The arguments of the `Glob` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobArgs {
+    /// Unicode pattern in the purrdf-glob-v2 language.
+    pub pattern: String,
+    /// Verbatim literal value or IRI reference.
+    pub value: String,
+    /// Treat slashes as ordinary text or path-component boundaries.
+    #[arg(long, value_enum)]
+    pub mode: GlobMode,
+    /// Select the literal or an exact lexical component of a parsed IRI.
+    #[arg(long, value_enum)]
+    pub surface: GlobSurface,
+    /// Maximum deterministic work units; exhaustion publishes no decision.
+    #[arg(long)]
+    pub max_work: u64,
+}
+
+// The arguments of the `Geo` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GeoArgs {
+    /// Request JSON source; `-` reads standard input.
+    #[arg(default_value = "-")]
+    pub input: String,
+    /// Canonical response; `-` writes stdout. Operational failures use stderr.
+    #[arg(default_value = "-")]
+    pub output: String,
 }
 
 // The arguments of the `Convert` subcommand, kept out of the enum so the
@@ -3057,29 +3097,29 @@ impl Cli {
             paths.push(path.clone());
         }
         match &self.cmd {
-            Command::DocumentExpand {
+            Command::DocumentExpand(DocumentExpandArgs {
                 request,
                 input,
                 output,
-            }
-            | Command::DocumentCompact {
+            })
+            | Command::DocumentCompact(DocumentCompactArgs {
                 request,
                 input,
                 output,
-            }
-            | Command::DocumentFlatten {
+            })
+            | Command::DocumentFlatten(DocumentFlattenArgs {
                 request,
                 input,
                 output,
-            } => {
+            }) => {
                 paths.extend([request, input, output].into_iter().map(PathBuf::from));
             }
-            Command::DocumentFrame {
+            Command::DocumentFrame(DocumentFrameArgs {
                 request,
                 input,
                 frame,
                 output,
-            } => {
+            }) => {
                 paths.extend(
                     [request, input, frame, output]
                         .into_iter()
@@ -3087,10 +3127,10 @@ impl Cli {
                 );
             }
             Command::YamlSource { command } => paths.extend(command.paths()),
-            Command::Glob { pattern, .. } => {
+            Command::Glob(GlobArgs { pattern, .. }) => {
                 paths.push(PathBuf::from(pattern));
             }
-            Command::Geo { input, output, .. } => {
+            Command::Geo(GeoArgs { input, output, .. }) => {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
@@ -3493,7 +3533,8 @@ impl Cli {
                 paths.push(PathBuf::from(&args.plan));
                 paths.push(PathBuf::from(&args.input));
             }
-            Command::GlobSet { .. } | Command::Fingerprint { .. } => {}
+            Command::GlobSet(GlobSetArgs { .. }) | Command::Fingerprint(FingerprintArgs { .. }) => {
+            }
             Command::WordId { command } => command.paths(&mut paths),
         }
         paths

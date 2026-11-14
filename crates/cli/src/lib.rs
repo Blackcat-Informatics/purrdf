@@ -141,9 +141,10 @@ use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
 use crate::cli::{
-    Cli, CliRdfFormat, Command, ConsistencyArgs, ConvertArgs, DescribeArgs, LiftArgs, NodeExprArgs,
-    PackCommand, ProjectArgs, QueryArgs, ReasonArgs, ReportTarget, RulesArgs, ShaclCommand,
-    ShapesCommand, ShexArgs, UpdateArgs, ValidateArgs,
+    Cli, CliRdfFormat, Command, ConsistencyArgs, ConvertArgs, DescribeArgs, DocumentCompactArgs,
+    DocumentExpandArgs, DocumentFlattenArgs, DocumentFrameArgs, FingerprintArgs, GeoArgs, GlobArgs,
+    GlobSetArgs, LiftArgs, NodeExprArgs, PackCommand, ProjectArgs, QueryArgs, ReasonArgs,
+    ReportTarget, RulesArgs, ShaclCommand, ShapesCommand, ShexArgs, UpdateArgs, ValidateArgs,
 };
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
@@ -201,15 +202,15 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
-                | Command::DocumentExpand { .. }
-                | Command::DocumentCompact { .. }
-                | Command::DocumentFlatten { .. }
-                | Command::DocumentFrame { .. }
+                | Command::DocumentExpand(DocumentExpandArgs { .. })
+                | Command::DocumentCompact(DocumentCompactArgs { .. })
+                | Command::DocumentFlatten(DocumentFlattenArgs { .. })
+                | Command::DocumentFrame(DocumentFrameArgs { .. })
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
-                | Command::Glob { .. }
-                | Command::GlobSet { .. }
-                | Command::Geo { .. }
+                | Command::Glob(GlobArgs { .. })
+                | Command::GlobSet(GlobSetArgs { .. })
+                | Command::Geo(GeoArgs { .. })
                 | Command::Lift(LiftArgs { .. })
         )
     {
@@ -227,7 +228,7 @@ fn dispatch_with_request(
     if cli.geo_profile.is_some()
         && !matches!(
             &cli.cmd,
-            Command::Geo { .. }
+            Command::Geo(GeoArgs { .. })
                 | Command::Query(QueryArgs { .. })
                 | Command::Update(UpdateArgs { .. })
         )
@@ -270,31 +271,31 @@ fn dispatch_with_request(
         })
         .transpose()?;
     match &cli.cmd {
-        Command::DocumentExpand {
+        Command::DocumentExpand(DocumentExpandArgs {
             request,
             input,
             output,
-        }
-        | Command::DocumentCompact {
+        })
+        | Command::DocumentCompact(DocumentCompactArgs {
             request,
             input,
             output,
-        }
-        | Command::DocumentFlatten {
+        })
+        | Command::DocumentFlatten(DocumentFlattenArgs {
             request,
             input,
             output,
-        } => {
+        }) => {
             let (operation, command) = match &cli.cmd {
-                Command::DocumentExpand { .. } => (
+                Command::DocumentExpand(DocumentExpandArgs { .. }) => (
                     purrdf_validate::document::Operation::Expand,
                     "document-expand",
                 ),
-                Command::DocumentCompact { .. } => (
+                Command::DocumentCompact(DocumentCompactArgs { .. }) => (
                     purrdf_validate::document::Operation::Compact,
                     "document-compact",
                 ),
-                Command::DocumentFlatten { .. } => (
+                Command::DocumentFlatten(DocumentFlattenArgs { .. }) => (
                     purrdf_validate::document::Operation::Flatten,
                     "document-flatten",
                 ),
@@ -308,12 +309,12 @@ fn dispatch_with_request(
             )?;
             document_expansion::run(operation, request, input, None, output, canonical)
         }
-        Command::DocumentFrame {
+        Command::DocumentFrame(DocumentFrameArgs {
             request,
             input,
             frame,
             output,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -348,12 +349,12 @@ fn dispatch_with_request(
             word_id::run(command)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Fingerprint {
+        Command::Fingerprint(FingerprintArgs {
             digest,
             symbols,
             max_bytes,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -373,13 +374,13 @@ fn dispatch_with_request(
             glob_rdf::run(args)?;
             Ok(CliOutcome::Complete)
         }
-        Command::GlobSet {
+        Command::GlobSet(GlobSetArgs {
             value,
             patterns,
             mode,
             surface,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -389,13 +390,13 @@ fn dispatch_with_request(
             glob::run_set(patterns, value, *mode, *surface, *max_work)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Glob {
+        Command::Glob(GlobArgs {
             pattern,
             value,
             mode,
             surface,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -405,7 +406,7 @@ fn dispatch_with_request(
             glob::run(pattern, value, *mode, *surface, *max_work)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Geo { input, output } => {
+        Command::Geo(GeoArgs { input, output }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
