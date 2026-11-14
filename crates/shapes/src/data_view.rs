@@ -1227,27 +1227,32 @@ mod statement_layer_tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
 
-    fn source(annotated: bool) -> Arc<RdfDataset> {
+    fn source(reified: bool, annotated: bool) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("http://example.org/s").unwrap();
         let p = b.intern_iri("http://example.org/p").unwrap();
         let o = b.intern_iri("http://example.org/o").unwrap();
         b.push_quad(s, p, o, None).unwrap();
-        if annotated {
+        let reifier = b.intern_iri("http://example.org/r").unwrap();
+        if reified {
             let statement = b.intern_triple(s, p, o).unwrap();
-            let reifier = b.intern_iri("http://example.org/r").unwrap();
             b.push_reifier(reifier, statement).unwrap();
+        }
+        if annotated {
+            b.push_annotation(reifier, p, o).unwrap();
         }
         b.freeze().unwrap()
     }
 
     /// The certificate is forwarded from a native source and withheld when that source
-    /// holds a reifier, so a probe of the statement layer is skipped only where it
+    /// holds a reifier or an annotation, so a probe of the statement layer is skipped only where it
     /// would find nothing.
     #[test]
     fn a_native_view_forwards_the_empty_statement_layer_certificate() {
         use purrdf_core::DatasetView;
-        assert!(ShaclDatasetView::native(source(false)).statement_layer_is_empty());
-        assert!(!ShaclDatasetView::native(source(true)).statement_layer_is_empty());
+        assert!(ShaclDatasetView::native(source(false, false)).statement_layer_is_empty());
+        // Either table alone is a statement layer: the certificate needs both empty.
+        assert!(!ShaclDatasetView::native(source(true, false)).statement_layer_is_empty());
+        assert!(!ShaclDatasetView::native(source(false, true)).statement_layer_is_empty());
     }
 }
