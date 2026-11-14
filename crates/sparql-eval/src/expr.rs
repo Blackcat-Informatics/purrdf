@@ -716,6 +716,11 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
                 )?
             };
             match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
+                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                {
+                    self.active = Some(frame);
+                }
                 crate::vm::VmStep::Value(value) => {
                     let (linked, row, keep, evidence) =
                         frame.finish_filter(expression, &self.schema, value, ctx)?;
@@ -899,6 +904,11 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
                 )?
             };
             match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
+                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                {
+                    self.active = Some(frame);
+                }
                 crate::vm::VmStep::Suspend(request) => {
                     self.active = Some(frame);
                     return Ok(ExtendStep::Suspend(self, request));
@@ -2777,6 +2787,8 @@ impl SiteFacts {
     const KNOWN: u8 = 2;
     const NO_BINDING: u8 = 4;
     const PROBE_EVERY_SCHEMA: u8 = 8;
+    /// The last row loop that asked for an answer in place got a child instead.
+    const CHILD_LAST: u8 = 16;
 
     /// The facts for `normalized`, or `None` on its first visit.
     fn read(
@@ -2805,6 +2817,28 @@ impl SiteFacts {
             facts |= Self::PROBE_EVERY_SCHEMA;
         }
         Ok(Some(self.0.fetch_or(facts, Relaxed) | facts))
+    }
+
+    fn visited(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::VISITED != 0
+    }
+
+    fn forget_visit(&self) {
+        self.0
+            .fetch_and(!Self::VISITED, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn child_last(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::CHILD_LAST != 0
+    }
+
+    fn set_child_last(&self, child: bool) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if child {
+            self.0.fetch_or(Self::CHILD_LAST, Relaxed);
+        } else if self.child_last() {
+            self.0.fetch_and(!Self::CHILD_LAST, Relaxed);
+        }
     }
 }
 
@@ -2946,10 +2980,17 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         ));
     }
     let prepared = ctx.prepared_exists(pattern)?;
-    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
+    let crate::eval::PreparedExists::Pattern {
+        ledger_source,
+        facts,
+        ..
+    } = prepared.as_ref()
+    else {
         return Ok(ExistsDecision::Complete(false));
     };
-    exists_prepared_decide(
+    // A row loop that last met a child here asks again once this path completes.
+    let hint = facts.child_last().then(|| prepared.clone());
+    let decision = exists_prepared_decide(
         PreparedSite {
             key: address,
             plan_map: ledger_source.clone(),
@@ -2960,7 +3001,67 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         schema,
         ctx,
         evidence,
-    )
+    )?;
+    if let Some(prepared) = hint
+        && matches!(decision, ExistsDecision::Complete(_))
+        && let crate::eval::PreparedExists::Pattern { facts, .. } = prepared.as_ref()
+    {
+        facts.set_child_last(false);
+    }
+    Ok(decision)
+}
+
+/// The answer of an `EXISTS` site for this row when its decision completes without a
+/// graph child, for a row loop that can then resume its row in place instead of
+/// suspending it. `None` leaves the request to the suspending caller, which decides
+/// it again from the start: a decision that ends in a child has charged nothing and
+/// published nothing, so deciding twice answers and charges as deciding once.
+///
+/// Only an ordinary resident evaluation asks: a bounded workspace or a query that
+/// records evidence keeps the suspended route. A site whose last such request ended
+/// in a child is not asked again until a suspended decision completes, so a site
+/// that always needs a child is decided once per row.
+pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<bool>, EvalError> {
+    crate::stack::check("EXISTS")?;
+    if ctx.deferred_exists.is_some() || crate::deferred_exists::is_placeholder(pattern) {
+        return Ok(None);
+    }
+    let prepared = ctx.prepared_exists(pattern)?;
+    let crate::eval::PreparedExists::Pattern {
+        ledger_source,
+        facts,
+        ..
+    } = prepared.as_ref()
+    else {
+        return Ok(Some(false));
+    };
+    if facts.child_last() {
+        return Ok(None);
+    }
+    let first_visit = !facts.visited();
+    let site = PreparedSite {
+        key: std::ptr::from_ref(pattern) as usize,
+        plan_map: ledger_source.clone(),
+        prepared: prepared.clone(),
+        source_owner: None,
+    };
+    match exists_prepared_decide(site, row, schema, ctx, None)? {
+        ExistsDecision::Complete(answer) => Ok(Some(answer)),
+        ExistsDecision::Child(_) => {
+            // The row is decided again from the start, so this request is not a visit:
+            // a site reached once still learns no facts and allocates nothing for them.
+            if first_visit {
+                facts.forget_visit();
+            }
+            facts.set_child_last(true);
+            Ok(None)
+        }
+    }
 }
 
 /// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to

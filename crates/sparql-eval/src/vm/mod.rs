@@ -749,6 +749,36 @@ impl<'e, I: purrdf_core::ViewTermId> RowExpressionFrame<'e, I> {
     ) -> Result<(), EvalError> {
         self.state.resume(&mut self.linked, value, record, ctx)
     }
+
+    /// Resume this row with the answer of its `EXISTS` request when that answer
+    /// needs no graph child ([`crate::expr::exists_answer_in_place`]), as the
+    /// suspending caller would resume it. `false` leaves the request untouched.
+    /// Kept out of line so the row loops that call it keep their frame size.
+    #[inline(never)]
+    pub(crate) fn resume_exists_in_place<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        site: u32,
+        expression: &Expression,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        if ctx.growth.is_bounded() || ctx.may_have_evidence() {
+            return Ok(false);
+        }
+        let sites = self
+            .linked
+            .exists
+            .as_deref()
+            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
+        let pattern = sites.pattern(site, Some(expression))?;
+        let Some(answer) = helpers::exists_answer_in_place(pattern, &self.row, schema, ctx)? else {
+            return Ok(false);
+        };
+        let value = helpers::intern_boolean(ctx, answer)?;
+        self.state
+            .resume(&mut self.linked, Some(value), None, ctx)?;
+        Ok(true)
+    }
 }
 
 impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
