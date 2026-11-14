@@ -501,503 +501,13 @@ pub(crate) enum Command {
         output: String,
     },
     /// Convert RDF between syntaxes, and to/from the native pack container.
-    Convert {
-        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
-        import_yamlld_input_options: Vec<String>,
-        /// Closed version-one YAML-LD Basic input-options JSON file.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Input format override; inferred from each input's extension when omitted.
-        /// Applies to EVERY source in the list, including each `--input`.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// An ADDITIONAL input source, repeatable. The effective ordered source list
-        /// is the positional `IN` followed by each `--input` in the order written;
-        /// two or more sources are merged with the deterministic dataset union, under
-        /// a separate blank-node scope per source.
-        #[arg(long = "input", value_name = "PATH")]
-        inputs: Vec<String>,
-        /// How a gzip/zstd transport wrapper around each input is handled: `auto`
-        /// sniffs the leading bytes then the filename suffix, `none` reads the bytes
-        /// verbatim, and `gzip`/`zstd` decode under exactly that encoding. A
-        /// truncated or corrupt stream is always a hard failure, never a short read.
-        #[arg(long, value_enum, value_name = "ENCODING", default_value = "auto")]
-        transport: CliTransport,
-        /// Output format override; inferred from the output extension when omitted.
-        #[arg(long, value_enum)]
-        to: Option<CliRdfFormat>,
-        /// Base IRI, on BOTH legs of the conversion. A relative IRI in the input
-        /// resolves against it while parsing, and a target syntax that can write a
-        /// base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
-        /// output document's base and relativizes against it; a target that cannot
-        /// (ntriples, nquads, trix, hextuples) writes absolute IRIs. When omitted, a
-        /// filesystem input still parses under its own `file://` retrieval IRI —
-        /// stdin has none, so a relative IRI there is an error — and no base is
-        /// written on output.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Materialize an entailment regime's closure in memory before
-        /// serializing (applied before `--canonical`).
-        #[arg(long, value_enum, value_name = "REGIME")]
-        entailment: Option<CliRegime>,
-        /// RIF-in-XML rule document for `rif`; required by that regime and
-        /// refused for every other (their rule table is the specification's).
-        #[arg(long, value_name = "FILE")]
-        rules: Option<PathBuf>,
-        /// Surface the reasoning report for `--entailment`: bare writes it to
-        /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
-        #[allow(clippy::option_option)]
-        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
-        report: Option<Option<PathBuf>>,
-        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
-        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
-        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
-        /// a run it admits writes exactly the closure a larger limit would.
-        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
-        max_stored_facts: Option<u64>,
-        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
-        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
-        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
-        max_join_steps: Option<u64>,
-        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
-        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, no logical ceiling is applied.
-        #[arg(
-            long = "max-term-arena-bytes",
-            value_name = "BYTES",
-            requires = "entailment"
-        )]
-        max_term_arena_bytes: Option<u64>,
-        /// An `owl:imports` the premise declares, resolved to a local document:
-        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
-        /// imports closure to BE the ontology, so the `--entailment` closure is
-        /// materialized over the premise — the merged sources — with every imported document. PurRDF fetches nothing: an
-        /// `owl:imports` no pair resolves, that does not name the premise document itself
-        /// (a source's `file://` retrieval IRI or `--base`), and whose ontology the premise does
-        /// not already hold, is refused by name (exit 1), and a pair the closure never
-        /// reaches is refused as unused (exit 2). The premise's imports are the
-        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
-        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
-        /// other is a premise triple. The IRI half must be ABSOLUTE.
-        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
-        imports: Vec<String>,
-        /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
-        /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
-        /// ignored) when named beside `--canonical`, since it would otherwise be
-        /// accepted and never read. Combine with `--entailment` to canonicalize the
-        /// closure.
-        #[arg(long)]
-        canonical: bool,
-        /// First input path `IN`, or `-` for stdin (which requires `--from`). Every
-        /// `--input` is appended AFTER this one.
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Convert(ConvertArgs),
     /// Evaluate a SPARQL query over an RDF or pack data source.
-    Query {
-        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
-        import_yamlld_input_options: Vec<String>,
-        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
-        /// Premise imports keep their default input policy.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Data-source path (format inferred from its extension). A pack file is
-        /// queried zero-copy (unless `--entailment` forces materialization).
-        #[arg(long)]
-        data: String,
-        /// Base IRI for resolving relative IRIs while parsing the data AND in the
-        /// query text. A CONSTRUCT/DESCRIBE graph written through an RDF
-        /// `--results-format` that can express a base (turtle, trig, rdfxml, jsonld,
-        /// yamlld) is additionally serialized under it; a SPARQL-results
-        /// serialization has no base surface to carry one.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Materialize an entailment regime's closure in memory before querying
-        /// (the query then runs over the closure, not the raw view). Combines with
-        /// every governor flag: the ceilings bound the QUERY over the closure, and
-        /// `--deadline` additionally bounds computing the closure itself. The query
-        /// governors never become limits on the reasoning run; `--max-stored-facts`,
-        /// `--max-join-steps` and `--max-term-arena-bytes` are its limits. Like every
-        /// evaluation limit they can only refuse, never truncate a closure. A deadline that expires while the
-        /// closure is still being computed prints the governor report, writes no rows,
-        /// and exits 3.
-        #[arg(long, value_enum, value_name = "REGIME")]
-        entailment: Option<CliRegime>,
-        /// RIF-in-XML rule document for `rif`; required by that regime and
-        /// refused for every other (their rule table is the specification's).
-        #[arg(long, value_name = "FILE")]
-        rules: Option<PathBuf>,
-        /// Surface the reasoning report for `--entailment`: bare writes it to
-        /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
-        #[allow(clippy::option_option)]
-        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
-        report: Option<Option<PathBuf>>,
-        /// An `owl:imports` the data declares, resolved to a local document:
-        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
-        /// imports closure to BE the ontology, so the `--entailment` closure the query
-        /// runs over is materialized over the data merged with every imported document.
-        /// PurRDF fetches nothing: an `owl:imports` no pair resolves, that does not name
-        /// the data document itself (its `file://` retrieval IRI or `--base`), and whose
-        /// ontology the data does not already hold, is refused by name (exit 1), and a
-        /// pair the closure never reaches is refused as unused (exit 2). The data's
-        /// imports are the `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
-        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
-        /// other is a data triple. The IRI half must be ABSOLUTE; each document's format
-        /// is inferred from its extension.
-        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
-        imports: Vec<String>,
-        /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
-        /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
-        /// run (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is
-        /// applied. The limit can only refuse: a run it admits answers over exactly the
-        /// closure a larger limit would.
-        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
-        max_stored_facts: Option<u64>,
-        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
-        /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
-        /// `d` regimes; one more fails the run (exit 1). Omitted, no logical ceiling is applied.
-        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
-        max_join_steps: Option<u64>,
-        /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
-        /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
-        /// the limit and the numbers. Omitted, no logical ceiling is applied.
-        #[arg(
-            long = "max-term-arena-bytes",
-            value_name = "BYTES",
-            requires = "entailment"
-        )]
-        max_term_arena_bytes: Option<u64>,
-        /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
-        /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
-        /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
-        /// absent, not merely defaulted) is load-bearing: it is what lets
-        /// `--explain` tell "the operator asked for a serialization" apart from
-        /// "nothing was named" and refuse the former (see
-        /// `crate::query::refuse_unenforceable_combinations`) rather than
-        /// silently ignore it.
-        #[arg(long, value_parser = QueryFormatParser)]
-        results_format: Option<QueryFormat>,
-        /// Bound the query's abstract execution steps. The unit is the engine's own
-        /// charge schedule, which `--explain` prints, so a fuel budget is comparable
-        /// only against the same schedule. The ceiling is inclusive, and `0` is a valid
-        /// one that trips at the first charge. A trip prints the answers it certified
-        /// and exits 3.
-        #[arg(long, value_name = "UNITS")]
-        fuel: Option<u64>,
-        /// Bound the query's wall-clock EVALUATION time: a run of count+unit components
-        /// over `ms`, `s`, `m`, `h` (`750ms`, `30s`, `1m30s`, `2h`). The budget starts
-        /// when evaluation starts — reading and parsing the data source happen before
-        /// it — and the engine observes it when it enters an algebra node, so an
-        /// evaluation overruns it by at most one operator rather than being killed
-        /// mid-step. This is not a timeout on the process.
-        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
-        deadline: Option<std::time::Duration>,
-        /// Bound the ANSWER SEQUENCE: solution rows for SELECT, output statements for
-        /// CONSTRUCT/DESCRIBE (an ASK boolean has no sequence to bound). This is an
-        /// operational ceiling and never `LIMIT`: `LIMIT` is query semantics and applies
-        /// before this is tested. Inclusive.
-        #[arg(long, value_name = "ROWS")]
-        max_answers: Option<u64>,
-        /// Bound the largest INTERMEDIATE solution bag, in cells (rows × columns) — the
-        /// ceiling that actually bounds allocation. Compared against the largest single
-        /// bag rather than a running total, and a plan whose ESTIMATED peak already
-        /// exceeds it is refused before evaluation starts.
-        #[arg(long, value_name = "CELLS")]
-        max_intermediate_cells: Option<u64>,
-        /// Bound the bytes value-constructing operations mint into the per-query scratch
-        /// arena, which grow independently of any row or cell count.
-        #[arg(long, value_name = "BYTES")]
-        max_scratch_bytes: Option<u64>,
-        /// Bound the requests issued to a remote or federated endpoint by a `SERVICE`
-        /// clause. The ceiling is enforced and reported like any other; this binary
-        /// configures no federation source, so a `SERVICE` clause fails — or, under
-        /// `SILENT`, is the join identity — before it can be charged.
-        #[arg(long, value_name = "REQUESTS")]
-        max_remote_requests: Option<u64>,
-        /// Bound logical user-function depth. The default is thirty-two.
-        #[arg(long, value_name = "DEPTH", conflicts_with_all = ["unlimited_udf_depth", "explain"])]
-        max_udf_depth: Option<u64>,
-        /// Remove the logical user-function depth ceiling.
-        #[arg(long, conflicts_with_all = ["max_udf_depth", "explain"])]
-        unlimited_udf_depth: bool,
-        /// Decline every ceiling AND all accounting: the query runs as if no governor
-        /// existed, rather than metered against ceilings nothing can reach (the base every
-        /// governed run otherwise starts from). Combines with `--deadline`, which is a stop
-        /// signal rather than a ceiling; refused beside any numeric ceiling, and beside
-        /// `--explain`, which meters by definition.
-        #[arg(long, conflicts_with = "explain")]
-        no_ceiling: bool,
-        /// Print what the engine does with the query and what it costs — the charge
-        /// schedule it was priced under, the per-node ledger with the planner's estimate
-        /// beside the cardinality that materialized, the cost-based join orders, and the
-        /// per-dimension consumption — INSTEAD of the query's answers. The query is
-        /// evaluated to produce it, under the metering profile: every counter engaged at
-        /// a ceiling nothing can reach. The rendering is plain text, so it is refused
-        /// beside every flag that names something about the ANSWERS: a governor flag,
-        /// `--entailment`, `--results-format` (which serialization to use),
-        /// `--loss-ledger` (which lossy transcode to report), and `--jsonld-options`
-        /// (which JSON-LD/YAML-LD serializer to configure) — none of which this lane
-        /// can honor.
-        #[arg(long)]
-        explain: bool,
-        /// Register purrdf's first-party statistical aggregate set (`MEDIAN`,
-        /// `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
-        /// `LAST`, `TOPK`) under this IRI namespace, so the query text can call
-        /// `AGG(<{NAMESPACE}NAME>, args…)`, e.g. `AGG(<https://ex.example/agg#MEDIAN>,
-        /// ?x)`. There is no default namespace (PurRDF mints no vocabulary IRIs of its
-        /// own) — omit this flag and every one of the ten names is an ordinary
-        /// unregistered custom-aggregate IRI, refused at parse time exactly as before.
-        /// This is the CLOSED, namespace-only statistical set; it carries no surface for
-        /// an arbitrary caller-defined aggregate, which is host Rust closures that cannot
-        /// cross this command-line boundary as a string.
-        #[arg(long, value_name = "IRI")]
-        aggregate_namespace: Option<String>,
-        /// Anchor the additive `purrdf` provenance extension under `PREFIX=IRI`
-        /// (e.g. `prov=https://example.org/ns/prov#`) on a SPARQL-results JSON/XML
-        /// `--results-format`. PurRDF mints no vocabulary IRIs of its own — there is no
-        /// default namespace, and omitting this flag emits pure-W3C output exactly as
-        /// before it existed. `PREFIX` must be a valid XML NCName (neither `xml` nor
-        /// `xmlns`) and `IRI` must be an absolute IRI; CSV/TSV have no extension point,
-        /// so this flag is REFUSED (not silently ignored) when combined with
-        /// `--results-format csv`/`tsv`. Read the extension back with
-        /// `purrdf_sparql_results::provenance_from_json`/`provenance_from_xml` under the
-        /// SAME namespace.
-        #[arg(long, value_name = "PREFIX=IRI", value_parser = crate::query::parse_provenance_namespace)]
-        provenance_namespace: Option<(String, String)>,
-        /// Register a PATH-WITNESS relation under `iri=`, callable from predicate
-        /// position as `?start <IRI> ( ?end ?pathId ?len ?step ?node ?edge )`. Repeatable:
-        /// one flag registers one relation. Unlike a property path, which answers only
-        /// with the endpoint pair, this binds the DERIVATION — one row per hop, carrying
-        /// the traversed statement as a first-class RDF 1.2 term — so `GROUP BY ?pathId`
-        /// with `ORDER BY ?step` reassembles the whole walk inside the query language.
-        ///
-        /// The value is semicolon-separated `key=value` pairs:
-        /// `iri=IRI;forward=IRI;inverse=IRI;min-hops=N;max-hops=N;max-paths-per-seed=N;max-expansions=N;mode=walk|shortest`.
-        /// `forward`/`inverse` build the hop's ordered alternation of directed predicates
-        /// and may each repeat; at least one must appear. Every other key is MANDATORY and
-        /// has NO default: PurRDF mints no vocabulary IRIs of its own, so the relation IRI
-        /// is caller-supplied and there is no default namespace, and a traversal envelope
-        /// this binary invented would be a limit the operator never read — a zero-hop path
-        /// has no witness and an unbounded depth is a stack-overflow abort. `mode=walk`
-        /// enumerates every simple-prefix witness (exponential in the worst case);
-        /// `mode=shortest` yields one shortest witness per reachable pair (polynomial).
-        ///
-        /// `;` is legal inside an IRI, so the separator is escapable: write `\;` for a
-        /// literal semicolon and `\\` for a literal backslash. Any other backslash escape
-        /// is refused rather than passed through, so a typo cannot become a predicate that
-        /// registers and then silently matches nothing.
-        ///
-        /// Beside `--entailment`, the step is snapshotted over the CLOSURE — the dataset
-        /// the query is answered over — so a regime that DERIVES a quad under the step's
-        /// predicate widens the walk exactly as it widens a `p+` in the same query. The
-        /// one refused pairing is `--entailment owl-direct` on an ontology whose
-        /// restricted chase mints existential witnesses; the refusal names itself and the
-        /// regimes that accept it.
-        #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
-        path_relation: Vec<crate::path_relation::PathRelationSpec>,
-        /// Evaluate `REGEX` and `REPLACE` under a DATED native XPath pattern law, named by
-        /// its stable edition-dated name: `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second
-        /// Edition) or `xpath-3.1-2017-03-21` (XPath F&O 3.1). Both laws admit
-        /// backreferences; only 3.1 admits non-capturing groups and the `q` flag. A pattern
-        /// the selected law does not define is an expression error, exactly as any other
-        /// invalid pattern is. A pattern or match that exceeds the native law's production
-        /// resource limits fails the whole query (exit 1) naming the refused resource; it is
-        /// never an unbound value, a `false` or a dropped row. Omitted, the compatibility
-        /// pattern engine runs, exactly as before this flag existed. The name is matched
-        /// exactly, and any other value is a usage error listing the accepted names.
-        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
-        xpath_regex: Option<Profile>,
-        /// The precision of an `xsd:integer`/`xsd:decimal` quotient, for `/`, `AVG` and
-        /// the statistical aggregates alike. `exact` answers every quotient with a finite
-        /// decimal expansion exactly and leaves one without (`1 / 3`) unbound, an
-        /// expression error (`err:FOAR0002`, reported on stderr by a governed run); `N`
-        /// keeps `N` fractional
-        /// digits truncated toward zero, and `N:ROUNDING` rounds them instead
-        /// (`toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
-        /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`).
-        /// Omitted, exact when terminating or eighteen digits rounded half to even.
-        #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
-        division: Option<purrdf_sparql_eval::DivisionPolicy>,
-        /// Supply the exact `xsd:dateTime` returned by NOW(), including its fraction
-        /// and timezone. Omitted, execution samples the host clock.
-        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
-        now: Option<String>,
-        /// Supply the unsigned 64-bit seed for RAND(), UUID() and STRUUID().
-        /// Zero is valid. Omitted, execution samples host entropy.
-        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
-        entropy_seed: Option<String>,
-        /// The SPARQL query text.
-        query: String,
-    },
+    Query(QueryArgs),
     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
-    Update {
-        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
-        /// Omitted, native host-clock behavior is unchanged.
-        #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
-        now: Option<String>,
-        /// Initial seed for one random stream across this UPDATE request.
-        /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
-        #[arg(long, value_name = "U64", allow_hyphen_values = true)]
-        entropy_seed: Option<String>,
-        /// Input dataset path; format is inferred from its extension unless `--from` is set.
-        #[arg(long)]
-        data: String,
-        /// Input format override, required when `--data -` reads stdin.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Output path, or `-` for stdout (the default).
-        #[arg(long, default_value = "-")]
-        output: String,
-        /// Output format override, required when `--output -` writes stdout.
-        #[arg(long, value_enum)]
-        to: Option<CliRdfFormat>,
-        /// Base IRI for parsing the data and the UPDATE request, and for the
-        /// mutated dataset on the way out: a `--to` syntax that can express a base
-        /// (turtle, trig, rdfxml, jsonld, yamlld) writes it and relativizes against
-        /// it.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Bound abstract execution steps. Inclusive; zero trips on the first charge.
-        #[arg(long, value_name = "UNITS")]
-        fuel: Option<u64>,
-        /// Wall-clock UPDATE budget (`750ms`, `30s`, `1m30s`, `2h`). A trip applies
-        /// nothing, writes no dataset, prints its receipt, and exits 3.
-        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
-        deadline: Option<std::time::Duration>,
-        /// Bound the largest intermediate solution bag in cells (rows × columns).
-        #[arg(long, value_name = "CELLS")]
-        max_intermediate_cells: Option<u64>,
-        /// Bound bytes minted into the per-request scratch arena.
-        #[arg(long, value_name = "BYTES")]
-        max_scratch_bytes: Option<u64>,
-        /// Bound remote/federated requests issued while computing the mutation.
-        #[arg(long, value_name = "REQUESTS")]
-        max_remote_requests: Option<u64>,
-        /// Bound logical user-function depth. The default is thirty-two.
-        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
-        max_udf_depth: Option<u64>,
-        /// Remove the logical user-function depth ceiling.
-        #[arg(long, conflicts_with = "max_udf_depth")]
-        unlimited_udf_depth: bool,
-        /// Decline every ceiling AND all accounting, rather than metering the mutation
-        /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
-        /// any numeric ceiling.
-        #[arg(long)]
-        no_ceiling: bool,
-        /// Register purrdf's first-party statistical aggregate set under this IRI
-        /// namespace — identical to `query --aggregate-namespace`, reachable from a
-        /// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY`, which
-        /// is the only place SPARQL UPDATE's grammar admits an aggregate. Omit it and
-        /// every one of the ten names stays an unregistered custom-aggregate IRI.
-        #[arg(long, value_name = "IRI")]
-        aggregate_namespace: Option<String>,
-        /// Register a path-witness relation — identical to `query --path-relation`, and
-        /// reachable from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern
-        /// context exactly as a query's is. The relation is snapshotted from the
-        /// PRE-update dataset, which is the same state the `WHERE` clause matches.
-        #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
-        path_relation: Vec<crate::path_relation::PathRelationSpec>,
-        /// Evaluate `REGEX` and `REPLACE` in the request's `WHERE` clauses and templates
-        /// under a dated native XPath pattern law — identical to `query --xpath-regex`. A
-        /// native resource refusal fails the request (exit 1) and applies nothing; omitted,
-        /// the compatibility pattern engine runs.
-        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
-        xpath_regex: Option<Profile>,
-        /// The precision of an `xsd:integer`/`xsd:decimal` quotient in the request's
-        /// `WHERE` clauses and expressions — identical to `query --division`. Omitted,
-        /// exact when terminating or eighteen digits rounded half to even.
-        #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
-        division: Option<purrdf_sparql_eval::DivisionPolicy>,
-        /// Named-graph lifetime: remember-empty retains empty slots until DROP;
-        /// implicit withdraws a graph when its last physical row is removed.
-        #[arg(long, value_name = "MODE", default_value = "remember-empty", value_parser = crate::update::parse_graph_existence)]
-        graph_existence: purrdf_core::GraphExistenceMode,
-        /// The SPARQL UPDATE text.
-        update: String,
-    },
+    Update(UpdateArgs),
     /// Materialize an entailment regime's closure over a source graph.
-    Reason {
-        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
-        import_yamlld_input_options: Vec<String>,
-        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
-        /// Imports keep their current input controls and existing --from policy.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// The entailment regime to close under.
-        #[arg(long, value_enum)]
-        regime: CliRegime,
-        /// RIF-in-XML rule document for `rif`; required by that regime and
-        /// refused for every other (their rule table is the specification's).
-        #[arg(long, value_name = "FILE")]
-        rules: Option<PathBuf>,
-        /// Surface the reasoning report: bare writes it to stderr,
-        /// `--report=PATH` writes it to PATH.
-        #[allow(clippy::option_option)]
-        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
-        report: Option<Option<PathBuf>>,
-        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
-        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
-        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
-        /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
-        /// a run it admits writes exactly the closure a larger limit would.
-        #[arg(long = "max-stored-facts", value_name = "N")]
-        max_stored_facts: Option<u64>,
-        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
-        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
-        /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
-        #[arg(long = "max-join-steps", value_name = "N")]
-        max_join_steps: Option<u64>,
-        /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
-        /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
-        /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
-        #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
-        max_term_arena_bytes: Option<u64>,
-        /// An `owl:imports` the premise declares, resolved to a local document:
-        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
-        /// imports closure to BE the ontology, so the closure is materialized over the
-        /// premise merged with every imported document. PurRDF fetches nothing: an
-        /// `owl:imports` no pair resolves, that does not name the premise document itself
-        /// (its `file://` retrieval IRI or `--base`), and whose ontology the premise does
-        /// not already hold, is refused by name (exit 1), and a pair the closure never
-        /// reaches is refused as unused (exit 2). The premise's imports are the
-        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
-        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
-        /// other is a premise triple. The IRI half must be ABSOLUTE.
-        #[arg(long = "import", value_name = "IRI=FILE")]
-        imports: Vec<String>,
-        /// Input format override (the input and every `--import` document); inferred from
-        /// each path's extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Output format override; inferred from the output extension when omitted.
-        #[arg(long, value_enum)]
-        to: Option<CliRdfFormat>,
-        /// Base IRI, on BOTH legs. A relative IRI in the input resolves against it
-        /// while parsing, and a target syntax that can write a base directive
-        /// (turtle, trig, rdfxml, jsonld, yamlld) emits it as the closure document's
-        /// base and relativizes against it. When omitted, a filesystem input still
-        /// parses under its own `file://` retrieval IRI; stdin has none, so a
-        /// relative IRI there is an error.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Input path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Reason(ReasonArgs),
     /// Decide whether a premise entails a conclusion under an entailment regime.
     Entails {
         /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
@@ -1120,143 +630,11 @@ pub(crate) enum Command {
     /// incomplete rather than failed, and the exit code carries that distinction to a
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
-    Consistency {
-        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
-        import_yamlld_input_options: Vec<String>,
-        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
-        /// Imports keep their current input controls and existing --from policy.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Also record the run's PROOF TERM and print it after the certificate.
-        ///
-        /// Opt-in, and it costs what it records: the completion graph of every tableau run
-        /// the decision made. Without it nothing is recorded and the run is exactly the one
-        /// this command has always made — the verdict and the certificate are byte-identical
-        /// either way, because recording is an observation the reasoner makes of itself
-        /// rather than a lever it reads.
-        ///
-        /// The document is a `purrdf-dl-proof 1` block: a header derived from the term, then
-        /// the term's own canonical bytes as lowercase hex. `--check-proof` verifies one.
-        #[arg(long)]
-        proof: bool,
-        /// CHECK a `purrdf-dl-proof 1` document at PATH against THIS ontology, this question
-        /// and this run's own answer, printing a `purrdf-dl-proof-check 1` report.
-        ///
-        /// Nothing about the check trusts the producer: the ontology is the one named on this
-        /// command line, the question is re-derived here, and the claims are read out of this
-        /// run's own answer. A proof for a different ontology, or a proof of a different
-        /// answer, is refused. A document reading `availability not-recorded` is refused too,
-        /// by name — an answer nobody asked to record is never presented as a verified one.
-        #[arg(long, value_name = "PATH")]
-        check_proof: Option<PathBuf>,
-        /// Narrow the per-decision round cap the ontology's own size already derives;
-        /// `0` (the default) applies no narrowing and runs under the derived cap alone.
-        /// This can only TIGHTEN the cap, never loosen it — mirrors the `step_cap`
-        /// parameter [`purrdf_validate::regime::consistency_to_string`] takes, so a
-        /// caller narrowing here narrows the exact same knob the Python/WASM/C-ABI hosts
-        /// do. A run this narrows into its cap answers `unknown` (exit 3) rather than
-        /// `false`, never the reverse.
-        #[arg(long, value_name = "N", default_value_t = 0)]
-        step_cap: u32,
-        /// Narrow the per-decision WORK cap the ontology's own size already derives; `0`
-        /// (the default) applies no narrowing and runs under the derived cap alone. Like
-        /// `--step-cap` this can only TIGHTEN, and it mirrors the `work_cap` parameter
-        /// [`purrdf_validate::regime::consistency_to_string`] takes.
-        ///
-        /// It bounds what `--step-cap` structurally cannot. A round is a PASS over the
-        /// completion graph rather than a unit of cost, so an ontology can make every
-        /// round enormously more expensive without making the search take more rounds —
-        /// one individual co-typed with several equivalence-defined classes does exactly
-        /// that, and used to grind while the certificate reported a few percent of the
-        /// round budget. This cap counts the matcher, scan, closure and clone work
-        /// itself, and a run that reaches it answers `unknown` (exit 3) with `work` equal
-        /// to `work-budget` in its certificate.
-        #[arg(long, value_name = "N", default_value_t = 0)]
-        work_cap: u32,
-        /// An `owl:imports` the ontology declares, resolved to a local document:
-        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
-        /// imports closure to BE the ontology, so consistency is decided for the ontology
-        /// merged with every imported document, and the certificate names
-        /// `ontology-import-resolved`. PurRDF fetches nothing: an `owl:imports` no pair
-        /// resolves, that does not name the input document itself (its `file://` retrieval
-        /// IRI or `--base`), and whose ontology the input does not already hold, is refused
-        /// by name (exit 1) rather than decided over a smaller ontology, and a pair the
-        /// closure never reaches is refused as unused (exit 2). The input's imports are the
-        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
-        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
-        /// other is an ontology triple. The IRI half must be ABSOLUTE. `--proof` records,
-        /// and `--check-proof` checks, a proof over that merged ontology.
-        #[arg(long = "import", value_name = "IRI=FILE")]
-        imports: Vec<String>,
-        /// Input format override (the input and every `--import` document); inferred from
-        /// each path's extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the input. A PARSE
-        /// base only: this command answers with a verdict and a certificate rather
-        /// than a document, so there is no serializer for one to reach.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Input path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-    },
+    Consistency(ConsistencyArgs),
     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
-    Project {
-        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
-        /// Projection configuration and assets keep their existing input policy.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Closed projection carrier profile.
-        #[arg(long, value_enum)]
-        profile: CliProjectionProfile,
-        /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
-        #[arg(long, value_name = "PATH")]
-        config: String,
-        /// Canonical payload-only USTAR path for attached RO-Crate output.
-        #[arg(long, value_name = "PATH")]
-        assets: Option<String>,
-        /// Input RDF/pack format override; inferred from the input extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing input RDF. A PARSE
-        /// base only: the output is a carrier archive rather than an RDF document,
-        /// so no serializer leg reads it.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Input path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Canonical USTAR output path `OUT`, or `-` for stdout.
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Project(ProjectArgs),
     /// Lift a strict bidirectional graph, tabular, or research-object carrier into RDF.
-    Lift {
-        /// Bidirectional carrier profile; OBO Graphs and SKOS are intentionally absent.
-        #[arg(long, value_enum)]
-        profile: CliLiftProfile,
-        /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
-        #[arg(long, value_name = "PATH")]
-        config: String,
-        /// Native RDF output syntax.
-        #[arg(long, value_enum)]
-        to: CliNativeRdfFormat,
-        /// Base IRI the RDF SERIALIZER writes as the output document's base and
-        /// relativizes against, on a `--to` syntax that can express one (turtle,
-        /// trig, rdfxml, jsonld, yamlld). `lift` reads a USTAR carrier archive
-        /// rather than an RDF document, so there is no parse leg for a base to feed
-        /// and no `file://` retrieval IRI is derived for the input.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Canonical USTAR input path `IN`, or `-` for stdin.
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// RDF output path `OUT`, or `-` for stdout.
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Lift(LiftArgs),
     /// Validate an RDF data graph against a SHACL shapes graph.
     ///
     /// The answer is the W3C SHACL **validation report** — the artifact the SHACL
@@ -1284,313 +662,7 @@ pub(crate) enum Command {
     /// verdict nor the report), so a shell learns the answer without parsing the artifact on
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
-    Validate {
-        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with = "shapes_product")]
-        import_yamlld_input_options: Vec<String>,
-        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
-        /// Shapes, products, imports and change documents keep their existing policy.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Independent YAML-LD Basic input options for the root shapes document only.
-        #[arg(
-            long,
-            value_name = "PATH",
-            requires = "shapes",
-            conflicts_with = "shapes_product"
-        )]
-        shapes_yamlld_input_options: Option<PathBuf>,
-        /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
-        /// Exactly one of this and `--shapes-product` is required: they are two spellings of
-        /// the same input, a document to parse or a preparation to restore.
-        #[arg(
-            long,
-            value_name = "FILE",
-            required_unless_present = "shapes_product",
-            conflicts_with = "shapes_product"
-        )]
-        shapes: Option<String>,
-        /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
-        /// parsing a shapes document. The product carries its own shapes graph, the base it was
-        /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
-        /// `--shapes-from`, `--shapes-graph`, `--shapes-base`, `--import` and
-        /// `--box-role-vocab` name a parse that does not happen here and are refused by name
-        /// rather than accepted and ignored.
-        ///
-        /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
-        /// checked before any of it reaches the validator, and a mismatch is refused on a named
-        /// dimension (written to stderr as `shacl dimension <label>`) rather than validated
-        /// under the wrong configuration. `purrdf shacl explain` reads that binding back
-        /// without admitting it.
-        #[arg(long = "shapes-product", value_name = "FILE")]
-        shapes_product: Option<String>,
-        /// Require `--shapes-product` to be the product whose INPUT BINDING is `HEX` — the
-        /// 64 hexadecimal digits `purrdf shacl explain` prints on its `identity-digest`
-        /// line, passed back unchanged. The restore is refused before anything is decoded
-        /// when the product carries a different binding, so a consumer that names the
-        /// wrong file learns it here instead of receiving a well-formed report about a
-        /// shapes graph nobody asked about.
-        ///
-        /// Everything else `--shapes-product` checks is a question about THIS PROCESS —
-        /// its build, its registries, its class analysis. This is the one question about
-        /// the artifact, and only the caller can ask it: the product cannot know which
-        /// product was wanted. Without it the wrong product validates silently.
-        ///
-        /// Refused against `--shapes`: a shapes DOCUMENT has no prepared binding to
-        /// require, and a flag whose whole job is to fail closed must never be the flag
-        /// that silently did nothing.
-        #[arg(long = "expect-identity", value_name = "HEX")]
-        expect_identity: Option<String>,
-        /// Restore `--shapes-product` from its carried shapes DATASET, re-deriving the
-        /// preparation rather than admitting its memo — the forward-compatibility path
-        /// for a stage id this build does not recognize.
-        ///
-        /// Without this flag, `--shapes-product` refuses such a product on `shacl
-        /// dimension stage-id` and names this flag as the remedy on stderr. With it, no
-        /// RDF text is parsed and no file other than the product itself is read: the
-        /// shapes dataset travels inside the product under its own digests, and this
-        /// re-derives the shapes graph from it.
-        ///
-        /// Also accepted, and does the identical work, when the product's stage id IS
-        /// one this build knows — rebuilding a CURRENT product re-derives from the same
-        /// carried dataset admission would restore a memo of, so the two routes reach
-        /// the byte-identical report. This flag is a second DOOR onto one product, never
-        /// a second, divergent answer.
-        ///
-        /// Composes with `--expect-identity`: the two ask different questions — which
-        /// restore strategy to use, and which artifact was meant — and both are
-        /// answered in full. The expectation is still checked FIRST, exactly as it is
-        /// without this flag, so a product that is not the one required is refused on
-        /// `shapes-graph` before anything is re-derived; `--rebuild` bypasses the memo,
-        /// never the binding a caller required.
-        ///
-        /// Refused against `--shapes`: a shapes DOCUMENT has no memo to skip and no
-        /// carried dataset to re-derive from — it is parsed on this run either way.
-        #[arg(long)]
-        rebuild: bool,
-        /// Shapes-graph format override; inferred from the shapes path's extension when
-        /// omitted. Whatever the syntax, the shapes DOCUMENT's own declarations travel with
-        /// its graph: the prefix map its codec recorded — Turtle's and TriG's
-        /// `@prefix`/`PREFIX`, RDF/XML's `xmlns` — is the fallback prefix environment for
-        /// SHACL-SPARQL and SHACL-AF queries, and the base it declares (`@base`, a root
-        /// `xml:base`, a JSON-LD `@base`) is its own IRI for `owl:imports`. So the same
-        /// shapes graph written in Turtle, TriG or RDF/XML validates identically. A syntax
-        /// that declares no prefixes (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD,
-        /// a pack, GTS) has no fallback, and its queries declare their own `sh:prefixes`.
-        #[arg(long = "shapes-from", value_enum)]
-        shapes_from: Option<CliRdfFormat>,
-        /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
-        /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
-        /// vocabulary IRIs, so there is no default: without this flag and without a
-        /// `sh:shapesGraph` declaration the shapes graph is simply not exposed. A relative
-        /// value resolves against the shapes document's own base — the same base the
-        /// `sh:shapesGraph` it overrides would resolve against — and is refused when the
-        /// shapes graph has none (stdin, or a container).
-        #[arg(long = "shapes-graph", value_name = "IRI")]
-        shapes_graph: Option<String>,
-        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
-        /// of its `file://` retrieval IRI — the same flag `shacl pack --base` is, for the
-        /// shapes document `validate --shapes` parses. It is also the shapes document's own
-        /// IRI for `owl:imports`: an import of it names the document being read, so it needs
-        /// no `--import`. An `@base` inside the document still wins over it there, as Turtle
-        /// specifies. `--shapes-graph` resolves against it too. Stdin has no retrieval IRI,
-        /// so this is the only base a `--shapes -` document can have.
-        ///
-        /// Refused against `--shapes-product`, which recorded the base it was packed under,
-        /// and against a pack or GTS shapes container, which stores resolved IRIs and has no
-        /// base to set.
-        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
-        shapes_base: Option<String>,
-        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
-        /// IRI the shapes document imports, then the file that is it. Repeatable, and
-        /// followed transitively — an imported document's own `owl:imports` are resolved
-        /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
-        /// import is only ever the document the operator named. An import of the shapes
-        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of a
-        /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
-        /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
-        /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
-        /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
-        /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
-        /// node that is only a `sh:DataGraph`, and SHACL's
-        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). The data
-        /// graph's own `owl:imports` are never enacted. Any import no pair resolves
-        /// is refused by name (exit 1) rather than validated as if the shapes graph were
-        /// complete, and a pair the closure never reaches is refused as unused (exit 2).
-        ///
-        /// The same pairs resolve the DATA graph's `sh:shapesGraph` links (SHACL 1.2 Core
-        /// section 6.4): a `sh:shapesGraph` on the data document's own IRI (`--base` or its
-        /// `file://` retrieval IRI) or on a `sh:DataGraph` node names a graph that is folded
-        /// into the shapes graph exactly as an import is — version IRI, own `owl:imports`
-        /// and all — or refused by name (exit 1). On any other node it is data. A
-        /// `--shapes-product` cannot take a graph in, so a link it does not hold is refused.
-        #[arg(long, value_name = "IRI=FILE")]
-        import: Vec<String>,
-        /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
-        /// `purrdf shacl pack --box-role-vocab` records, deriving the six term IRIs
-        /// `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by concatenation
-        /// (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`, `boxConfigBox`).
-        /// PurRDF mints no vocabulary IRIs, so there is no default: without this flag
-        /// the box-role annotation feature is simply INACTIVE — shapes parse fine, and
-        /// no role annotation is collected or stamped on a validation result.
-        ///
-        /// Refused against `--shapes-product`: a product already recorded the
-        /// vocabulary (or its deliberate absence) it was packed under, which its
-        /// identity binds, so it cannot be changed without re-preparing. Pass
-        /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
-        #[arg(long = "box-role-vocab", value_name = "NS")]
-        box_role_vocab: Option<String>,
-        /// A severity IRI in the conformance-disallow set: a result whose severity is in
-        /// the set makes the data non-conforming — the report's `sh:conforms` and every
-        /// nested `sh:node` / `sh:not` / `sh:and` / `sh:or` / `sh:xone` /
-        /// `sh:qualifiedValueShape` check alike — and a result whose severity is not in it
-        /// is reported without blocking. Repeatable; the set is exactly the IRIs named.
-        /// Omitted, the set is SHACL's default, `sh:Violation`, `sh:Warning` and
-        /// `sh:Info` (`sh:Debug` and `sh:Trace` are "not a constraint violation"). A
-        /// non-default set is echoed in the report as `sh:conformanceDisallows`. Each
-        /// value must be an absolute IRI, for example
-        /// `http://www.w3.org/ns/shacl#Violation`; any IRI is a severity, so a custom
-        /// one blocks exactly when it is named here.
-        #[arg(long = "conformance-disallows", value_name = "IRI")]
-        conformance_disallows: Vec<String>,
-        /// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: read the shapes graph's
-        /// `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL
-        /// type decides class membership — `sh:targetClass`, implicit class targets,
-        /// `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Off by default, as the
-        /// specification's default is the data graph alone. Only class membership
-        /// changes: the shapes graph's triples do not become data-graph triples, and
-        /// `rdf:type` triples are still read from the data graph only.
-        #[arg(long = "subclass-of-in-shapes-graph")]
-        subclass_of_in_shapes_graph: bool,
-        /// Data-graph format override; inferred from the input extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
-        /// graph is a separate document and resolves against its OWN `file://` retrieval
-        /// IRI, `--shapes-base`, or its own `@base`, so this flag never silently retargets
-        /// it. A PARSE
-        /// base only: the validation report is a graph the engine mints with absolute
-        /// terms, and it is serialized with no base rather than under this one.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// The rows ADDED to `IN`: the insert half of a change set, as a document in any
-        /// input syntax. Naming either half takes this run down the INCREMENTAL lane —
-        /// the engine expands the change into the focus nodes whose verdict it can move
-        /// and re-validates only those, instead of validating the merged graph whole.
-        ///
-        /// **The report then describes the AFFECTED focus nodes, not the whole graph.**
-        /// `shacl conforms true` on this lane means the change introduced no violation,
-        /// not that `IN` plus the change conforms — a pre-existing violation at a node
-        /// the change cannot reach is not re-reported, which is the entire saving. For
-        /// those affected nodes the results are identical, and in the identical order, to
-        /// what a full validation of the merged graph reports about them.
-        ///
-        /// A shapes graph that reads through SPARQL query text has no bounded change
-        /// footprint, and such a run validates the merged graph in FULL rather than
-        /// under-reporting. Which of the two happened is always written to stderr as a
-        /// `shacl change-expansion bounded N` or `shacl change-expansion everything
-        /// <reason>` line, so the scope of a verdict is never guessed at.
-        ///
-        /// With neither half named, this command behaves exactly as it did before the
-        /// flag existed.
-        #[arg(long, value_name = "FILE")]
-        changes: Option<String>,
-        /// Independent YAML-LD Basic input options for this change document only.
-        #[arg(long, value_name = "PATH", requires = "changes")]
-        changes_yamlld_input_options: Option<PathBuf>,
-        /// The rows REMOVED from `IN`: the retract half of a change set, and the reason
-        /// `--changes` alone would be half of one — a SHACL verdict moves when a row
-        /// leaves the graph just as readily as when one joins it.
-        ///
-        /// Composes with `--changes`: a change set may add rows, remove rows, or both,
-        /// and the expansion covers every focus node either direction can move. A row
-        /// named here that `IN` does not carry retracts nothing, which is a no-op rather
-        /// than an error — the same contract `remove` carries everywhere else in PurRDF.
-        ///
-        /// Takes the identical incremental lane `--changes` does; see it for what the
-        /// resulting report does and does not describe.
-        #[arg(long = "changes-removed", value_name = "FILE")]
-        changes_removed: Option<String>,
-        /// Independent YAML-LD Basic input options for this change document only.
-        #[arg(long, value_name = "PATH", requires = "changes_removed")]
-        changes_removed_yamlld_input_options: Option<PathBuf>,
-        /// Change-document format override for `--changes` and `--changes-removed`;
-        /// inferred from each path's extension when omitted. Both halves are read as the
-        /// same syntax, because they are two halves of one change set.
-        ///
-        /// Refused when neither half is named: there would be no document for it to
-        /// label, and a format flag that silently named nothing is the no-op this
-        /// pipeline refuses everywhere else.
-        #[arg(long = "changes-from", value_enum)]
-        changes_from: Option<CliRdfFormat>,
-        /// How to serialize the validation report: an RDF syntax for the SHACL results
-        /// graph (the default, `ntriples`), or `sarif` for SARIF 2.1.0 JSON.
-        #[arg(long, value_enum, default_value = "ntriples")]
-        format: ValidateFormat,
-        /// Bound the abstract execution steps every SHACL-SPARQL and SHACL-AF path in the
-        /// validation charges, against ONE budget for the whole run. Inclusive; `0` trips at
-        /// the first charge. Core constraint evaluation reads the IR directly and charges
-        /// nothing, so a shapes graph with no SPARQL in it validates under any budget.
-        #[arg(long, value_name = "UNITS")]
-        fuel: Option<u64>,
-        /// Wall-clock VALIDATION budget (`750ms`, `30s`, `1m30s`, `2h`). A trip writes no
-        /// report, prints the governor receipt to stderr, and exits 3.
-        #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
-        deadline: Option<std::time::Duration>,
-        /// Bound the largest intermediate solution bag, in cells (rows × columns), across
-        /// every SPARQL path the validation runs.
-        #[arg(long, value_name = "CELLS")]
-        max_intermediate_cells: Option<u64>,
-        /// Bound the bytes minted into the per-validation scratch arena.
-        #[arg(long, value_name = "BYTES")]
-        max_scratch_bytes: Option<u64>,
-        /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
-        #[arg(long, value_name = "REQUESTS")]
-        max_remote_requests: Option<u64>,
-        /// Bound logical user-function depth. The default is thirty-two.
-        #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
-        max_udf_depth: Option<u64>,
-        /// Remove the logical user-function depth ceiling.
-        #[arg(long, conflicts_with = "max_udf_depth")]
-        unlimited_udf_depth: bool,
-        /// Decline every ceiling AND all accounting, rather than metering the validation
-        /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
-        /// any numeric ceiling.
-        #[arg(long)]
-        no_ceiling: bool,
-        /// Evaluate every pattern the validation decides — `sh:pattern` (with its
-        /// `sh:flags`), and `REGEX`/`REPLACE` in SHACL-SPARQL targets, constraints and
-        /// functions — under a dated native XPath pattern law: `xpath-2.0-2010-12-14` or
-        /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
-        /// non-capturing groups and the `q` flag. A pattern the selected law does not
-        /// define is reported as it always is, as a finding of the shape that declares it.
-        /// A pattern or match that exceeds the native law's production resource limits
-        /// fails the run (exit 1) with no report. Applies to `--shapes` and
-        /// `--shapes-product` alike, and to the `--changes` lane. Omitted, the
-        /// compatibility pattern engine runs, exactly as before this flag existed.
-        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
-        xpath_regex: Option<Profile>,
-        /// Validate under one exact, dated SHACL law, named by its stable id:
-        /// `shacl-rec-2017-07-20` (the 2017 Recommendation), `shacl-wd-2026-09-18` (the
-        /// SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the data-shapes editor's draft
-        /// the W3C SHACL 1.2 test suite is graded under). The id is decoded once, exactly,
-        /// by `purrdf_validate::complete_profile`; an id it does not know is refused with
-        /// its `unsupported-profile` status (exit 2), never mapped to a nearby edition.
-        /// A dated law carries its own XPath pattern law, so `--xpath-regex` may only name
-        /// that same law: `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`
-        /// is a usage error (exit 2). Applies to `--shapes` and `--shapes-product` alike
-        /// (a product stores no SHACL law; the restore takes it from this request) and to
-        /// the `--changes` lane. Omitted, the compatibility law runs, exactly as before this
-        /// flag existed.
-        #[arg(long = "shacl-profile", value_name = "ID")]
-        shacl_profile: Option<String>,
-        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Report path `OUT`, or `-` for stdout (the default).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Validate(ValidateArgs),
     /// Validate RDF nodes against a ShEx 2.1 schema through a query shape map.
     ///
     /// The answer is the ShapeMap specification's **result shape map**: a JSON array of
@@ -1607,71 +679,7 @@ pub(crate) enum Command {
     ///
     /// The one-line verdict (`shex conformant true|false`) and the entry counts are ALWAYS
     /// written to stderr, for the reason `validate`'s are.
-    Shex {
-        /// The ShEx schema `FILE`, or `-` for stdin (which requires `--schema-from`).
-        #[arg(long, value_name = "FILE")]
-        schema: String,
-        /// Schema syntax override; inferred from the schema path's extension when omitted
-        /// (`.shex`/`.shexc` → `shexc`, `.json`/`.shexj` → `shexj`).
-        #[arg(long = "schema-from", value_enum)]
-        schema_from: Option<CliShexFormat>,
-        /// An `IMPORT` the schema declares, resolved to a local document: repeatable,
-        /// `IRI=FILE`. PurRDF fetches nothing, so an import no pair resolves is refused by
-        /// name rather than treated as an empty schema — and a pair the schema's import
-        /// closure never reaches is refused too, rather than silently unused. Each imported
-        /// document's syntax is inferred from its own extension. The IRI half must be
-        /// ABSOLUTE — it is matched against the schema's `IMPORT` IRIs, which are, and it is
-        /// the base its document parses under — and a relative or malformed one is refused
-        /// against the argument before any document is opened.
-        #[arg(long = "import", value_name = "IRI=FILE")]
-        imports: Vec<String>,
-        /// Data-graph path, or `-` for stdin (which requires `--from`).
-        #[arg(long)]
-        data: String,
-        /// Bounded YAML-LD Basic input options for the data graph only.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Data-graph format override; inferred from `--data`'s extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Base IRI for the relative IRIs of the DATA graph and the MAP. It OVERRIDES the
-        /// data graph's own `file://` retrieval IRI, and it is the only base the MAP can
-        /// ever have (a shape map is command-line text, so it has no retrieval IRI) — which
-        /// is why this flag is never inert here and never refused, even against a pack or
-        /// GTS data source that cannot spend it. NOT the schema's: `--schema` is an independent
-        /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
-        /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
-        /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
-        /// Each `--import`ed document likewise resolves against the import IRI.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Evaluate every ShEx string-facet `PATTERN` (`/…/flags` in ShExC, `pattern` and
-        /// `flags` in ShExJ) under a dated native XPath pattern law: `xpath-2.0-2010-12-14`
-        /// or `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1
-        /// admits non-capturing groups and the `q` flag. A pattern the selected law does not
-        /// define fails its facet, as it always does. A pattern or match that exceeds the
-        /// native law's production resource limits fails the whole shape map (exit 1), with
-        /// no result shape map written. Omitted, the compatibility pattern engine runs,
-        /// exactly as before this flag existed.
-        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
-        xpath_regex: Option<Profile>,
-        /// Maximum assignment-prefix states per ambiguous neighbourhood, including
-        /// terminal cardinality checks. Exhaustion fails the whole shape map.
-        #[arg(long, value_name = "COUNT", default_value_t = 200_000)]
-        matcher_maximum_states: u64,
-        /// The query shape map: `<node>@<shape>` associations separated by commas, where a
-        /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
-        /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
-        /// `<label>`. Its grammar admits no prefixed name, and a relative IRI in it resolves
-        /// against `--base` alone; both are decided against the argument before any document
-        /// is opened. A label the schema does not declare is a separate failure, and cannot
-        /// be decided until the schema has been read.
-        #[arg(value_name = "MAP")]
-        map: String,
-        /// Result-shape-map path `OUT`, or `-` for stdout (the default).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Shex(ShexArgs),
     /// Extract the Symmetric Concise Bounded Description of one or more resources.
     ///
     /// The SCBD is what `purrdf_core::describe` computes and what SPARQL `DESCRIBE` returns
@@ -1689,42 +697,7 @@ pub(crate) enum Command {
     /// verb, `--loss-ledger` and `--jsonld-options` apply to it exactly as they do to
     /// `convert` — a description whose statement layer cannot survive the target syntax
     /// records the drop instead of losing it silently.
-    Describe {
-        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// A resource to describe: repeatable, and at least one is required. Several are
-        /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
-        /// as several documents. A RELATIVE reference resolves against the base in force —
-        /// the same base the data graph parses under, so `--iri alice` denotes what
-        /// `<alice>` written inside the document denotes — and one with no base in scope is
-        /// refused rather than silently matching nothing. An IRI the graph does not mention
-        /// is a legitimate EMPTY description, not an error.
-        #[arg(long = "iri", value_name = "IRI", required = true)]
-        iris: Vec<String>,
-        /// Input format override; inferred from the input extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Output format override; inferred from the output extension when omitted.
-        #[arg(long, value_enum)]
-        to: Option<CliRdfFormat>,
-        /// Base IRI, on THREE legs: relative IRIs in the input resolve against it while
-        /// parsing, every `--iri` selector resolves against it, and a `--to` syntax that can
-        /// write a base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
-        /// description's base and relativizes against it. When omitted, a filesystem input
-        /// is still parsed — and its `--iri` selectors resolved — under its own `file://`
-        /// retrieval IRI. Because `--iri` is required and always resolves against it, this
-        /// flag is never inert here and is never refused, even against a pack or GTS source
-        /// whose own syntax could not spend it.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Input path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Describe(DescribeArgs),
     /// Pack container utilities.
     Pack {
         /// The pack subcommand to run.
@@ -1772,191 +745,7 @@ pub(crate) enum Command {
     /// to stdout. It exits **0** when the rule set passes, **1** when a check refuses it
     /// (naming the stage), and **2** for a usage error or an `--import` pair the closure
     /// never reaches, exactly as a run would.
-    Rules {
-        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with_all = ["srl", "check"])]
-        import_yamlld_input_options: Vec<String>,
-        /// Exact caller-supplied `xsd:dateTime` for every rule query's `NOW()`.
-        /// Omitted, the native host-clock behavior is unchanged.
-        #[arg(
-            long,
-            value_name = "XSD_DATE_TIME",
-            allow_hyphen_values = true,
-            conflicts_with = "check"
-        )]
-        now: Option<String>,
-        /// Initial unsigned seed for the rule execution's query-seed sequence.
-        /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
-        #[arg(
-            long,
-            value_name = "U64",
-            allow_hyphen_values = true,
-            conflicts_with = "check"
-        )]
-        entropy_seed: Option<String>,
-        /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
-        /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
-        /// required: a shapes graph and a SPARQL 1.2 RL rule set are two rule sets, and
-        /// neither specification defines running them as one.
-        #[arg(
-            long,
-            value_name = "FILE",
-            required_unless_present = "srl",
-            conflicts_with = "srl"
-        )]
-        shapes: Option<String>,
-        /// Shapes-graph format override; inferred from the shapes path's extension when
-        /// omitted.
-        #[arg(long = "shapes-from", value_enum, requires = "shapes")]
-        shapes_from: Option<CliRdfFormat>,
-        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
-        /// of its `file://` retrieval IRI; also its own IRI for `owl:imports`. The same flag
-        /// `validate --shapes-base` is.
-        #[arg(
-            long = "shapes-base",
-            value_name = "IRI",
-            value_parser = parse_base_iri,
-            requires = "shapes"
-        )]
-        shapes_base: Option<String>,
-        /// Expose the shapes graph to the SHACL-SPARQL rules as a named graph under this
-        /// IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s `$shapesGraph` is
-        /// pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. PurRDF
-        /// mints no vocabulary IRIs, so there is no default: without this flag
-        /// `$shapesGraph` is an ordinary variable. A relative value resolves against the
-        /// shapes document's base and is refused when it has none. A SPARQL 1.2 RL rule set
-        /// has no shapes graph, so the flag requires `--shapes`.
-        #[arg(long = "shapes-graph", value_name = "IRI", requires = "shapes")]
-        shapes_graph: Option<String>,
-        /// The SPARQL 1.2 RL rule-set `FILE`, or `-` for stdin.
-        #[arg(long, value_name = "FILE")]
-        srl: Option<String>,
-        /// Base IRI the rule set's relative IRI references resolve against, in place of its
-        /// `file://` retrieval IRI. Stdin has no retrieval IRI, so this is the only base a
-        /// `--srl -` rule set can have.
-        #[arg(
-            long = "srl-base",
-            value_name = "IRI",
-            value_parser = parse_base_iri,
-            requires = "srl"
-        )]
-        srl_base: Option<String>,
-        /// Resolve an import of the rule source to a LOCAL document: an `owl:imports` of
-        /// the shapes graph, or an `IMPORTS` of the SPARQL 1.2 RL rule set. Repeatable and
-        /// followed transitively. PurRDF fetches nothing, so an import no pair resolves is
-        /// refused by name (exit 1), and a pair the imports never reach is refused as
-        /// unused (exit 2).
-        #[arg(long, value_name = "IRI=FILE")]
-        import: Vec<String>,
-        /// Check the `--srl` rule set and evaluate NOTHING: no data graph is read and no
-        /// rule runs. `LEVEL` is how far the check goes, each level including the ones
-        /// before it: `syntax` (the SPARQL 1.2 RL grammar, the rule set and every document
-        /// its imports read), `well-formed` (every rule, imported ones included, is well
-        /// formed) or `stratified` (the combined rule set can be stratified — every static
-        /// check a run applies before it evaluates). Bare `--check` is `--check=stratified`.
-        /// On success one summary line goes to stdout; a refusal names the stage and exits 1.
-        /// The data-graph, output, proof and limit flags configure an evaluation, which a
-        /// check does not run, so they are refused beside it.
-        #[arg(
-            long,
-            value_enum,
-            value_name = "LEVEL",
-            num_args = 0..=1,
-            require_equals = true,
-            default_missing_value = "stratified",
-            requires = "srl",
-            conflicts_with_all = [
-                "explain",
-                "max_term_generating_rounds",
-                "max_generated_terms",
-                "max_stored_facts",
-                "max_join_steps",
-                "from",
-                "to",
-                "base",
-                "input",
-                "output",
-            ]
-        )]
-        check: Option<CliSrlCheckLevel>,
-        /// Write the PROOF of every inferred triple: bare writes it to stderr,
-        /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
-        /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
-        /// per fact the rule's body matched (a SHACL rule executed as one producer over the
-        /// whole graph — every rule but a global SPARQL rule whose query is a conjunctive
-        /// pattern — lists none), or `  data-block` for a SPARQL 1.2 RL data-block
-        /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
-        #[allow(clippy::option_option)]
-        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
-        explain: Option<Option<PathBuf>>,
-        /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did
-        /// not hold; one more fails the run naming the limit, the numbers and the rules
-        /// that inferred a new term last. Omitted, the limit is 16384 rounds: a rule
-        /// stepping a value to 10,000 completes, and one counting with no bound is refused
-        /// in well under a second. A rule set that needs more states it here.
-        #[arg(long = "max-term-generating-rounds", value_name = "N")]
-        max_term_generating_rounds: Option<u64>,
-        /// Permit exactly `N` terms inferred beyond the input's; one more fails the run
-        /// naming the budget and the numbers. Omitted, the budget is max(65536, 4 × T)
-        /// for T distinct input terms: a rule set whose new terms multiply every
-        /// iteration is refused within a few iterations. A rule set that needs more
-        /// states it here.
-        #[arg(long = "max-generated-terms", value_name = "N")]
-        max_generated_terms: Option<u64>,
-        /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
-        /// data and every inferred triple; one more fails the run naming the limit and the
-        /// numbers. Omitted, no logical ceiling is applied.
-        /// The limit can only refuse: a run it admits writes exactly the
-        /// inference graph a larger limit would.
-        #[arg(long = "max-stored-facts", value_name = "N")]
-        max_stored_facts: Option<u64>,
-        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
-        /// one more fails the run naming the limit and the numbers. Omitted, no logical
-        /// ceiling is applied. It bounds a rule body that enumerates far more candidates than
-        /// it infers triples.
-        #[arg(long = "max-join-steps", value_name = "N")]
-        max_join_steps: Option<u64>,
-        /// Evaluate every pattern the rules decide — `REGEX`/`REPLACE` in a `sh:SPARQLRule`,
-        /// a SHACL-AF function, a node expression or a SPARQL 1.2 RL filter or assignment,
-        /// and `sh:pattern` in a rule's condition or filter shape — under a dated native
-        /// XPath pattern law: `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`, named
-        /// exactly. Both admit backreferences; only 3.1 admits non-capturing groups and the
-        /// `q` flag. A pattern the selected law does not define behaves as an ill-formed
-        /// pattern always does (an expression error, a nonconforming value). A pattern or
-        /// match that exceeds the native law's production resource limits fails the run
-        /// (exit 1) with no graph written. Omitted, the compatibility pattern engine runs,
-        /// exactly as before this flag existed.
-        #[arg(
-            long,
-            value_name = "PROFILE",
-            value_parser = XPathRegexParser,
-            conflicts_with = "check"
-        )]
-        xpath_regex: Option<Profile>,
-        /// Data-graph format override; inferred from the input extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Bounded YAML-LD Basic input options for the primary data graph only.
-        #[arg(long, value_name = "PATH", conflicts_with = "check")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Independent YAML-LD Basic input options for the root shapes document only.
-        #[arg(long, value_name = "PATH", requires = "shapes", conflicts_with_all = ["srl", "check"])]
-        shapes_yamlld_input_options: Option<PathBuf>,
-        /// Output format override; inferred from the output extension when omitted.
-        #[arg(long, value_enum)]
-        to: Option<CliRdfFormat>,
-        /// Base IRI, on BOTH legs of the data: a relative IRI in `IN` resolves against it
-        /// while parsing, and a `--to` syntax that can write a base directive emits it as
-        /// the inference graph's base and relativizes against it.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    Rules(RulesArgs),
     /// Evaluate ONE node expression of a shapes graph against a focus node of a data graph
     /// — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode, scope)`.
     ///
@@ -1992,99 +781,1373 @@ pub(crate) enum Command {
             .multiple(false)
             .args(["expr", "expr_at", "expr_turtle", "expr_turtle_file"])
     ))]
-    NodeExpr {
-        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
-        #[arg(long, value_name = "IRI=PATH", requires = "import")]
-        import_yamlld_input_options: Vec<String>,
-        /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
-        /// requires `--shapes-from`).
-        #[arg(long, value_name = "FILE")]
-        shapes: String,
-        /// Shapes-graph format override; inferred from the shapes path's extension when
-        /// omitted.
-        #[arg(long = "shapes-from", value_enum)]
-        shapes_from: Option<CliRdfFormat>,
-        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
-        /// of its `file://` retrieval IRI.
-        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
-        shapes_base: Option<String>,
-        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
-        /// --import` does.
-        #[arg(long, value_name = "IRI=FILE")]
-        import: Vec<String>,
-        /// The expression node: an absolute IRI, or `_:LABEL` for a blank node the shapes
-        /// document labels `_:LABEL`. An IRI that is the subject of no triple is a constant
-        /// expression, evaluating to itself; a label the document never wrote is refused.
-        #[arg(long, value_name = "IRI|_:LABEL")]
-        expr: Option<String>,
-        /// Name the expression by a walk: start from this node (an absolute IRI, or
-        /// `_:LABEL`) and follow each `--expr-via` predicate in turn. Every step must reach
-        /// exactly one value of the shapes graph; none or several is refused, naming the
-        /// step and the count.
-        #[arg(long = "expr-at", value_name = "IRI|_:LABEL", requires = "expr_via")]
-        expr_at: Option<String>,
-        /// One predicate (an absolute IRI) of the `--expr-at` walk. Repeatable, followed
-        /// in the order given.
-        #[arg(long = "expr-via", value_name = "IRI", requires = "expr_at")]
-        expr_via: Vec<String>,
-        /// The expression, inline, as a Turtle document read under the shapes document's
-        /// prefixes and base (its own directives outrank them), e.g. `'[ sh:path ex:p ] .'`.
-        /// Its blank nodes are standardized apart from the shapes document's.
-        #[arg(long = "expr-turtle", value_name = "TURTLE")]
-        expr_turtle: Option<String>,
-        /// `--expr-turtle`, read from `FILE` (`-` is not accepted: stdin is `IN`'s or
-        /// `--shapes`').
-        #[arg(long = "expr-turtle-file", value_name = "FILE")]
-        expr_turtle_file: Option<String>,
-        /// The focus node: an absolute IRI, or any N-Triples 1.2 term (`"-3"^^<…>`,
-        /// `_:b`, …). A blank node names the node the data document labels so.
-        #[arg(long, value_name = "TERM")]
-        focus: String,
-        /// Bind a scope variable, read by `shnex:var "NAME"`: `NAME=TERM`, the term spelled
-        /// as `--focus` is. Repeatable; a name bound twice, and the name `focusNode` (which
-        /// SHACL 1.2 Node Expressions resolves to the focus node before the scope is
-        /// searched), are refused, since neither binding could ever be read.
-        #[arg(long, value_name = "NAME=TERM")]
-        scope: Vec<String>,
-        /// Exact dated SHACL law; omitted, preserves compatibility behavior.
-        #[arg(long = "shacl-profile", value_name = "ID")]
-        shacl_profile: Option<String>,
-        /// Evaluate every pattern the expression decides — `sh:pattern` in a filter shape,
-        /// and `REGEX`/`REPLACE` in a function call or a SPARQL-based expression — under a
-        /// dated native XPath pattern law: `xpath-2.0-2010-12-14` or
-        /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
-        /// non-capturing groups and the `q` flag. A pattern the selected law does not define
-        /// behaves as an ill-formed pattern always does. A pattern or match that exceeds the
-        /// native law's production resource limits fails the run (exit 1) with no output.
-        /// Omitted, the compatibility pattern engine runs, exactly as before this flag
-        /// existed.
-        #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
-        xpath_regex: Option<Profile>,
-        /// Data-graph format override; inferred from the input extension when omitted.
-        #[arg(long, value_enum)]
-        from: Option<CliRdfFormat>,
-        /// Bounded YAML-LD Basic input options for the primary data graph only.
-        #[arg(long, value_name = "PATH")]
-        yamlld_input_options: Option<PathBuf>,
-        /// Independent YAML-LD Basic input options for the root shapes document only.
-        #[arg(long, value_name = "PATH", requires = "shapes")]
-        shapes_yamlld_input_options: Option<PathBuf>,
-        /// Base IRI for resolving relative IRIs while parsing the DATA graph.
-        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
-        base: Option<String>,
-        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
-        #[arg(value_name = "IN", default_value = "-")]
-        input: String,
-        /// Output path `OUT`, or `-` for stdout (the default).
-        #[arg(value_name = "OUT", default_value = "-")]
-        output: String,
-    },
+    NodeExpr(NodeExprArgs),
     /// Shapes-graph authoring tools.
     Shapes {
         /// The shapes subcommand to run.
         #[command(subcommand)]
         command: ShapesCommand,
     },
+}
+
+// The arguments of the `Convert` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ConvertArgs {
+    /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Closed version-one YAML-LD Basic input-options JSON file.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Input format override; inferred from each input's extension when omitted.
+    /// Applies to EVERY source in the list, including each `--input`.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// An ADDITIONAL input source, repeatable. The effective ordered source list
+    /// is the positional `IN` followed by each `--input` in the order written;
+    /// two or more sources are merged with the deterministic dataset union, under
+    /// a separate blank-node scope per source.
+    #[arg(long = "input", value_name = "PATH")]
+    pub inputs: Vec<String>,
+    /// How a gzip/zstd transport wrapper around each input is handled: `auto`
+    /// sniffs the leading bytes then the filename suffix, `none` reads the bytes
+    /// verbatim, and `gzip`/`zstd` decode under exactly that encoding. A
+    /// truncated or corrupt stream is always a hard failure, never a short read.
+    #[arg(long, value_enum, value_name = "ENCODING", default_value = "auto")]
+    pub transport: CliTransport,
+    /// Output format override; inferred from the output extension when omitted.
+    #[arg(long, value_enum)]
+    pub to: Option<CliRdfFormat>,
+    /// Base IRI, on BOTH legs of the conversion. A relative IRI in the input
+    /// resolves against it while parsing, and a target syntax that can write a
+    /// base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
+    /// output document's base and relativizes against it; a target that cannot
+    /// (ntriples, nquads, trix, hextuples) writes absolute IRIs. When omitted, a
+    /// filesystem input still parses under its own `file://` retrieval IRI —
+    /// stdin has none, so a relative IRI there is an error — and no base is
+    /// written on output.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Materialize an entailment regime's closure in memory before
+    /// serializing (applied before `--canonical`).
+    #[arg(long, value_enum, value_name = "REGIME")]
+    pub entailment: Option<CliRegime>,
+    /// RIF-in-XML rule document for `rif`; required by that regime and
+    /// refused for every other (their rule table is the specification's).
+    #[arg(long, value_name = "FILE")]
+    pub rules: Option<PathBuf>,
+    /// Surface the reasoning report for `--entailment`: bare writes it to
+    /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
+    #[allow(clippy::option_option)]
+    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    pub report: Option<Option<PathBuf>>,
+    /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+    /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+    /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+    /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
+    /// a run it admits writes exactly the closure a larger limit would.
+    #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+    pub max_stored_facts: Option<u64>,
+    /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+    /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+    /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
+    #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+    pub max_join_steps: Option<u64>,
+    /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+    /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+    /// the limit and the numbers. Omitted, no logical ceiling is applied.
+    #[arg(
+        long = "max-term-arena-bytes",
+        value_name = "BYTES",
+        requires = "entailment"
+    )]
+    pub max_term_arena_bytes: Option<u64>,
+    /// An `owl:imports` the premise declares, resolved to a local document:
+    /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+    /// imports closure to BE the ontology, so the `--entailment` closure is
+    /// materialized over the premise — the merged sources — with every imported document. PurRDF fetches nothing: an
+    /// `owl:imports` no pair resolves, that does not name the premise document itself
+    /// (a source's `file://` retrieval IRI or `--base`), and whose ontology the premise does
+    /// not already hold, is refused by name (exit 1), and a pair the closure never
+    /// reaches is refused as unused (exit 2). The premise's imports are the
+    /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+    /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+    /// other is a premise triple. The IRI half must be ABSOLUTE.
+    #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+    pub imports: Vec<String>,
+    /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
+    /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
+    /// ignored) when named beside `--canonical`, since it would otherwise be
+    /// accepted and never read. Combine with `--entailment` to canonicalize the
+    /// closure.
+    #[arg(long)]
+    pub canonical: bool,
+    /// First input path `IN`, or `-` for stdin (which requires `--from`). Every
+    /// `--input` is appended AFTER this one.
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Query` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct QueryArgs {
+    /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+    /// Premise imports keep their default input policy.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Data-source path (format inferred from its extension). A pack file is
+    /// queried zero-copy (unless `--entailment` forces materialization).
+    #[arg(long)]
+    pub data: String,
+    /// Base IRI for resolving relative IRIs while parsing the data AND in the
+    /// query text. A CONSTRUCT/DESCRIBE graph written through an RDF
+    /// `--results-format` that can express a base (turtle, trig, rdfxml, jsonld,
+    /// yamlld) is additionally serialized under it; a SPARQL-results
+    /// serialization has no base surface to carry one.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Materialize an entailment regime's closure in memory before querying
+    /// (the query then runs over the closure, not the raw view). Combines with
+    /// every governor flag: the ceilings bound the QUERY over the closure, and
+    /// `--deadline` additionally bounds computing the closure itself. The query
+    /// governors never become limits on the reasoning run; `--max-stored-facts`,
+    /// `--max-join-steps` and `--max-term-arena-bytes` are its limits. Like every
+    /// evaluation limit they can only refuse, never truncate a closure. A deadline that expires while the
+    /// closure is still being computed prints the governor report, writes no rows,
+    /// and exits 3.
+    #[arg(long, value_enum, value_name = "REGIME")]
+    pub entailment: Option<CliRegime>,
+    /// RIF-in-XML rule document for `rif`; required by that regime and
+    /// refused for every other (their rule table is the specification's).
+    #[arg(long, value_name = "FILE")]
+    pub rules: Option<PathBuf>,
+    /// Surface the reasoning report for `--entailment`: bare writes it to
+    /// stderr, `--report=PATH` writes it to PATH. Requires `--entailment`.
+    #[allow(clippy::option_option)]
+    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    pub report: Option<Option<PathBuf>>,
+    /// An `owl:imports` the data declares, resolved to a local document:
+    /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+    /// imports closure to BE the ontology, so the `--entailment` closure the query
+    /// runs over is materialized over the data merged with every imported document.
+    /// PurRDF fetches nothing: an `owl:imports` no pair resolves, that does not name
+    /// the data document itself (its `file://` retrieval IRI or `--base`), and whose
+    /// ontology the data does not already hold, is refused by name (exit 1), and a
+    /// pair the closure never reaches is refused as unused (exit 2). The data's
+    /// imports are the `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+    /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+    /// other is a data triple. The IRI half must be ABSOLUTE; each document's format
+    /// is inferred from its extension.
+    #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+    pub imports: Vec<String>,
+    /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
+    /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
+    /// run (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is
+    /// applied. The limit can only refuse: a run it admits answers over exactly the
+    /// closure a larger limit would.
+    #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+    pub max_stored_facts: Option<u64>,
+    /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+    /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
+    /// `d` regimes; one more fails the run (exit 1). Omitted, no logical ceiling is applied.
+    #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+    pub max_join_steps: Option<u64>,
+    /// Permit exactly `BYTES` bytes of interned term spellings while materializing the
+    /// `rdf`, `rdfs`, `owl-rl` or `d` closure; one more fails the run (exit 1) naming
+    /// the limit and the numbers. Omitted, no logical ceiling is applied.
+    #[arg(
+        long = "max-term-arena-bytes",
+        value_name = "BYTES",
+        requires = "entailment"
+    )]
+    pub max_term_arena_bytes: Option<u64>,
+    /// Result serialization: a SPARQL-results format (json/xml/csv/tsv, its media
+    /// type, or `srj`, in any case) for SELECT/ASK, or an RDF syntax
+    /// (turtle/trig/…) for CONSTRUCT/DESCRIBE. Defaults to `json` when omitted. `None` here (the flag genuinely
+    /// absent, not merely defaulted) is load-bearing: it is what lets
+    /// `--explain` tell "the operator asked for a serialization" apart from
+    /// "nothing was named" and refuse the former (see
+    /// `crate::query::refuse_unenforceable_combinations`) rather than
+    /// silently ignore it.
+    #[arg(long, value_parser = QueryFormatParser)]
+    pub results_format: Option<QueryFormat>,
+    /// Bound the query's abstract execution steps. The unit is the engine's own
+    /// charge schedule, which `--explain` prints, so a fuel budget is comparable
+    /// only against the same schedule. The ceiling is inclusive, and `0` is a valid
+    /// one that trips at the first charge. A trip prints the answers it certified
+    /// and exits 3.
+    #[arg(long, value_name = "UNITS")]
+    pub fuel: Option<u64>,
+    /// Bound the query's wall-clock EVALUATION time: a run of count+unit components
+    /// over `ms`, `s`, `m`, `h` (`750ms`, `30s`, `1m30s`, `2h`). The budget starts
+    /// when evaluation starts — reading and parsing the data source happen before
+    /// it — and the engine observes it when it enters an algebra node, so an
+    /// evaluation overruns it by at most one operator rather than being killed
+    /// mid-step. This is not a timeout on the process.
+    #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+    pub deadline: Option<std::time::Duration>,
+    /// Bound the ANSWER SEQUENCE: solution rows for SELECT, output statements for
+    /// CONSTRUCT/DESCRIBE (an ASK boolean has no sequence to bound). This is an
+    /// operational ceiling and never `LIMIT`: `LIMIT` is query semantics and applies
+    /// before this is tested. Inclusive.
+    #[arg(long, value_name = "ROWS")]
+    pub max_answers: Option<u64>,
+    /// Bound the largest INTERMEDIATE solution bag, in cells (rows × columns) — the
+    /// ceiling that actually bounds allocation. Compared against the largest single
+    /// bag rather than a running total, and a plan whose ESTIMATED peak already
+    /// exceeds it is refused before evaluation starts.
+    #[arg(long, value_name = "CELLS")]
+    pub max_intermediate_cells: Option<u64>,
+    /// Bound the bytes value-constructing operations mint into the per-query scratch
+    /// arena, which grow independently of any row or cell count.
+    #[arg(long, value_name = "BYTES")]
+    pub max_scratch_bytes: Option<u64>,
+    /// Bound the requests issued to a remote or federated endpoint by a `SERVICE`
+    /// clause. The ceiling is enforced and reported like any other; this binary
+    /// configures no federation source, so a `SERVICE` clause fails — or, under
+    /// `SILENT`, is the join identity — before it can be charged.
+    #[arg(long, value_name = "REQUESTS")]
+    pub max_remote_requests: Option<u64>,
+    /// Bound logical user-function depth. The default is thirty-two.
+    #[arg(long, value_name = "DEPTH", conflicts_with_all = ["unlimited_udf_depth", "explain"])]
+    pub max_udf_depth: Option<u64>,
+    /// Remove the logical user-function depth ceiling.
+    #[arg(long, conflicts_with_all = ["max_udf_depth", "explain"])]
+    pub unlimited_udf_depth: bool,
+    /// Decline every ceiling AND all accounting: the query runs as if no governor
+    /// existed, rather than metered against ceilings nothing can reach (the base every
+    /// governed run otherwise starts from). Combines with `--deadline`, which is a stop
+    /// signal rather than a ceiling; refused beside any numeric ceiling, and beside
+    /// `--explain`, which meters by definition.
+    #[arg(long, conflicts_with = "explain")]
+    pub no_ceiling: bool,
+    /// Print what the engine does with the query and what it costs — the charge
+    /// schedule it was priced under, the per-node ledger with the planner's estimate
+    /// beside the cardinality that materialized, the cost-based join orders, and the
+    /// per-dimension consumption — INSTEAD of the query's answers. The query is
+    /// evaluated to produce it, under the metering profile: every counter engaged at
+    /// a ceiling nothing can reach. The rendering is plain text, so it is refused
+    /// beside every flag that names something about the ANSWERS: a governor flag,
+    /// `--entailment`, `--results-format` (which serialization to use),
+    /// `--loss-ledger` (which lossy transcode to report), and `--jsonld-options`
+    /// (which JSON-LD/YAML-LD serializer to configure) — none of which this lane
+    /// can honor.
+    #[arg(long)]
+    pub explain: bool,
+    /// Register purrdf's first-party statistical aggregate set (`MEDIAN`,
+    /// `PERCENTILE`, `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`,
+    /// `LAST`, `TOPK`) under this IRI namespace, so the query text can call
+    /// `AGG(<{NAMESPACE}NAME>, args…)`, e.g. `AGG(<https://ex.example/agg#MEDIAN>,
+    /// ?x)`. There is no default namespace (PurRDF mints no vocabulary IRIs of its
+    /// own) — omit this flag and every one of the ten names is an ordinary
+    /// unregistered custom-aggregate IRI, refused at parse time exactly as before.
+    /// This is the CLOSED, namespace-only statistical set; it carries no surface for
+    /// an arbitrary caller-defined aggregate, which is host Rust closures that cannot
+    /// cross this command-line boundary as a string.
+    #[arg(long, value_name = "IRI")]
+    pub aggregate_namespace: Option<String>,
+    /// Anchor the additive `purrdf` provenance extension under `PREFIX=IRI`
+    /// (e.g. `prov=https://example.org/ns/prov#`) on a SPARQL-results JSON/XML
+    /// `--results-format`. PurRDF mints no vocabulary IRIs of its own — there is no
+    /// default namespace, and omitting this flag emits pure-W3C output exactly as
+    /// before it existed. `PREFIX` must be a valid XML NCName (neither `xml` nor
+    /// `xmlns`) and `IRI` must be an absolute IRI; CSV/TSV have no extension point,
+    /// so this flag is REFUSED (not silently ignored) when combined with
+    /// `--results-format csv`/`tsv`. Read the extension back with
+    /// `purrdf_sparql_results::provenance_from_json`/`provenance_from_xml` under the
+    /// SAME namespace.
+    #[arg(long, value_name = "PREFIX=IRI", value_parser = crate::query::parse_provenance_namespace)]
+    pub provenance_namespace: Option<(String, String)>,
+    /// Register a PATH-WITNESS relation under `iri=`, callable from predicate
+    /// position as `?start <IRI> ( ?end ?pathId ?len ?step ?node ?edge )`. Repeatable:
+    /// one flag registers one relation. Unlike a property path, which answers only
+    /// with the endpoint pair, this binds the DERIVATION — one row per hop, carrying
+    /// the traversed statement as a first-class RDF 1.2 term — so `GROUP BY ?pathId`
+    /// with `ORDER BY ?step` reassembles the whole walk inside the query language.
+    ///
+    /// The value is semicolon-separated `key=value` pairs:
+    /// `iri=IRI;forward=IRI;inverse=IRI;min-hops=N;max-hops=N;max-paths-per-seed=N;max-expansions=N;mode=walk|shortest`.
+    /// `forward`/`inverse` build the hop's ordered alternation of directed predicates
+    /// and may each repeat; at least one must appear. Every other key is MANDATORY and
+    /// has NO default: PurRDF mints no vocabulary IRIs of its own, so the relation IRI
+    /// is caller-supplied and there is no default namespace, and a traversal envelope
+    /// this binary invented would be a limit the operator never read — a zero-hop path
+    /// has no witness and an unbounded depth is a stack-overflow abort. `mode=walk`
+    /// enumerates every simple-prefix witness (exponential in the worst case);
+    /// `mode=shortest` yields one shortest witness per reachable pair (polynomial).
+    ///
+    /// `;` is legal inside an IRI, so the separator is escapable: write `\;` for a
+    /// literal semicolon and `\\` for a literal backslash. Any other backslash escape
+    /// is refused rather than passed through, so a typo cannot become a predicate that
+    /// registers and then silently matches nothing.
+    ///
+    /// Beside `--entailment`, the step is snapshotted over the CLOSURE — the dataset
+    /// the query is answered over — so a regime that DERIVES a quad under the step's
+    /// predicate widens the walk exactly as it widens a `p+` in the same query. The
+    /// one refused pairing is `--entailment owl-direct` on an ontology whose
+    /// restricted chase mints existential witnesses; the refusal names itself and the
+    /// regimes that accept it.
+    #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
+    pub path_relation: Vec<crate::path_relation::PathRelationSpec>,
+    /// Evaluate `REGEX` and `REPLACE` under a DATED native XPath pattern law, named by
+    /// its stable edition-dated name: `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second
+    /// Edition) or `xpath-3.1-2017-03-21` (XPath F&O 3.1). Both laws admit
+    /// backreferences; only 3.1 admits non-capturing groups and the `q` flag. A pattern
+    /// the selected law does not define is an expression error, exactly as any other
+    /// invalid pattern is. A pattern or match that exceeds the native law's production
+    /// resource limits fails the whole query (exit 1) naming the refused resource; it is
+    /// never an unbound value, a `false` or a dropped row. Omitted, the compatibility
+    /// pattern engine runs, exactly as before this flag existed. The name is matched
+    /// exactly, and any other value is a usage error listing the accepted names.
+    #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+    pub xpath_regex: Option<Profile>,
+    /// The precision of an `xsd:integer`/`xsd:decimal` quotient, for `/`, `AVG` and
+    /// the statistical aggregates alike. `exact` answers every quotient with a finite
+    /// decimal expansion exactly and leaves one without (`1 / 3`) unbound, an
+    /// expression error (`err:FOAR0002`, reported on stderr by a governed run); `N`
+    /// keeps `N` fractional
+    /// digits truncated toward zero, and `N:ROUNDING` rounds them instead
+    /// (`toward-zero`, `away-from-zero`, `floor`, `ceiling`, `half-even`,
+    /// `half-away-from-zero`, `half-toward-zero`, `half-ceiling`, `half-floor`).
+    /// Omitted, exact when terminating or eighteen digits rounded half to even.
+    #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
+    pub division: Option<purrdf_sparql_eval::DivisionPolicy>,
+    /// Supply the exact `xsd:dateTime` returned by NOW(), including its fraction
+    /// and timezone. Omitted, execution samples the host clock.
+    #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+    pub now: Option<String>,
+    /// Supply the unsigned 64-bit seed for RAND(), UUID() and STRUUID().
+    /// Zero is valid. Omitted, execution samples host entropy.
+    #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+    pub entropy_seed: Option<String>,
+    /// The SPARQL query text.
+    pub query: String,
+}
+
+// The arguments of the `Update` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct UpdateArgs {
+    /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
+    /// Omitted, native host-clock behavior is unchanged.
+    #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+    pub now: Option<String>,
+    /// Initial seed for one random stream across this UPDATE request.
+    /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
+    #[arg(long, value_name = "U64", allow_hyphen_values = true)]
+    pub entropy_seed: Option<String>,
+    /// Input dataset path; format is inferred from its extension unless `--from` is set.
+    #[arg(long)]
+    pub data: String,
+    /// Input format override, required when `--data -` reads stdin.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Output path, or `-` for stdout (the default).
+    #[arg(long, default_value = "-")]
+    pub output: String,
+    /// Output format override, required when `--output -` writes stdout.
+    #[arg(long, value_enum)]
+    pub to: Option<CliRdfFormat>,
+    /// Base IRI for parsing the data and the UPDATE request, and for the
+    /// mutated dataset on the way out: a `--to` syntax that can express a base
+    /// (turtle, trig, rdfxml, jsonld, yamlld) writes it and relativizes against
+    /// it.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Bound abstract execution steps. Inclusive; zero trips on the first charge.
+    #[arg(long, value_name = "UNITS")]
+    pub fuel: Option<u64>,
+    /// Wall-clock UPDATE budget (`750ms`, `30s`, `1m30s`, `2h`). A trip applies
+    /// nothing, writes no dataset, prints its receipt, and exits 3.
+    #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+    pub deadline: Option<std::time::Duration>,
+    /// Bound the largest intermediate solution bag in cells (rows × columns).
+    #[arg(long, value_name = "CELLS")]
+    pub max_intermediate_cells: Option<u64>,
+    /// Bound bytes minted into the per-request scratch arena.
+    #[arg(long, value_name = "BYTES")]
+    pub max_scratch_bytes: Option<u64>,
+    /// Bound remote/federated requests issued while computing the mutation.
+    #[arg(long, value_name = "REQUESTS")]
+    pub max_remote_requests: Option<u64>,
+    /// Bound logical user-function depth. The default is thirty-two.
+    #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+    pub max_udf_depth: Option<u64>,
+    /// Remove the logical user-function depth ceiling.
+    #[arg(long, conflicts_with = "max_udf_depth")]
+    pub unlimited_udf_depth: bool,
+    /// Decline every ceiling AND all accounting, rather than metering the mutation
+    /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
+    /// any numeric ceiling.
+    #[arg(long)]
+    pub no_ceiling: bool,
+    /// Register purrdf's first-party statistical aggregate set under this IRI
+    /// namespace — identical to `query --aggregate-namespace`, reachable from a
+    /// `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY`, which
+    /// is the only place SPARQL UPDATE's grammar admits an aggregate. Omit it and
+    /// every one of the ten names stays an unregistered custom-aggregate IRI.
+    #[arg(long, value_name = "IRI")]
+    pub aggregate_namespace: Option<String>,
+    /// Register a path-witness relation — identical to `query --path-relation`, and
+    /// reachable from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern
+    /// context exactly as a query's is. The relation is snapshotted from the
+    /// PRE-update dataset, which is the same state the `WHERE` clause matches.
+    #[arg(long, value_name = "SPEC", value_parser = crate::path_relation::parse_path_relation)]
+    pub path_relation: Vec<crate::path_relation::PathRelationSpec>,
+    /// Evaluate `REGEX` and `REPLACE` in the request's `WHERE` clauses and templates
+    /// under a dated native XPath pattern law — identical to `query --xpath-regex`. A
+    /// native resource refusal fails the request (exit 1) and applies nothing; omitted,
+    /// the compatibility pattern engine runs.
+    #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+    pub xpath_regex: Option<Profile>,
+    /// The precision of an `xsd:integer`/`xsd:decimal` quotient in the request's
+    /// `WHERE` clauses and expressions — identical to `query --division`. Omitted,
+    /// exact when terminating or eighteen digits rounded half to even.
+    #[arg(long, value_name = "POLICY", value_parser = crate::query::parse_division)]
+    pub division: Option<purrdf_sparql_eval::DivisionPolicy>,
+    /// Named-graph lifetime: remember-empty retains empty slots until DROP;
+    /// implicit withdraws a graph when its last physical row is removed.
+    #[arg(long, value_name = "MODE", default_value = "remember-empty", value_parser = crate::update::parse_graph_existence)]
+    pub graph_existence: purrdf_core::GraphExistenceMode,
+    /// The SPARQL UPDATE text.
+    pub update: String,
+}
+
+// The arguments of the `Reason` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ReasonArgs {
+    /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+    /// Imports keep their current input controls and existing --from policy.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// The entailment regime to close under.
+    #[arg(long, value_enum)]
+    pub regime: CliRegime,
+    /// RIF-in-XML rule document for `rif`; required by that regime and
+    /// refused for every other (their rule table is the specification's).
+    #[arg(long, value_name = "FILE")]
+    pub rules: Option<PathBuf>,
+    /// Surface the reasoning report: bare writes it to stderr,
+    /// `--report=PATH` writes it to PATH.
+    #[allow(clippy::option_option)]
+    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    pub report: Option<Option<PathBuf>>,
+    /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+    /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+    /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+    /// and the numbers. Omitted, no logical ceiling is applied. The limit can only refuse:
+    /// a run it admits writes exactly the closure a larger limit would.
+    #[arg(long = "max-stored-facts", value_name = "N")]
+    pub max_stored_facts: Option<u64>,
+    /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+    /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+    /// naming the limit and the numbers. Omitted, no logical ceiling is applied.
+    #[arg(long = "max-join-steps", value_name = "N")]
+    pub max_join_steps: Option<u64>,
+    /// Permit exactly `BYTES` bytes of interned term spellings in each evaluation
+    /// store for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run
+    /// (exit 1) naming the limit and the numbers. Omitted, no logical ceiling is applied.
+    #[arg(long = "max-term-arena-bytes", value_name = "BYTES")]
+    pub max_term_arena_bytes: Option<u64>,
+    /// An `owl:imports` the premise declares, resolved to a local document:
+    /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+    /// imports closure to BE the ontology, so the closure is materialized over the
+    /// premise merged with every imported document. PurRDF fetches nothing: an
+    /// `owl:imports` no pair resolves, that does not name the premise document itself
+    /// (its `file://` retrieval IRI or `--base`), and whose ontology the premise does
+    /// not already hold, is refused by name (exit 1), and a pair the closure never
+    /// reaches is refused as unused (exit 2). The premise's imports are the
+    /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+    /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+    /// other is a premise triple. The IRI half must be ABSOLUTE.
+    #[arg(long = "import", value_name = "IRI=FILE")]
+    pub imports: Vec<String>,
+    /// Input format override (the input and every `--import` document); inferred from
+    /// each path's extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Output format override; inferred from the output extension when omitted.
+    #[arg(long, value_enum)]
+    pub to: Option<CliRdfFormat>,
+    /// Base IRI, on BOTH legs. A relative IRI in the input resolves against it
+    /// while parsing, and a target syntax that can write a base directive
+    /// (turtle, trig, rdfxml, jsonld, yamlld) emits it as the closure document's
+    /// base and relativizes against it. When omitted, a filesystem input still
+    /// parses under its own `file://` retrieval IRI; stdin has none, so a
+    /// relative IRI there is an error.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Input path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Consistency` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ConsistencyArgs {
+    /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+    /// Imports keep their current input controls and existing --from policy.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Also record the run's PROOF TERM and print it after the certificate.
+    ///
+    /// Opt-in, and it costs what it records: the completion graph of every tableau run
+    /// the decision made. Without it nothing is recorded and the run is exactly the one
+    /// this command has always made — the verdict and the certificate are byte-identical
+    /// either way, because recording is an observation the reasoner makes of itself
+    /// rather than a lever it reads.
+    ///
+    /// The document is a `purrdf-dl-proof 1` block: a header derived from the term, then
+    /// the term's own canonical bytes as lowercase hex. `--check-proof` verifies one.
+    #[arg(long)]
+    pub proof: bool,
+    /// CHECK a `purrdf-dl-proof 1` document at PATH against THIS ontology, this question
+    /// and this run's own answer, printing a `purrdf-dl-proof-check 1` report.
+    ///
+    /// Nothing about the check trusts the producer: the ontology is the one named on this
+    /// command line, the question is re-derived here, and the claims are read out of this
+    /// run's own answer. A proof for a different ontology, or a proof of a different
+    /// answer, is refused. A document reading `availability not-recorded` is refused too,
+    /// by name — an answer nobody asked to record is never presented as a verified one.
+    #[arg(long, value_name = "PATH")]
+    pub check_proof: Option<PathBuf>,
+    /// Narrow the per-decision round cap the ontology's own size already derives;
+    /// `0` (the default) applies no narrowing and runs under the derived cap alone.
+    /// This can only TIGHTEN the cap, never loosen it — mirrors the `step_cap`
+    /// parameter [`purrdf_validate::regime::consistency_to_string`] takes, so a
+    /// caller narrowing here narrows the exact same knob the Python/WASM/C-ABI hosts
+    /// do. A run this narrows into its cap answers `unknown` (exit 3) rather than
+    /// `false`, never the reverse.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub step_cap: u32,
+    /// Narrow the per-decision WORK cap the ontology's own size already derives; `0`
+    /// (the default) applies no narrowing and runs under the derived cap alone. Like
+    /// `--step-cap` this can only TIGHTEN, and it mirrors the `work_cap` parameter
+    /// [`purrdf_validate::regime::consistency_to_string`] takes.
+    ///
+    /// It bounds what `--step-cap` structurally cannot. A round is a PASS over the
+    /// completion graph rather than a unit of cost, so an ontology can make every
+    /// round enormously more expensive without making the search take more rounds —
+    /// one individual co-typed with several equivalence-defined classes does exactly
+    /// that, and used to grind while the certificate reported a few percent of the
+    /// round budget. This cap counts the matcher, scan, closure and clone work
+    /// itself, and a run that reaches it answers `unknown` (exit 3) with `work` equal
+    /// to `work-budget` in its certificate.
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub work_cap: u32,
+    /// An `owl:imports` the ontology declares, resolved to a local document:
+    /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+    /// imports closure to BE the ontology, so consistency is decided for the ontology
+    /// merged with every imported document, and the certificate names
+    /// `ontology-import-resolved`. PurRDF fetches nothing: an `owl:imports` no pair
+    /// resolves, that does not name the input document itself (its `file://` retrieval
+    /// IRI or `--base`), and whose ontology the input does not already hold, is refused
+    /// by name (exit 1) rather than decided over a smaller ontology, and a pair the
+    /// closure never reaches is refused as unused (exit 2). The input's imports are the
+    /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+    /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+    /// other is an ontology triple. The IRI half must be ABSOLUTE. `--proof` records,
+    /// and `--check-proof` checks, a proof over that merged ontology.
+    #[arg(long = "import", value_name = "IRI=FILE")]
+    pub imports: Vec<String>,
+    /// Input format override (the input and every `--import` document); inferred from
+    /// each path's extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Base IRI for resolving relative IRIs while parsing the input. A PARSE
+    /// base only: this command answers with a verdict and a certificate rather
+    /// than a document, so there is no serializer for one to reach.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Input path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+}
+
+// The arguments of the `Project` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ProjectArgs {
+    /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+    /// Projection configuration and assets keep their existing input policy.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Closed projection carrier profile.
+    #[arg(long, value_enum)]
+    pub profile: CliProjectionProfile,
+    /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
+    #[arg(long, value_name = "PATH")]
+    pub config: String,
+    /// Canonical payload-only USTAR path for attached RO-Crate output.
+    #[arg(long, value_name = "PATH")]
+    pub assets: Option<String>,
+    /// Input RDF/pack format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Base IRI for resolving relative IRIs while parsing input RDF. A PARSE
+    /// base only: the output is a carrier archive rather than an RDF document,
+    /// so no serializer leg reads it.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Input path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Canonical USTAR output path `OUT`, or `-` for stdout.
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Lift` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct LiftArgs {
+    /// Bidirectional carrier profile; OBO Graphs and SKOS are intentionally absent.
+    #[arg(long, value_enum)]
+    pub profile: CliLiftProfile,
+    /// Profile-tagged mandatory JSON configuration path, or `-` for stdin.
+    #[arg(long, value_name = "PATH")]
+    pub config: String,
+    /// Native RDF output syntax.
+    #[arg(long, value_enum)]
+    pub to: CliNativeRdfFormat,
+    /// Base IRI the RDF SERIALIZER writes as the output document's base and
+    /// relativizes against, on a `--to` syntax that can express one (turtle,
+    /// trig, rdfxml, jsonld, yamlld). `lift` reads a USTAR carrier archive
+    /// rather than an RDF document, so there is no parse leg for a base to feed
+    /// and no `file://` retrieval IRI is derived for the input.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Canonical USTAR input path `IN`, or `-` for stdin.
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// RDF output path `OUT`, or `-` for stdout.
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Validate` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+// Each bool is an independent command-line switch, not a state machine; the fields
+// were already these switches when they sat inline in the enum variant.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(clap::Args, Debug)]
+pub(crate) struct ValidateArgs {
+    /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with = "shapes_product")]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+    /// Shapes, products, imports and change documents keep their existing policy.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Independent YAML-LD Basic input options for the root shapes document only.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "shapes",
+        conflicts_with = "shapes_product"
+    )]
+    pub shapes_yamlld_input_options: Option<PathBuf>,
+    /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
+    /// Exactly one of this and `--shapes-product` is required: they are two spellings of
+    /// the same input, a document to parse or a preparation to restore.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "shapes_product",
+        conflicts_with = "shapes_product"
+    )]
+    pub shapes: Option<String>,
+    /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
+    /// parsing a shapes document. The product carries its own shapes graph, the base it was
+    /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
+    /// `--shapes-from`, `--shapes-graph`, `--shapes-base`, `--import` and
+    /// `--box-role-vocab` name a parse that does not happen here and are refused by name
+    /// rather than accepted and ignored.
+    ///
+    /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
+    /// checked before any of it reaches the validator, and a mismatch is refused on a named
+    /// dimension (written to stderr as `shacl dimension <label>`) rather than validated
+    /// under the wrong configuration. `purrdf shacl explain` reads that binding back
+    /// without admitting it.
+    #[arg(long = "shapes-product", value_name = "FILE")]
+    pub shapes_product: Option<String>,
+    /// Require `--shapes-product` to be the product whose INPUT BINDING is `HEX` — the
+    /// 64 hexadecimal digits `purrdf shacl explain` prints on its `identity-digest`
+    /// line, passed back unchanged. The restore is refused before anything is decoded
+    /// when the product carries a different binding, so a consumer that names the
+    /// wrong file learns it here instead of receiving a well-formed report about a
+    /// shapes graph nobody asked about.
+    ///
+    /// Everything else `--shapes-product` checks is a question about THIS PROCESS —
+    /// its build, its registries, its class analysis. This is the one question about
+    /// the artifact, and only the caller can ask it: the product cannot know which
+    /// product was wanted. Without it the wrong product validates silently.
+    ///
+    /// Refused against `--shapes`: a shapes DOCUMENT has no prepared binding to
+    /// require, and a flag whose whole job is to fail closed must never be the flag
+    /// that silently did nothing.
+    #[arg(long = "expect-identity", value_name = "HEX")]
+    pub expect_identity: Option<String>,
+    /// Restore `--shapes-product` from its carried shapes DATASET, re-deriving the
+    /// preparation rather than admitting its memo — the forward-compatibility path
+    /// for a stage id this build does not recognize.
+    ///
+    /// Without this flag, `--shapes-product` refuses such a product on `shacl
+    /// dimension stage-id` and names this flag as the remedy on stderr. With it, no
+    /// RDF text is parsed and no file other than the product itself is read: the
+    /// shapes dataset travels inside the product under its own digests, and this
+    /// re-derives the shapes graph from it.
+    ///
+    /// Also accepted, and does the identical work, when the product's stage id IS
+    /// one this build knows — rebuilding a CURRENT product re-derives from the same
+    /// carried dataset admission would restore a memo of, so the two routes reach
+    /// the byte-identical report. This flag is a second DOOR onto one product, never
+    /// a second, divergent answer.
+    ///
+    /// Composes with `--expect-identity`: the two ask different questions — which
+    /// restore strategy to use, and which artifact was meant — and both are
+    /// answered in full. The expectation is still checked FIRST, exactly as it is
+    /// without this flag, so a product that is not the one required is refused on
+    /// `shapes-graph` before anything is re-derived; `--rebuild` bypasses the memo,
+    /// never the binding a caller required.
+    ///
+    /// Refused against `--shapes`: a shapes DOCUMENT has no memo to skip and no
+    /// carried dataset to re-derive from — it is parsed on this run either way.
+    #[arg(long)]
+    pub rebuild: bool,
+    /// Shapes-graph format override; inferred from the shapes path's extension when
+    /// omitted. Whatever the syntax, the shapes DOCUMENT's own declarations travel with
+    /// its graph: the prefix map its codec recorded — Turtle's and TriG's
+    /// `@prefix`/`PREFIX`, RDF/XML's `xmlns` — is the fallback prefix environment for
+    /// SHACL-SPARQL and SHACL-AF queries, and the base it declares (`@base`, a root
+    /// `xml:base`, a JSON-LD `@base`) is its own IRI for `owl:imports`. So the same
+    /// shapes graph written in Turtle, TriG or RDF/XML validates identically. A syntax
+    /// that declares no prefixes (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD,
+    /// a pack, GTS) has no fallback, and its queries declare their own `sh:prefixes`.
+    #[arg(long = "shapes-from", value_enum)]
+    pub shapes_from: Option<CliRdfFormat>,
+    /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
+    /// overriding a `sh:shapesGraph` the shapes document declares. PurRDF mints no
+    /// vocabulary IRIs, so there is no default: without this flag and without a
+    /// `sh:shapesGraph` declaration the shapes graph is simply not exposed. A relative
+    /// value resolves against the shapes document's own base — the same base the
+    /// `sh:shapesGraph` it overrides would resolve against — and is refused when the
+    /// shapes graph has none (stdin, or a container).
+    #[arg(long = "shapes-graph", value_name = "IRI")]
+    pub shapes_graph: Option<String>,
+    /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+    /// of its `file://` retrieval IRI — the same flag `shacl pack --base` is, for the
+    /// shapes document `validate --shapes` parses. It is also the shapes document's own
+    /// IRI for `owl:imports`: an import of it names the document being read, so it needs
+    /// no `--import`. An `@base` inside the document still wins over it there, as Turtle
+    /// specifies. `--shapes-graph` resolves against it too. Stdin has no retrieval IRI,
+    /// so this is the only base a `--shapes -` document can have.
+    ///
+    /// Refused against `--shapes-product`, which recorded the base it was packed under,
+    /// and against a pack or GTS shapes container, which stores resolved IRIs and has no
+    /// base to set.
+    #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+    pub shapes_base: Option<String>,
+    /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
+    /// IRI the shapes document imports, then the file that is it. Repeatable, and
+    /// followed transitively — an imported document's own `owl:imports` are resolved
+    /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
+    /// import is only ever the document the operator named. An import of the shapes
+    /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of a
+    /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
+    /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
+    /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
+    /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
+    /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
+    /// node that is only a `sh:DataGraph`, and SHACL's
+    /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). The data
+    /// graph's own `owl:imports` are never enacted. Any import no pair resolves
+    /// is refused by name (exit 1) rather than validated as if the shapes graph were
+    /// complete, and a pair the closure never reaches is refused as unused (exit 2).
+    ///
+    /// The same pairs resolve the DATA graph's `sh:shapesGraph` links (SHACL 1.2 Core
+    /// section 6.4): a `sh:shapesGraph` on the data document's own IRI (`--base` or its
+    /// `file://` retrieval IRI) or on a `sh:DataGraph` node names a graph that is folded
+    /// into the shapes graph exactly as an import is — version IRI, own `owl:imports`
+    /// and all — or refused by name (exit 1). On any other node it is data. A
+    /// `--shapes-product` cannot take a graph in, so a link it does not hold is refused.
+    #[arg(long, value_name = "IRI=FILE")]
+    pub import: Vec<String>,
+    /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
+    /// `purrdf shacl pack --box-role-vocab` records, deriving the six term IRIs
+    /// `purrdf_shapes::model::BoxRoleVocab::for_namespace` mints by concatenation
+    /// (`graphBoxRole`, `boxABox`, `boxTBox`, `boxRBox`, `boxCBox`, `boxConfigBox`).
+    /// PurRDF mints no vocabulary IRIs, so there is no default: without this flag
+    /// the box-role annotation feature is simply INACTIVE — shapes parse fine, and
+    /// no role annotation is collected or stamped on a validation result.
+    ///
+    /// Refused against `--shapes-product`: a product already recorded the
+    /// vocabulary (or its deliberate absence) it was packed under, which its
+    /// identity binds, so it cannot be changed without re-preparing. Pass
+    /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
+    #[arg(long = "box-role-vocab", value_name = "NS")]
+    pub box_role_vocab: Option<String>,
+    /// A severity IRI in the conformance-disallow set: a result whose severity is in
+    /// the set makes the data non-conforming — the report's `sh:conforms` and every
+    /// nested `sh:node` / `sh:not` / `sh:and` / `sh:or` / `sh:xone` /
+    /// `sh:qualifiedValueShape` check alike — and a result whose severity is not in it
+    /// is reported without blocking. Repeatable; the set is exactly the IRIs named.
+    /// Omitted, the set is SHACL's default, `sh:Violation`, `sh:Warning` and
+    /// `sh:Info` (`sh:Debug` and `sh:Trace` are "not a constraint violation"). A
+    /// non-default set is echoed in the report as `sh:conformanceDisallows`. Each
+    /// value must be an absolute IRI, for example
+    /// `http://www.w3.org/ns/shacl#Violation`; any IRI is a severity, so a custom
+    /// one blocks exactly when it is named here.
+    #[arg(long = "conformance-disallows", value_name = "IRI")]
+    pub conformance_disallows: Vec<String>,
+    /// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: read the shapes graph's
+    /// `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL
+    /// type decides class membership — `sh:targetClass`, implicit class targets,
+    /// `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Off by default, as the
+    /// specification's default is the data graph alone. Only class membership
+    /// changes: the shapes graph's triples do not become data-graph triples, and
+    /// `rdf:type` triples are still read from the data graph only.
+    #[arg(long = "subclass-of-in-shapes-graph")]
+    pub subclass_of_in_shapes_graph: bool,
+    /// Data-graph format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
+    /// graph is a separate document and resolves against its OWN `file://` retrieval
+    /// IRI, `--shapes-base`, or its own `@base`, so this flag never silently retargets
+    /// it. A PARSE
+    /// base only: the validation report is a graph the engine mints with absolute
+    /// terms, and it is serialized with no base rather than under this one.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// The rows ADDED to `IN`: the insert half of a change set, as a document in any
+    /// input syntax. Naming either half takes this run down the INCREMENTAL lane —
+    /// the engine expands the change into the focus nodes whose verdict it can move
+    /// and re-validates only those, instead of validating the merged graph whole.
+    ///
+    /// **The report then describes the AFFECTED focus nodes, not the whole graph.**
+    /// `shacl conforms true` on this lane means the change introduced no violation,
+    /// not that `IN` plus the change conforms — a pre-existing violation at a node
+    /// the change cannot reach is not re-reported, which is the entire saving. For
+    /// those affected nodes the results are identical, and in the identical order, to
+    /// what a full validation of the merged graph reports about them.
+    ///
+    /// A shapes graph that reads through SPARQL query text has no bounded change
+    /// footprint, and such a run validates the merged graph in FULL rather than
+    /// under-reporting. Which of the two happened is always written to stderr as a
+    /// `shacl change-expansion bounded N` or `shacl change-expansion everything
+    /// <reason>` line, so the scope of a verdict is never guessed at.
+    ///
+    /// With neither half named, this command behaves exactly as it did before the
+    /// flag existed.
+    #[arg(long, value_name = "FILE")]
+    pub changes: Option<String>,
+    /// Independent YAML-LD Basic input options for this change document only.
+    #[arg(long, value_name = "PATH", requires = "changes")]
+    pub changes_yamlld_input_options: Option<PathBuf>,
+    /// The rows REMOVED from `IN`: the retract half of a change set, and the reason
+    /// `--changes` alone would be half of one — a SHACL verdict moves when a row
+    /// leaves the graph just as readily as when one joins it.
+    ///
+    /// Composes with `--changes`: a change set may add rows, remove rows, or both,
+    /// and the expansion covers every focus node either direction can move. A row
+    /// named here that `IN` does not carry retracts nothing, which is a no-op rather
+    /// than an error — the same contract `remove` carries everywhere else in PurRDF.
+    ///
+    /// Takes the identical incremental lane `--changes` does; see it for what the
+    /// resulting report does and does not describe.
+    #[arg(long = "changes-removed", value_name = "FILE")]
+    pub changes_removed: Option<String>,
+    /// Independent YAML-LD Basic input options for this change document only.
+    #[arg(long, value_name = "PATH", requires = "changes_removed")]
+    pub changes_removed_yamlld_input_options: Option<PathBuf>,
+    /// Change-document format override for `--changes` and `--changes-removed`;
+    /// inferred from each path's extension when omitted. Both halves are read as the
+    /// same syntax, because they are two halves of one change set.
+    ///
+    /// Refused when neither half is named: there would be no document for it to
+    /// label, and a format flag that silently named nothing is the no-op this
+    /// pipeline refuses everywhere else.
+    #[arg(long = "changes-from", value_enum)]
+    pub changes_from: Option<CliRdfFormat>,
+    /// How to serialize the validation report: an RDF syntax for the SHACL results
+    /// graph (the default, `ntriples`), or `sarif` for SARIF 2.1.0 JSON.
+    #[arg(long, value_enum, default_value = "ntriples")]
+    pub format: ValidateFormat,
+    /// Bound the abstract execution steps every SHACL-SPARQL and SHACL-AF path in the
+    /// validation charges, against ONE budget for the whole run. Inclusive; `0` trips at
+    /// the first charge. Core constraint evaluation reads the IR directly and charges
+    /// nothing, so a shapes graph with no SPARQL in it validates under any budget.
+    #[arg(long, value_name = "UNITS")]
+    pub fuel: Option<u64>,
+    /// Wall-clock VALIDATION budget (`750ms`, `30s`, `1m30s`, `2h`). A trip writes no
+    /// report, prints the governor receipt to stderr, and exits 3.
+    #[arg(long, value_name = "DURATION", value_parser = crate::governors::parse_deadline)]
+    pub deadline: Option<std::time::Duration>,
+    /// Bound the largest intermediate solution bag, in cells (rows × columns), across
+    /// every SPARQL path the validation runs.
+    #[arg(long, value_name = "CELLS")]
+    pub max_intermediate_cells: Option<u64>,
+    /// Bound the bytes minted into the per-validation scratch arena.
+    #[arg(long, value_name = "BYTES")]
+    pub max_scratch_bytes: Option<u64>,
+    /// Bound the requests a `SERVICE` clause in a SHACL-SPARQL constraint issues.
+    #[arg(long, value_name = "REQUESTS")]
+    pub max_remote_requests: Option<u64>,
+    /// Bound logical user-function depth. The default is thirty-two.
+    #[arg(long, value_name = "DEPTH", conflicts_with = "unlimited_udf_depth")]
+    pub max_udf_depth: Option<u64>,
+    /// Remove the logical user-function depth ceiling.
+    #[arg(long, conflicts_with = "max_udf_depth")]
+    pub unlimited_udf_depth: bool,
+    /// Decline every ceiling AND all accounting, rather than metering the validation
+    /// against ceilings nothing can reach. Combines with `--deadline`; refused beside
+    /// any numeric ceiling.
+    #[arg(long)]
+    pub no_ceiling: bool,
+    /// Evaluate every pattern the validation decides — `sh:pattern` (with its
+    /// `sh:flags`), and `REGEX`/`REPLACE` in SHACL-SPARQL targets, constraints and
+    /// functions — under a dated native XPath pattern law: `xpath-2.0-2010-12-14` or
+    /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
+    /// non-capturing groups and the `q` flag. A pattern the selected law does not
+    /// define is reported as it always is, as a finding of the shape that declares it.
+    /// A pattern or match that exceeds the native law's production resource limits
+    /// fails the run (exit 1) with no report. Applies to `--shapes` and
+    /// `--shapes-product` alike, and to the `--changes` lane. Omitted, the
+    /// compatibility pattern engine runs, exactly as before this flag existed.
+    #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+    pub xpath_regex: Option<Profile>,
+    /// Validate under one exact, dated SHACL law, named by its stable id:
+    /// `shacl-rec-2017-07-20` (the 2017 Recommendation), `shacl-wd-2026-09-18` (the
+    /// SHACL 1.2 working draft) or `shacl-ed-2026-10-16` (the data-shapes editor's draft
+    /// the W3C SHACL 1.2 test suite is graded under). The id is decoded once, exactly,
+    /// by `purrdf_validate::complete_profile`; an id it does not know is refused with
+    /// its `unsupported-profile` status (exit 2), never mapped to a nearby edition.
+    /// A dated law carries its own XPath pattern law, so `--xpath-regex` may only name
+    /// that same law: `--shacl-profile shacl-ed-2026-10-16 --xpath-regex xpath-2.0-2010-12-14`
+    /// is a usage error (exit 2). Applies to `--shapes` and `--shapes-product` alike
+    /// (a product stores no SHACL law; the restore takes it from this request) and to
+    /// the `--changes` lane. Omitted, the compatibility law runs, exactly as before this
+    /// flag existed.
+    #[arg(long = "shacl-profile", value_name = "ID")]
+    pub shacl_profile: Option<String>,
+    /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Report path `OUT`, or `-` for stdout (the default).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Shex` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ShexArgs {
+    /// The ShEx schema `FILE`, or `-` for stdin (which requires `--schema-from`).
+    #[arg(long, value_name = "FILE")]
+    pub schema: String,
+    /// Schema syntax override; inferred from the schema path's extension when omitted
+    /// (`.shex`/`.shexc` → `shexc`, `.json`/`.shexj` → `shexj`).
+    #[arg(long = "schema-from", value_enum)]
+    pub schema_from: Option<CliShexFormat>,
+    /// An `IMPORT` the schema declares, resolved to a local document: repeatable,
+    /// `IRI=FILE`. PurRDF fetches nothing, so an import no pair resolves is refused by
+    /// name rather than treated as an empty schema — and a pair the schema's import
+    /// closure never reaches is refused too, rather than silently unused. Each imported
+    /// document's syntax is inferred from its own extension. The IRI half must be
+    /// ABSOLUTE — it is matched against the schema's `IMPORT` IRIs, which are, and it is
+    /// the base its document parses under — and a relative or malformed one is refused
+    /// against the argument before any document is opened.
+    #[arg(long = "import", value_name = "IRI=FILE")]
+    pub imports: Vec<String>,
+    /// Data-graph path, or `-` for stdin (which requires `--from`).
+    #[arg(long)]
+    pub data: String,
+    /// Bounded YAML-LD Basic input options for the data graph only.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Data-graph format override; inferred from `--data`'s extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Base IRI for the relative IRIs of the DATA graph and the MAP. It OVERRIDES the
+    /// data graph's own `file://` retrieval IRI, and it is the only base the MAP can
+    /// ever have (a shape map is command-line text, so it has no retrieval IRI) — which
+    /// is why this flag is never inert here and never refused, even against a pack or
+    /// GTS data source that cannot spend it. NOT the schema's: `--schema` is an independent
+    /// document and resolves its relative IRIs — in BOTH syntaxes, since ShExJ is a
+    /// JSON-LD dialect whose IRI-valued members are document-relative exactly as ShExC's
+    /// IRIREFs are — against its own `file://` retrieval IRI, or its `BASE` directive.
+    /// Each `--import`ed document likewise resolves against the import IRI.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Evaluate every ShEx string-facet `PATTERN` (`/…/flags` in ShExC, `pattern` and
+    /// `flags` in ShExJ) under a dated native XPath pattern law: `xpath-2.0-2010-12-14`
+    /// or `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1
+    /// admits non-capturing groups and the `q` flag. A pattern the selected law does not
+    /// define fails its facet, as it always does. A pattern or match that exceeds the
+    /// native law's production resource limits fails the whole shape map (exit 1), with
+    /// no result shape map written. Omitted, the compatibility pattern engine runs,
+    /// exactly as before this flag existed.
+    #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+    pub xpath_regex: Option<Profile>,
+    /// Maximum assignment-prefix states per ambiguous neighbourhood, including
+    /// terminal cardinality checks. Exhaustion fails the whole shape map.
+    #[arg(long, value_name = "COUNT", default_value_t = 200_000)]
+    pub matcher_maximum_states: u64,
+    /// The query shape map: `<node>@<shape>` associations separated by commas, where a
+    /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
+    /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or
+    /// `<label>`. Its grammar admits no prefixed name, and a relative IRI in it resolves
+    /// against `--base` alone; both are decided against the argument before any document
+    /// is opened. A label the schema does not declare is a separate failure, and cannot
+    /// be decided until the schema has been read.
+    #[arg(value_name = "MAP")]
+    pub map: String,
+    /// Result-shape-map path `OUT`, or `-` for stdout (the default).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Describe` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct DescribeArgs {
+    /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// A resource to describe: repeatable, and at least one is required. Several are
+    /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
+    /// as several documents. A RELATIVE reference resolves against the base in force —
+    /// the same base the data graph parses under, so `--iri alice` denotes what
+    /// `<alice>` written inside the document denotes — and one with no base in scope is
+    /// refused rather than silently matching nothing. An IRI the graph does not mention
+    /// is a legitimate EMPTY description, not an error.
+    #[arg(long = "iri", value_name = "IRI", required = true)]
+    pub iris: Vec<String>,
+    /// Input format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Output format override; inferred from the output extension when omitted.
+    #[arg(long, value_enum)]
+    pub to: Option<CliRdfFormat>,
+    /// Base IRI, on THREE legs: relative IRIs in the input resolve against it while
+    /// parsing, every `--iri` selector resolves against it, and a `--to` syntax that can
+    /// write a base directive (turtle, trig, rdfxml, jsonld, yamlld) emits it as the
+    /// description's base and relativizes against it. When omitted, a filesystem input
+    /// is still parsed — and its `--iri` selectors resolved — under its own `file://`
+    /// retrieval IRI. Because `--iri` is required and always resolves against it, this
+    /// flag is never inert here and is never refused, even against a pack or GTS source
+    /// whose own syntax could not spend it.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Input path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `Rules` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RulesArgs {
+    /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with_all = ["srl", "check"])]
+    pub import_yamlld_input_options: Vec<String>,
+    /// Exact caller-supplied `xsd:dateTime` for every rule query's `NOW()`.
+    /// Omitted, the native host-clock behavior is unchanged.
+    #[arg(
+        long,
+        value_name = "XSD_DATE_TIME",
+        allow_hyphen_values = true,
+        conflicts_with = "check"
+    )]
+    pub now: Option<String>,
+    /// Initial unsigned seed for the rule execution's query-seed sequence.
+    /// Zero is a supplied seed; omitted, native entropy behavior is unchanged.
+    #[arg(
+        long,
+        value_name = "U64",
+        allow_hyphen_values = true,
+        conflicts_with = "check"
+    )]
+    pub entropy_seed: Option<String>,
+    /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
+    /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
+    /// required: a shapes graph and a SPARQL 1.2 RL rule set are two rule sets, and
+    /// neither specification defines running them as one.
+    #[arg(
+        long,
+        value_name = "FILE",
+        required_unless_present = "srl",
+        conflicts_with = "srl"
+    )]
+    pub shapes: Option<String>,
+    /// Shapes-graph format override; inferred from the shapes path's extension when
+    /// omitted.
+    #[arg(long = "shapes-from", value_enum, requires = "shapes")]
+    pub shapes_from: Option<CliRdfFormat>,
+    /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+    /// of its `file://` retrieval IRI; also its own IRI for `owl:imports`. The same flag
+    /// `validate --shapes-base` is.
+    #[arg(
+        long = "shapes-base",
+        value_name = "IRI",
+        value_parser = parse_base_iri,
+        requires = "shapes"
+    )]
+    pub shapes_base: Option<String>,
+    /// Expose the shapes graph to the SHACL-SPARQL rules as a named graph under this
+    /// IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s `$shapesGraph` is
+    /// pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. PurRDF
+    /// mints no vocabulary IRIs, so there is no default: without this flag
+    /// `$shapesGraph` is an ordinary variable. A relative value resolves against the
+    /// shapes document's base and is refused when it has none. A SPARQL 1.2 RL rule set
+    /// has no shapes graph, so the flag requires `--shapes`.
+    #[arg(long = "shapes-graph", value_name = "IRI", requires = "shapes")]
+    pub shapes_graph: Option<String>,
+    /// The SPARQL 1.2 RL rule-set `FILE`, or `-` for stdin.
+    #[arg(long, value_name = "FILE")]
+    pub srl: Option<String>,
+    /// Base IRI the rule set's relative IRI references resolve against, in place of its
+    /// `file://` retrieval IRI. Stdin has no retrieval IRI, so this is the only base a
+    /// `--srl -` rule set can have.
+    #[arg(
+        long = "srl-base",
+        value_name = "IRI",
+        value_parser = parse_base_iri,
+        requires = "srl"
+    )]
+    pub srl_base: Option<String>,
+    /// Resolve an import of the rule source to a LOCAL document: an `owl:imports` of
+    /// the shapes graph, or an `IMPORTS` of the SPARQL 1.2 RL rule set. Repeatable and
+    /// followed transitively. PurRDF fetches nothing, so an import no pair resolves is
+    /// refused by name (exit 1), and a pair the imports never reach is refused as
+    /// unused (exit 2).
+    #[arg(long, value_name = "IRI=FILE")]
+    pub import: Vec<String>,
+    /// Check the `--srl` rule set and evaluate NOTHING: no data graph is read and no
+    /// rule runs. `LEVEL` is how far the check goes, each level including the ones
+    /// before it: `syntax` (the SPARQL 1.2 RL grammar, the rule set and every document
+    /// its imports read), `well-formed` (every rule, imported ones included, is well
+    /// formed) or `stratified` (the combined rule set can be stratified — every static
+    /// check a run applies before it evaluates). Bare `--check` is `--check=stratified`.
+    /// On success one summary line goes to stdout; a refusal names the stage and exits 1.
+    /// The data-graph, output, proof and limit flags configure an evaluation, which a
+    /// check does not run, so they are refused beside it.
+    #[arg(
+        long,
+        value_enum,
+        value_name = "LEVEL",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "stratified",
+        requires = "srl",
+        conflicts_with_all = [
+            "explain",
+            "max_term_generating_rounds",
+            "max_generated_terms",
+            "max_stored_facts",
+            "max_join_steps",
+            "from",
+            "to",
+            "base",
+            "input",
+            "output",
+        ]
+    )]
+    pub check: Option<CliSrlCheckLevel>,
+    /// Write the PROOF of every inferred triple: bare writes it to stderr,
+    /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
+    /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
+    /// per fact the rule's body matched (a SHACL rule executed as one producer over the
+    /// whole graph — every rule but a global SPARQL rule whose query is a conjunctive
+    /// pattern — lists none), or `  data-block` for a SPARQL 1.2 RL data-block
+    /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
+    #[allow(clippy::option_option)]
+    #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+    pub explain: Option<Option<PathBuf>>,
+    /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did
+    /// not hold; one more fails the run naming the limit, the numbers and the rules
+    /// that inferred a new term last. Omitted, the limit is 16384 rounds: a rule
+    /// stepping a value to 10,000 completes, and one counting with no bound is refused
+    /// in well under a second. A rule set that needs more states it here.
+    #[arg(long = "max-term-generating-rounds", value_name = "N")]
+    pub max_term_generating_rounds: Option<u64>,
+    /// Permit exactly `N` terms inferred beyond the input's; one more fails the run
+    /// naming the budget and the numbers. Omitted, the budget is max(65536, 4 × T)
+    /// for T distinct input terms: a rule set whose new terms multiply every
+    /// iteration is refused within a few iterations. A rule set that needs more
+    /// states it here.
+    #[arg(long = "max-generated-terms", value_name = "N")]
+    pub max_generated_terms: Option<u64>,
+    /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
+    /// data and every inferred triple; one more fails the run naming the limit and the
+    /// numbers. Omitted, no logical ceiling is applied.
+    /// The limit can only refuse: a run it admits writes exactly the
+    /// inference graph a larger limit would.
+    #[arg(long = "max-stored-facts", value_name = "N")]
+    pub max_stored_facts: Option<u64>,
+    /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
+    /// one more fails the run naming the limit and the numbers. Omitted, no logical
+    /// ceiling is applied. It bounds a rule body that enumerates far more candidates than
+    /// it infers triples.
+    #[arg(long = "max-join-steps", value_name = "N")]
+    pub max_join_steps: Option<u64>,
+    /// Evaluate every pattern the rules decide — `REGEX`/`REPLACE` in a `sh:SPARQLRule`,
+    /// a SHACL-AF function, a node expression or a SPARQL 1.2 RL filter or assignment,
+    /// and `sh:pattern` in a rule's condition or filter shape — under a dated native
+    /// XPath pattern law: `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`, named
+    /// exactly. Both admit backreferences; only 3.1 admits non-capturing groups and the
+    /// `q` flag. A pattern the selected law does not define behaves as an ill-formed
+    /// pattern always does (an expression error, a nonconforming value). A pattern or
+    /// match that exceeds the native law's production resource limits fails the run
+    /// (exit 1) with no graph written. Omitted, the compatibility pattern engine runs,
+    /// exactly as before this flag existed.
+    #[arg(
+        long,
+        value_name = "PROFILE",
+        value_parser = XPathRegexParser,
+        conflicts_with = "check"
+    )]
+    pub xpath_regex: Option<Profile>,
+    /// Data-graph format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Bounded YAML-LD Basic input options for the primary data graph only.
+    #[arg(long, value_name = "PATH", conflicts_with = "check")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Independent YAML-LD Basic input options for the root shapes document only.
+    #[arg(long, value_name = "PATH", requires = "shapes", conflicts_with_all = ["srl", "check"])]
+    pub shapes_yamlld_input_options: Option<PathBuf>,
+    /// Output format override; inferred from the output extension when omitted.
+    #[arg(long, value_enum)]
+    pub to: Option<CliRdfFormat>,
+    /// Base IRI, on BOTH legs of the data: a relative IRI in `IN` resolves against it
+    /// while parsing, and a `--to` syntax that can write a base directive emits it as
+    /// the inference graph's base and relativizes against it.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
+}
+
+// The arguments of the `NodeExpr` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct NodeExprArgs {
+    /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+    #[arg(long, value_name = "IRI=PATH", requires = "import")]
+    pub import_yamlld_input_options: Vec<String>,
+    /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
+    /// requires `--shapes-from`).
+    #[arg(long, value_name = "FILE")]
+    pub shapes: String,
+    /// Shapes-graph format override; inferred from the shapes path's extension when
+    /// omitted.
+    #[arg(long = "shapes-from", value_enum)]
+    pub shapes_from: Option<CliRdfFormat>,
+    /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+    /// of its `file://` retrieval IRI.
+    #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+    pub shapes_base: Option<String>,
+    /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
+    /// --import` does.
+    #[arg(long, value_name = "IRI=FILE")]
+    pub import: Vec<String>,
+    /// The expression node: an absolute IRI, or `_:LABEL` for a blank node the shapes
+    /// document labels `_:LABEL`. An IRI that is the subject of no triple is a constant
+    /// expression, evaluating to itself; a label the document never wrote is refused.
+    #[arg(long, value_name = "IRI|_:LABEL")]
+    pub expr: Option<String>,
+    /// Name the expression by a walk: start from this node (an absolute IRI, or
+    /// `_:LABEL`) and follow each `--expr-via` predicate in turn. Every step must reach
+    /// exactly one value of the shapes graph; none or several is refused, naming the
+    /// step and the count.
+    #[arg(long = "expr-at", value_name = "IRI|_:LABEL", requires = "expr_via")]
+    pub expr_at: Option<String>,
+    /// One predicate (an absolute IRI) of the `--expr-at` walk. Repeatable, followed
+    /// in the order given.
+    #[arg(long = "expr-via", value_name = "IRI", requires = "expr_at")]
+    pub expr_via: Vec<String>,
+    /// The expression, inline, as a Turtle document read under the shapes document's
+    /// prefixes and base (its own directives outrank them), e.g. `'[ sh:path ex:p ] .'`.
+    /// Its blank nodes are standardized apart from the shapes document's.
+    #[arg(long = "expr-turtle", value_name = "TURTLE")]
+    pub expr_turtle: Option<String>,
+    /// `--expr-turtle`, read from `FILE` (`-` is not accepted: stdin is `IN`'s or
+    /// `--shapes`').
+    #[arg(long = "expr-turtle-file", value_name = "FILE")]
+    pub expr_turtle_file: Option<String>,
+    /// The focus node: an absolute IRI, or any N-Triples 1.2 term (`"-3"^^<…>`,
+    /// `_:b`, …). A blank node names the node the data document labels so.
+    #[arg(long, value_name = "TERM")]
+    pub focus: String,
+    /// Bind a scope variable, read by `shnex:var "NAME"`: `NAME=TERM`, the term spelled
+    /// as `--focus` is. Repeatable; a name bound twice, and the name `focusNode` (which
+    /// SHACL 1.2 Node Expressions resolves to the focus node before the scope is
+    /// searched), are refused, since neither binding could ever be read.
+    #[arg(long, value_name = "NAME=TERM")]
+    pub scope: Vec<String>,
+    /// Exact dated SHACL law; omitted, preserves compatibility behavior.
+    #[arg(long = "shacl-profile", value_name = "ID")]
+    pub shacl_profile: Option<String>,
+    /// Evaluate every pattern the expression decides — `sh:pattern` in a filter shape,
+    /// and `REGEX`/`REPLACE` in a function call or a SPARQL-based expression — under a
+    /// dated native XPath pattern law: `xpath-2.0-2010-12-14` or
+    /// `xpath-3.1-2017-03-21`, named exactly. Both admit backreferences; only 3.1 admits
+    /// non-capturing groups and the `q` flag. A pattern the selected law does not define
+    /// behaves as an ill-formed pattern always does. A pattern or match that exceeds the
+    /// native law's production resource limits fails the run (exit 1) with no output.
+    /// Omitted, the compatibility pattern engine runs, exactly as before this flag
+    /// existed.
+    #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
+    pub xpath_regex: Option<Profile>,
+    /// Data-graph format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Bounded YAML-LD Basic input options for the primary data graph only.
+    #[arg(long, value_name = "PATH")]
+    pub yamlld_input_options: Option<PathBuf>,
+    /// Independent YAML-LD Basic input options for the root shapes document only.
+    #[arg(long, value_name = "PATH", requires = "shapes")]
+    pub shapes_yamlld_input_options: Option<PathBuf>,
+    /// Base IRI for resolving relative IRIs while parsing the DATA graph.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
+    /// Output path `OUT`, or `-` for stdout (the default).
+    #[arg(value_name = "OUT", default_value = "-")]
+    pub output: String,
 }
 
 /// The `shapes` subcommands.
@@ -3031,7 +3094,7 @@ impl Cli {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Convert {
+            Command::Convert(ConvertArgs {
                 yamlld_input_options,
                 inputs,
                 rules,
@@ -3041,7 +3104,7 @@ impl Cli {
                 output,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
@@ -3063,7 +3126,7 @@ impl Cli {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Query {
+            Command::Query(QueryArgs {
                 data,
                 yamlld_input_options,
                 rules,
@@ -3072,7 +3135,7 @@ impl Cli {
                 query,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
@@ -3095,13 +3158,13 @@ impl Cli {
                     paths.push(PathBuf::from(path));
                 }
             }
-            Command::Update {
+            Command::Update(UpdateArgs {
                 data,
                 output,
                 update,
                 yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
                 paths.extend(yamlld_input_options.iter().cloned());
@@ -3109,7 +3172,7 @@ impl Cli {
                     paths.push(PathBuf::from(path));
                 }
             }
-            Command::Reason {
+            Command::Reason(ReasonArgs {
                 yamlld_input_options,
                 rules,
                 report,
@@ -3118,7 +3181,7 @@ impl Cli {
                 output,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
@@ -3175,14 +3238,14 @@ impl Cli {
                 }
                 paths.push(PathBuf::from(output));
             }
-            Command::Consistency {
+            Command::Consistency(ConsistencyArgs {
                 yamlld_input_options,
                 check_proof,
                 imports,
                 input,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
@@ -3199,14 +3262,14 @@ impl Cli {
                 }
                 paths.push(PathBuf::from(input));
             }
-            Command::Project {
+            Command::Project(ProjectArgs {
                 yamlld_input_options,
                 config,
                 assets,
                 input,
                 output,
                 ..
-            } => {
+            }) => {
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(config));
                 if let Some(path) = assets {
@@ -3215,17 +3278,17 @@ impl Cli {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Lift {
+            Command::Lift(LiftArgs {
                 config,
                 input,
                 output,
                 ..
-            } => {
+            }) => {
                 paths.push(PathBuf::from(config));
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Validate {
+            Command::Validate(ValidateArgs {
                 yamlld_input_options,
                 shapes_yamlld_input_options,
                 shapes,
@@ -3239,7 +3302,7 @@ impl Cli {
                 changes_yamlld_input_options,
                 changes_removed_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 paths.extend(changes_yamlld_input_options.iter().cloned());
                 paths.extend(changes_removed_yamlld_input_options.iter().cloned());
                 for mapping in import_yamlld_input_options {
@@ -3269,14 +3332,14 @@ impl Cli {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Shex {
+            Command::Shex(ShexArgs {
                 schema,
                 imports,
                 data,
                 output,
                 yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(schema));
                 for pair in imports {
@@ -3287,17 +3350,17 @@ impl Cli {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
             }
-            Command::Describe {
+            Command::Describe(DescribeArgs {
                 input,
                 output,
                 yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::Rules {
+            Command::Rules(RulesArgs {
                 shapes,
                 srl,
                 import,
@@ -3308,7 +3371,7 @@ impl Cli {
                 shapes_yamlld_input_options,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
@@ -3333,7 +3396,7 @@ impl Cli {
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }
-            Command::NodeExpr {
+            Command::NodeExpr(NodeExprArgs {
                 shapes,
                 import,
                 expr_turtle_file,
@@ -3343,7 +3406,7 @@ impl Cli {
                 shapes_yamlld_input_options,
                 import_yamlld_input_options,
                 ..
-            } => {
+            }) => {
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
