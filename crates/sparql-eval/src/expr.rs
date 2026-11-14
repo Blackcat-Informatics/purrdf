@@ -716,6 +716,11 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
                 )?
             };
             match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
+                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                {
+                    self.active = Some(frame);
+                }
                 crate::vm::VmStep::Value(value) => {
                     let (linked, row, keep, evidence) =
                         frame.finish_filter(expression, &self.schema, value, ctx)?;
@@ -899,6 +904,11 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
                 )?
             };
             match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
+                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                {
+                    self.active = Some(frame);
+                }
                 crate::vm::VmStep::Suspend(request) => {
                     self.active = Some(frame);
                     return Ok(ExtendStep::Suspend(self, request));
@@ -1428,6 +1438,17 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Result<Option<bool>, EvalError> {
+    // The two booleans this evaluation interned (an `EXISTS` answer, a comparison)
+    // are their own effective boolean value. Only an unbounded evaluation answers
+    // here, so a bounded one parses, admits and is charged as it always was.
+    if !ctx.growth.is_bounded()
+        && let Some(slot) = ctx
+            .cached_bool_terms
+            .iter()
+            .position(|cached| *cached == Some(term))
+    {
+        return Ok(Some(slot == 1));
+    }
     let is_lang_tagged = match term {
         SolutionTerm::Existing(id) => ctx
             .dataset
@@ -2759,6 +2780,7 @@ fn exists_apply_first_witness_wrap() -> bool {
 fn exists_use_probe(
     correlated: bool,
     stateful: bool,
+    every_schema: bool,
     normalized: &GraphPattern,
     analysis: &crate::governor::soundness::NodeAnalysisTable,
     outer_schema: &VarSchema,
@@ -2768,7 +2790,7 @@ fn exists_use_probe(
     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
         return Ok(forced == ForcedExistsStrategy::Probe);
     }
-    if !correlated && !stateful {
+    if (!correlated && !stateful) || every_schema {
         return Ok(true);
     }
     crate::governor::soundness::probe_admissible_admitted(
@@ -2779,8 +2801,91 @@ fn exists_use_probe(
     )
 }
 
-/// Evaluate `EXISTS { pattern }` for the current solution.
+/// What holds for one prepared `EXISTS` body whatever outer row or schema reaches
+/// it, so a resident evaluation can skip the per-row walks these facts decide.
 ///
+/// * The body introduces no binding (no `BIND` or projection target, `UNFOLD`
+///   target, `VALUES` column or `GROUP`): the row-collision walk then answers "no
+///   collision" for every row, since every collision it reports names one of those.
+/// * The memoized probe is admissible with every free variable of the body treated
+///   as a current-row variable: probe admissibility only ever refuses because a
+///   current-row variable is present, and the variables a real outer schema
+///   supplies are a subset of those, so it is then admissible for every schema.
+///
+/// Learned on the site's second visit, so a site reached once allocates nothing
+/// for them. Both are properties of the immutable body alone, which is why a
+/// preparation shared across runs may keep them. Only a workspace without a
+/// storage budget reads them: a bounded run keeps its original per-row walks and
+/// their exact admission.
+#[derive(Debug, Default)]
+pub(crate) struct SiteFacts(std::sync::atomic::AtomicU8);
+
+impl SiteFacts {
+    const VISITED: u8 = 1;
+    const KNOWN: u8 = 2;
+    const NO_BINDING: u8 = 4;
+    const PROBE_EVERY_SCHEMA: u8 = 8;
+    /// The last row loop that asked for an answer in place got a child instead.
+    const CHILD_LAST: u8 = 16;
+    /// That child was a per-row definition (or a deferred one), which no later decision
+    /// turns into an answer without a child: the site keeps `CHILD_LAST` for the run.
+    const DEFINITION: u8 = 32;
+
+    /// The facts for `normalized`, or `None` on its first visit.
+    fn read(
+        &self,
+        normalized: &GraphPattern,
+        analysis: &crate::governor::soundness::NodeAnalysisTable,
+        free_vars: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<u8>, EvalError> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let state = self.0.load(Relaxed);
+        if state & Self::KNOWN != 0 {
+            return Ok(Some(state));
+        }
+        if state & Self::VISITED == 0 {
+            self.0.fetch_or(Self::VISITED, Relaxed);
+            return Ok(None);
+        }
+        let mut facts = Self::VISITED | Self::KNOWN;
+        if !crate::governor::soundness::introduces_row_binding(normalized, workspace)? {
+            facts |= Self::NO_BINDING;
+        }
+        if crate::governor::soundness::probe_admissible_admitted(
+            normalized, analysis, free_vars, workspace,
+        )? {
+            facts |= Self::PROBE_EVERY_SCHEMA;
+        }
+        Ok(Some(self.0.fetch_or(facts, Relaxed) | facts))
+    }
+
+    fn visited(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::VISITED != 0
+    }
+
+    fn child_last(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::CHILD_LAST != 0
+    }
+
+    /// Record that a request for an answer in place got a child; `definition` says it
+    /// was a definition child, which keeps the flag for the rest of the run.
+    fn set_child_last(&self, definition: bool) {
+        let bits = Self::CHILD_LAST | if definition { Self::DEFINITION } else { 0 };
+        self.0.fetch_or(bits, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A suspended decision completed without a child: a probe answered from its cache
+    /// may be asked in place again. A definition site never is.
+    fn clear_child_last(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let state = self.0.load(Relaxed);
+        if state & Self::DEFINITION == 0 && state & Self::CHILD_LAST != 0 {
+            self.0.fetch_and(!Self::CHILD_LAST, Relaxed);
+        }
+    }
+}
+
 /// # The one-definition theorem
 ///
 /// Stated once, in full, in `crate::enf`'s module doc (cited from there by
@@ -2917,10 +3022,17 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         ));
     }
     let prepared = ctx.prepared_exists(pattern)?;
-    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
+    let crate::eval::PreparedExists::Pattern {
+        ledger_source,
+        facts,
+        ..
+    } = prepared.as_ref()
+    else {
         return Ok(ExistsDecision::Complete(false));
     };
-    exists_prepared_decide(
+    // A row loop that last met a child here asks again once this path completes.
+    let hint = facts.child_last().then(|| prepared.clone());
+    let decision = exists_prepared_decide(
         PreparedSite {
             key: address,
             plan_map: ledger_source.clone(),
@@ -2931,7 +3043,70 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         schema,
         ctx,
         evidence,
-    )
+    )?;
+    if let Some(prepared) = hint
+        && matches!(decision, ExistsDecision::Complete(_))
+        && let crate::eval::PreparedExists::Pattern { facts, .. } = prepared.as_ref()
+    {
+        facts.clear_child_last();
+    }
+    Ok(decision)
+}
+
+/// The answer of an `EXISTS` site for this row when its decision completes without a
+/// graph child, for a row loop that can then resume its row in place instead of
+/// suspending it. `None` leaves the request to the suspending caller, which decides
+/// it again from the start: a decision that ends in a child has charged nothing and
+/// published nothing, so deciding twice answers and charges as deciding once.
+///
+/// Only an ordinary resident evaluation asks: a bounded workspace or a query that
+/// records evidence keeps the suspended route. A site whose last such request ended
+/// in a child is not asked again until a suspended decision completes, and a site
+/// whose child was a per-row definition is not asked again in the run, so a site that
+/// always needs a child is decided once per row.
+pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<bool>, EvalError> {
+    crate::stack::check("EXISTS")?;
+    // A body inside a substituted EXISTS is rebuilt for every outer row, so no site there
+    // has a history to learn from: it keeps the suspending route.
+    if ctx.in_substituted_exists
+        || ctx.deferred_exists.is_some()
+        || crate::deferred_exists::is_placeholder(pattern)
+    {
+        return Ok(None);
+    }
+    let prepared = ctx.prepared_exists(pattern)?;
+    let crate::eval::PreparedExists::Pattern {
+        ledger_source,
+        facts,
+        ..
+    } = prepared.as_ref()
+    else {
+        return Ok(Some(false));
+    };
+    // A site never decided before takes the suspending route, which decides it once:
+    // a body substituted afresh for every row is always such a site, and deciding it
+    // here as well would double its work whenever the decision ends in a child.
+    if !facts.visited() || facts.child_last() {
+        return Ok(None);
+    }
+    let site = PreparedSite {
+        key: std::ptr::from_ref(pattern) as usize,
+        plan_map: ledger_source.clone(),
+        prepared: prepared.clone(),
+        source_owner: None,
+    };
+    match exists_prepared_decide(site, row, schema, ctx, None)? {
+        ExistsDecision::Complete(answer) => Ok(Some(answer)),
+        ExistsDecision::Child(child) => {
+            facts.set_child_last(!matches!(child, ExistsChild::Probe { .. }));
+            Ok(None)
+        }
+    }
 }
 
 /// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to
@@ -3401,13 +3576,15 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<ExistsDecision<D::Id>, EvalError> {
+    #[cfg(test)]
+    crate::eval::EXISTS_DECISION_COUNT.with(|count| count.set(count.get() + 1));
     let PreparedSite {
         key,
         prepared,
         plan_map: ledger_source,
         source_owner,
     } = site;
-    let (normalized, analysis, free_vars, stateful) = match prepared.as_ref() {
+    let (normalized, analysis, free_vars, stateful, facts) = match prepared.as_ref() {
         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
         crate::eval::PreparedExists::FoldedFalse => return Ok(ExistsDecision::Complete(false)),
@@ -3416,8 +3593,17 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
             analysis,
             free_vars,
             stateful,
+            facts,
             ..
-        } => (normalized, analysis, free_vars, *stateful),
+        } => (normalized, analysis, free_vars, *stateful, facts),
+    };
+    // A bounded run keeps every per-row walk below with its original admission.
+    let facts = if ctx.growth.is_bounded() {
+        0
+    } else {
+        facts
+            .read(normalized, analysis, free_vars, &ctx.growth)?
+            .unwrap_or(0)
     };
 
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
@@ -3456,7 +3642,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     // deferred ([`exists_deferred_decide`]) and that reaches this function with nothing owed:
     // it is the body the eager copy would have been, reached inside the same window,
     // and skipped exactly as that copy was.
-    if !ctx.in_substituted_exists {
+    if !ctx.in_substituted_exists && facts & SiteFacts::NO_BINDING == 0 {
         // The outer-bound variables (a concrete binding in the current row), built
         // only for this check: it is the one consumer that needs the set itself.
         let outer_bound = VarSchema::from_vars_admitted(
@@ -3513,6 +3699,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     if exists_use_probe(
         correlated,
         stateful,
+        facts & SiteFacts::PROBE_EVERY_SCHEMA != 0,
         normalized,
         analysis,
         schema,
@@ -16043,6 +16230,7 @@ impl crate::eval::PreparedExists {
             )?,
             witness_sites: std::sync::OnceLock::new(),
             normalized_sites: std::sync::OnceLock::new(),
+            facts: SiteFacts::default(),
         })
     }
 }

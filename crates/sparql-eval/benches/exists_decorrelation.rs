@@ -156,6 +156,15 @@ const OPTIONAL_INSIDE_EXISTS_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/know
        FILTER(?w != <http://ex/nobody>) \
      } }";
 
+/// The aggregate-and-negation shape a SHACL view runs: a correlated `NOT EXISTS` over a
+/// body that carries its own `FILTER`, grouped and filtered by `HAVING`. Every outer row
+/// decides the site, and each survivor feeds a group, so the row loop's per-row decision
+/// and the aggregate's per-cell value read are both on the measured path.
+const NOT_EXISTS_GROUPED_QUERY: &str = "SELECT ?o (COUNT(?s) AS ?n) WHERE { \
+     ?s <http://ex/knows> ?o \
+     FILTER NOT EXISTS { ?s <http://ex/likes> ?z FILTER(?z = <http://ex/z0>) } \
+     } GROUP BY ?o HAVING (COUNT(?s) > 0)";
+
 /// `d` nested `FILTER EXISTS`, every level correlated with the one around it through
 /// `?s` and `?o`.
 fn nested_correlated_query(depth: usize) -> String {
@@ -238,6 +247,14 @@ fn bench_exists_decorrelation(c: &mut Bench) {
         &hub_optional,
         OPTIONAL_INSIDE_EXISTS_QUERY,
         DEFINITION_MEMO_ARMS,
+    );
+    // The grouped NOT EXISTS shape over the hub dataset: only `:s0` has the excluded
+    // `:likes` target, so every other outer row survives into the one group on `:hub`.
+    bench_pair(
+        c,
+        "exists_not_exists_grouped",
+        &hub,
+        NOT_EXISTS_GROUPED_QUERY,
     );
 }
 

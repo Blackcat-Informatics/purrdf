@@ -72,9 +72,10 @@ fn constant_operand_is_parsed_once_per_query() {
         "the constant must not be parsed again for each of the extra rows"
     );
     assert_eq!(
-        many, 5,
-        "the dataset value once, and the constant and the boolean the comparison \
-         yields twice each: on the first row and on the second, which stores them"
+        many, 3,
+        "the dataset value once, and the constant twice: on the first row and on the \
+         second, which stores it; the boolean the comparison yields is read as the \
+         interned boolean it is and is never parsed"
     );
 }
 
@@ -84,7 +85,28 @@ fn constant_operand_is_parsed_once_per_query() {
 fn constant_operand_memo_keeps_the_answer() {
     let (kept, parses) = parses_of(400, "?v > 8.5e0");
     assert_eq!(kept, 0);
-    assert_eq!(parses, 5);
+    assert_eq!(parses, 3);
+}
+
+/// **A boolean used as a comparison operand is read as the interned boolean it is.**
+/// `(?v > 5.5e0) = true` compares the comparison's own boolean result with a constant
+/// rather than taking its effective boolean value, so the boolean reaches the operand
+/// reader: its parse count must not grow with the rows, and the answer is unchanged by
+/// reading it without a parse. The neighbouring `= false` keeps no row.
+#[test]
+fn a_boolean_operand_is_not_parsed_per_row() {
+    let (few_kept, few) = parses_of(4, "(?v > 5.5e0) = true");
+    let (many_kept, many) = parses_of(400, "(?v > 5.5e0) = true");
+    assert_eq!(
+        (few_kept, many_kept),
+        (4, 400),
+        "the comparison holds on every row"
+    );
+    assert_eq!(
+        few, many,
+        "the boolean the comparison yields must not be parsed again for each extra row"
+    );
+    assert_eq!(parses_of(400, "(?v > 5.5e0) = false").0, 0);
 }
 
 /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a
