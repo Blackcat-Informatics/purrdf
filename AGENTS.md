@@ -8,6 +8,29 @@ contributing to the PurRDF repository.
 
 ---
 
+## Guiding principles
+
+When requests conflict, these decide. They do not replace the hard constraints
+below or a release plan.
+
+* **GREENFIELD:** we always correct the mistakes of the past. Others' mistakes
+  are our lessons, not our limits.
+* **SOTA:** always choose the state of the art over the bones of the past.
+* **OPTIMAL:** choose the Pareto frontier of the quality, speed, efficiency and
+  other axes.
+* **MAXIMAL:** support the broadest functionality possible after the other
+  choices are made.
+
+## Shell commands
+
+* One shell call does one thing. Do not join steps with `&&` or `;`. A run of
+  several steps is a script file, run once, with its output in a log.
+* A deletion is its own call, on one exact path inside the repository, after
+  that path has been listed. Do not use `rm -r`, `find -delete`, `git clean` or
+  a forced worktree removal, and do not put a deletion beside other commands.
+* Run nothing that can raise a permission prompt.
+* A call that was refused is not sent again in another form.
+
 ## Shared engineering guidance
 
 Read the complete [Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md).
