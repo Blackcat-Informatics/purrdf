@@ -1255,4 +1255,43 @@ mod statement_layer_tests {
         assert!(!ShaclDatasetView::native(source(true, false)).statement_layer_is_empty());
         assert!(!ShaclDatasetView::native(source(false, true)).statement_layer_is_empty());
     }
+
+    /// Only a native, unrestricted-by-composition source certifies an empty layer: a
+    /// projected or graph-selected view over a source holding a reifier does not, and
+    /// a composite or mutation-snapshot source keeps the default (`false`) even when it
+    /// holds no statement.
+    #[test]
+    fn restricted_and_layered_views_do_not_certify_an_empty_statement_layer() {
+        use purrdf_core::DatasetView;
+        use purrdf_rdf::ir::{CompositeDatasetView, MutableDataset, ViewLimits};
+        let with_reifier = source(true, false);
+        let graph = with_reifier
+            .term_id_by_value(&TermValue::iri("http://example.org/s"))
+            .expect("lookup succeeds")
+            .expect("the subject is interned");
+        assert!(!ShaclDatasetView::project(Arc::clone(&with_reifier)).statement_layer_is_empty());
+        assert!(
+            !ShaclDatasetView::named_graph(Arc::clone(&with_reifier), graph)
+                .statement_layer_is_empty()
+        );
+        let plain = source(false, false);
+        let composite = Arc::new(
+            CompositeDatasetView::new(vec![Arc::clone(&plain)], ViewLimits::default()).unwrap(),
+        );
+        let delta = Arc::new(
+            MutableDataset::new(Arc::clone(&plain))
+                .snapshot_view()
+                .unwrap(),
+        );
+        assert!(
+            !ShaclDatasetView::composite(composite, false, ViewLimits::default())
+                .unwrap()
+                .statement_layer_is_empty()
+        );
+        assert!(
+            !ShaclDatasetView::delta(delta, false, ViewLimits::default())
+                .unwrap()
+                .statement_layer_is_empty()
+        );
+    }
 }

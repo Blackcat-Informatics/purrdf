@@ -51,8 +51,10 @@ macro_rules! frozen_term_nesting_bound_method {
 }
 pub(crate) use frozen_term_nesting_bound_method;
 
-/// The sole typed leaf-conversion body. The storage factory determines physical
-/// ownership; view resolution and lexical/type semantics remain shared.
+/// The typed leaf-conversion body of the nested walk and of the storage-parameterized
+/// conversions. The storage factory determines physical ownership; view resolution
+/// and lexical/type semantics remain shared. [`DatasetView::term_value`] keeps a
+/// closure-free copy of this body for the resident case (see there).
 fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
     view: &D,
     term: TermRef<'_, D::Id>,
@@ -958,9 +960,12 @@ pub trait DatasetView {
     /// retains that reservation until those values are released.
     fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError<Self::ReadError>> {
         // A term that is not a triple term needs neither the nested walk's work list nor
-        // its storage closures: copy it from its single resolution. The copy is the same
-        // `owned_term_leaf` the walk applies to such a term, with the same typed errors
-        // and the same panic on allocator exhaustion; only a triple term takes the walk.
+        // its storage closures: copy it from its single resolution. The copy below is a
+        // second, hand-inlined body of what `owned_term_leaf` does for a leaf (the same
+        // typed foreign-datatype refusal, the same fallible exact reservation per string,
+        // the same panic on allocator exhaustion). It exists because the generic body's
+        // closures and `Result` forwarding measured about 34 instructions per copied
+        // string on this path; only a triple term takes the walk.
         {
             let guard = self.resolve(id).map_err(TermLookupError::Read)?;
             match guard.term() {
