@@ -104,7 +104,6 @@ from pathlib import Path
 # match a fresh scan.
 PRE_EXISTING_BRAND_CASING: frozenset[tuple[str, int]] = frozenset(
     {
-        ("AGENTS.md", 1),
         ("CHANGELOG.md", 7),
         ("CONTRIBUTING.md", 2),
         ("LICENSING.md", 1),
