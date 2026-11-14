@@ -2800,6 +2800,9 @@ impl SiteFacts {
     const PROBE_EVERY_SCHEMA: u8 = 8;
     /// The last row loop that asked for an answer in place got a child instead.
     const CHILD_LAST: u8 = 16;
+    /// That child was a per-row definition (or a deferred one), which no later decision
+    /// turns into an answer without a child: the site keeps `CHILD_LAST` for the run.
+    const DEFINITION: u8 = 32;
 
     /// The facts for `normalized`, or `None` on its first visit.
     fn read(
@@ -2838,18 +2841,24 @@ impl SiteFacts {
         self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::CHILD_LAST != 0
     }
 
-    fn set_child_last(&self, child: bool) {
+    /// Record that a request for an answer in place got a child; `definition` says it
+    /// was a definition child, which keeps the flag for the rest of the run.
+    fn set_child_last(&self, definition: bool) {
+        let bits = Self::CHILD_LAST | if definition { Self::DEFINITION } else { 0 };
+        self.0.fetch_or(bits, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A suspended decision completed without a child: a probe answered from its cache
+    /// may be asked in place again. A definition site never is.
+    fn clear_child_last(&self) {
         use std::sync::atomic::Ordering::Relaxed;
-        if child {
-            self.0.fetch_or(Self::CHILD_LAST, Relaxed);
-        } else if self.child_last() {
+        let state = self.0.load(Relaxed);
+        if state & Self::DEFINITION == 0 && state & Self::CHILD_LAST != 0 {
             self.0.fetch_and(!Self::CHILD_LAST, Relaxed);
         }
     }
 }
 
-/// Evaluate `EXISTS { pattern }` for the current solution.
-///
 /// # The one-definition theorem
 ///
 /// Stated once, in full, in `crate::enf`'s module doc (cited from there by
@@ -3012,7 +3021,7 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
         && matches!(decision, ExistsDecision::Complete(_))
         && let crate::eval::PreparedExists::Pattern { facts, .. } = prepared.as_ref()
     {
-        facts.set_child_last(false);
+        facts.clear_child_last();
     }
     Ok(decision)
 }
@@ -3025,8 +3034,9 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
 ///
 /// Only an ordinary resident evaluation asks: a bounded workspace or a query that
 /// records evidence keeps the suspended route. A site whose last such request ended
-/// in a child is not asked again until a suspended decision completes, so a site
-/// that always needs a child is decided once per row.
+/// in a child is not asked again until a suspended decision completes, and a site
+/// whose child was a per-row definition is not asked again in the run, so a site that
+/// always needs a child is decided once per row.
 pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm<D::Id>>],
@@ -3065,8 +3075,8 @@ pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     };
     match exists_prepared_decide(site, row, schema, ctx, None)? {
         ExistsDecision::Complete(answer) => Ok(Some(answer)),
-        ExistsDecision::Child(_) => {
-            facts.set_child_last(true);
+        ExistsDecision::Child(child) => {
+            facts.set_child_last(!matches!(child, ExistsChild::Probe { .. }));
             Ok(None)
         }
     }
@@ -3539,6 +3549,8 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
 ) -> Result<ExistsDecision<D::Id>, EvalError> {
+    #[cfg(test)]
+    crate::eval::EXISTS_DECISION_COUNT.with(|count| count.set(count.get() + 1));
     let PreparedSite {
         key,
         prepared,

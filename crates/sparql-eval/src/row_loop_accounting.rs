@@ -330,3 +330,35 @@ fn a_refused_resident_read_is_the_typed_allocation_error() {
         purrdf_core::TermValue::Iri("http://example.org/original".to_owned())
     );
 }
+
+/// A site whose child is a per-row definition is decided once per row, with one extra
+/// decision at most: the request for an answer in place that learns it needs a child.
+/// Rows alternate between a restriction already answered (memoized) and a fresh one, so
+/// a flag cleared by a memoized answer would ask in place again on the next fresh row
+/// and decide it twice. The neighbouring probe site answers the same rows within the
+/// same bound.
+#[test]
+fn a_definition_site_is_not_decided_again_in_place_after_a_memoized_answer() {
+    let dataset = dataset();
+    let rows = 10_u64;
+    let text = "SELECT ?st WHERE { \
+                VALUES ?st { ex:st0 ex:st1 ex:st0 ex:st2 ex:st0 ex:st3 ex:st0 ex:st4 ex:st0 ex:st5 } \
+                FILTER NOT EXISTS { ?y ex:status ?st } }";
+    for strategy in [
+        crate::expr::ForcedExistsStrategy::Definition,
+        crate::expr::ForcedExistsStrategy::Probe,
+    ] {
+        let _guard = crate::expr::force_exists_strategy_for_test(strategy);
+        let mut ctx = EvalCtx::new(dataset.as_ref()).with_eval_options(crate::eval::EvalOptions {
+            force_sequential: true,
+            ..crate::eval::EvalOptions::default()
+        });
+        crate::eval::EXISTS_DECISION_COUNT.with(|count| count.set(0));
+        evaluate_query_evaluated(&query(text), &mut ctx).unwrap();
+        let decisions = crate::eval::EXISTS_DECISION_COUNT.with(std::cell::Cell::get);
+        assert!(
+            decisions <= rows + 1,
+            "{decisions} decisions for {rows} rows under the forced strategy"
+        );
+    }
+}

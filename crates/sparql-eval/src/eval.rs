@@ -467,6 +467,13 @@ thread_local! {
     /// that thread's count from ever being touched by another test's thread.
     pub(crate) static PREPARED_EXISTS_BUILD_COUNT: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+
+    /// Test-only counter of strategy decisions an `EXISTS` site makes
+    /// (`exists_prepared_decide` entries), thread-local for the same reason as
+    /// [`PREPARED_EXISTS_BUILD_COUNT`]. It pins how often a row loop decides a site
+    /// before it answers.
+    pub(crate) static EXISTS_DECISION_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
