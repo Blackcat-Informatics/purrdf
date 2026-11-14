@@ -966,18 +966,43 @@ pub trait DatasetView {
             match guard.term() {
                 TermRef::Triple { .. } => {}
                 leaf => {
-                    return owned_term_leaf(
-                        self,
-                        leaf,
-                        &mut (),
-                        |(), source| {
-                            Ok(crate::ir::try_owned_text(source).unwrap_or_else(|error| {
-                                panic!("resident term value allocation: {error}")
-                            }))
+                    // The leaf copy without the generic conversion's closures: the same
+                    // typed foreign-datatype refusal, and the same fallible exact
+                    // reservation per string, which panics on allocator exhaustion as
+                    // this method always has.
+                    fn copy(source: &str) -> String {
+                        crate::ir::try_owned_text(source).unwrap_or_else(|error| {
+                            panic!("resident term value allocation: {error}")
+                        })
+                    }
+                    return Ok(match leaf {
+                        TermRef::Iri(iri) => TermValue::Iri(copy(iri)),
+                        TermRef::Blank { label, scope } => TermValue::Blank {
+                            label: copy(label),
+                            scope,
                         },
-                        |error| error,
-                        false,
-                    );
+                        TermRef::Literal {
+                            lexical,
+                            datatype,
+                            language,
+                            direction,
+                        } => {
+                            let datatype_guard =
+                                self.resolve(datatype).map_err(TermLookupError::Read)?;
+                            let TermRef::Iri(datatype) = datatype_guard.term() else {
+                                return Err(TermLookupError::ForeignId);
+                            };
+                            TermValue::Literal {
+                                lexical_form: copy(lexical),
+                                datatype: copy(datatype),
+                                language: language.map(copy),
+                                direction,
+                            }
+                        }
+                        TermRef::Triple { .. } => {
+                            unreachable!("a triple term takes the nested walk")
+                        }
+                    });
                 }
             }
         }

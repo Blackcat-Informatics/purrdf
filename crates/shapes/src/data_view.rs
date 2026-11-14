@@ -1119,6 +1119,11 @@ impl DatasetView for ShaclDatasetView {
             Source::Delta(dense) => u64::try_from(dense.len()).expect("resident mapping fits u64"),
         }
     }
+    /// A native source holding no reifier and no annotation leaves this view with none
+    /// whatever its projection or graph selection, which only ever remove rows.
+    fn statement_layer_is_empty(&self) -> bool {
+        matches!(&self.source, Source::Native(source) if source.statement_layer_is_empty())
+    }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.raw_reifiers().take(if self.statements_projected {
             0
@@ -1214,5 +1219,35 @@ impl ShaclRead for ShaclDatasetView {
             o: TermBox::new(crate::term::term_id_to_native(self, o).to_term_value()),
         })
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod statement_layer_tests {
+    use super::*;
+    use purrdf_core::RdfDatasetBuilder;
+
+    fn source(annotated: bool) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        if annotated {
+            let statement = b.intern_triple(s, p, o).unwrap();
+            let reifier = b.intern_iri("http://example.org/r").unwrap();
+            b.push_reifier(reifier, statement).unwrap();
+        }
+        b.freeze().unwrap()
+    }
+
+    /// The certificate is forwarded from a native source and withheld when that source
+    /// holds a reifier, so a probe of the statement layer is skipped only where it
+    /// would find nothing.
+    #[test]
+    fn a_native_view_forwards_the_empty_statement_layer_certificate() {
+        use purrdf_core::DatasetView;
+        assert!(ShaclDatasetView::native(source(false)).statement_layer_is_empty());
+        assert!(!ShaclDatasetView::native(source(true)).statement_layer_is_empty());
     }
 }

@@ -27,6 +27,11 @@ type Rows = (Vec<String>, Vec<Vec<Option<TermValue>>>);
 /// Six subjects with an integer, an IRI and three plain literals each, so a query can
 /// read two to six columns. With `statements`, one reifier and one annotation as well.
 fn dataset(statements: bool) -> Arc<RdfDataset> {
+    dataset_with(statements, statements)
+}
+
+/// The same dataset holding a reifier binding, an annotation, both or neither.
+fn dataset_with(reifier: bool, annotation: bool) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let preds: Vec<_> = ["v", "w", "x", "y", "z"]
         .iter()
@@ -51,18 +56,23 @@ fn dataset(statements: bool) -> Arc<RdfDataset> {
         }
     }
     let confidence = b.intern_iri(&format!("{EX}confidence")).unwrap();
-    if statements {
+    if reifier || annotation {
         let s0 = b.intern_iri(&format!("{EX}s0")).unwrap();
         let v = b.intern_iri(&format!("{EX}v")).unwrap();
         let three = b
             .intern_literal(RdfLiteral::typed("3", INTEGER.to_owned()))
             .unwrap();
         let triple = b.intern_triple(s0, v, three).unwrap();
+        let reifier_row = reifier;
         let reifier = b.intern_iri(&format!("{EX}r")).unwrap();
         b.intern_iri(RDF_REIFIES).unwrap();
-        b.push_reifier(reifier, triple).unwrap();
+        if reifier_row {
+            b.push_reifier(reifier, triple).unwrap();
+        }
         let high = b.intern_literal(RdfLiteral::simple("high")).unwrap();
-        b.push_annotation(reifier, confidence, high).unwrap();
+        if annotation {
+            b.push_annotation(reifier, confidence, high).unwrap();
+        }
     }
     b.freeze().unwrap()
 }
@@ -74,12 +84,11 @@ fn query(text: &str) -> purrdf_sparql_algebra::Query {
 }
 
 /// Evaluate and materialize on `ctx`, as the engine does for a SELECT.
-fn run(text: &str, dataset: &RdfDataset, ctx: &mut EvalCtx<'_, RdfDataset>) -> Option<Rows> {
+fn run(text: &str, ctx: &mut EvalCtx<'_, RdfDataset>) -> Option<Rows> {
     let outcome = evaluate_query_evaluated(&query(text), ctx).ok()?;
     let EvaluatedOutcome::Complete(Outcome::Solutions(seq)) = outcome else {
         return None;
     };
-    let _ = dataset;
     crate::eval::materialize_solutions(&seq, ctx).ok()
 }
 
@@ -88,7 +97,7 @@ fn unbounded(text: &str, dataset: &Arc<RdfDataset>) -> Rows {
     let mut ctx = EvalCtx::new(dataset.as_ref());
     ctx.options.force_sequential = true;
     assert!(!ctx.growth.is_bounded());
-    run(text, dataset, &mut ctx).expect("the unbounded run completes")
+    run(text, &mut ctx).expect("the unbounded run completes")
 }
 
 /// The answer under an account of `limit` bytes, if it completes.
@@ -98,7 +107,7 @@ fn bounded(text: &str, dataset: &Arc<RdfDataset>, limit: u64) -> Option<Rows> {
     ctx.options.force_sequential = true;
     ctx.growth = workspace.capability();
     assert!(ctx.growth.is_bounded());
-    run(text, dataset, &mut ctx)
+    run(text, &mut ctx)
 }
 
 /// The smallest account, in 8 byte steps, under which `text` completes.
@@ -140,7 +149,6 @@ fn the_accounted_row_path_needs_the_account_it_always_needed() {
         .iter()
         .map(|shape| smallest_completing_limit(shape, &data))
         .collect();
-    eprintln!("PIN {measured:?}");
     assert_eq!(measured, PINNED_SMALLEST_LIMIT);
     for (shape, smallest) in SHAPES.iter().zip(measured) {
         assert!(
@@ -166,7 +174,7 @@ fn the_direct_row_path_answers_as_the_accounted_row_path_does() {
 
 #[test]
 fn the_statement_layer_is_skipped_only_when_the_view_certifies_it_empty() {
-    use crate::bgp::expansion::VIRTUAL_SOURCES;
+    use crate::bgp::VIRTUAL_SOURCES;
     let shape = "SELECT ?r ?c WHERE { ?r ex:confidence ?c }";
     let without = dataset(false);
     let with = dataset(true);
@@ -253,4 +261,17 @@ fn float_comparison_is_the_same_directly_and_under_an_account() {
         pinned.push(limit);
     }
     assert_eq!(pinned, FLOAT_PINNED_LIMIT);
+}
+
+#[test]
+fn either_statement_table_alone_makes_the_layer_non_empty() {
+    use purrdf_core::DatasetView;
+    for (reifier, annotation) in [(false, false), (true, false), (false, true), (true, true)] {
+        let data = dataset_with(reifier, annotation);
+        assert_eq!(
+            data.statement_layer_is_empty(),
+            !(reifier || annotation),
+            "reifier {reifier}, annotation {annotation}"
+        );
+    }
 }

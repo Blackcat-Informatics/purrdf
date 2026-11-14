@@ -52,7 +52,9 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-pub(crate) mod expansion;
+mod expansion;
+#[cfg(test)]
+pub(crate) use expansion::VIRTUAL_SOURCES;
 pub(crate) mod forecast;
 mod positive;
 mod window;
