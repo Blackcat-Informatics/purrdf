@@ -41,6 +41,13 @@ pub(super) enum ExpansionStep<I: ViewTermId> {
     Stop,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Virtual statement-layer sources opened on this thread, for tests that pin when
+    /// the phase is skipped.
+    pub(crate) static VIRTUAL_SOURCES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct Expansion<I: ViewTermId> {
     bounds: [Option<I>; 3],
     graph: usize,
@@ -110,8 +117,20 @@ impl<I: ViewTermId> Expansion<I> {
                     graph: *graph,
                 })
             }
+            // A workspace that admits nothing over a view that certifies an empty
+            // statement layer: the virtual phase yields no candidate, charges no
+            // candidate, and admits nothing, so it is not opened. A bounded workspace
+            // still opens it, because opening a source is admitted there.
+            GraphScope::One(_)
+                if !ctx.growth.is_bounded() && ctx.dataset.statement_layer_is_empty() =>
+            {
+                self.phase = 2;
+                None
+            }
             GraphScope::One(graph) => {
                 self.phase = 2;
+                #[cfg(test)]
+                VIRTUAL_SOURCES.with(|opened| opened.set(opened.get() + 1));
                 Some(ExpansionSource::Virtual(virtual_probe(
                     ctx.dataset,
                     input.pattern,

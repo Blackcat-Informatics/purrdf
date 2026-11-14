@@ -165,6 +165,8 @@ mod row_checkpoint;
 #[cfg(test)]
 mod row_checkpoint_gate;
 mod row_ingest;
+#[cfg(test)]
+mod row_path_parity;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.

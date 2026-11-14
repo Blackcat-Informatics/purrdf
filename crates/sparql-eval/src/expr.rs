@@ -1758,7 +1758,16 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
             return Ok(Some(intern_boolean(ctx, false)?));
         }
         (Some(ax), Some(bx)) => {
-            if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
+            // Two binary floats on a workspace that admits nothing: their comparison
+            // costs `Cost::ZERO` and asks the numeric frame for no layout, so no charge
+            // and no admission is skipped by comparing the machine values directly
+            // (the NaN pairs were answered above, so the order always exists).
+            let direct = (!ctx.growth.is_bounded())
+                .then(|| float_order(&ax, &bx))
+                .flatten();
+            if direct.is_none()
+                && !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare))
+            {
                 return Ok(None);
             }
             if let (SolutionTerm::Existing(left), SolutionTerm::Existing(right)) = (ta, tb) {
@@ -1771,14 +1780,32 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
                     return Ok(Some(intern_boolean(ctx, keep(order))?));
                 }
             }
-            let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
-            let compared =
-                purrdf_xsd::ops::value_cmp_admitted(&ax, &bx, &mut |layout| frame.admit(layout));
-            frame.finish_scalar(compared)?
+            if let Some(order) = direct {
+                Some(order)
+            } else {
+                let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
+                let compared = purrdf_xsd::ops::value_cmp_admitted(&ax, &bx, &mut |layout| {
+                    frame.admit(layout)
+                });
+                frame.finish_scalar(compared)?
+            }
         }
         _ => None,
     };
     ord.map(|ord| intern_boolean(ctx, keep(ord))).transpose()
+}
+
+/// The order of two non-NaN `xsd:float` / `xsd:double` values, which promote exactly
+/// to `f64`; `None` for any other pair, and for a NaN operand.
+fn float_order(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    fn wide(value: &XsdValue) -> Option<f64> {
+        match value {
+            XsdValue::Float(x) => Some(f64::from(*x)),
+            XsdValue::Double(x) => Some(*x),
+            _ => None,
+        }
+    }
+    wide(a)?.partial_cmp(&wide(b)?)
 }
 
 /// `a = b` over two evaluated operands, under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
