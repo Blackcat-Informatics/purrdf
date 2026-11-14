@@ -4719,6 +4719,41 @@ fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -
     )
 }
 
+/// A survivor's value for a run with no storage budget: a copy that keeps the failures
+/// the admitted route reports (a refused clone, a refused read buffer, a failed read, a
+/// foreign id) as typed errors rather than the infallible resident read's panic, without
+/// the native admission frame an unbounded workspace has no use for.
+pub(crate) fn resident_aggregate_value<D: DatasetView>(
+    dataset: &D,
+    scratch: &crate::scratch::ScratchInterner,
+    term: SolutionTerm<D::Id>,
+    source_error: impl Fn(D::ReadError) -> EvalError,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    let value = match term {
+        SolutionTerm::Computed(id) => {
+            scratch
+                .computed_value(id)
+                .try_clone()
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "native term clone",
+                })?
+        }
+        SolutionTerm::Existing(id) => dataset.term_value_with_storage(
+            id,
+            |error| match error {
+                purrdf_core::TermLookupError::Read(error) => source_error(error),
+                purrdf_core::TermLookupError::ForeignId => {
+                    EvalError::source_read("foreign dataset term id")
+                }
+            },
+            |_| EvalError::AllocationFailed {
+                construct: "resolved term value",
+            },
+        )?,
+    };
+    Ok(crate::WorkspaceTerm::resident(value))
+}
+
 /// Native row completion admitted only for arguments that cannot suspend.
 fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     agg: &AggregateExpression,
@@ -4833,18 +4868,9 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             }
             survivors.reserve_next()?;
             let value = if resident {
-                crate::WorkspaceTerm::resident(
-                    ctx.scratch
-                        .try_value_of(ctx.dataset, term)
-                        .map_err(|error| match error {
-                            purrdf_core::TermLookupError::Read(error) => {
-                                ctx.workspace.source_error(error)
-                            }
-                            purrdf_core::TermLookupError::ForeignId => {
-                                EvalError::source_read("foreign dataset term id")
-                            }
-                        })?,
-                )
+                resident_aggregate_value(ctx.dataset, &ctx.scratch, term, |error| {
+                    ctx.workspace.source_error(error)
+                })?
             } else {
                 ctx.scratch
                     .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {

@@ -21,6 +21,8 @@ use purrdf_sparql_algebra::{
 use crate::SolutionTerm;
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, eval_evaluated, evaluate_query_evaluated};
+use crate::modifier::resident_aggregate_value;
+use crate::scratch::ScratchInterner;
 use crate::workspace::owned_row_regressions::account;
 use crate::{GovernorState, QueryGovernors};
 
@@ -60,7 +62,7 @@ const BIND_EXISTS: &str =
 /// Two sites in one expression, with different bodies.
 const TWO_SITES: &str = "SELECT ?x WHERE { ?x ex:score ?s . \
      FILTER(NOT EXISTS { ?x ex:status ex:st0 } && EXISTS { ?x ex:status ex:st1 }) }";
-/// One textual body at two sites whose outer schemas differ.
+/// Two sites with the same text under different outer schemas.
 const BRANCH_SCHEMAS: &str = "SELECT ?x ?s ?st WHERE { \
      { ?x ex:score ?s . FILTER NOT EXISTS { ?x ex:status ex:st2 } } UNION \
      { ?x ex:status ?st . FILTER NOT EXISTS { ?x ex:status ex:st2 } } }";
@@ -221,7 +223,7 @@ fn collision_pattern(with_binding_row: bool) -> GraphPattern {
 }
 
 #[test]
-fn exists_scope_collision_is_refused_on_the_row_that_binds_the_variable() {
+fn exists_scope_collision_is_refused_once_a_row_binds_the_variable() {
     let dataset = dataset();
     // Twelve rows leave `?o` unbound; every one of them is answered.
     let mut ctx = EvalCtx::new(dataset.as_ref());
@@ -242,30 +244,89 @@ fn exists_scope_collision_is_refused_on_the_row_that_binds_the_variable() {
     }
 }
 
-/// Run with `--ignored --nocapture` on the base revision to read the values pinned above.
-#[test]
-#[ignore = "measures the pinned values"]
-fn measure_pinned_values() {
-    let dataset = dataset();
-    for text in QUERIES {
-        let base = crate::workspace::QueryWorkspace::<
-            crate::workspace::owned_row_regressions::Refusal,
-        >::control_bytes()
-        .unwrap();
-        let mut high = base + 4096;
-        while bounded(&dataset, text, high).is_none() {
-            high *= 2;
-        }
-        let mut low = base;
-        while low < high {
-            let mid = low + (high - low) / 2;
-            if bounded(&dataset, text, mid).is_some() {
-                high = mid;
-            } else {
-                low = mid + 1;
-            }
-        }
-        let (totals, _) = metered(&dataset, text);
-        eprintln!("PIN {low} {totals:?} {text}");
+/// A view whose value reads are refused by the allocator, as an exhausted one would.
+struct RefusingReads;
+
+impl purrdf_core::DatasetView for RefusingReads {
+    type Id = purrdf_core::TermId;
+    type ReadError = std::convert::Infallible;
+    type TermGuard<'a> = purrdf_core::TermRef<'a>;
+    type ProbePlan = ();
+    fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+        std::iter::empty()
     }
+    fn resolve(&self, _: purrdf_core::TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        Ok(purrdf_core::TermRef::Iri("http://example.org/original"))
+    }
+    fn term_id_by_value(
+        &self,
+        _: &purrdf_core::TermValue,
+    ) -> Result<Option<purrdf_core::TermId>, Self::ReadError> {
+        Ok(None)
+    }
+    fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+        purrdf_core::RdfStoreCapabilities::default()
+    }
+    fn term_count(&self) -> u64 {
+        1
+    }
+    fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+    fn quads_for_pattern_with_plan(
+        &self,
+        (): &(),
+        _: Option<purrdf_core::TermId>,
+        _: Option<purrdf_core::TermId>,
+        _: Option<purrdf_core::TermId>,
+        _: purrdf_core::GraphMatch,
+    ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+        std::iter::empty()
+    }
+    fn term_value_with_storage<E>(
+        &self,
+        _: purrdf_core::TermId,
+        _: impl Fn(purrdf_core::TermLookupError<Self::ReadError>) -> E,
+        storage_error: impl Fn(std::collections::TryReserveError) -> E,
+    ) -> Result<purrdf_core::TermValue, E> {
+        Err(storage_error(
+            Vec::<u8>::new()
+                .try_reserve(usize::MAX)
+                .expect_err("a request past the address space is refused"),
+        ))
+    }
+}
+
+/// A resident aggregate run copies each survivor without the admission frame, and a
+/// refused read buffer is the typed error the admitted route reports, never a panic.
+/// The neighbouring readable value is copied unchanged.
+#[test]
+fn a_refused_resident_read_is_the_typed_allocation_error() {
+    let mut builder = RdfDatasetBuilder::new();
+    let id = builder.intern_iri("http://example.org/original").unwrap();
+    let refused = resident_aggregate_value(
+        &RefusingReads,
+        &ScratchInterner::default(),
+        SolutionTerm::Existing(id),
+        |error| match error {},
+    )
+    .expect_err("the refused buffer is an error");
+    assert!(matches!(
+        refused,
+        EvalError::AllocationFailed {
+            construct: "resolved term value"
+        }
+    ));
+
+    let dataset = builder.freeze().unwrap();
+    let (value, _) = resident_aggregate_value(
+        dataset.as_ref(),
+        &ScratchInterner::default(),
+        SolutionTerm::Existing(id),
+        EvalError::source_read,
+    )
+    .expect("a readable value is copied")
+    .into_parts();
+    assert_eq!(
+        value,
+        purrdf_core::TermValue::Iri("http://example.org/original".to_owned())
+    );
 }

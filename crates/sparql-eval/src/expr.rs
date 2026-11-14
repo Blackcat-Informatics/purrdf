@@ -2834,11 +2834,6 @@ impl SiteFacts {
         self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::VISITED != 0
     }
 
-    fn forget_visit(&self) {
-        self.0
-            .fetch_and(!Self::VISITED, std::sync::atomic::Ordering::Relaxed);
-    }
-
     fn child_last(&self) -> bool {
         self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::CHILD_LAST != 0
     }
@@ -3039,7 +3034,12 @@ pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
     crate::stack::check("EXISTS")?;
-    if ctx.deferred_exists.is_some() || crate::deferred_exists::is_placeholder(pattern) {
+    // A body inside a substituted EXISTS is rebuilt for every outer row, so no site there
+    // has a history to learn from: it keeps the suspending route.
+    if ctx.in_substituted_exists
+        || ctx.deferred_exists.is_some()
+        || crate::deferred_exists::is_placeholder(pattern)
+    {
         return Ok(None);
     }
     let prepared = ctx.prepared_exists(pattern)?;
@@ -3051,10 +3051,12 @@ pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     else {
         return Ok(Some(false));
     };
-    if facts.child_last() {
+    // A site never decided before takes the suspending route, which decides it once:
+    // a body substituted afresh for every row is always such a site, and deciding it
+    // here as well would double its work whenever the decision ends in a child.
+    if !facts.visited() || facts.child_last() {
         return Ok(None);
     }
-    let first_visit = !facts.visited();
     let site = PreparedSite {
         key: std::ptr::from_ref(pattern) as usize,
         plan_map: ledger_source.clone(),
@@ -3064,11 +3066,6 @@ pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     match exists_prepared_decide(site, row, schema, ctx, None)? {
         ExistsDecision::Complete(answer) => Ok(Some(answer)),
         ExistsDecision::Child(_) => {
-            // The row is decided again from the start, so this request is not a visit:
-            // a site reached once still learns no facts and allocates nothing for them.
-            if first_visit {
-                facts.forget_visit();
-            }
             facts.set_child_last(true);
             Ok(None)
         }

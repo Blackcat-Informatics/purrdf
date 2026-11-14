@@ -72,9 +72,10 @@ fn constant_operand_is_parsed_once_per_query() {
         "the constant must not be parsed again for each of the extra rows"
     );
     assert_eq!(
-        many, 5,
-        "the dataset value once, and the constant and the boolean the comparison \
-         yields twice each: on the first row and on the second, which stores them"
+        many, 3,
+        "the dataset value once, and the constant twice: on the first row and on the \
+         second, which stores it; the boolean the comparison yields is read as the \
+         interned boolean it is and is never parsed"
     );
 }
 
@@ -84,7 +85,7 @@ fn constant_operand_is_parsed_once_per_query() {
 fn constant_operand_memo_keeps_the_answer() {
     let (kept, parses) = parses_of(400, "?v > 8.5e0");
     assert_eq!(kept, 0);
-    assert_eq!(parses, 5);
+    assert_eq!(parses, 3);
 }
 
 /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a
