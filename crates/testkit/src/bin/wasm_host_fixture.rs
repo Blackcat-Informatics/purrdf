@@ -24,7 +24,7 @@ mod host {
         fn math_random_import() -> f64;
     }
 
-    /// The raw `Date.now` global, read here rather than through the evaluator's one
+    /// The raw `Date.now` global, read here rather than through the browser binding's
     /// import: the fixture proves the runner's seal, so it must reach the global itself.
     /// The import sits inside the function so the helpers ledger names it exactly
     /// (`wasm-host-clock`).
