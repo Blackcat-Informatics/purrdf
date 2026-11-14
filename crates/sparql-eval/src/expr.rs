@@ -1438,6 +1438,17 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Result<Option<bool>, EvalError> {
+    // The two booleans this evaluation interned (an `EXISTS` answer, a comparison)
+    // are their own effective boolean value. Only an unbounded evaluation answers
+    // here, so a bounded one parses, admits and is charged as it always was.
+    if !ctx.growth.is_bounded()
+        && let Some(slot) = ctx
+            .cached_bool_terms
+            .iter()
+            .position(|cached| *cached == Some(term))
+    {
+        return Ok(Some(slot == 1));
+    }
     let is_lang_tagged = match term {
         SolutionTerm::Existing(id) => ctx
             .dataset
