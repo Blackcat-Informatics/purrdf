@@ -110,6 +110,9 @@ mod fallible;
 pub mod geo;
 mod governed;
 pub mod governor;
+// The host clock and entropy, read through a source the embedder installs. This
+// crate declares no host import of its own.
+pub mod host_source;
 pub mod interned;
 mod join_plan;
 /// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
@@ -153,7 +156,6 @@ pub use retained::{
 pub mod protocol;
 pub mod remote;
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
 #[doc(hidden)]
 pub mod wasm_host;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this

@@ -1379,12 +1379,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// A fresh context over `dataset`, scoped to the default graph.
+    ///
+    /// # Panics
+    ///
+    /// On a build with no operating system (`wasm32-unknown-unknown`) and no installed
+    /// [`crate::host_source`]: the context's time and seed have nowhere to come from,
+    /// and this signature has no error to return. [`Self::try_new`] returns that
+    /// refusal as a value.
     pub fn new(dataset: &'d D) -> Self {
-        Self::at(
+        Self::try_new(dataset).unwrap_or_else(|missing| panic!("{missing}"))
+    }
+
+    /// A fresh context over `dataset`, scoped to the default graph, or the refusal
+    /// when this build has no host clock or entropy to sample.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::HostSourceMissing`] on a build with no operating system and no
+    /// installed [`crate::host_source`].
+    pub fn try_new(dataset: &'d D) -> Result<Self, EvalError> {
+        Ok(Self::at(
             dataset,
-            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
-            crate::clock::entropy_seed(),
-        )
+            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()?),
+            crate::clock::entropy_seed()?,
+        ))
     }
 
     /// A fresh context over `dataset` whose `NOW()` is `now` and whose

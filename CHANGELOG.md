@@ -8,6 +8,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
+  depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`, so
+  a module built from `purrdf-rdf`, the umbrella crate or any other library
+  crate has an empty import section and runs without a JavaScript host. The
+  evaluator reads the clock and entropy through a source the embedder installs
+  once (`purrdf_sparql_eval::host_source::install`); `purrdf-wasm` installs
+  `Date.now` and `Math.random` when its module starts, so its users see no
+  change, and native builds read the operating system as before. **Behaviour
+  change:** a `wasm32` module that links the evaluator without `purrdf-wasm` and
+  relied on the default query time, entropy seed or wall deadline must now
+  install a source or supply `QueryOptions::with_now` and
+  `QueryOptions::with_entropy_seed`. Without either, the request is refused
+  with the new `EvalError::HostSourceMissing`
+  (`native-sparql-host-source-missing`), which names the missing input; no time
+  or seed is substituted. `WallDeadline::try_after` and `EvalCtx::try_new`
+  return that refusal as a value. `WallDeadline::after`, `EvalCtx::new` and the
+  hidden `wasm_host` functions keep their signatures and panic with the same
+  message in that one case.
+
 - **GTS snapshot emission:** `emit_gts` encodes the snapshot payload once,
   straight from the builder's tables, instead of building a copy of every term
   and encoding the result twice. Its signature and the emitted bytes are

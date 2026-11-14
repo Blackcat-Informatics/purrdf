@@ -716,7 +716,16 @@ fn delete_insert(
             error.to_string(),
         )
     })?;
-    let seed = supplied_rng.unwrap_or_else(crate::clock::entropy_seed);
+    let seed = match *supplied_rng {
+        Some(seed) => seed,
+        None => crate::clock::entropy_seed().map_err(|missing| {
+            let error = crate::EvalError::from(missing);
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?,
+    };
     let mut ctx = EvalCtx::at(&snap, now, seed).with_bounded_order_cache(cfg.order_cache);
     ctx.xpath_regex = cfg.xpath_regex;
     // The property-function registry, the SHACL-AF function registry, the

@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -625,6 +625,22 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
 
+# A wasm32-unknown-unknown module built from the library crates runs where there
+# is no JavaScript host, so every import is one its embedder cannot provide. The
+# probe (crates/purrdf/examples/host_import_probe.rs) links the parser and the
+# SPARQL evaluator, including both of the evaluator's host reads, into one bare
+# module; helper-census reads that module's import section and refuses an entry.
+# Host imports belong to the browser binding, purrdf-wasm, and nowhere below it.
+wasm-imports: ## Link the library crates as one bare wasm32 module and refuse any host import (SKIP locally if target absent; CI hard-fails).
+	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
+		cargo build --locked --release --target wasm32-unknown-unknown -p purrdf --example host_import_probe \
+		&& cargo run -q --locked -p helper-census -- --wasm-imports "$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/examples/host_import_probe.wasm"; \
+	elif [ -n "$${CI:-}" ]; then \
+		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
+	else \
+		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
+	fi
+
 doctor: ## Report which build pins this machine actually enforces (never gates; run it when a gate SKIPs).
 	@# Every "SKIP" a gate prints is a claim that something was not checked, and the
 	@# reasons are not interchangeable: a missing TARGET is one command away, while a
@@ -788,6 +804,9 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				supplied_large_fraction_and_timezone_survive_repeated_now \
 				prepared_executions_select_fresh_inputs_without_changing_the_plan \
 				bounded_coordinate_owners_price_real_allocations_and_release_after_last_output \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test host_source -- --exact \
+				the_installed_source_is_the_only_host_read_and_its_absence_is_a_typed_refusal \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
 				the_hand_answers_are_reproduced_on_this_target \

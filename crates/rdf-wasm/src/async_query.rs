@@ -411,7 +411,7 @@ fn run_job(id: u32) -> RunStatus {
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_ms() -> f64 {
-    purrdf_sparql_eval::wasm_host::date_now()
+    crate::host::date_now()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
