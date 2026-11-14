@@ -1447,6 +1447,8 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
             .iter()
             .position(|cached| *cached == Some(term))
     {
+        #[cfg(test)]
+        crate::eval::BOOLEAN_SHORTCUT_COUNT.with(|count| count.set(count.get() + 1));
         return Ok(Some(slot == 1));
     }
     let is_lang_tagged = match term {
@@ -2814,7 +2816,9 @@ fn exists_use_probe(
 ///
 /// Learned on the site's second visit, so a site reached once allocates nothing
 /// for them. Both are properties of the immutable body alone, which is why a
-/// preparation shared across runs may keep them. Only a workspace without a
+/// preparation shared across runs may keep them: every flag lives as long as its
+/// preparation, so the first row of a later run of one plan finds the site already
+/// visited and is asked in place at once. Only a workspace without a
 /// storage budget reads them: a bounded run keeps its original per-row walks and
 /// their exact admission.
 #[derive(Debug, Default)]
@@ -2827,8 +2831,12 @@ impl SiteFacts {
     const PROBE_EVERY_SCHEMA: u8 = 8;
     /// The last row loop that asked for an answer in place got a child instead.
     const CHILD_LAST: u8 = 16;
-    /// That child was a per-row definition (or a deferred one), which no later decision
-    /// turns into an answer without a child: the site keeps `CHILD_LAST` for the run.
+    /// That child was a per-row definition (or a deferred one). A definition-memo hit can
+    /// complete a later decision without a child, but a hit is followed by a miss on most
+    /// data, and clearing the flag on a hit would decide the next fresh row twice. The
+    /// site therefore keeps `CHILD_LAST` for the life of its preparation, and a
+    /// preparation a plan shares keeps every flag across the runs of that plan: only the
+    /// route a row takes depends on them, never an answer or a charge.
     const DEFINITION: u8 = 32;
 
     /// The facts for `normalized`, or `None` on its first visit.
@@ -2869,7 +2877,7 @@ impl SiteFacts {
     }
 
     /// Record that a request for an answer in place got a child; `definition` says it
-    /// was a definition child, which keeps the flag for the rest of the run.
+    /// was a definition child, which keeps the flag for the life of the preparation.
     fn set_child_last(&self, definition: bool) {
         let bits = Self::CHILD_LAST | if definition { Self::DEFINITION } else { 0 };
         self.0.fetch_or(bits, std::sync::atomic::Ordering::Relaxed);
@@ -3062,8 +3070,9 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
 /// Only an ordinary resident evaluation asks: a bounded workspace or a query that
 /// records evidence keeps the suspended route. A site whose last such request ended
 /// in a child is not asked again until a suspended decision completes, and a site
-/// whose child was a per-row definition is not asked again in the run, so a site that
-/// always needs a child is decided once per row.
+/// whose child was a per-row definition is not asked again for the life of its
+/// preparation (which a plan shares across runs), so a site that always needs a child
+/// is decided once per row.
 pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm<D::Id>>],
@@ -3601,9 +3610,11 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
     let facts = if ctx.growth.is_bounded() {
         0
     } else {
-        facts
-            .read(normalized, analysis, free_vars, &ctx.growth)?
-            .unwrap_or(0)
+        let learned = facts.read(normalized, analysis, free_vars, &ctx.growth)?;
+        #[cfg(test)]
+        crate::eval::SITE_FACTS_READ_COUNT
+            .with(|count| count.set(count.get() + u64::from(learned.is_some())));
+        learned.unwrap_or(0)
     };
 
     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a

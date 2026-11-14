@@ -775,6 +775,8 @@ impl<'e, I: purrdf_core::ViewTermId> RowExpressionFrame<'e, I> {
             return Ok(false);
         };
         let value = helpers::intern_boolean(ctx, answer)?;
+        #[cfg(test)]
+        crate::eval::IN_PLACE_ANSWER_COUNT.with(|count| count.set(count.get() + 1));
         self.state
             .resume(&mut self.linked, Some(value), None, ctx)?;
         Ok(true)

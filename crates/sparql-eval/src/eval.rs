@@ -474,6 +474,20 @@ thread_local! {
     /// before it answers.
     pub(crate) static EXISTS_DECISION_COUNT: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+
+    /// Test-only witnesses that each resident fast path engages on the shape it claims:
+    /// an `EXISTS` row resumed in place, a site read through its learned facts, an
+    /// interned boolean read as its own effective boolean value, and an aggregate
+    /// argument read straight from the row. Thread-local like the counters above; a test
+    /// reads them under `force_sequential`.
+    pub(crate) static IN_PLACE_ANSWER_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static SITE_FACTS_READ_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static BOOLEAN_SHORTCUT_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static LONE_VARIABLE_READ_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,

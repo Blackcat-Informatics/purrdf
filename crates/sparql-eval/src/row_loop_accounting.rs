@@ -7,8 +7,10 @@
 //! when the workspace reports no storage budget. These cases pin what those
 //! routes must not change: the answers, the smallest bounded account each
 //! query completes under (with one byte less refusing), the governor totals a
-//! metered run reports, and the row on which an `EXISTS` scope collision is
-//! refused.
+//! metered run reports, what a host's own governors charge the sequential aggregate
+//! route, the run of a shared plan twice, that each fast path engages on the shape it
+//! claims, and that an `EXISTS` scope collision is refused with its variable and
+//! construct once a row binds it, with the neighbouring case accepted.
 
 use std::sync::Arc;
 
@@ -62,7 +64,9 @@ const BIND_EXISTS: &str =
 /// Two sites in one expression, with different bodies.
 const TWO_SITES: &str = "SELECT ?x WHERE { ?x ex:score ?s . \
      FILTER(NOT EXISTS { ?x ex:status ex:st0 } && EXISTS { ?x ex:status ex:st1 }) }";
-/// Two sites with the same text under different outer schemas.
+/// Two distinct sites with the same text, in two branches that bind different columns. One
+/// preparation meeting several outer schemas needs a shared plan, which the two-run test
+/// below covers.
 const BRANCH_SCHEMAS: &str = "SELECT ?x ?s ?st WHERE { \
      { ?x ex:score ?s . FILTER NOT EXISTS { ?x ex:status ex:st2 } } UNION \
      { ?x ex:status ?st . FILTER NOT EXISTS { ?x ex:status ex:st2 } } }";
@@ -194,58 +198,174 @@ fn metered_runs_report_the_pinned_totals_and_the_unbounded_answer() {
     }
 }
 
-/// The governors of a host that sets a scratch ceiling, an intermediate-cell ceiling and a
-/// stop signal, as a SHACL host does: a cell ceiling keeps GROUP BY on its sequential,
-/// suspendable aggregate route.
-fn host_governors(scratch: u64) -> QueryGovernors {
-    QueryGovernors::UNBOUNDED
+/// A stop signal that counts its polls and fires, and stays fired, from poll `fire_at`.
+#[derive(Debug)]
+struct StopFrom {
+    polls: std::sync::atomic::AtomicU64,
+    fire_at: u64,
+}
+
+impl crate::StopSignal for StopFrom {
+    fn poll(&self) -> Option<purrdf_core::StopCause> {
+        let seen = self
+            .polls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        (seen >= self.fire_at).then_some(purrdf_core::StopCause::Cancelled)
+    }
+}
+
+/// What a host's governors report for one run: the answer when it completes, the fuel,
+/// scratch, intermediate cells and answer rows consumed, and the stop polls made.
+struct Host {
+    rendered: Option<String>,
+    totals: [u64; 4],
+    polls: u64,
+}
+
+/// Run `text` under the governors of a host that sets a fuel, scratch, cell and answer
+/// ceiling and a stop signal that fires from poll `fire_at`, as a SHACL host does. A
+/// ceiling on cells keeps GROUP BY on its sequential, suspendable aggregate route.
+fn host_run(dataset: &RdfDataset, text: &str, scratch: u64, fire_at: u64) -> Host {
+    let stop = Arc::new(StopFrom {
+        polls: std::sync::atomic::AtomicU64::new(0),
+        fire_at,
+    });
+    let governors = QueryGovernors::UNBOUNDED
+        .with_fuel(1 << 40)
         .with_max_scratch_bytes(scratch)
         .with_max_intermediate_cells(1 << 40)
-        .with_stop_signal(Arc::new(crate::CancellationFlag::new()))
-}
-
-/// The rendered answer under the host's governors with `scratch` bytes of scratch, and the
-/// scratch it consumed, or `None` when a governor refuses it.
-fn host_governed(dataset: &RdfDataset, text: &str, scratch: u64) -> Option<(String, u64)> {
-    let state = Arc::new(GovernorState::new(&host_governors(scratch)));
+        .with_max_answers(1 << 40)
+        .with_stop_signal(Arc::clone(&stop) as Arc<dyn crate::StopSignal>);
+    let state = Arc::new(GovernorState::new(&governors));
     let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
-    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).ok()?;
+    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).ok();
     let evidence = state.evidence();
-    if evidence.tripped().is_some() {
-        return None;
+    let rendered = outcome
+        .filter(|_| evidence.tripped().is_none())
+        .map(|outcome| render(&outcome, &ctx));
+    Host {
+        rendered,
+        totals: [
+            ResourceDimension::Fuel,
+            ResourceDimension::ScratchBytes,
+            ResourceDimension::IntermediateCells,
+            ResourceDimension::AnswerRows,
+        ]
+        .map(|dimension| evidence.consumed_in(dimension)),
+        polls: stop.polls.load(std::sync::atomic::Ordering::Relaxed),
     }
-    Some((
-        render(&outcome, &ctx),
-        evidence.consumed_in(ResourceDimension::ScratchBytes),
-    ))
 }
 
-/// The smallest scratch ceiling each query completes under the host's governors.
-const HOST_SCRATCH_MINIMUM: [u64; 8] = [153, 153, 153, 153, 153, 784, 1328, 2318];
+/// What a host-governed run of each query consumes: fuel, scratch bytes, intermediate
+/// cells and answer rows.
+const HOST_TOTALS: [[u64; 4]; 8] = [
+    [65, 153, 24, 9],
+    [71, 153, 36, 12],
+    [61, 153, 24, 3],
+    [150, 153, 60, 20],
+    [694, 153, 36, 0],
+    [65, 784, 24, 5],
+    [121, 1328, 36, 4],
+    [133, 2318, 36, 5],
+];
 
+/// The stop polls a host-governed run of each query makes.
+const HOST_POLLS: [u64; 8] = [23, 23, 28, 44, 292, 20, 41, 36];
+
+/// **A host-governed run is charged, polled and stopped as it always was.** Under a
+/// host's ceilings GROUP BY takes its sequential route, so each query must consume the
+/// pinned fuel, scratch, cells and rows, make the pinned number of stop polls, complete
+/// at its own scratch and refuse one byte below, stop when the signal fires on a poll it
+/// makes, and complete when the signal fires only after its last poll.
 #[test]
-fn host_governed_runs_complete_at_the_pinned_scratch_minimum_and_refuse_one_byte_below() {
+fn host_governed_runs_report_the_pinned_totals_polls_and_scratch_boundary() {
     let dataset = dataset();
-    for (text, minimum) in QUERIES.into_iter().zip(HOST_SCRATCH_MINIMUM) {
+    for (index, text) in QUERIES.into_iter().enumerate() {
         let expected = answer(&dataset, text);
-        let (rendered, consumed) = host_governed(&dataset, text, 1 << 40).unwrap();
-        assert_eq!(rendered, expected, "{text}: the host-governed answer");
+        let run = host_run(&dataset, text, 1 << 40, u64::MAX);
         assert_eq!(
-            consumed, minimum,
-            "{text}: scratch consumed under the host's governors"
+            run.rendered.as_deref(),
+            Some(expected.as_str()),
+            "{text}: answer"
         );
         assert_eq!(
-            host_governed(&dataset, text, minimum).map(|(rendered, _)| rendered),
-            Some(expected),
-            "{text}: completes at {minimum} bytes of scratch"
+            run.totals, HOST_TOTALS[index],
+            "{text}: fuel, scratch, cells, rows"
         );
-        if minimum > 0 {
+        assert_eq!(run.polls, HOST_POLLS[index], "{text}: stop polls");
+        // The scratch ceiling: complete at what was consumed, refused one byte below.
+        let scratch = run.totals[1];
+        assert_eq!(
+            host_run(&dataset, text, scratch, u64::MAX)
+                .rendered
+                .as_deref(),
+            Some(expected.as_str()),
+            "{text}: completes at {scratch} bytes of scratch"
+        );
+        if scratch > 0 {
             assert_eq!(
-                host_governed(&dataset, text, minimum - 1),
+                host_run(&dataset, text, scratch - 1, u64::MAX).rendered,
                 None,
                 "{text}: refused one byte below"
             );
         }
+        // The stop signal: observed on the first poll and part-way through, the run is
+        // stopped; fired only after its last poll, it completes with the same answer.
+        for fire_at in [1, run.polls.div_ceil(2)] {
+            assert_eq!(
+                host_run(&dataset, text, 1 << 40, fire_at).rendered,
+                None,
+                "{text}: stopped at poll {fire_at} of {}",
+                run.polls
+            );
+        }
+        assert_eq!(
+            host_run(&dataset, text, 1 << 40, run.polls + 1)
+                .rendered
+                .as_deref(),
+            Some(expected.as_str()),
+            "{text}: completes when the stop fires after its last poll"
+        );
+    }
+}
+
+/// Aggregate shapes whose value path differs: `SUM` over IRIs (an error, so an unbound
+/// result), `AVG` and `SUM` of floats, `GROUP_CONCAT` and an unbound argument.
+const ROUTE_QUERIES: [&str; 4] = [
+    "SELECT ?st (SUM(?x) AS ?t) WHERE { ?x ex:status ?st } GROUP BY ?st",
+    "SELECT ?st (AVG(?s) AS ?a) (SUM(?s) AS ?t) WHERE { ?x ex:score ?s ; ex:status ?st } GROUP BY ?st",
+    "SELECT ?st (GROUP_CONCAT(?s; SEPARATOR=\",\") AS ?g) WHERE { ?x ex:score ?s ; ex:status ?st } GROUP BY ?st",
+    "SELECT ?x (COUNT(?o) AS ?n) WHERE { ?x ex:score ?s OPTIONAL { ?x ex:status ?o FILTER(?o = ex:st1) } } GROUP BY ?x",
+];
+
+/// **Each aggregate route yields the accounted run's answer and one scratch charge.**
+/// The inline route, the sequential route a cell ceiling forces and a bounded account
+/// must agree on these value shapes, where an error, a float sum, a concatenation or an
+/// unbound argument reaches the value copy.
+#[test]
+fn the_sequential_and_inline_aggregate_routes_answer_as_the_accounted_run() {
+    let dataset = dataset();
+    for text in ROUTE_QUERIES {
+        let inline = answer(&dataset, text);
+        let accounted = bounded(&dataset, text, 1 << 40);
+        let sequential = host_run(&dataset, text, 1 << 40, u64::MAX);
+        assert_eq!(
+            accounted.as_deref(),
+            Some(inline.as_str()),
+            "{text}: accounted run"
+        );
+        assert_eq!(
+            sequential.rendered.as_deref(),
+            Some(inline.as_str()),
+            "{text}: sequential route"
+        );
+        // The scratch each route charges is one number.
+        assert_eq!(
+            metered(&dataset, text).0[1],
+            sequential.totals[1],
+            "{text}: scratch charged"
+        );
     }
 }
 
@@ -415,6 +535,119 @@ fn a_definition_site_is_not_decided_again_in_place_after_a_memoized_answer() {
         assert!(
             decisions <= rows + 1,
             "{decisions} decisions for {rows} rows under the forced strategy"
+        );
+    }
+}
+
+/// A prepared plan keeps what its `EXISTS` sites learned between runs. The second run of
+/// each query answers and is charged exactly as the first, which began with nothing
+/// learned.
+#[test]
+fn a_second_run_of_one_prepared_plan_answers_and_is_charged_as_the_first() {
+    let dataset = dataset();
+    let engine = crate::NativeSparqlEngine::default();
+    for text in QUERIES.into_iter().chain(ROUTE_QUERIES) {
+        let prepared = engine
+            .prepare_query(&format!("PREFIX ex: <{EX}>\n{text}"), None)
+            .expect("prepares");
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let outcome = engine
+                .query_prepared_governed_view(
+                    &*dataset,
+                    &prepared,
+                    &[],
+                    &crate::QueryOptions::EMPTY,
+                    &QueryGovernors::METERED,
+                )
+                .expect("completes");
+            let crate::GovernedOutcome::Complete {
+                result, evidence, ..
+            } = outcome
+            else {
+                panic!("{text}: a metered run completes");
+            };
+            runs.push((
+                format!("{result:?}"),
+                [
+                    ResourceDimension::Fuel,
+                    ResourceDimension::ScratchBytes,
+                    ResourceDimension::IntermediateCells,
+                    ResourceDimension::AnswerRows,
+                ]
+                .map(|dimension| evidence.consumed_in(dimension)),
+            ));
+        }
+        assert_eq!(runs[0], runs[1], "{text}: the second run of one plan");
+    }
+}
+
+/// A comparison `FILTER`: its boolean result is the interned boolean the shortcut reads.
+const COMPARISON: &str = "SELECT ?x ?s WHERE { ?x ex:score ?s FILTER(?s > 5.5e0) }";
+
+/// The four witnesses a resident run raises, in the order of their declaration, for one
+/// sequential run of `text` (under the host's governors when `host`) over an unbounded or
+/// an accounted workspace.
+fn engaged(dataset: &RdfDataset, text: &str, accounted: bool, host: bool) -> [u64; 4] {
+    let counters = [
+        &crate::eval::IN_PLACE_ANSWER_COUNT,
+        &crate::eval::SITE_FACTS_READ_COUNT,
+        &crate::eval::BOOLEAN_SHORTCUT_COUNT,
+        &crate::eval::LONE_VARIABLE_READ_COUNT,
+    ];
+    for counter in counters {
+        counter.with(|count| count.set(0));
+    }
+    let mut ctx = EvalCtx::new(dataset).with_eval_options(crate::eval::EvalOptions {
+        force_sequential: true,
+        ..crate::eval::EvalOptions::default()
+    });
+    let (workspace, _ledger, _) = account(1 << 40);
+    if accounted {
+        ctx.growth = workspace.capability();
+    }
+    if host {
+        let state = Arc::new(GovernorState::new(
+            &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1 << 40),
+        ));
+        ctx = ctx.with_governors(state);
+    }
+    evaluate_query_evaluated(&query(text), &mut ctx).expect("completes");
+    counters.map(|counter| counter.with(std::cell::Cell::get))
+}
+
+/// Each fast path engages on the shape it claims, and none does on an accounted
+/// workspace, which keeps the original routes.
+#[test]
+fn each_resident_fast_path_engages_on_its_shape_and_not_on_an_accounted_workspace() {
+    let dataset = dataset();
+    let [in_place, facts, ..] = engaged(&dataset, NOT_EXISTS, false, false);
+    assert!(in_place > 0, "an EXISTS row is resumed in place");
+    assert!(facts > 0, "the site is read through its learned facts");
+    let [_, _, boolean, _] = engaged(&dataset, COMPARISON, false, false);
+    assert!(
+        boolean > 0,
+        "the boolean a comparison yields is read as itself"
+    );
+    let [in_place, ..] = engaged(&dataset, BIND_EXISTS, false, false);
+    assert!(in_place > 0, "a BIND of EXISTS is resumed in place too");
+    // The lone-variable read, on the inline route and on the sequential one.
+    let [.., inline] = engaged(&dataset, GROUP_COUNT, false, false);
+    assert!(
+        inline > 0,
+        "the inline aggregate reads its argument from the row"
+    );
+    let [.., sequential] = engaged(&dataset, GROUP_COUNT, false, true);
+    assert!(
+        sequential > 0,
+        "the sequential aggregate reads its argument from the row"
+    );
+    // The neighbour: an accounted workspace takes none of them.
+    for text in [NOT_EXISTS, BIND_EXISTS, GROUP_COUNT] {
+        assert_eq!(
+            engaged(&dataset, text, true, false),
+            [0; 4],
+            "{text}: accounted"
         );
     }
 }

@@ -2225,10 +2225,11 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
         rows: &[RetainedRow<I>],
         ctx: &mut EvalCtx<'d, D>,
     ) -> Result<BuiltinAggregateStep<'e, 'd, I>, EvalError> {
-        // A resident run reads a lone variable argument straight from the row and copies
-        // each dataset value without a native admission frame: an unbounded workspace
-        // admits and charges nothing, so the value, the scratch charge and every
-        // refusal are those of the frame route, in the same order.
+        // A resident run reads a lone variable argument straight from the row (an unbound
+        // one skips its row there too, as the frame route does) and copies each dataset
+        // value without a native admission frame: an unbounded workspace admits and
+        // charges nothing, so the value, the scratch charge and the typed read and
+        // allocation refusals are those of the frame route, in the same order.
         let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
         loop {
             let direct = if resident && self.active.is_none() {
@@ -2243,6 +2244,8 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
                 None
             };
             let term = if let Some(term) = direct {
+                #[cfg(test)]
+                crate::eval::LONE_VARIABLE_READ_COUNT.with(|count| count.set(count.get() + 1));
                 self.ordinal += 1;
                 term
             } else {
@@ -4866,17 +4869,22 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ctx,
             ChargePoint::AggregateAccumulation,
         );
-        // A resident run reads a lone variable argument straight from the row and
-        // copies each dataset value without a native admission frame: an unbounded
-        // workspace admits and charges nothing, so the value, every governor charge
-        // and every refusal are those of the admitted route.
+        // A resident run reads a lone variable argument straight from the row (an unbound
+        // one skips its row there too, as the frame route does) and copies each dataset
+        // value without a native admission frame: an unbounded workspace admits and
+        // charges nothing, so the value, every governor charge and the typed read and
+        // allocation refusals are those of the admitted route.
         let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
         for &i in idxs {
             let term = match resident
                 .then(|| first_arg.sole_variable(&rows[i]))
                 .flatten()
             {
-                Some(term) => term,
+                Some(term) => {
+                    #[cfg(test)]
+                    crate::eval::LONE_VARIABLE_READ_COUNT.with(|count| count.set(count.get() + 1));
+                    term
+                }
                 None => first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)?,
             };
             let Some(term) = term else {
