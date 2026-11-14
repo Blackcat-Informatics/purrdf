@@ -4805,8 +4805,20 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ctx,
             ChargePoint::AggregateAccumulation,
         );
+        // A resident run reads a lone variable argument straight from the row and
+        // copies each dataset value without a native admission frame: an unbounded
+        // workspace admits and charges nothing, so the value, every governor charge
+        // and every refusal are those of the admitted route.
+        let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
         for &i in idxs {
-            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
+            let term = match resident
+                .then(|| first_arg.sole_variable(&rows[i]))
+                .flatten()
+            {
+                Some(term) => term,
+                None => first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)?,
+            };
+            let Some(term) = term else {
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
@@ -4820,11 +4832,25 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
                 let _ = seen.insert_admitted(term, (), &ctx.growth)?;
             }
             survivors.reserve_next()?;
-            let value =
+            let value = if resident {
+                crate::WorkspaceTerm::resident(
+                    ctx.scratch
+                        .try_value_of(ctx.dataset, term)
+                        .map_err(|error| match error {
+                            purrdf_core::TermLookupError::Read(error) => {
+                                ctx.workspace.source_error(error)
+                            }
+                            purrdf_core::TermLookupError::ForeignId => {
+                                EvalError::source_read("foreign dataset term id")
+                            }
+                        })?,
+                )
+            } else {
                 ctx.scratch
                     .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
                         ctx.workspace.source_error(error)
-                    })?;
+                    })?
+            };
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 crate::scratch::value_bytes(&value),

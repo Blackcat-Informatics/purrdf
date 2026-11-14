@@ -1197,6 +1197,21 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         }
     }
 
+    /// The current row's binding of the one variable this program reads, when the
+    /// whole program is that read and records no evidence: exactly the value
+    /// [`Self::term`] returns for it, without entering the interpreter.
+    pub(crate) fn sole_variable(
+        &self,
+        row: &[Option<SolutionTerm<I>>],
+    ) -> Option<Option<SolutionTerm<I>>> {
+        match self.program.ops.as_slice() {
+            [Op::Var(slot)] if self.evidence.is_none() => {
+                Some(self.slots[*slot as usize].and_then(|column| row[column]))
+            }
+            _ => None,
+        }
+    }
+
     /// Start one expression exactly once; a suspended execution retains its
     /// program counter and stack instead of replaying any previous instruction.
     fn begin_term<D: DatasetView<Id = I> + Sync>(
