@@ -304,6 +304,12 @@ pub const LEDGER: &[ThreadLocal] = &[
                  before it runs an evaluation; an evaluation reads it as a constant.",
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/bgp/expansion.rs",
+        name: "VIRTUAL_SOURCES",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/op_count.rs",
         name: "COUNTS",
         safety: Safety::NotCompiledIn,
