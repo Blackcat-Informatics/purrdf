@@ -6,7 +6,7 @@
 //! `Reflect.get` is declared here once and read by the option reader, the asynchronous
 //! job's option decoding and the test-flag reader. The host clock (`Date.now`) and the
 //! host random draw (`Math.random`) are declared here once too: the asynchronous job
-//! clock reads the first, and [`JsHostSource`] is the source this crate installs in the
+//! clock reads the first, and `JsHostSource` is the source this crate installs in the
 //! evaluator, which imports nothing itself. A second declaration of `Date.now` or
 //! `Reflect.get` fails `scripts/check-shared-helpers.py`.
 //!

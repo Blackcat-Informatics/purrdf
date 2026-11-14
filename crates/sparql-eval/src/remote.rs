@@ -372,6 +372,62 @@ impl<'a> ServiceRequest<'a> {
     }
 }
 
+/// The calling execution's query time and a seed derived from its random state, for a
+/// resolver that evaluates the forwarded query in process.
+///
+/// A `SERVICE` clause answered in process is part of the execution that reached it, so
+/// its evaluation takes that execution's instant: one request has one `NOW()`. Its
+/// random stream starts from a seed derived from the caller's random state and the
+/// request, so it differs from the caller's own stream and from another request's, and
+/// repeats when the caller's seed does. Neither value is read from the host.
+#[derive(Clone, Copy, Debug)]
+pub struct ServiceCoordinates<'a> {
+    now: &'a purrdf_xsd::temporal::DateTime,
+    entropy_seed: u64,
+}
+
+impl<'a> ServiceCoordinates<'a> {
+    /// Coordinates carrying `now` and `entropy_seed`.
+    #[must_use]
+    pub const fn new(now: &'a purrdf_xsd::temporal::DateTime, entropy_seed: u64) -> Self {
+        Self { now, entropy_seed }
+    }
+
+    /// The calling execution's query time.
+    #[must_use]
+    pub const fn now(&self) -> &'a purrdf_xsd::temporal::DateTime {
+        self.now
+    }
+
+    /// The seed the forwarded evaluation's random stream starts from.
+    #[must_use]
+    pub const fn entropy_seed(&self) -> u64 {
+        self.entropy_seed
+    }
+
+    /// The coordinates `ctx` hands the request for `text` at `endpoint`. The caller's
+    /// random state is read, not advanced.
+    fn of<D: DatasetView + Sync>(
+        ctx: &'a EvalCtx<'_, D>,
+        endpoint: &str,
+        text: &str,
+    ) -> Result<Self, EvalError> {
+        let purrdf_xsd::XsdValue::DateTime(now) = &ctx.now else {
+            return Err(EvalError::Invariant(
+                crate::EvaluatorInvariant::QueryClockNotDateTime,
+            ));
+        };
+        let request = purrdf_hash::fnv::fold(
+            purrdf_hash::fnv::fnv1a64(endpoint.as_bytes()),
+            text.as_bytes(),
+        );
+        Ok(Self::new(
+            now,
+            purrdf_hash::mix::splitmix64_finalize(ctx.rng_state ^ request),
+        ))
+    }
+}
+
 /// A host's certified maximum live bytes during one resolution, including its
 /// returned bindings or dynamic error. The grant is acquired before dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -858,6 +914,27 @@ pub trait ServiceResolver {
                 AdmittedRemoteError::certified(error, allocation, &workspace)?,
             )),
         }
+    }
+
+    /// [`Self::resolve_admitted`], with the calling execution's coordinates. The
+    /// evaluator dispatches every `SERVICE` request through this method.
+    ///
+    /// A resolver that answers by exchange with an endpoint has no use for them, and
+    /// the default forwards to [`Self::resolve_admitted`]. A resolver that evaluates
+    /// the forwarded query in process overrides this and evaluates under them, so the
+    /// forwarded evaluation reads no host clock or entropy. A resolver that dispatches
+    /// to other resolvers overrides it to pass them on.
+    ///
+    /// # Errors
+    /// Those of [`Self::resolve_admitted`].
+    fn resolve_coordinated(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+        coordinates: ServiceCoordinates<'_>,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        let _ = coordinates;
+        self.resolve_admitted(request, workspace)
     }
 }
 
@@ -1767,12 +1844,14 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     let max_intermediate_cells = ctx
         .governor_state()
         .and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
-    let response = source.resolve_admitted(
+    let coordinates = ServiceCoordinates::of(ctx, endpoint, &text.text)?;
+    let response = source.resolve_coordinated(
         ServiceRequest::new(endpoint, &text.text)
             .silent(silent)
             .with_stop(stop.as_ref())
             .with_max_intermediate_cells(max_intermediate_cells),
         workspace.clone(),
+        coordinates,
     );
     let post_return_trip = ctx.stop_check();
     let error = match response {
@@ -2278,6 +2357,7 @@ pub(crate) fn evaluate_in_memory_admitted(
     request: ServiceRequest<'_>,
     nested: &(dyn ServiceResolver + Sync),
     workspace: &crate::WorkspaceCapability,
+    coordinates: Option<ServiceCoordinates<'_>>,
 ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
     use crate::workspace::LexicalFrame;
     use purrdf_lex::allocation::Memory;
@@ -2317,13 +2397,19 @@ pub(crate) fn evaluate_in_memory_admitted(
             })?;
         }
     }
-    // A SERVICE endpoint executes its own query; its protocol request has no
-    // caller-selected clock or entropy coordinate.
-    let mut ctx = EvalCtx::new_admitted(dataset, workspace, || {
-        Ok((
+    // A request the evaluator dispatched carries the calling execution's coordinates,
+    // and the forwarded query evaluates under them with no host read. A request a host
+    // hands the resolver directly has no calling execution, so it is a query of its
+    // own and samples the host as any query without supplied inputs does.
+    let mut ctx = EvalCtx::new_admitted(dataset, workspace, || match coordinates {
+        Some(coordinates) => Ok((
+            crate::engine::prepare_coordinate_now(Some(coordinates.now()), workspace)?,
+            coordinates.entropy_seed(),
+        )),
+        None => Ok((
             purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()?),
             crate::clock::entropy_seed()?,
-        ))
+        )),
     })?
     .with_remote(nested);
     ctx.growth = workspace.clone();
@@ -2496,6 +2582,7 @@ pub(crate) fn evaluate_in_memory(
         request,
         nested,
         &crate::WorkspaceCapability::resident(),
+        None,
     ))
 }
 

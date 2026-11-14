@@ -5,10 +5,11 @@
 //! WASM worklist answer, then refuses below each physical margin. The
 //! shared runner executes this test natively and on actual WebAssembly.
 
+mod support;
+
 use purrdf_core::{RdfDatasetBuilder, SparqlResult, TermValue};
-use purrdf_sparql_eval::{
-    EvalError, GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions,
-};
+use purrdf_sparql_eval::{EvalError, GovernedOutcome, NativeSparqlEngine, QueryGovernors};
+use support::supplied;
 
 fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_caller() {
     let mut builder = RdfDatasetBuilder::new();
@@ -50,7 +51,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
                     dataset.as_ref(),
                     &prepared,
                     &[],
-                    &QueryOptions::EMPTY,
+                    &supplied(),
                     &QueryGovernors::METERED,
                 )?;
                 let GovernedOutcome::Complete { result, .. } = outcome else {
@@ -58,7 +59,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
                 };
                 Ok(result)
             } else {
-                engine.query_prepared(&dataset, &prepared, &[], &QueryOptions::EMPTY)
+                engine.query_prepared(&dataset, &prepared, &[], &supplied())
             }
         };
         let assert_answer = |answer: SparqlResult| {
@@ -80,8 +81,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
         let smaller = purrdf_stack::on_stack_scoped(192 * 1024, || {
             let scoped_engine = NativeSparqlEngine::new();
             let result = evaluate(&scoped_engine);
-            let canary_result =
-                scoped_engine.query_prepared(&dataset, &canary, &[], &QueryOptions::EMPTY);
+            let canary_result = scoped_engine.query_prepared(&dataset, &canary, &[], &supplied());
             // Native fixed frames may consume the remaining margin even for a
             // shallow query. Recovery must succeed on the caller's stack below.
             #[cfg(not(target_arch = "wasm32"))]
@@ -116,7 +116,7 @@ fn prepared_evaluation_refuses_the_actual_smaller_stack_without_poisoning_the_ca
         // The caller's stack context is restored after each typed refusal.
         assert_answer(
             engine
-                .query_prepared(&dataset, &canary, &[], &QueryOptions::EMPTY)
+                .query_prepared(&dataset, &canary, &[], &supplied())
                 .expect("the caller's shallow canary answers after refusal"),
         );
         assert_answer(

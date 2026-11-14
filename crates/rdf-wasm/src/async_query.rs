@@ -1953,6 +1953,28 @@ impl ServiceResolver for JobServiceSource {
             remote.resolve(request)
         }
     }
+
+    /// A local endpoint is evaluated under the calling execution's coordinates, so it
+    /// reads no host clock or entropy; every other request takes the ordinary route.
+    fn resolve_coordinated(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+        coordinates: purrdf_sparql_eval::remote::ServiceCoordinates<'_>,
+    ) -> Result<
+        purrdf_sparql_eval::remote::AdmittedResolvedBindings,
+        purrdf_sparql_eval::remote::ServiceResolutionError,
+    > {
+        if let Some((local, endpoints)) = &self.local
+            && endpoints
+                .iter()
+                .any(|endpoint| endpoint == request.endpoint)
+        {
+            // The local resolver polls the stop signal first, as `resolve` does.
+            return local.resolve_coordinated(request, workspace, coordinates);
+        }
+        self.resolve_admitted(request, workspace)
+    }
 }
 
 /// The `Accept` header of a `LOAD` fetch: every parseable RDF syntax's media type.

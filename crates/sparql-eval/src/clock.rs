@@ -38,9 +38,11 @@ pub(crate) fn entropy_seed() -> Result<u64, HostSourceMissing> {
     host_source::installed().map_or_else(os_entropy_seed, |source| Ok(source.entropy_seed()))
 }
 
-// A `Result` so the read has one shape on every target.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::unnecessary_wraps)]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the read has one shape on every target, and the wasm32 one refuses"
+)]
 fn os_unix_seconds() -> Result<i64, HostSourceMissing> {
     Ok(unix_seconds(std::time::SystemTime::now()))
 }
@@ -67,9 +69,11 @@ fn unix_seconds(time: std::time::SystemTime) -> i64 {
 }
 
 /// A fresh 64-bit entropy seed from the OS CSPRNG.
-// A `Result` so the read has one shape on every target.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::unnecessary_wraps)]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the read has one shape on every target, and the wasm32 one refuses"
+)]
 fn os_entropy_seed() -> Result<u64, HostSourceMissing> {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).expect("OS entropy source is available");

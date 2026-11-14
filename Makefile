@@ -173,6 +173,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
+	$(MAKE) wasm-imports
 
 check-issue-refs: ## Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
 	python3 scripts/check-issue-refs.py

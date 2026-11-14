@@ -9,15 +9,16 @@
 //! after. On `wasm32-unknown-unknown` the first part is the refusal this crate
 //! raises in place of a host import; natively it is the operating system's answer.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use purrdf_core::{RdfDatasetBuilder, SparqlRequest, StopCause};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, StopCause, TermValue};
 use purrdf_sparql_eval::eval::EvalCtx;
 use purrdf_sparql_eval::host_source::{self, HostInput, HostSource, HostSourceInstalled};
 use purrdf_sparql_eval::{
-    EvalError, EvaluationFailure, NativeSparqlEngine, QueryCoordinates, QueryGovernors,
-    QueryOptions, StopSignal, WallDeadline, WorkspaceCapability,
+    EvalError, EvaluationFailure, InProcessServiceResolver, NativeSparqlEngine, QueryCoordinates,
+    QueryGovernors, QueryOptions, StopSignal, WallDeadline, WorkspaceCapability,
 };
 
 /// A host whose clock the test moves and whose reads it counts.
@@ -59,12 +60,38 @@ const QUERY: &str = "SELECT (NOW() AS ?time) (RAND() AS ?random) WHERE {}";
 const UPDATE: &str = "INSERT { <http://example.org/s> <http://example.org/time> ?t ; \
      <http://example.org/random> ?r } WHERE { BIND(NOW() AS ?t) BIND(RAND() AS ?r) }";
 
+const ENDPOINT: &str = "http://example.org/endpoint";
+/// The request's own time and random draw beside those of a clause answered in
+/// process.
+const SERVICE_QUERY: &str = "SELECT ?outer ?inner ?mine ?theirs WHERE { \
+     BIND(NOW() AS ?outer) BIND(RAND() AS ?mine) \
+     SERVICE <http://example.org/endpoint> { BIND(NOW() AS ?inner) BIND(RAND() AS ?theirs) } }";
+
 fn request(query: &str) -> SparqlRequest<'_> {
     SparqlRequest {
         query,
         base_iri: None,
         substitutions: &[],
     }
+}
+
+fn service_resolver(dataset: &Arc<RdfDataset>) -> InProcessServiceResolver {
+    InProcessServiceResolver::new().with_endpoint(ENDPOINT, Arc::clone(dataset))
+}
+
+/// The rows of [`SERVICE_QUERY`] under `options`: exactly one, with every cell bound.
+fn service_rows(
+    engine: &NativeSparqlEngine,
+    dataset: &Arc<RdfDataset>,
+    options: &QueryOptions<'_, '_>,
+) -> Vec<Vec<Option<TermValue>>> {
+    let result = engine
+        .query_with_options_view(dataset, request(SERVICE_QUERY), options)
+        .unwrap();
+    let rows = result.solutions().unwrap().1.to_vec();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].iter().all(Option::is_some), "{rows:?}");
+    rows
 }
 
 /// What a build with no operating system and no source answers: each entry point
@@ -89,7 +116,7 @@ fn without_a_source_a_host_read_is_refused_and_supplied_inputs_run(
             &options,
             &QueryGovernors::METERED,
         );
-        let mut target = std::sync::Arc::clone(&dataset);
+        let mut target = Arc::clone(&dataset);
         let update = engine.update_with_options(&mut target, request(UPDATE), &options);
         let Some(input) = missing else {
             assert_eq!(query.unwrap().solutions().unwrap().1.len(), 1);
@@ -146,6 +173,25 @@ fn without_a_source_a_host_read_is_refused_and_supplied_inputs_run(
     };
     assert_eq!(cause.input(), HostInput::Clock);
     assert!(typed(&supplied).is_ok());
+
+    // An in-process SERVICE is part of the request that reaches it: with the inputs
+    // supplied it answers with no source, and with neither it is the same refusal.
+    let resolver = service_resolver(&dataset);
+    let rows = service_rows(engine, &dataset, &supplied.with_remote(Some(&resolver)));
+    assert_eq!(rows[0][0], rows[0][1], "one request has one NOW()");
+    let refused = engine
+        .query_with_options_view(
+            &dataset,
+            request(SERVICE_QUERY),
+            &QueryOptions::new().with_remote(Some(&resolver)),
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, EvalError::HOST_SOURCE_MISSING_CODE);
+    assert!(
+        refused.message.starts_with("no host clock source"),
+        "{}",
+        refused.message
+    );
 
     assert_eq!(
         WallDeadline::try_after(Duration::from_millis(5))
@@ -230,6 +276,29 @@ fn the_installed_source_is_the_only_host_read_and_its_absence_is_a_typed_refusal
     assert_eq!(started.effective_entropy_seed(), 7);
     assert_eq!(SOURCE.clock_reads.load(Ordering::Relaxed), 1);
     assert_eq!(SOURCE.entropy_reads.load(Ordering::Relaxed), 1);
+
+    // An in-process SERVICE evaluates under the request's own time and a seed derived
+    // from its random state: it makes no host read of its own, with inputs supplied
+    // or sampled.
+    let resolver = service_resolver(&dataset);
+    let with_service = QueryOptions::new()
+        .with_now(&now)
+        .with_entropy_seed(7)
+        .with_remote(Some(&resolver));
+    let first = service_rows(&engine, &dataset, &with_service);
+    assert_eq!(first[0][0], first[0][1], "one request has one NOW()");
+    assert_ne!(first[0][2], first[0][3], "the forwarded stream is its own");
+    assert_eq!(first, service_rows(&engine, &dataset, &with_service));
+    assert_eq!(SOURCE.clock_reads.load(Ordering::Relaxed), 1);
+    assert_eq!(SOURCE.entropy_reads.load(Ordering::Relaxed), 1);
+    let sampled = service_rows(
+        &engine,
+        &dataset,
+        &QueryOptions::new().with_remote(Some(&resolver)),
+    );
+    assert_eq!(sampled[0][0], sampled[0][1]);
+    assert_eq!(SOURCE.clock_reads.load(Ordering::Relaxed), 2);
+    assert_eq!(SOURCE.entropy_reads.load(Ordering::Relaxed), 2);
 
     // A wall deadline runs on the installed clock.
     let deadline = WallDeadline::try_after(Duration::from_millis(5)).unwrap();
