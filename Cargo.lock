@@ -974,7 +974,6 @@ dependencies = [
  "purrdf-xsd",
  "rayon",
  "sha2",
- "wasm-bindgen",
 ]
 
 [[package]]

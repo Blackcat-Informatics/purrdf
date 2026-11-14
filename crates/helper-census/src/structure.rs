@@ -23,11 +23,10 @@
 //!
 //! * `wasm-import-date-now` and `wasm-import-reflect-get`: a `#[wasm_bindgen]`
 //!   `extern` block that imports `Date.now` or `Reflect.get`. Each host import is
-//!   declared once, in the lowest crate every user reaches
-//!   (`purrdf_sparql_eval::wasm_host` for the clock, `purrdf_wasm::host` for
-//!   `Reflect.get`), so a second declaration in another crate, or another file of
-//!   the home crate, is a copy. Read in every file, tests and fixtures included:
-//!   an import in test code is an import.
+//!   declared once, in the browser binding's host module (`purrdf_wasm::host`), so
+//!   a second declaration in another crate, or another file of the home crate, is
+//!   a copy. Read in every file, tests and fixtures included: an import in test
+//!   code is an import.
 //!
 //! The first and third read shipping code only, as the lexical rules do: an item
 //! under `#[test]` or a `#[cfg]` that needs `cfg(test)`, and every file under a
@@ -64,7 +63,7 @@ const REIFIER_DETAIL: &str = "an `RdfQuad::new` reifier row is built in the defa
 const HASHER_DETAIL: &str = "`std`'s `DefaultHasher` is an unspecified algorithm; hash through purrdf_hash \
      (`fnv`, `mix`, or a `Domain`-keyed digest)";
 const HOST_IMPORT_DETAIL: &str = "a second wasm host import of `Date.now` or `Reflect.get`; call the one home's \
-     function (`purrdf_sparql_eval::wasm_host::date_now`, `purrdf_wasm::host::reflect_get`)";
+     function (`purrdf_wasm::host::date_now`, `purrdf_wasm::host::reflect_get`)";
 const LIST_DETAIL: &str = "a hand-rolled `rdf:first`/`rdf:rest` walk; walk lists through \
      `DatasetView::rdf_list_with`, whose policy names the malformed-list contract";
 
@@ -466,13 +465,8 @@ pub(crate) fn structure_rules(package: &str, file: &str, parsed: &syn::File) -> 
     hits
 }
 
-/// The file that is the one home of the host import a `wasm-import-*` rule names.
-const fn host_import_home(rule: &str) -> &'static str {
-    match rule.as_bytes() {
-        b"rule:wasm-import-date-now" => "crates/sparql-eval/src/wasm_host.rs",
-        _ => "crates/rdf-wasm/src/host.rs",
-    }
-}
+/// The file that is the one home of every host import a `wasm-import-*` rule names.
+const HOST_IMPORT_HOME: &str = "crates/rdf-wasm/src/host.rs";
 
 /// The `(js_namespace, js_name)` a `#[wasm_bindgen(..)]` import declares, the name
 /// defaulting to the Rust function's own.
@@ -559,7 +553,7 @@ fn host_import_hits(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHi
                     line: function.sig.ident.span().start().line,
                     symbol: crate::rules::scoped_symbol(self.file, &self.modules),
                     detail: HOST_IMPORT_DETAIL.to_owned(),
-                    home_exempt: self.file == host_import_home(rule),
+                    home_exempt: self.file == HOST_IMPORT_HOME,
                 });
             }
         }

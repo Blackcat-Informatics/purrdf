@@ -5524,7 +5524,7 @@ pub(crate) mod owned_row_regressions {
                         frame,
                     ));
                 }
-                crate::remote::evaluate_in_memory_admitted(self.0, request, self, &workspace)
+                crate::remote::evaluate_in_memory_admitted(self.0, request, self, &workspace, None)
             }
         }
         let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();

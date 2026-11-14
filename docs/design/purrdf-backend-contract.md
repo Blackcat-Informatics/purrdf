@@ -504,9 +504,10 @@ narrowed rather than deleted. The **evaluation** tier ships exactly one clock re
 `purrdf_sparql_eval::governor::WallDeadline`, so that obtaining a deadline is not a
 caller obligation — requiring every caller to hand-roll a `StopSignal` would leave two
 callers with two different notions of "expired", which is the optionality this
-document exists to refuse. It is target-split (`std::time::Instant` natively,
-the host's `Date.now()` through `wasm-bindgen` on `wasm32-unknown-unknown`), so it costs the wasm build
-nothing, and it latches: the first poll that observes expiry — or that observes the
+document exists to refuse. It reads the installed host source's clock, and
+`std::time::Instant` on a native build with none; on `wasm32-unknown-unknown` the
+browser binding installs `Date.now()` and the evaluator itself imports nothing, so it
+costs the wasm build nothing, and it latches: the first poll that observes expiry — or that observes the
 clock stepping backwards behind the start snapshot, which on a steppable wall clock
 would otherwise make a deadline un-trippable — sets a bit every later poll
 short-circuits on. What that wall-clock reader deliberately does **not** carry is a

@@ -1,15 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Per-query non-deterministic inputs, read from the host platform: the wall clock
-//! `NOW()` returns and the entropy seed for `RAND()`/`UUID()`/`STRUUID()`. The read is
-//! written per target (a wasm build has no `SystemTime`/OS entropy syscall) but every
-//! target returns the correct live default. Query options can select these
-//! inputs explicitly before their corresponding host reads are sampled.
+//! Per-query non-deterministic inputs, read from the host: the wall clock `NOW()`
+//! returns and the entropy seed for `RAND()`/`UUID()`/`STRUUID()`. Query options can
+//! select these inputs explicitly before their corresponding host reads are sampled.
 //!
-//! These are two of the crate's three host-platform reads. The third is the governor
+//! Each read asks the installed [`crate::host_source`] first. With none installed a
+//! native build reads the operating system; a wasm build has no `SystemTime` or OS
+//! entropy syscall and imports nothing, so there the read is refused with
+//! [`HostSourceMissing`] rather than answered with a value nobody sampled.
+//!
+//! These are two of the crate's three host reads. The third is the governor
 //! path's deadline clock, which is confined to
-//! [`crate::governor::WallDeadline`] and split per target exactly as
+//! [`crate::governor::WallDeadline`] and split exactly as
 //! [`wall_clock_now`] is here. It is deliberately not routed through this module: a
 //! deadline needs elapsed time against a snapshotted start, not an `xsd:dateTime`, and
 //! the evaluator core itself never reads a clock — every governor check consults a
@@ -17,13 +20,36 @@
 //! caller did not supply one of their own. Those two sites are the whole set; do not
 //! open a third.
 
+use crate::host_source::{self, HostSourceMissing};
 use purrdf_xsd::temporal::DateTime;
 
 /// The current wall-clock instant as an `xsd:dateTime` (seconds precision), sampled
 /// once per query so all `NOW()` calls in one query agree (SPARQL 1.1 §17.4.5.1).
+pub(crate) fn wall_clock_now() -> Result<DateTime, HostSourceMissing> {
+    let seconds = match host_source::installed() {
+        Some(source) => unix_seconds_from_millis(source.unix_millis()),
+        None => os_unix_seconds()?,
+    };
+    Ok(purrdf_xsd::datetime_from_unix_seconds(seconds))
+}
+
+/// A fresh 64-bit entropy seed for one execution's random stream.
+pub(crate) fn entropy_seed() -> Result<u64, HostSourceMissing> {
+    host_source::installed().map_or_else(os_entropy_seed, |source| Ok(source.entropy_seed()))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn wall_clock_now() -> DateTime {
-    purrdf_xsd::datetime_from_unix_seconds(unix_seconds(std::time::SystemTime::now()))
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the read has one shape on every target, and the wasm32 one refuses"
+)]
+fn os_unix_seconds() -> Result<i64, HostSourceMissing> {
+    Ok(unix_seconds(std::time::SystemTime::now()))
+}
+
+#[cfg(target_arch = "wasm32")]
+const fn os_unix_seconds() -> Result<i64, HostSourceMissing> {
+    Err(HostSourceMissing::new(host_source::HostInput::Clock))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -44,31 +70,26 @@ fn unix_seconds(time: std::time::SystemTime) -> i64 {
 
 /// A fresh 64-bit entropy seed from the OS CSPRNG.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn entropy_seed() -> u64 {
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the read has one shape on every target, and the wasm32 one refuses"
+)]
+fn os_entropy_seed() -> Result<u64, HostSourceMissing> {
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).expect("OS entropy source is available");
-    u64::from_le_bytes(bytes)
+    Ok(u64::from_le_bytes(bytes))
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn wall_clock_now() -> DateTime {
-    purrdf_xsd::datetime_from_unix_seconds(unix_seconds_from_millis(crate::wasm_host::date_now()))
+const fn os_entropy_seed() -> Result<u64, HostSourceMissing> {
+    Err(HostSourceMissing::new(host_source::HostInput::Entropy))
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
 // Floor establishes whole seconds; the cast preserves the existing saturating
 // i64 range law for the host's floating-point millisecond representation.
 #[allow(clippy::cast_possible_truncation)]
 fn unix_seconds_from_millis(milliseconds: f64) -> i64 {
     (milliseconds / 1000.0).floor() as i64
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn entropy_seed() -> u64 {
-    // Compose 64 bits from two host Math.random() draws in [0,1).
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let draw = || (crate::wasm_host::math_random() * f64::from(u32::MAX)) as u64;
-    (draw() << 32) | draw()
 }
 
 #[cfg(test)]

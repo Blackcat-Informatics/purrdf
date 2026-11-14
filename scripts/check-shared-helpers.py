@@ -925,7 +925,7 @@ names = []
 [[job]]
 id = "wasm-host-clock"
 summary = "s"
-home = "purrdf_sparql_eval::wasm_host::date_now"
+home = "purrdf_wasm::host::date_now"
 entry_points = []
 spec = "s"
 vectors = []
@@ -966,15 +966,11 @@ STRUCTURE_FIXTURE_FILES = {
         "pub trait DatasetView { fn rdf_list(&self) { loop { let _ = (RDF_FIRST, RDF_REST); } } }\n"
         "/// The one strict walker.\npub fn walk_rdf_list() {}\n"
     ),
-    "crates/sparql-eval/Cargo.toml": '[package]\nname = "purrdf-sparql-eval"\n',
-    "crates/sparql-eval/src/lib.rs": "pub mod wasm_host;\n",
-    "crates/sparql-eval/src/wasm_host.rs": (
-        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn date_now_import() -> f64; }\n'
-        "/// The one clock import.\npub fn date_now() -> f64 { date_now_import() }\n"
-    ),
     "crates/rdf-wasm/Cargo.toml": '[package]\nname = "purrdf-wasm"\n',
     "crates/rdf-wasm/src/lib.rs": "pub mod host;\n",
     "crates/rdf-wasm/src/host.rs": (
+        '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn date_now_import() -> f64; }\n'
+        "/// The one clock import.\npub fn date_now() -> f64 { date_now_import() }\n"
         '#[wasm_bindgen] extern "C" { #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)] fn reflect_get_import(t: &V, k: &str) -> R; }\n'
         "/// The one Reflect.get import.\npub fn reflect_get(t: &V, k: &str) -> R { reflect_get_import(t, k) }\n"
     ),
@@ -993,7 +989,7 @@ STRUCTURE_FIXTURE_FILES = {
         '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Date, js_name = now)] fn clock() -> f64; } // CLOCK\n'
         '#[wasm_bindgen] extern "C" { #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)] fn get(t: &V, k: &str) -> R; } // REFLECT\n'
         '#[wasm_bindgen] extern "C" { #[wasm_bindgen(js_namespace = Math, js_name = random)] fn random() -> f64; #[wasm_bindgen(js_namespace = Reflect, js_name = has)] fn has(t: &V, k: &str) -> bool; #[wasm_bindgen(js_namespace = Date, js_name = parse)] fn parse(s: &str) -> f64; }\n'
-        "pub fn shared_clock() -> f64 { purrdf_sparql_eval::wasm_host::date_now() }\n"
+        "pub fn shared_clock() -> f64 { purrdf_wasm::host::date_now() }\n"
         "#[cfg(test)]\n"
         "mod tests {\n"
         "    fn traps(s: T, t: U) { let _ = RdfQuad::new(s, RDF_REIFIES, RdfTerm::triple(t)); }\n"

@@ -598,6 +598,11 @@ jobs:
             -p purrdf-wasm \
             -p purrdf-bench
 
+      - name: Refuse host imports in a module linked from the library crates
+        # A bare wasm32 module has no JavaScript host: host imports belong to
+        # purrdf-wasm and nowhere below it.
+        run: make wasm-imports
+
   wasm-package:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest

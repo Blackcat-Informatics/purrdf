@@ -8,6 +8,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
+  depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
+  A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
+  and the evaluator, has an empty import section and runs without a JavaScript
+  host; `make wasm-imports` checks exactly that module. The
+  evaluator reads the clock and entropy through a source the embedder installs
+  once (`purrdf_sparql_eval::host_source::install`); `purrdf-wasm` installs
+  `Date.now` and `Math.random` when its module starts, so its users see no
+  change, and native builds read the operating system as before. **Behaviour
+  change:** a `wasm32` module that links the evaluator without `purrdf-wasm` and
+  relied on the default query time, entropy seed or wall deadline must now
+  install a source or supply `QueryOptions::with_now` and
+  `QueryOptions::with_entropy_seed`. Without either, the request is refused
+  with the new `EvalError::HostSourceMissing`
+  (`native-sparql-host-source-missing`), which names the missing input; no time
+  or seed is substituted. `WallDeadline::try_after` and `EvalCtx::try_new`
+  return that refusal as a value. `WallDeadline::after`, `EvalCtx::new` and the
+  hidden `wasm_host` functions keep their signatures and panic with the same
+  message in that one case. A `SERVICE` clause answered in process now
+  evaluates under the request's own query time and a seed derived from its
+  random state, where it used to sample a second clock reading and fresh
+  entropy; it reads no host, and repeats when the request's seed is supplied.
+  A resolver receives those through the new provided method
+  `ServiceResolver::resolve_coordinated`.
+
 - **GTS snapshot emission:** `emit_gts` encodes the snapshot payload once,
   straight from the builder's tables, instead of building a copy of every term
   and encoding the result twice. Its signature and the emitted bytes are
