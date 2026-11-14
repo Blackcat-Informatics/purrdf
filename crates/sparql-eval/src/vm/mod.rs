@@ -1200,6 +1200,11 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
     /// The current row's binding of the one variable this program reads, when the
     /// whole program is that read and records no evidence: exactly the value
     /// [`Self::term`] returns for it, without entering the interpreter.
+    #[expect(
+        clippy::option_option,
+        reason = "the outer option says whether the program is a lone variable read, the \
+                  inner one whether that variable is bound in the row"
+    )]
     pub(crate) fn sole_variable(
         &self,
         row: &[Option<SolutionTerm<I>>],

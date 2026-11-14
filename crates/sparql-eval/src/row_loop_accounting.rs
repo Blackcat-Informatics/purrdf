@@ -96,15 +96,16 @@ fn render(outcome: &EvaluatedOutcome, ctx: &EvalCtx<'_, RdfDataset>) -> String {
     let EvaluatedOutcome::Complete(Outcome::Solutions(solutions)) = outcome else {
         panic!("every query here completes with solutions: {outcome:?}");
     };
+    use std::fmt::Write as _;
     let mut out = format!("{:?}", solutions.schema.vars());
-    for row in solutions.rows.iter() {
+    for row in &solutions.rows {
         out.push('\n');
-        for cell in row.iter() {
+        for cell in row {
             match cell {
                 None => out.push_str("- "),
-                Some(SolutionTerm::Existing(id)) => out.push_str(&format!("{id:?} ")),
+                Some(SolutionTerm::Existing(id)) => write!(out, "{id:?} ").unwrap(),
                 Some(SolutionTerm::Computed(sid)) => {
-                    out.push_str(&format!("{:?} ", ctx.scratch.computed_value(*sid)));
+                    write!(out, "{:?} ", ctx.scratch.computed_value(*sid)).unwrap();
                 }
             }
         }
