@@ -187,35 +187,76 @@ fn unbounded_into_the_sink(text: &str, dataset: &Arc<RdfDataset>) -> Rows {
     run(text, &mut ctx).expect("the governed unbounded run completes")
 }
 
-/// INVARIANT: a candidate binds to the same row whichever scan loop offers it. The
-/// sink loop and the retained cursor share one binder, and its direct form for a
-/// pattern with no nested position equals the general one: a constant, a slot the
-/// driving row binds, a variable repeated inside one pattern (`?s ex:w ?s`, which
-/// must reject every candidate here) and a nested triple pattern all answer alike.
+/// INVARIANT: a candidate binds to the same row whichever scan loop offers it, and
+/// the direct binder of a pattern with no nested position equals the general one,
+/// which the accounted run still uses.
+///
+/// What each case exercises:
+/// - The pinned shapes, and `?s ex:w ?o . ?o ex:w ?o`: constants, slots the driving row
+///   already binds (the index filters those, so the binder only ever sees agreeing
+///   candidates, a repeated variable included) and a nested triple pattern, which
+///   keeps the general binder.
+/// - The four shapes over [`repeat_dataset`]: a variable repeated inside one pattern
+///   that the driving row does NOT bind, so the index offers every quad and the
+///   binder's own comparison is what rejects. Each has one candidate that agrees
+///   with itself and must bind, beside candidates that disagree and must not.
 #[test]
 fn the_sink_scan_binds_as_the_cursor_scan_does() {
-    let repeated = "SELECT ?s ?o WHERE { ?s ex:w ?o . ?o ex:w ?o }";
+    let bound_repeat = "SELECT ?s ?o WHERE { ?s ex:w ?o . ?o ex:w ?o }";
     let data = dataset(true);
-    for shape in SHAPES.into_iter().chain([repeated]) {
+    for shape in SHAPES.into_iter().chain([bound_repeat]) {
         let cursor = unbounded(shape, &data);
         let sink = unbounded_into_the_sink(shape, &data);
         assert_eq!(cursor, sink, "{shape}");
         let limit = smallest_completing_limit(shape, &data);
         assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
     }
-    // The neighbour that binds: a variable repeated inside one pattern is not refused
-    // when the candidate does agree with itself.
+
+    let data = repeat_dataset();
+    let iri = |name: &str| Some(TermValue::Iri(format!("{EX}{name}")));
+    let cases = [
+        // Subject and object, from the empty driving row.
+        ("SELECT ?s WHERE { ?s ex:w ?s }", vec![iri("n")]),
+        // Two such patterns with no shared variable: whichever is scanned second is
+        // offered a driving row that binds the other variable and not its own.
+        (
+            "SELECT ?x ?y WHERE { ?x ex:w ?x . ?y ex:t ?y }",
+            vec![iri("n"), iri("m")],
+        ),
+        // Subject and predicate.
+        ("SELECT ?x ?o WHERE { ?x ?x ?o }", vec![iri("w"), iri("n")]),
+        // Predicate and object.
+        ("SELECT ?s ?p WHERE { ?s ?p ?p }", vec![iri("e"), iri("t")]),
+    ];
+    for (shape, only_row) in cases {
+        let sink = unbounded_into_the_sink(shape, &data);
+        assert_eq!(sink.1, vec![only_row], "{shape}");
+        assert_eq!(unbounded(shape, &data), sink, "{shape}");
+        let limit = smallest_completing_limit(shape, &data);
+        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
+    }
+}
+
+/// Six quads over two predicates. For each way a variable can repeat inside one
+/// pattern exactly one quad agrees with itself: `n w n` (subject and object under
+/// `ex:w`), `m t m` (the same under `ex:t`), `w w n` (subject and predicate) and
+/// `e t t` (predicate and object). `e w n` and `k t m` agree with none.
+fn repeat_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
-    let knows = b.intern_iri(&format!("{EX}w")).unwrap();
-    let narcissus = b.intern_iri(&format!("{EX}n")).unwrap();
-    let echo = b.intern_iri(&format!("{EX}e")).unwrap();
-    b.push_quad(narcissus, knows, narcissus, None).unwrap();
-    b.push_quad(echo, knows, narcissus, None).unwrap();
-    let data = b.freeze().unwrap();
-    let shape = "SELECT ?s WHERE { ?s ex:w ?s }";
-    let rows = unbounded_into_the_sink(shape, &data);
-    assert_eq!(rows.1, vec![vec![Some(TermValue::Iri(format!("{EX}n")))]]);
-    assert_eq!(unbounded(shape, &data), rows);
+    let mut id = |name: &str| b.intern_iri(&format!("{EX}{name}")).unwrap();
+    let (w, t) = (id("w"), id("t"));
+    let (n, e, m, k) = (id("n"), id("e"), id("m"), id("k"));
+    for (s, p, o) in [
+        (n, w, n),
+        (e, w, n),
+        (m, t, m),
+        (k, t, m),
+        (w, w, n),
+        (e, t, t),
+    ] {
+        b.push_quad(s, p, o, None).unwrap();
+    }
+    b.freeze().unwrap()
 }
 
 #[test]

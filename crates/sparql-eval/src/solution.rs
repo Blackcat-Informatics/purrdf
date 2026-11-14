@@ -457,7 +457,10 @@ impl VarSchema {
 /// the common row lives inline with no heap allocation and spills to the heap
 /// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
 /// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
-pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; 4]>;
+pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; INLINE_CELLS]>;
+
+/// The cells a [`Solution`] holds inline, with no heap allocation.
+pub(crate) const INLINE_CELLS: usize = 4;
 
 /// One immutable row whose clone retains its admitted cell owner.
 #[derive(Clone, Debug)]
@@ -715,7 +718,8 @@ impl<I: ViewTermId> RetainedRow<I> {
         }
     }
 
-    /// A resident copy of `cells` for a workspace that admits nothing. A row that fits
+    /// A resident copy of `cells` for a workspace that admits nothing: a bound scan
+    /// candidate, and a kept row cloned by [`Self::clone_admitted`]. A row that fits
     /// the inline capacity is copied in place: nothing is allocated, so there is no
     /// refusal to report. A wider row takes one exact reservation and one copy, with
     /// the same typed refusal `try_build` gives an allocator that cannot supply the
@@ -724,7 +728,7 @@ impl<I: ViewTermId> RetainedRow<I> {
     pub(crate) fn resident_copy(
         cells: &[Option<SolutionTerm<I>>],
     ) -> Result<Solution<I>, crate::EvalError> {
-        if cells.len() <= Solution::<I>::new().inline_size() {
+        if cells.len() <= INLINE_CELLS {
             return Ok(Solution::from_slice(cells));
         }
         let mut row = Solution::new();

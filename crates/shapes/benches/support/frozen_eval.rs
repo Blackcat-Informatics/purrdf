@@ -412,8 +412,12 @@ pub(crate) enum Query {
     Q4,
     /// NOT EXISTS with FILTER.
     Q5,
-    /// Two patterns scanned, bound and joined, then only counted: the pattern scan
-    /// loop with one result row to build.
+    /// Two patterns scanned, bound and joined, then only counted. Like every row here
+    /// it runs ungoverned, with no stop signal and no ceiling: the first pattern scans
+    /// into the row sink and the last through the retained cursor. It is not the
+    /// governed run, in which every stage scans into the sink. Many rows are bound and
+    /// one answer row is returned, so the witness count is always 1 and the check on
+    /// this row is agreement between the freeze variants, not a known count.
     Scan,
 }
 
@@ -692,10 +696,9 @@ pub(crate) fn rows() -> Vec<Row> {
         );
     }
 
-    let reported = Query::ALL;
     // Cold: a fresh engine plans on a dataset whose identity is sealed. Warm: the
     // same engine runs the prepared query again.
-    for query in reported {
+    for query in Query::ALL {
         for data in [Data::Ordinary, Data::Eager] {
             for warm in [false, true] {
                 add(
