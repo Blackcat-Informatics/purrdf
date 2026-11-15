@@ -307,6 +307,17 @@ struct CompiledPattern<I: ViewTermId = TermId> {
     o: Pos<I>,
 }
 
+impl<I: ViewTermId> CompiledPattern<I> {
+    /// Whether no position is a nested quoted-triple pattern, so binding a candidate
+    /// never has to resolve a term.
+    #[inline]
+    const fn is_flat(&self) -> bool {
+        !matches!(self.s, Pos::Triple(_))
+            && !matches!(self.p, Pos::Triple(_))
+            && !matches!(self.o, Pos::Triple(_))
+    }
+}
+
 /// Immutable positions and column layout for repeated occurrences of one BGP.
 /// The input schema stays fixed; binding masks and candidate scans remain local
 /// to each occurrence. A missing ground term retains the full empty header.
@@ -3320,6 +3331,22 @@ fn bind_row<D: DatasetView + Sync>(
     // plain copy of the cells in place. The accounted build below is the same row.
     if !workspace.is_bounded() && ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
         let mut out = RetainedRow::resident_copy(cells)?;
+        if cp.is_flat() {
+            // No nested position: the test above settled every constant and every slot
+            // the driving row binds, so each slot is written where it stands and only a
+            // variable repeated inside this pattern can still disagree. The general
+            // loop below does the same writes in the same order through a work list.
+            for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+                if let Pos::Slot(col) = pos {
+                    let value = SolutionTerm::Existing(id);
+                    match out[*col] {
+                        Some(existing) if existing != value => return Ok(None),
+                        _ => out[*col] = Some(value),
+                    }
+                }
+            }
+            return Ok(Some(RetainedRow::from_resident(out)));
+        }
         for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
             if !bind_pos_admitted(&mut out, pos, id, dataset, workspace)? {
                 return Ok(None);
