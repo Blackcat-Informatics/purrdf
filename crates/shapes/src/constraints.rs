@@ -1482,69 +1482,41 @@ fn walk_shape_body<S: ResultSink>(
     if shape.deactivated {
         return Ok(Flow::Continue);
     }
-    if deactivated_at(
-        context.store,
-        plan,
-        context.depth,
-        focus,
-        &shape.id,
-        plan.deactivated_when()?,
-    )? {
+    if !shape.deactivated_when.is_empty()
+        && deactivated_at(
+            context.store,
+            plan,
+            context.depth,
+            focus,
+            &shape.id,
+            plan.deactivated_when()?,
+        )?
+    {
         return Ok(Flow::Continue);
     }
 
     // --- Node-level constraints (value nodes = [focus], no path) ---
     let node_value_nodes = [ValueNode::of_focus(focus)];
-    {
-        for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
-            if !shape.constraint_annotations.is_empty()
-                && deactivated_at(
-                    context.store,
-                    plan,
-                    context.depth,
-                    focus,
-                    &shape.id,
-                    plan.constraint_deactivation(AnnotatedConstraint::Constraint(index))?,
-                )?
-            {
+    if let Some(body) = plan.resolved() {
+        // Resolved once for the whole run of focus nodes.
+        for (index, resolved) in body.constraints().iter().enumerate() {
+            if node_constraint_deactivated(context, focus, index)? {
                 continue;
             }
-            let planned = plan.planned(constraint, lowered)?;
-            if let PlannedConstraint::PropertyReference {
-                definition,
-                edge,
-                deactivated_when,
-            } = planned
-            {
-                if eval_property_reference(
-                    context,
-                    focus,
-                    definition,
-                    edge,
-                    deactivated_when,
-                    &shape.box_roles,
-                    sink,
-                )?
+            if walk_node_constraint(context, focus, &node_value_nodes, index, resolved, sink)?
                 .stopped()
-                {
-                    return Ok(Flow::Stop);
-                }
+            {
+                return Ok(Flow::Stop);
+            }
+        }
+    } else {
+        for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+            if node_constraint_deactivated(context, focus, index)? {
                 continue;
             }
-            let mut node_sink = NodeRoles {
-                inner: &mut *sink,
-                roles: &shape.box_roles,
-            };
-            if eval_constraint(
-                context,
-                focus,
-                &node_value_nodes,
-                planned,
-                None,
-                ConstraintSource::of_shape(shape, index, context.report_profile()),
-                &mut node_sink,
-            )?
-            .stopped()
+            let resolved = plan.resolve_constraint(constraint, lowered)?;
+            if walk_node_constraint(context, focus, &node_value_nodes, index, &resolved, sink)?
+                .stopped()
             {
                 return Ok(Flow::Stop);
             }
@@ -1552,15 +1524,32 @@ fn walk_shape_body<S: ResultSink>(
     }
 
     // --- Property shapes ---
-    for (ps, property_plan) in plan.properties()? {
-        if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?.stopped()
-        {
-            return Ok(Flow::Stop);
+    if let Some(body) = plan.resolved() {
+        for &(ps, property_plan) in body.properties() {
+            if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?
+                .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
+        }
+    } else {
+        for (ps, property_plan) in plan.properties()? {
+            if eval_property_shape(context, focus, ps, property_plan, &shape.box_roles, sink)?
+                .stopped()
+            {
+                return Ok(Flow::Stop);
+            }
         }
     }
 
     // --- sh:closed ---
     for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+        // Only a `sh:closed` constraint is planned here: planning resolves a shape
+        // or property reference through the catalog, which the first pass has
+        // already done for this visit.
+        if !matches!(constraint, crate::shapes::Constraint::Closed { .. }) {
+            continue;
+        }
         let PlannedConstraint::Closed {
             permitted,
             by_types,
@@ -1595,6 +1584,86 @@ fn walk_shape_body<S: ResultSink>(
         }
     }
     Ok(Flow::Continue)
+}
+
+/// Whether a constraint reifier of the shape being walked deactivates its
+/// constraint number `index` at `focus`.
+fn node_constraint_deactivated(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    index: usize,
+) -> Result<bool, crate::error::ShapesError> {
+    let plan = context.plan;
+    let shape = plan.shape();
+    if shape.constraint_annotations.is_empty() {
+        return Ok(false);
+    }
+    deactivated_at(
+        context.store,
+        plan,
+        context.depth,
+        focus,
+        &shape.id,
+        plan.constraint_deactivation(AnnotatedConstraint::Constraint(index))?,
+    )
+}
+
+/// Evaluate one node-level constraint of the shape being walked.
+fn walk_node_constraint<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    node_value_nodes: &[ValueNode],
+    index: usize,
+    resolved: &crate::plan::ResolvedConstraint<'a>,
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
+    let shape = context.plan.shape();
+    let planned = match *resolved {
+        crate::plan::ResolvedConstraint::Property {
+            definition,
+            edge,
+            deactivated_when,
+            property,
+            plan,
+        } => {
+            // A recursive run answers a property edge through its fixed point.
+            return if context.fixed.is_some() {
+                eval_property_reference(
+                    context,
+                    focus,
+                    definition,
+                    edge,
+                    deactivated_when,
+                    &shape.box_roles,
+                    sink,
+                )
+            } else {
+                eval_referenced_property(
+                    context,
+                    focus,
+                    definition,
+                    property,
+                    plan,
+                    &shape.box_roles,
+                    sink,
+                )
+            };
+        }
+        crate::plan::ResolvedConstraint::Planned(planned) => planned,
+    };
+    let mut node_sink = NodeRoles {
+        inner: &mut *sink,
+        roles: &shape.box_roles,
+    };
+    eval_constraint(
+        context,
+        focus,
+        node_value_nodes,
+        planned,
+        None,
+        ConstraintSource::of_shape(shape, index, context.report_profile()),
+        &mut node_sink,
+    )
 }
 
 fn admit_validation(shape: &Term, depth: u32) -> Result<(), crate::error::ShapesError> {
@@ -2026,36 +2095,11 @@ fn eval_referenced_property<'a, S: ResultSink>(
         plan: definition,
         ..context
     };
-    // Identity edges erase accumulated sink decorators, as ordinary references
-    // do. The actual property evaluator still owns path/focus/role stamping.
-    if S::RECORDS_EVIDENCE {
-        eval_property_shape(
-            context,
-            focus,
-            property,
-            plan,
-            parent_roles,
-            &mut ReferenceSink::<true, true> { inner: sink },
-        )
-    } else if S::RECORDS_RESULTS {
-        eval_property_shape(
-            context,
-            focus,
-            property,
-            plan,
-            parent_roles,
-            &mut ReferenceSink::<true, false> { inner: sink },
-        )
-    } else {
-        eval_property_shape(
-            context,
-            focus,
-            property,
-            plan,
-            parent_roles,
-            &mut ReferenceSink::<false, false> { inner: sink },
-        )
-    }
+    // The sink arrives undecorated: a property edge is evaluated by its callers
+    // with the sink they were given, not with a per-constraint wrapper, so the
+    // actual property evaluator still owns path/focus/role stamping and the edge
+    // needs no erasure of its own.
+    eval_property_shape(context, focus, property, plan, parent_roles, sink)
 }
 
 /// Evaluate one property shape at `focus`, sending what it finds to `sink`.
@@ -2094,24 +2138,30 @@ fn eval_property_shape<'a, S: ResultSink>(
     if ps.deactivated || property_plan.edge().is_some_and(|edge| edge.deactivated) {
         return Ok(Flow::Continue);
     }
-    if deactivated_at(
-        store,
-        property_plan.parent(),
-        context.depth,
-        focus,
-        &ps.id,
-        property_plan.deactivated_when(ps)?,
-    )? {
+    if !ps.deactivated_when.is_empty()
+        && deactivated_at(
+            store,
+            property_plan.parent(),
+            context.depth,
+            focus,
+            &ps.id,
+            property_plan.deactivated_when(ps)?,
+        )?
+    {
         return Ok(Flow::Continue);
     }
-    if deactivated_at(
-        store,
-        property_plan.parent(),
-        context.depth,
-        focus,
-        &ps.id,
-        property_plan.edge_deactivation(),
-    )? {
+    if property_plan
+        .edge()
+        .is_some_and(|edge| !edge.deactivated_when.is_empty())
+        && deactivated_at(
+            store,
+            property_plan.parent(),
+            context.depth,
+            focus,
+            &ps.id,
+            property_plan.edge_deactivation(),
+        )?
+    {
         return Ok(Flow::Continue);
     }
     // The value nodes: the path's, plus `sh:values` / `sh:defaultValue` output
@@ -4687,8 +4737,11 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
         // RDF supplies the lexical form itself, without schema-validation
         // whiteSpace preprocessing. Trimming here would hide malformed tokens.
-        XSD_STRING | XSD_NORMALIZED_STRING | XSD_TOKEN => XsdDatatype::from_iri(dt)
-            .is_some_and(|datatype| purrdf_xsd::parse_xsd10(lex, datatype).is_ok()),
+        // The string family is admitted by reading the lexical form in place: the
+        // check needs the verdict, never an owned copy of the value.
+        XSD_STRING => purrdf_xsd::simple::read_xml_string(lex).is_ok(),
+        XSD_NORMALIZED_STRING => purrdf_xsd::simple::read_normalized_string(lex).is_ok(),
+        XSD_TOKEN => purrdf_xsd::simple::read_token(lex).is_ok(),
         XSD_INTEGER => is_xsd_integer_lexical(lex),
         XSD_DECIMAL => is_xsd_decimal_lexical(lex),
         // `xsd:double` / `xsd:float` / `xsd:boolean` each fix

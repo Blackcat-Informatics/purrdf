@@ -8,6 +8,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Cheaper SHACL validation over many focus nodes:** a root shape's
+  constraints and property shapes are now resolved once per shape instead of
+  once per focus node, the `sh:closed` pass no longer re-plans every
+  constraint, property edges run under the caller's own result sink, the
+  quad-membership probe plan is built only when a probe needs it, and the
+  `xsd:string` family datatype check reads the lexical form without copying it.
+  The end of a matching run in a sorted dataset index is found by a galloping
+  search instead of a second full binary search. Reports, diagnostics and
+  refusals are unchanged. On the reporter-shaped validation workloads the
+  retired-instruction count is now within 1.10 of the previous release.
+
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the
   group ordinal beside its hash, instead of cloning every key into a second
