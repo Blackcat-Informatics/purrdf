@@ -2479,7 +2479,7 @@ summary = "the pack triples `(?,p,o)` access path (`partition_rows`: the shorter
 
 [[site]]
 id = "core.canon-escape"
-summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `write_literal` over `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
+summary = "the escape scans under the canonical N-Quads writer's terms, `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`, measured in the scans and in `term_syntax::write_iri` / `write_literal`: a chunked scan, bulk copies of the clean runs. The canonical writer itself calls `term_syntax::write_canonical_iri` / `write_canonical_literal`, which are not measured"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]

@@ -283,7 +283,11 @@ pub const CANON_CORPUS_DIGEST: &str =
 ///
 /// **v3 → v4**: the spelling follows the canonical form of RDF 1.2 N-Quads (section
 /// 3). A language tag and a base direction are written in ASCII lower case; U+FFFE
-/// and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF`. The flat
+/// and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF`; an IRI is escaped
+/// for exactly what the `IRIREF` production excludes, so DEL and the C1 controls
+/// (U+007F to U+009F) are written raw where version 3 wrote `\u007F` to `\u009F`
+/// (a dataset frozen by the builder never holds one in an IRI; a caller's own
+/// view can, because canonicalization does not validate a view's IRIs). The flat
 /// presentation refuses no reserved IRI and has no datatype-aware step: a blank
 /// label inside a `cdt:List` or `cdt:Map` lexical form is text and is written as it
 /// is. Every other input keeps its version 3 bytes.
@@ -313,8 +317,9 @@ pub const CANON_PRESENTATION_OVERLAY_ID: &str = "overlay";
 /// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`]'s output, which versions independently.
 ///
 /// **1 → 2**: U+FFFE and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF`,
-/// and a language tag and base direction in ASCII lower case. The admission rule and
-/// the composite relabelling are unchanged.
+/// a language tag and base direction in ASCII lower case, and DEL and the C1
+/// controls in an IRI raw. The admission rule and the composite relabelling are
+/// unchanged.
 pub const CANON_PRESENTATION_OVERLAY_VERSION: u32 = 2;
 
 /// The identifier of the flat assertion presentation: the RDF 1.2 statement layer
@@ -347,8 +352,9 @@ pub const CANON_PRESENTATION_FLAT_ASSERTION_ID: &str = "flat-assertion";
 /// vocabulary and this one does not.
 ///
 /// **1 → 2**: no reserved-vocabulary refusal, no datatype-aware step (a composite
-/// literal's blank labels are text), language and direction in lower case and
-/// U+FFFE and U+FFFF escaped (the last two as for the overlay).
+/// literal's blank labels are text), language and direction in lower case,
+/// U+FFFE and U+FFFF escaped and DEL and the C1 controls in an IRI raw (the last
+/// three as for the overlay).
 pub const CANON_PRESENTATION_FLAT_ASSERTION_VERSION: u32 = 2;
 
 /// The identifier of the flat assertion presentation with the composite-literal
@@ -862,10 +868,13 @@ type FlatViewResult<D> = Result<
 /// node it named in the source.
 ///
 /// The stored spelling of such a label depends on how the data was loaded. A
-/// document parsed on its own keeps the label it wrote. A dataset merged into a
-/// builder that already holds another scope has the label rewritten into that
-/// scope's envelope (`purrdfesc{scope}_{label}`, see [`crate::blank_label`]), and
-/// that text is what the flat document then carries. The same source document can
+/// document parsed on its own keeps the label it wrote. The same data merged into
+/// a dataset
+/// ([`RdfDatasetBuilder::push_dataset`](super::builder::RdfDatasetBuilder::push_dataset),
+/// several sources of one command) has the label rewritten into the merge scope's
+/// envelope (`purrdfesc{scope}_{label}`, see [`crate::blank_label`]): every such
+/// merge allocates a new scope, a merge into an empty builder included. That text
+/// is what the flat document then carries. The same source document can
 /// so give two different standard flat documents. A consumer that mints an
 /// identifier from flat output and may hold such literals must use the overlay
 /// ([`try_canonicalize_view`]) or the named option
@@ -1052,6 +1061,9 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
 /// [`try_canonicalize_flat_composite_view`]. Equal to [`ContentDigest::of`] applied
 /// to that function's [`Canonicalized::nquads`] under the same `hash`; never equal
 /// by construction to a standard flat digest of a dataset the relabelling changes.
+/// The run's receipt is identical to [`try_flat_digest_view`]'s and nothing this
+/// function returns names the option, so a caller that must tell the two digests
+/// apart records which entry it called.
 ///
 /// # Errors
 /// Exactly [`try_flat_digest_view`]'s.
@@ -1559,8 +1571,10 @@ pub enum CanonPresentation {
     /// ORDINARY quad carrying its row's own real predicate id (`rdf:reifies`, or the
     /// annotation's own predicate) — no sentinel is ever minted. A lowered row whose
     /// `(s, p, o, g)` already exists as a genuine base quad is emitted exactly once
-    /// (see `already_asserted`'s flat dedup law). What is ADMITTED is unchanged
-    /// from [`Overlay`](Self::Overlay) — only what is EMITTED differs.
+    /// (see `already_asserted`'s flat dedup law). What is ADMITTED differs from
+    /// [`Overlay`](Self::Overlay) as well as what is EMITTED: this presentation
+    /// writes no sentinel and refuses no reserved IRI, so it admits an input
+    /// carrying one outside a fold shape, which the overlay refuses.
     ///
     /// **The law holds for BOTH ways a row can reach this presentation.** A row held
     /// NATIVELY (the side tables) lowers through `emit_reifier_row` /

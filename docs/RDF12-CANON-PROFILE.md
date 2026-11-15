@@ -607,22 +607,30 @@ consumer nothing.
 Version 4 moves bytes for exactly these inputs, and every other input keeps its
 version 3 bytes:
 
-* a literal holding U+FFFE or U+FFFF (written `\uFFFE` and `\uFFFF`; both
-  presentations, which is why the overlay presentation moves to version 2);
-* a language tag or a base direction that reaches canonicalization with an upper-case
-  letter (written in lower case). A term table that folds tags at intern time, as
-  PurRDF's does, already holds them in lower case, so this reaches only a source view
-  that keeps the written case;
-* a composite (`cdt:List` / `cdt:Map`) literal with a blank-node label in its lexical
-  form, under the standard flat presentation (written as it is, where it was written as
-  a canonical label); the overlay and the named composite option are unchanged;
-* an input carrying a reserved IRI outside a fold shape, under the flat presentation,
-  which version 3 refused and version 4 canonicalizes. The overlay presentation still
-  refuses it.
+1. a language tag or a base direction that a caller's own dataset view hands to
+   canonicalization with an upper-case letter (written in lower case). A term table
+   that folds tags at intern time, as PurRDF's does, already holds them in lower case,
+   so this reaches only a source view that keeps the written case;
+2. a literal holding U+FFFE or U+FFFF (written `\uFFFE` and `\uFFFF`; both
+   presentations, which is why the overlay presentation moves to version 2);
+3. an IRI holding DEL (U+007F) or a C1 control (U+0080 to U+009F) that a caller's own
+   dataset view hands to canonicalization (version 3 wrote `\u007F` to `\u009F`,
+   version 4 writes the character raw; both presentations). The escape set of an IRI
+   (§2.1) is the production's exclusions exactly, and the canonicalizer does not
+   validate the IRIs of a view. The N-Quads and Turtle parsers, `RdfDatasetBuilder`
+   at freeze and the GTS import each refuse such an IRI, so data that entered through
+   them is unaffected;
+4. flat presentation only: an input carrying a reserved IRI outside a fold shape,
+   which version 3 refused and version 4 writes. The overlay presentation still
+   refuses it;
+5. flat presentation only: a composite (`cdt:List` / `cdt:Map`) literal with a
+   blank-node label in its lexical form (written as stored, where it was written as a
+   canonical label); the overlay and the named composite option are unchanged.
 
-The escape set of an IRI (§2.1) is the production's exclusions exactly; no input can
-observe the difference from version 3, because an IRI holding DEL or a C1 control is
-refused at every ingress.
+The constants that move with them: `CANON_PROFILE_VERSION` 3 to 4,
+`CANON_PRESENTATION_OVERLAY_VERSION` 1 to 2,
+`CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 1 to 2, and `CANON_CORPUS_DIGEST` to
+`f496dea01850dc3ef1d4b945b831d548e670a7664238ed1a0e25c0582fce23e0`.
 
 Nothing but canonical lines moves. The spelling rules of §2.1 are applied by the
 canonical line writer alone, so no serializer output, no SPARQL text, no composite

@@ -12,22 +12,37 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   canonical form of RDF 1.2 N-Quads (section 3), and the flat presentation no longer
   applies the overlay's reservation. `CANON_PROFILE_VERSION` is `4`, the overlay
   presentation `2` and the flat presentation `2`, so a consumer that asserts them at
-  build time stops compiling until it reads this entry. Only canonical lines change,
-  and the digests taken over them (document, graph and flat digests, and the pipeline
-  bundle digests that hash them); every serializer, the SPARQL serializer, composite
-  literal rendering and every other identity keep their bytes. Canonical bytes move
-  only for these inputs, and every other input keeps its version 3 bytes: a literal
-  holding U+FFFE or U+FFFF (now `\uFFFE` and `\uFFFF`, as N-Quads 1.2 section 3
-  requires for a character outside the XML 1.1 `Char` production; both
-  presentations); a language tag or base direction that reaches canonicalization with
-  a capital (now lower case; a dataset built through `RdfDatasetBuilder` folds a tag
-  when it interns the literal and never held one, so only a source view that keeps
-  the written case is affected); a composite (`cdt:List` / `cdt:Map`) literal with a
-  blank-node label in its lexical form under the flat presentation (the label is text
-  and is written as stored, where it was written as a canonical label); and an input
-  carrying a `urn:purrdf:rdfc:` IRI outside the two fold shapes under the flat
-  presentation, which version 3 refused and version 4 canonicalizes. The overlay
-  presentation keeps the reservation and the refusal exactly as they were.
+  build time stops compiling until it reads this entry. A consumer that stores
+  canonical digests reads these two lists first. **Inputs whose canonical bytes
+  change** (every other input keeps its version 3 bytes):
+  1. a language tag or base direction that a caller's own dataset view hands to
+     canonicalization with a capital letter (now lower case; a dataset built through
+     `RdfDatasetBuilder` folds a tag when it interns the literal and never held one,
+     so only a source view that keeps the written case is affected);
+  2. a literal holding U+FFFE or U+FFFF (now `\uFFFE` and `\uFFFF`, as N-Quads 1.2
+     section 3 requires for a character outside the XML 1.1 `Char` production; both
+     presentations);
+  3. an IRI holding DEL (U+007F) or a C1 control (U+0080 to U+009F) that a caller's
+     own dataset view hands to canonicalization (version 3 wrote `\u007F` to
+     `\u009F`, version 4 writes the character raw; both presentations; a dataset
+     frozen by `RdfDatasetBuilder` never holds such an IRI, so only a caller's own
+     view that holds one is affected);
+  4. flat presentation only: an input carrying a `urn:purrdf:rdfc:` IRI outside the
+     two fold shapes, which version 3 refused and version 4 writes;
+  5. flat presentation only: a composite (`cdt:List` / `cdt:Map`) literal with a
+     blank-node label in its lexical form (the label is text and is written as
+     stored, where it was written as a canonical label).
+
+  **Constants that move:** `CANON_PROFILE_VERSION` `3` to `4`;
+  `CANON_PRESENTATION_OVERLAY_VERSION` `1` to `2`;
+  `CANON_PRESENTATION_FLAT_ASSERTION_VERSION` `1` to `2`; `CANON_CORPUS_DIGEST` to
+  `f496dea01850dc3ef1d4b945b831d548e670a7664238ed1a0e25c0582fce23e0`.
+
+  Only canonical lines change, and the digests taken over them (document, graph and
+  flat digests, and the pipeline bundle digests that hash them); every serializer,
+  the SPARQL serializer, composite literal rendering and every other identity keep
+  their bytes. The overlay presentation keeps the reservation and the refusal exactly
+  as they were.
   **Standard flat output is no longer invariant under blank relabelling for a dataset
   with a composite literal that holds a blank-node label:** two datasets that
   `datasets_isomorphic` calls equal can have different flat documents, and the stored
@@ -42,9 +57,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   an input the other changes do not touch. The additions are additive: no public enum
   gains a variant. The IRI escape set of a canonical line is exactly what the `IRIREF`
   production excludes (`purrdf_lex::iri_escape` gains a `Carrier` and `_for` functions;
-  the unqualified functions and `term_syntax::write_iri` keep the XML-transport set);
-  no input can observe the difference, because an IRI holding DEL or a C1 control is
-  refused at every ingress, which tests now pin. `purrdf-lex` gains
+  the unqualified functions and `term_syntax::write_iri` keep the XML-transport set).
+  That is input 3 above: the canonicalizer does not validate the IRIs of a view, so a
+  caller's own view can hold DEL or a C1 control in an IRI and sees it written raw.
+  The N-Quads and Turtle parsers, `RdfDatasetBuilder` at freeze and the GTS import
+  each refuse such an IRI, which tests now pin, so data that entered through them is
+  unaffected. `purrdf-lex` gains
   `term_syntax::write_canonical_iri`, `term_syntax::write_canonical_literal` and
   `literal_escape::write_canonical_line` for a consumer that streams its own canonical
   lines; `term_syntax::write_literal` and `literal_escape::Carrier::Canonical` are

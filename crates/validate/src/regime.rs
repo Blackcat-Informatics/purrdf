@@ -2595,8 +2595,8 @@ impl ReasonerSession {
     ///
     /// # Errors
     ///
-    /// A dataset refused canonicalization (a reserved-vocabulary IRI, or one that exhausts
-    /// the RDFC-1.0 search budget).
+    /// A dataset refused canonicalization: one that exhausts the search budget. The
+    /// flat presentation this writes refuses no reserved-vocabulary IRI.
     pub fn premise_nquads(
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
@@ -7682,9 +7682,10 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
 
     /// The ontology document is wholly caller-supplied, so a justification
     /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
-    /// `Err` VALUE — through [`ReasonerSession::justify`]'s
-    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
-    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    /// `Err` VALUE rather than panicking. The refusal comes from the overlay
+    /// content identity `render_justification` computes
+    /// (`Justification::digest_hex`); the flat presentation refuses no
+    /// reserved-vocabulary IRI.
     #[test]
     fn justify_refuses_a_reserved_vocabulary_justification_as_a_value() {
         let mut control =

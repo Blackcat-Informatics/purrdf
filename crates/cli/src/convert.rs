@@ -53,9 +53,10 @@
 //!   ([`purrdf_rdf::try_canonicalize_flat_view`]) rather than the `--to` format.
 //!   Canonical output is always N-Quads, so `--canonical` lets you OMIT `--to` — and
 //!   refuses it by name (see [`run`]) rather than silently ignoring a `--to` naming a
-//!   different format, exactly as it refuses `--jsonld-options`. A refusal (reserved
-//!   vocabulary, or n-degree search budget exhaustion) is reported as an ordinary
-//!   [`CliError::Runtime`], never a process abort — `--canonical` reads arbitrary
+//!   different format, exactly as it refuses `--jsonld-options`. A refusal (n-degree
+//!   search budget exhaustion; the flat presentation refuses no reserved-vocabulary
+//!   IRI) is reported as an ordinary [`CliError::Runtime`], never a process abort —
+//!   `--canonical` reads arbitrary
 //!   caller-supplied documents, so it is an untrusted-input surface.
 
 use std::sync::Arc;

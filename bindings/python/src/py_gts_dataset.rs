@@ -135,10 +135,10 @@ impl PyRdfDataset {
     /// `to_ntriples` spelling would misdescribe. There is deliberately no alias:
     /// one serializer, one name.
     ///
-    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (reserved
-    /// vocabulary, or n-degree search budget exhaustion) is raised as an ordinary
-    /// `ValueError` via the typed [`try_canonicalize_flat_view`] path, never a process
-    /// abort.
+    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (n-degree
+    /// search budget exhaustion; the flat presentation refuses no reserved-vocabulary
+    /// IRI) is raised as an ordinary `ValueError` via the typed
+    /// [`try_canonicalize_flat_view`] path, never a process abort.
     #[pyo3(signature = (*, canonical_search, cancel=None))]
     fn to_nquads(
         &self,

@@ -1,15 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! An IRI holding DEL or a C1 control is refused at every ingress, beside a
-//! neighbour holding U+00A0 that is accepted.
+//! An IRI holding DEL or a C1 control is refused at each ingress listed below,
+//! beside a neighbour holding U+00A0 that is accepted.
 //!
 //! RFC 3987 `ucschar` starts at U+00A0, so DEL and U+0080 to U+009F are not IRI
 //! characters. The canonical form writes them raw (it escapes exactly what the
-//! `IRIREF` production excludes), so the canonical form can never be asked to
-//! write one only because every ingress refuses it first. This pins that
-//! instead of assuming it: if an entry point ever admits such an IRI, a canonical
-//! document would carry a raw DEL or C1 control and this test names the entry point.
+//! `IRIREF` production excludes) and the canonicalizer does not validate the IRIs
+//! of the view it reads. A dataset that entered through one of these ingresses
+//! never holds such an IRI, so its canonical document never carries a raw DEL or
+//! C1 control; this pins that instead of assuming it, and names the entry point
+//! if one ever admits such an IRI. A caller's own dataset view is not an ingress
+//! covered here: it can hold such an IRI, and its canonical line carries the
+//! character raw.
 //!
 //! Ingresses covered: N-Quads (raw and `UCHAR`-escaped), Turtle (raw and
 //! `UCHAR`-escaped) and the programmatic builder, which records the refusal when
