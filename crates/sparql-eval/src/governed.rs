@@ -393,6 +393,16 @@ pub enum PartialAnswers<R = PartialSparqlResult> {
     Unknown(NonMonotoneBarrier),
 }
 
+impl<R: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for PartialAnswers<R>
+{
+    purrdf_hash::error_visit! {
+        Certain(result) => "sparql-partial-certain" { "result" => Record(result) },
+        AtMost(result) => "sparql-partial-at-most" { "result" => Record(result) },
+        Unknown(barrier) => "sparql-partial-unknown" { "barrier" => Record(barrier) },
+    }
+}
+
 impl<R> PartialAnswers<R> {
     /// The same certificate over a borrow of the rows.
     #[must_use]
@@ -497,6 +507,15 @@ pub struct PartialSparqlResult {
     result: SparqlResult,
     /// Whether those rows are the true output's first rows, in order.
     positional_prefix: bool,
+}
+
+impl purrdf_hash::error::StructuredError for PartialSparqlResult {
+    purrdf_hash::error_visit! {
+        @record self { result, positional_prefix } => "sparql-partial-result" {
+            "result" => Record(&self.result),
+            "positional_prefix" => Boolean(self.positional_prefix),
+        }
+    }
 }
 
 impl PartialSparqlResult {
@@ -718,6 +737,18 @@ pub struct GovernedEvidence<Evidence> {
     pub view: Evidence,
     /// This execution's consumption, ceilings, and trip.
     pub governors: GovernorEvidence,
+}
+
+impl<Evidence: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for GovernedEvidence<Evidence>
+{
+    purrdf_hash::error_visit! {
+        @record self { coordinates, view, governors } => "sparql-governed-evidence" {
+            "coordinates" => Record(&self.coordinates),
+            "view" => Record(&self.view),
+            "governors" => Record(&self.governors),
+        }
+    }
 }
 
 impl<Evidence> GovernedEvidence<Evidence> {

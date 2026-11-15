@@ -388,6 +388,17 @@ fn native_ledger_refusal_is_an_operational_error_without_partial_answers() {
             &QueryOptions::default(),
         )
         .expect_err("reporting/operator growth exceeds original grant");
+    // A generic consumer reads the same refusal without matching either enum:
+    // the view's native storage cause and its byte receipt stay typed.
+    let inspected = purrdf_testkit::error_capture::Capture::read(&error);
+    assert_eq!(inspected.code, "sparql-fallible-operational");
+    let cause = inspected.child("cause");
+    assert_eq!(cause.code, "ledger-read-storage");
+    assert_eq!(cause.child("cause").code, "storage-admission-failed");
+    assert!(matches!(
+        inspected.child("evidence").field("value"),
+        purrdf_hash::error::ErrorValue::Unsigned(_)
+    ));
     assert!(matches!(
         error,
         FallibleSparqlError::Operational {

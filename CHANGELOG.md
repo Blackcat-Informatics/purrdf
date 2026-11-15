@@ -39,6 +39,74 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `StreamWriter`, with the same bytes as before; a regular file is still read
   twice, once to check its digest before anything is written and once to
   frame it.
+
+- **Structured inspection of fallible query outcomes:** `FallibleSparqlError`
+  now implements `purrdf_hash::error::StructuredError` whenever its operational
+  error and evidence types do, so a consumer records each outcome (`Query`,
+  `Operational`, `AllocationFailed`, `ControlFailure`, `BudgetExhausted`) with
+  its typed fields and never formats it: the retained diagnostic and the view's
+  own error are nested causes, the governor trip keeps its ceiling and
+  consumption, and the certified partial rows are reached as rows. The values
+  it carries gained the same inspection: `QueryControlFailure`,
+  `PartialAnswers`, `PartialSparqlResult`, `RetainedSparqlResult`,
+  `RetainedPartialSparqlResult`, `NonMonotoneBarrier` and `GovernedEvidence`.
+  `GraphBuildError`, `protocol::ProtocolError` and `protocol::OperationKind`
+  implement it as well; a protocol refusal reports byte offsets as byte counts
+  and parameter and clause names as codes, and its `reason` and `message`
+  fields remain the text their producer wrote. Additive: no signature, variant
+  or payload changed.
+
+- **iri: `Iri::normalize` keeps what a rootless relative reference resolves
+  to.** **Behaviour change**, confined to a reference with no scheme and no
+  authority whose path is not empty and does not begin with `/`. There,
+  `normalize` no longer applies RFC 3986 §5.2.4 `remove_dot_segments`, which is
+  defined for a path already merged with a base and discarded the segments only
+  a base can interpret, and it no longer decodes a segment into a dot segment.
+  For such a reference and any absolute base, resolving the normal form now
+  names the same IRI as resolving the original (equal once both results are
+  normalized). The rules, each with the inputs whose normal form changes:
+
+  | Rule | Reference | Before | Now |
+  | --- | --- | --- | --- |
+  | A `..` with nothing before it stays | `../a`, `./../a` | `a` | `../a` |
+  | | `../a:b` | `./a:b` | `../a:b` |
+  | | `..`, `../`, `./..`, `.././` | `.` | `..` |
+  | A reference that reduces to its directory keeps the path `.` beside a query or fragment | `.?q`, `./?q` | `?q` | `.?q` |
+  | | `./#f` | `#f` | `.#f` |
+  | An empty first segment stays behind its dot segment | `.//x` | `/x` | `.//x` |
+  | | `..//x` | `/x` | `..//x` |
+  | The reference's own first segment is never removed by a `..` | `a/..`, `a/../` | `/` | `a/..` |
+  | | `a/../b` | `/b` | `a/../b` |
+  | | `a/b/../../c` | `/c` | `a/../c` |
+  | A segment that decodes to `.` or `..` stays encoded, as `%2E` or `%2E%2E`, and is an ordinary segment | `%2e` | `.` | `%2E` |
+  | | `%2e%2e`, `.%2E` | `.` | `%2E%2E` |
+  | | `%2e%2e/a` | `a` | `%2E%2E/a` |
+  | | `a/%2e/b` | `a/b` | `a/%2E/b` |
+  | | `a/%2e/../b` | `/b` | `a/b` |
+  | | `x/%2e%2e/../a` | `/a` | `x/a` |
+  | | `x/%2e/..` | `/` | `x/` |
+  | | `%2e%2e/..` | `.` | `%2E%2E/..` |
+  | | `%2e/%2e/..` | `.` | `%2E/` |
+
+  A normal form changes exactly when the reference is of that kind and has a
+  leading `..`; or reduces to its directory beside a query or fragment; or has
+  an empty segment directly after its leading dot segments; or has a `..` that
+  reaches its own first segment; or has a segment that decodes to `.` or `..`
+  without being spelled so. Every other such reference is unchanged: `.`, `./`
+  and `./.` are `.`, `./a` is `a`, `a/./b` is `a/b`, `a/b/../c` is `a/c`,
+  `a/.` is `a/`, `./a:b` is `./a:b`. The first-segment rule exists because a
+  base whose path has no directory part (`urn:x`) resolves `a/../b` to a
+  leading `/`.
+
+  Unchanged, byte for byte: every IRI with a scheme, every reference with an
+  authority and every absolute-path reference (`/a/../b` is `/b`). Not covered
+  by the guarantee: under a scheme, an authority or a leading `/`, a
+  percent-encoded dot segment is still decoded and then removed as a dot
+  segment (`/a/%2e%2e/../b` is `/b`, while the reference itself resolves to
+  `/a/b`). The signature is unchanged. A caller that stored normal forms of
+  rootless relative references holds the old spelling for the inputs described
+  above.
+
 - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
