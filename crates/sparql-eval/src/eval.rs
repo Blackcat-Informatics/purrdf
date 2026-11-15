@@ -1291,7 +1291,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self.reserve_computed_owner()?;
         let before = self.scratch.owned_value_count();
         let (value, admission) = value.into_parts();
-        let workspace = self.workspace.clone();
+        let workspace = &self.workspace;
         let lookup = &self.term_lookup;
         let dataset = self.dataset;
         let growth = &self.growth;
