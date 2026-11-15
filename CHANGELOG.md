@@ -16,8 +16,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   type is returned unchanged in `StreamError::Sink`. `StreamWriter::new` writes
   the header (caller catalog, `meta`, optional self-describe tag);
   `StreamWriter::resume` continues a chain from a stored 32-byte previous-frame
-  id with no earlier frame in memory; `head` and `bytes_written` report the
-  last whole frame. `add_frame_with_options` takes the same `FrameOptions` as
+  id with no earlier frame in memory; `head` is the last whole frame's id and
+  `bytes_written` counts the whole items this writer itself has written (from
+  its header for `new`, from zero for `resume`), so the place to cut a file
+  back to is the offset at which the writer started plus `bytes_written`. `add_frame_with_options` takes the same `FrameOptions` as
   `Writer`, and `add_frame_signing` chooses per frame whether the installed
   Ed25519 signer signs it (`FrameSigning`), which `Writer` cannot do;
   `FrameOptions` itself is unchanged. `add_frame_from_reader` reads a payload
@@ -26,7 +28,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   first, because a frame's data is one definite-length byte string and the
   codecs and AES-GCM here are single-shot. After a sink failure, or a reader
   failure inside a streamed frame, the writer refuses further frames
-  (`StreamError::Poisoned`) and stays at the last whole frame. `index` footers
+  (`StreamError::Poisoned`) and stays at the last whole frame; while a whole
+  frame is encoded, its encoded data is held twice, and the frame buffer keeps
+  the largest frame's capacity for the writer's lifetime. `index` footers
   and composite signatures are not streamed. `FrameError` gains
   `PreviousHashLength`, `ConflictingSigning` and `ReaderSource`. The
   files-profile packers (`pack_to_writer`, `pack_entries_v2_to_writer`,

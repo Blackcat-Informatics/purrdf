@@ -196,23 +196,30 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
 ///
 /// The bytes are those [`Writer`](super::Writer) accumulates for the same
 /// calls: both run one frame encoder. Nothing is kept per frame, so the state
-/// between calls is the 32-byte head, a byte count and one reused frame
-/// buffer.
+/// between calls is the 32-byte head, two byte counts and two reused buffers:
+/// the frame buffer, which keeps the capacity of the largest frame encoded
+/// whole, and, once a payload has been streamed from a reader, one 128 KiB
+/// chunk.
 ///
 /// # What is held in memory
 ///
 /// * [`add_frame_with_options`](Self::add_frame_with_options) and
 ///   [`add_frame_signing`](Self::add_frame_signing) encode one whole frame and
 ///   hand it to the sink in a single call: memory is bounded by the largest
-///   frame, never by the log.
+///   frame, never by the log. While a frame is encoded its data is held twice,
+///   once in the frame being built and once in the frame buffer.
 /// * [`add_frame_from_reader`](Self::add_frame_from_reader) with no transform
 ///   and no sealing reads the payload once and holds one 128 KiB chunk of it,
 ///   whatever its length. Public metadata, recipients and a signature do not
 ///   change that.
-/// * With a transform or sealing, the same call holds the whole payload and
-///   its encoded form. A frame's data is one definite-length byte string, so
-///   the transformed length precedes the first transformed byte, and the
-///   codecs and the AEAD here are single-shot.
+/// * With a transform or sealing, the same call holds the whole payload, its
+///   encoded form, and a second copy of the encoded form while the frame is
+///   written to the frame buffer. A frame's data is one definite-length byte
+///   string, so the transformed length precedes the first transformed byte,
+///   and the codecs and the AEAD here are single-shot.
+///
+/// Sealing panics on a payload longer than AES-GCM's plaintext limit (just
+/// under 64 GiB), exactly as [`Writer`](super::Writer) does.
 ///
 /// # Failures
 ///
@@ -222,9 +229,11 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
 /// short while its frame was being streamed — the writer is poisoned: the head
 /// and [`bytes_written`](Self::bytes_written) stay at the last complete frame
 /// and every later frame returns [`StreamError::Poisoned`] without touching
-/// the sink. To continue, cut the destination back to `bytes_written()` past
-/// where this writer started and [`resume`](Self::resume) from
-/// [`head`](Self::head).
+/// the sink. To continue, cut the destination back to the offset at which
+/// this writer started plus `bytes_written()`, and [`resume`](Self::resume)
+/// from [`head`](Self::head). `bytes_written()` alone is not a position in the
+/// destination: it starts at the header for [`new`](Self::new) and at zero for
+/// `resume`.
 ///
 /// # Not streamed
 ///
@@ -368,6 +377,11 @@ impl<S: FrameSink> StreamWriter<S> {
     /// Bytes of complete items this writer has handed to the sink: the header
     /// (for [`new`](Self::new)) and every whole frame. Part of a failed frame
     /// is not counted, so this is always a frame boundary.
+    ///
+    /// The count is this writer's own and starts at zero for
+    /// [`resume`](Self::resume): it is not an offset in the destination. The
+    /// last whole frame ends at the offset where this writer started plus
+    /// this count.
     #[must_use]
     pub const fn bytes_written(&self) -> u64 {
         self.written

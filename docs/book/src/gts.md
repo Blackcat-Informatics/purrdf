@@ -84,10 +84,14 @@ and not by the log. Both writers run one frame encoder, and for the same calls
 their bytes are identical.
 
 A long-lived log is a concatenation of segments, each a header and its frames.
-Keep `head()` and `bytes_written()` after each frame that must survive. After
-a restart, cut the file back to that length and call `StreamWriter::resume`
-with the stored head and the header's catalog options: the chain continues
-with no earlier frame in memory. To start the next segment, put the previous
+`bytes_written()` counts only what one writer has written: it starts at the
+header for `StreamWriter::new` and at zero for `StreamWriter::resume`, and is
+never an offset in the file. So record the file offset at which each writer
+starts, and after each frame that must survive keep `head()` and that starting
+offset plus `bytes_written()`. After a restart, cut the file back to that sum
+(not to `bytes_written()` alone, which would cut into earlier segments) and
+call `StreamWriter::resume` with the stored head and the header's catalog
+options: the chain continues with no earlier frame in memory. To start the next segment, put the previous
 segment's head in the new header's `meta`.
 
 Per frame, `add_frame_signing` chooses whether the installed Ed25519 signer
@@ -96,12 +100,15 @@ last frame only; a signature never changes a frame id. Sealing takes the
 caller's nonce in `Encrypt0Options`. `add_frame_from_reader` reads a payload of
 a declared length from a reader: a clear payload is streamed in one pass,
 holding one 128 KiB chunk, while a transformed or sealed payload is read whole
-first, because its encoded length precedes it on the wire.
+first, because its encoded length precedes it on the wire. A sealed payload
+longer than AES-GCM's plaintext limit (just under 64 GiB) panics, as it does in
+`Writer`.
 
 If the sink fails, or a streamed payload's reader fails, part of a frame may be
 in the destination: the writer refuses further frames, and `head()` and
-`bytes_written()` stay at the last whole frame, which is where to cut back and
-resume. `index` footers and composite signatures are not streamed.
+`bytes_written()` stay at the last whole frame. Cut the destination back to
+the offset at which this writer started plus `bytes_written()`, and resume
+from `head()`. `index` footers and composite signatures are not streamed.
 
 The `RdfDataset` import/export path lives one layer up: the umbrella crate's
 `gts` module combines the container engine with the RDF-level adapter
