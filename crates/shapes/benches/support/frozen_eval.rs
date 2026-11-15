@@ -412,9 +412,19 @@ pub(crate) enum Query {
     Q4,
     /// NOT EXISTS with FILTER.
     Q5,
+    /// Two patterns scanned, bound and joined, then only counted. Like every row here
+    /// it runs ungoverned, with no stop signal and no ceiling: the first pattern scans
+    /// into the row sink and the last through the retained cursor. It is not the
+    /// governed run, in which every stage scans into the sink. Many rows are bound and
+    /// one answer row is returned, so the witness count is always 1 and the check on
+    /// this row is agreement between the freeze variants, not a known count.
+    Scan,
 }
 
 impl Query {
+    /// Every query, in report order.
+    const ALL: [Self; 6] = [Self::Q1, Self::Q2, Self::Q3, Self::Q4, Self::Q5, Self::Scan];
+
     pub(crate) fn label(self) -> String {
         match self {
             Self::Q1 => "q1_not_exists_group_having".into(),
@@ -422,6 +432,7 @@ impl Query {
             Self::Q3 => "q3_not_exists_group_subquery".into(),
             Self::Q4 => "q4_filter".into(),
             Self::Q5 => "q5_not_exists_filter".into(),
+            Self::Scan => "scan_two_patterns_count".into(),
         }
     }
 
@@ -454,6 +465,9 @@ impl Query {
             Self::Q5 => "SELECT ?x ?s WHERE { ?x ex:score ?s ; ex:status ?st . \
                  FILTER NOT EXISTS { ?x ex:parent ?p . ?p ex:score ?ps . FILTER(?ps > ?s) } }"
                 .to_owned(),
+            Self::Scan => {
+                "SELECT (COUNT(*) AS ?n) WHERE { ?x ex:score ?s ; ex:status ?st }".to_owned()
+            }
         };
         format!("{}{body}", prologue())
     }
@@ -682,10 +696,9 @@ pub(crate) fn rows() -> Vec<Row> {
         );
     }
 
-    let reported = [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5];
     // Cold: a fresh engine plans on a dataset whose identity is sealed. Warm: the
     // same engine runs the prepared query again.
-    for query in reported {
+    for query in Query::ALL {
         for data in [Data::Ordinary, Data::Eager] {
             for warm in [false, true] {
                 add(
@@ -790,7 +803,7 @@ impl Fixtures {
             );
             let _ = DatasetView::snapshot_identity(&*dataset);
             let engine = NativeSparqlEngine::new();
-            for query in [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5] {
+            for query in Query::ALL {
                 let prepared = engine
                     .prepare_query(&query.text(&self.layout), None)
                     .expect("the query prepares");
