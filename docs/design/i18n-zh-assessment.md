@@ -74,7 +74,7 @@ mechanically**, and every one of those gates was written against English:
    (`isalnum` → ASCII-only in `check-brand-casing.py`; `\b` → explicit
    ASCII lookarounds in `check-issue-refs.py`; a Chinese disclaimer set in
    `check-spec-attribution.py`). Each is small, and each is a tightening, so
-   each needs the paired valid-neighbour case proven per `CLAUDE.md`.
+   each needs the paired valid-neighbour case proven per `AGENTS.md`.
 3. **Ship a glossary file as a gate input, not a wiki page.** The 30-term
    sample in §5 shows that roughly a third of PurRDF's load-bearing terms have
    no established mainland rendering. The house style already settles the

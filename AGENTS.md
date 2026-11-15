@@ -1,27 +1,88 @@
-<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
-<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# Agent guide (AGENTS.md)
 
-# AI Developer Agent Guide (AGENTS.md)
+This is the one contract for every coding agent in the PurRDF repository.
+`CLAUDE.md` only imports it. Where a generic guide or skill disagrees with this
+file, this file wins.
 
-Welcome, AI Agent! This file is your behavioral contract and instruction manual for
-contributing to the PurRDF repository.
+**We do not care about binary size or WASM size. If you find yourself optimizing
+for either, stop.**
 
 ---
 
-## Guiding principles
+## Principles
 
 When requests conflict, these decide. They do not replace the hard constraints
 below or a release plan.
 
 * **GREENFIELD:** we always correct the mistakes of the past. Others' mistakes
-  are our lessons, not our limits.
+  are our lessons, not our limits. No compromises inherited from earlier work.
 * **SOTA:** always choose the state of the art over the bones of the past.
 * **OPTIMAL:** choose the Pareto frontier of the quality, speed, efficiency and
   other axes.
 * **MAXIMAL:** support the broadest functionality possible after the other
   choices are made.
 
-## Shell commands
+Project commitments:
+
+* **Rust first, Python surface.** All core functionality is high-quality Rust.
+  Other languages are surfaces over the one engine.
+* **Subsume, extend, enhance.** If something we depend on is substandard or
+  holds us back, take over its job, extend it, then improve it well past the
+  original.
+* **Low optionality, hard failures.** The build has no optional components,
+  conditional imports or optional packages, and nothing swallows an error. Fail
+  early with an actionable message. This is a rule about the build and its
+  packaging, not about ordinary control flow in code.
+* **RDF 1.2 only.** Triple terms, reifiers and annotations are first-class
+  everywhere. No shortcut that only serves RDF 1.1 and no lowering that drops
+  them.
+* **Three maximums:** utility (when in doubt, the more useful behavior),
+  performance (the best Rust solution, using the language fully) and
+  portability (code that builds for WebAssembly is the core value).
+
+## How to work
+
+* **Done means merged.** Work in a pull request or a worktree is not done.
+  Land small, complete changes; do not grow a large change set in search of a
+  perfect one, and do not iterate on a branch when one push would do. With more
+  than three open pull requests or worktrees, start nothing new: land what is
+  open, oldest first. Anything held more than twelve hours is reported.
+* **No deferrals.** No follow-up, "left for later" or stub. The work is now.
+* **You see a bug, you own it.** Fix it; do not spend the effort on who
+  introduced it. A gate already failing on untouched `main` is reported, not
+  silently absorbed into an unrelated change.
+* **Gap analysis is adversarial.** Assume the code under review does not meet
+  its specification until the evidence shows it does.
+* **No process references in the repository.** Issue numbers, pull-request
+  numbers and development history belong on the forge. Text such as "per the
+  issue" or "will be fixed in" is banned from source, comments and
+  documentation; remove it where you find it. No tool or agent credits anywhere.
+* **A refusal is a claim too: prove it.** Rejecting valid input is the mirror
+  of silently dropping it, and it passes every test because it looks like
+  strictness. For every refusal you add or tighten, execute two cases: the one
+  you believe is invalid, and a neighbouring valid one that must still
+  succeed. Cost and size estimators are the worst offenders.
+* **Research is encouraged; copying is not.** Read specifications, upstream
+  documentation and issue trackers instead of guessing. Send only the technical
+  question, never private data. Write your own code and prose; record what you
+  consulted where the repository keeps its sources (`PROVENANCE.md`).
+* **Look before you build.** Consult `helpers-ledger.toml`, the helper census
+  and the crate map before writing something new. Prefer an existing home in
+  this workspace to a second implementation.
+* **Design.** Apply SOLID judged by concrete consequences. Prefer small crates
+  and keep a source file under 5,000 lines; split one that grows past it.
+  Refactor code your change touches when that makes the change simpler.
+
+### Directories and data
+
+* All git work happens in a worktree under the main checkout's `.worktrees/`.
+* Notes, evidence, logs, checkpoints and scratch go under the main checkout's
+  `.stage/` (ignored by git). Nothing you need is kept in `/tmp` or
+  `/var/tmp`, and nothing is stored in another repository's tree.
+* A worktree is removed only after every agent given it has ended, and its
+  review files are saved under `.stage/` first.
+
+### Shell commands
 
 * One shell call does one thing. Do not join steps with `&&` or `;`. A run of
   several steps is a script file, run once, with its output in a log.
@@ -31,525 +92,241 @@ below or a release plan.
 * Run nothing that can raise a permission prompt.
 * A call that was refused is not sent again in another form.
 
-## Shared engineering guidance
+### Builds, waiting and evidence
 
-Read the complete [Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md).
-Repository-specific constraints in this file take precedence, including
-dependency choices and test tooling.
+* Cargo runs through the managed wrapper; do not work around it. Serialize
+  every heavy command (cargo, a test suite, a gate, a commit whose hook
+  builds) through one lock, `flock .stage/build.lock`, so that one runs at a
+  time across all agents of a session.
+* Do not watch. No `tail -f`, `sleep`, process listing or polling loop to
+  learn that something finished. Run the command in the foreground with a
+  timeout that fits it, or in the background and act on its completion notice.
+  If you cannot name the event that will wake you, you are stuck: read the
+  state once and act.
+* Send output to a file under `.stage/` and record the tool's own exit status
+  after it. A status read through a pipe, or a line you echoed yourself, is not
+  evidence. A cargo command names its own tree, and its log starts with the
+  directory and the commit.
+* Evidence for a gate comes from the gate's own command, flag for flag. A
+  hand-written command that differs from it proves nothing about the gate.
+  Missing tools, skips, zero selected cases and interrupted runs are not passes.
+* Read the clock when you write a time; do not estimate it.
 
-## WASM test ownership
+### Sub-agents and review
 
-General semantics, correctness, grammar, arithmetic, refusal, ownership and
-conformance tests belong in native Rust. Do not add or execute WASM copies of
-those tests, regardless of their origin. A portable build, a 32-bit integer,
-a shared harness, or a test already being selected is not a justification.
-
-WASM execution is limited to actual WASM dispatch/SIMD kernels, shadow-stack
-floors, host imports/interfaces, and explicitly named frozen native byte/digest
-identity probes. Every retained selection must name that concrete obligation in
-[WASM_TESTING.md](./docs/WASM_TESTING.md). Exercise only its exact named cases;
-never run an entire mixed target on WASM. Keep ordinary cases in native coverage.
-`make wasm` separately establishes release-crate build portability.
-
-Before adding a WASM selection, inspect its implementation and identify the
-platform-specific branch or frozen native identity it exercises. General
-correctness, full-width values, source ownership and typed errors alone do not
-qualify. Audit existing selections by the same rule; do not grandfather them.
-
-## Deficiency emergency ledger (non-negotiable)
-
-`.deficiencies` is the log of last resort for critically undone work. Every entry
-below its marker is **100% unauthorized**, is **100% a bug**, and means its
-originating issue or pull request failed. It is used for work misrepresented to
-pass PR gates, work misrepresented by an agent, or a discovery that an agent was
-fundamentally defective. An entry is literally a cry for help from a failing
-agent; it is never an accepted risk, authorized descope, backlog, or success with
-caveats.
-
-The only normal contents are the tracked notice and marker, with no entries below
-them. An entry blocks completion, PR creation, and merge of the work that produced
-it. Immediately verify the defect against current code and give it a durable,
-visible remediation owner before removing the emergency entry. Removing an entry
-does not resolve the bug or retroactively make the failed work successful. Never
-add ledger text to make incomplete work appear complete.
+* A brief is all a sub-agent knows: the goal, what is ruled out, the files to
+  read, the exact scope, the worktree path and the rules that bind it. If you
+  cannot write the brief, you do not understand the task well enough.
+* One coding sub-agent per worktree. Read-only work (research, review, log
+  reading) may run beside it.
+* A reviewer gets the change and the requirement, never your conclusion. Its
+  verdict counts only for the exact head it names, with what it read and what
+  it did not read. Every review item is addressed before merge.
+* What a sub-agent reports is a claim. Read the evidence before you repeat it
+  or build on it. Judge a coder by its diff, logs and the hook.
+* Before merging, the session that merges reads the merging diff itself, after
+  the independent review and not in place of it. Hosted checks must be green on
+  that exact head.
 
 ---
 
 ## 1. What this repository is
 
 PurRDF is the **RDF 1.2 toolkit** that several downstream projects (notably
-[`gmeow-ontology`](https://github.com/Blackcat-Informatics/gmeow-ontology)) use as
-their **data-carrier backbone**. It must stay fast, deterministic, and boring:
-one engine, one behavior, carried verbatim into Rust, Python, WebAssembly, and C.
+[`gmeow-ontology`](https://github.com/Blackcat-Informatics/gmeow-ontology)) use
+as their **data-carrier backbone**. It must stay fast, deterministic, and
+boring: one engine, one behavior, carried verbatim into Rust, Python,
+WebAssembly, and C.
 
-Crate map (all under `crates/`, published names in `Cargo.toml`):
+Crate map (all under `crates/` unless a path is given; each crate's README
+holds the detail):
 
 | Crate | Role |
 |---|---|
-| `purrdf` | Umbrella facade (RDF surface at root; `slice`/`shapes` as modules) |
-| `purrdf-rdf` (`crates/rdf`) | Native text/XML/JSON-LD codecs, GTS adapters, describe, canonicalization |
-| `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
-| `purrdf-columnar` (`crates/columnar`) | Bidirectional five-table Parquet codec for RDF 1.2 + blobs |
-| `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log through `purrdf_lex::cbor`, BLAKE3, COSE, Ed25519 through `purrdf-ed25519`) |
-| `purrdf-zstd` (`crates/zstd`) | Shared Zstandard frame codec and deterministic FastCOVER dictionary trainer over `purrdf-hash` and the `purrdf-lex` conversion macros; one fixed product with native error inspection and target-selected kernels, imported with its original Apache grant |
+| `purrdf` | Umbrella facade |
+| `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, store traits, diagnostics, provenance, canonicalization |
+| `purrdf-rdf` (`crates/rdf`) | Text, XML and JSON-LD codecs, GTS adapters, describe |
+| `purrdf-columnar` | Five-table Parquet codec for RDF 1.2 and blobs |
+| `purrdf-gts` | GTS container engine: CBOR log, BLAKE3, COSE, signatures |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
-| `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
-| `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
-| `purrdf-slice` (`crates/slice`) | Slice catalog, artifacts, ownership analysis |
-| `purrdf-datalog` (`crates/datalog`) | Deterministic semi-naive Datalog substrate beneath every rule-driven engine |
-| `purrdf-entail` (`crates/entail`) | Entailment regimes: RDF/RDFS/OWL 2 RL/D materialization, OWL-Direct, RIF |
-| `purrdf-geo` (`crates/geo`) | Compatibility facade over the geographic kernel and the evaluator's scalar/property-function adapters |
-| `purrdf-geo-kernel` (`crates/geo-kernel`) | Exact WKT/GeoJSON geometry, certified geodesy, explicit coordinate operations, hierarchical cells/covers and native geographic indexes |
-| `purrdf-text` (`crates/text`) | Deterministic full-text search over literals: exact fixed-point BM25, ranked rows through the property-function seam |
-| `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
-| `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through, including what every host (CLI, C ABI, wasm, Python) shares around a query: the governor decoder (`governors::from_parts`, from `QueryGovernors::METERED`) and the query provenance record (`query::provenance`) |
-| `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; runtime dependencies are `purrdf-core`, `purrdf-lex` (the JSON string decoder and pointer tokens) and the `purrdf-hash` root |
-| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202), CRC-32 (ISO-HDLC) and seeded XXH64, streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; `wasm32` and 32-bit targets use the portable function), each function pinned by frozen self-vectors. The workspace root: zero dependencies, and every crate may depend on it; it also holds the small specified kernels shared across the workspace (`hex`, base16 in either case with the `Digest32` value every 32-byte content identity wraps; `frame`, the length framing every preimage uses; `fnv`, FNV-1a 64-bit; `mix`, `SplitMix64`, its `[-1, 1)` signed-unit draws and the MMIX 64-bit LCG), `Domain`, the registry type of every hash domain-separation string, and the `Backend` trait every family of named execution paths implements (`selected`, `is_available`, `all_available`, `name`), with the one `PURRDF_REQUIRE_SIMD_PATHS` check in `dispatch`; and the impl macros `debug_non_exhaustive!`, `default_from_new!` and `vector_backend!`. It implements no SHA-2: the external `sha2` crate is the workspace's one SHA-2 |
-| `purrdf-deflate` (`crates/deflate`) | Native DEFLATE (RFC 1951) and gzip (RFC 1952): a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage and output past a caller's limit, and a deterministic encoder (gzip `MTIME` 0, `XFL` 0, `OS` 255; the same bytes on every path and however the input is chunked); match copies, match-length compares and window hashing run on SSE2/AVX2, NEON or wasm simd128, portable code otherwise; sole runtime dependency is `purrdf-hash` (the CRC-32) |
-| `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, exact decimal numbers, and ECMA-262 `/u` patterns using `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers; `Schema::is_valid`/`evaluate` return typed errors on resource exhaustion; the `date-time`, `date` and `time` formats read through `purrdf_xsd::rfc3339` and exact number comparison computes on `purrdf_xsd::bigint::BigInt`; depends on `regex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only |
-| `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
-| `purrdf-toml` (`crates/toml`) | Lossless TOML 1.1 authoring model and RDF 1.2 cover, with typed ordered occurrences, explicit profiles, flat parsing and exact reparse-verified reconstruction; depends on `purrdf-core`, `purrdf-lex`, `purrdf-xsd` and `purrdf-hash` |
-| `purrdf-glob` (`crates/glob`) | Compiled single-pattern Unicode glob matching over explicit literal or IRI lexical surfaces, with fallible admitted ownership, constant execution workspace and deterministic work refusal; depends on `purrdf-hash`, `purrdf-iri` and `purrdf-lex` |
-| `purrdf-mime` (`crates/mime`) | Ordered original-byte RFC 5322/MIME cover with typed defects, nested part ranges, deterministic attachment decoding and strict RDF reparse verification; depends on `purrdf-core`, `purrdf-lex`, `purrdf-xsd` and `purrdf-hash` |
-| `purrdf-ed25519` (`crates/ed25519`) | Ed25519 signatures (RFC 8032): key expansion, deterministic signing over constant-time field and scalar arithmetic, and strict cofactorless verification that refuses a non-canonical `S`, a non-canonical point encoding and a small-order key or `R`; every GTS and RDF signer and verifier uses it; runtime dependencies are `purrdf-hash` and `sha2` (SHA-512) |
-| `purrdf-lex` (`crates/lex`) | The workspace's lexical layer, over the zero-dependency `purrdf-hash` root alone: the exact Turtle/SPARQL/XML/ECMA-262 terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`); the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time and `find_byte_pair` for two positions a fixed gap apart, the search behind `purrdf_core::xsd_regex`'s literal prefilter (`scan`); the RFC 8259 JSON string escaper and decoder (`json_escape`); RFC 6901 JSON Pointer tokens (`json_pointer`); RFC 3986/3987/6570 percent-encoding (`percent`); the one JSON reader, lexeme-keeping value and deterministic writer, with the strict typed record reader and its record codec (`json`, `json::record`, `json_record!`); the YAML 1.2 core-schema reader and block emitter over the JSON data model (`yaml`); the RFC 8949 CBOR codec with core deterministic encoding (`cbor`); the XML 1.0 + Namespaces reader, which expands an internal DTD subset under a budget and refuses external entities (`xml`); the literal and IRI escapers for each carrier (`literal_escape`, `iri_escape`), the RDF 1.2 term spelling (`term_syntax`), the text sink (`text_out`) and Crockford Base32 (`crockford`); the typed diagnostic presentation (`diagnostic`: stable message identity and exact typed arguments, validated against an English template; `purrdf_core::diagnostic` re-exports it); and the one Unicode normalization pipeline (`unicode`: NFC, NFD, NFKC, NFKD, `is_nfc`, `ccc` and the streaming stages the text analyzer composes its case fold with) over tables generated at `unicode::UNICODE_VERSION`, the version every Unicode table in the workspace is generated from by its one generator (`examples/gen_unicode_tables.rs`); and the shared structures and constructor macros (`walk`, `assoc`, `constructors!`, `variant_from!`, `message_error!`; see [Shared structures and constructors](#shared-structures-and-constructors)) |
-| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA 2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
-| `purrdf-xsd` | Foundation over `purrdf-lex` and `purrdf-hash` |
-| `purrdf-events` | Foundation over `purrdf-hash`: the event protocol and `TextDirection`, the one RDF 1.2 base-direction type; event errors use the root's borrowed structured inspection |
-| `purrdf-deflate` | Leaf over `purrdf-hash` alone |
-| `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`), re-exporting the one RDF 1.2 base-direction type, `purrdf_events::TextDirection`: `no_std` closed leaf over `purrdf-events`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only |
-| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; `wasm32` shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at; `on_stack`/`on_stack_scoped` run a computation on a stack of a stated size (a fresh thread natively, checked against the floor on `wasm32`) |
-| `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
-| `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
-| `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
-| `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (published development library, used as `[dev-dependencies]` by runtime crates) |
-| `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
-| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), an exact rational oracle that rounds an integer, a decimal or a float's binary value to `f64`, `f32` or a fixed decimal scale with integer arithmetic only (`exact`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on `wasm32`); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (published development library, used as `[dev-dependencies]` by runtime crates) |
-| `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
-| `purrdf-conformance-kit` (`crates/conformance-kit`) | Portable conformance grading over parsed inputs: inventory, catalog and review-registry admission, structural `mf:` manifest decoding, complete SHACL report comparison by contextual graph isomorphism, solution-bag comparison, and the one EARL report structure (`outcome::Report`: described subject and assertor, sorted records, EARL graph and EARL-scope scoreboard line); the community runner in `purrdf-sparql-conformance` and both W3C SHACL harnesses in `purrdf-shapes` report through this published development library |
-| `purrdf-shacl-conformance` (`crates/shacl-conformance`) | Shared SHACL corpus discovery, fixture vocabulary readers and engine-specific grading for Shapes and CLI integration tests (`publish = false`, path-only dev dependency of shipping crates) |
-| `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality, the XXH64 differential vectors), the digest, base16, XXH64 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on `wasm32`; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
-| `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml`; also hosts the non-Rust ratchet (`--non-rust-ratchet`, see [Hard constraints](#2-hard-constraints-violating-these-fails-ci-or-review)) (`publish = false`, host tool) |
+| `purrdf-shapes` | SHACL validation and SHACL Rules |
+| `purrdf-shex` | ShEx 2.1 schemas and validation |
+| `purrdf-datalog`, `purrdf-entail` | Semi-naive Datalog substrate; entailment regimes (RDF, RDFS, OWL 2 RL, D, OWL-Direct, RIF) |
+| `purrdf-slice` | Slice catalog, artifacts, ownership analysis |
+| `purrdf-geo`, `purrdf-geo-kernel` | Geographic functions over an exact geometry and geodesy kernel |
+| `purrdf-text`, `purrdf-retrieval` | Full-text search with exact BM25; ranked retrieval plans and fusion |
+| `purrdf-json`, `purrdf-toml`, `purrdf-markdown`, `purrdf-mime`, `purrdf-jsonschema`, `purrdf-glob` | Lossless document covers and validators, each under its shipped specification |
+| `purrdf-validate` | The string boundary every language binding and host routes through |
+| `purrdf-hash` | The zero-dependency root: digests, the fixed-key table hasher, shared small kernels, error inspection |
+| `purrdf-lex` | Lexical layer: terminals, scanners, JSON, YAML, CBOR, XML, escapers, Unicode normalization |
+| `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-cdt` | IRIs and W3C vocabulary terms; XSD values and exact arithmetic; the event protocol; composite datatypes |
+| `purrdf-deflate`, `purrdf-zstd`, `purrdf-ed25519` | Native DEFLATE and gzip; Zstandard; Ed25519 |
+| `purrdf-stack` | Remaining stack and running a computation on a stack of a stated size |
+| `purrdf-wasm` (`crates/rdf-wasm`), `purrdf-capi` (`crates/rdf-capi`), `bindings/python` | WebAssembly, C and Python bindings |
+| `purrdf-cli` | The `purrdf` command |
+| `purrdf-testkit`, `purrdf-alloc-probe`, `purrdf-conformance-kit` | Published development libraries: goldens, properties, benches; allocation measurement; conformance grading |
+| `purrdf-sparql-conformance`, `purrdf-shacl-conformance`, `purrdf-hash-conformance` | Conformance harnesses |
+| `helper-census`, `wasm-link`, `purrdf-bench`, `purrdf-envelope-probe` | Host tools: the structural census and non-Rust ratchet, the wasm post-link step, the scale corpus, the hardware envelope |
 
-The unpublished `helper-census` library also supplies exact Rust `cfg(test)`
-scope inspection to host-side structural gates. Its census consumers depend on
-it only through path-only development dependencies; it adds no shipping edge.
-
-### Where each job lives
-
-Every job the workspace implements once has one home. `helpers-ledger.toml` is
-authoritative (with each job's specification, frozen vectors, sanctioned
-variants and forbidden fingerprints); this table lists its rows, in ledger
-order, with the home each names. Call the home; never write a second body.
-
-| Job | Home |
-|---|---|
-| `iri-reference-resolution` | `purrdf_iri::BaseScope` |
-| `fixed-key-table-hash` | `purrdf_hash::fixed::FixedState` |
-| `fixed-hasher-everywhere` | `purrdf_hash::fixed::FixedState` |
-| `hash-domain` | `purrdf_hash::Domain` |
-| `blake3` | `purrdf_hash::blake3::hash` |
-| `splitmix64` | `purrdf_hash::mix` |
-| `fnv1a64` | `purrdf_hash::fnv` |
-| `md5` | `purrdf_hash::md5::Md5` |
-| `sha1` | `purrdf_hash::sha1::Sha1` |
-| `sha3` | `purrdf_hash::sha3::Sha3` |
-| `crc32` | `purrdf_hash::crc32::Crc32` |
-| `xxh64` | `purrdf_hash::xxh64::Xxh64` |
-| `deflate-gzip` | `purrdf_deflate::Inflater` |
-| `zstd-codec` | `purrdf_zstd::decoding::FrameDecoder` |
-| `match-length` | `purrdf_deflate::common_prefix_len` |
-| `csvw-dialect-csv` | `purrdf_core::csv::Reader` |
-| `strongly-connected-components` | `purrdf_core::graph::tarjan_scc` |
-| `small-vector` | `purrdf_core::SmallVec` |
-| `hex` | `purrdf_hash::hex::encode` |
-| `json-schema-validation` | `purrdf_jsonschema::Schema` |
-| `byte-exact-goldens` | `purrdf_testkit::assert_golden` |
-| `test-temporary-paths` | `purrdf_testkit::TempDir` |
-| `bench-harness` | `purrdf_testkit::bench` |
-| `escape-decode` | `purrdf_lex::terminals::decode_uchar` |
-| `grammar-ws` | `purrdf_lex::terminals::skip_ws` |
-| `json-pointer` | `purrdf_lex::json_pointer::escape_token` |
-| `percent-encoding` | `purrdf_lex::percent::encode` |
-| `range-table-search` | `purrdf_lex::terminals::in_ranges` |
-| `byte-search` | `purrdf_lex::scan::find_byte` |
-| `w3c-vocab` | `purrdf_iri::vocab` |
-| `text-direction` | `purrdf_events::TextDirection` |
-| `frame-le` | `purrdf_hash::frame::frame_le` |
-| `le-bytes` | `purrdf_core::bytes::read_u32_le` |
-| `align-up` | `purrdf_core::bytes` |
-| `div-ceil` | `purrdf_retrieval::reciprocal_rank::ceil_div` |
-| `wide-arith` | `purrdf_xsd::wide::mul_div` |
-| `bigint` | `purrdf_xsd::bigint::BigInt` |
-| `calendar` | `purrdf_xsd::temporal::days_from_civil` |
-| `rfc3339` | `purrdf_xsd::rfc3339::parse` |
-| `numeric-predicate` | `purrdf_xsd::XsdDatatype::is_numeric` |
-| `unicode-normalization` | `purrdf_lex::unicode::nfc` |
-| `term-conversion` | `purrdf_core::TermValue` |
-| `term-constructor` | `purrdf_core::TermValue` |
-| `json-document` | `purrdf_lex::json::read` |
-| `toml-document` | `purrdf_toml::analyze` |
-| `yaml-document` | `purrdf_lex::yaml::read` |
-| `cbor-codec` | `purrdf_lex::cbor::encode` |
-| `xml-reader` | `purrdf_lex::xml::Document` |
-| `literal-and-iri-escape` | `purrdf_lex::literal_escape::write` |
-| `term-syntax` | `purrdf_lex::term_syntax::write_literal` |
-| `crockford-base32` | `purrdf_lex::crockford::write_u128` |
-| `rdf-collection` | `purrdf_core::DatasetView` |
-| `thread-stack` | `purrdf_stack::on_stack` |
-| `test-workspace-paths` | `purrdf_testkit::paths::workspace_root_from` |
-| `query-host-plumbing` | `purrdf_validate::governors::from_parts` |
-| `ed25519` | `purrdf_ed25519::SigningKey` |
-| `mldsa65` | `purrdf_gts::mldsa65::SigningKey` |
-| `lattice-ntt-and-codec` | `purrdf_gts::lattice::Lattice` |
-| `mlkem1024` | `purrdf_gts::mlkem1024::DecapsulationKey` |
-| `cose-composite-mldsa65-ed25519` | `purrdf_gts::cose::composite::SigningKey` |
-| `secret-clearing` | `purrdf_hash::wipe_secret` |
-| `constant-time-byte-comparison` | `purrdf_ed25519::constant_time_eq` |
-| `prefixed-name` | `purrdf_iri::contract_where` |
-| `structured-error-list` | `purrdf_hash::error::visit_list` |
-| `structured-error-capture` | `purrdf_testkit::error_capture::Capture::read` |
-| `multiset-256` | `purrdf_hash::multiset::Multiset256` |
-| `source-row-identity` | `purrdf_core::source::LiteralSourceRow` |
-
-### Shared structures and constructors
-
-The general-purpose structures a job's home is built from are shared the same
-way, so a crate reaches for them rather than writing its own:
-
-* `purrdf_hash::error`: `StructuredError`, `ErrorVisitor` and the closed
-  `ErrorValue` algebra inspect semantic error fields without rendering them.
-  `error_visit!` generates exhaustive producer patterns; `visit_list` emits
-  borrowed lists. Consumers handle this protocol rather than mirroring each
-  non-exhaustive error enum.
-  `purrdf_hash::error_sources!` shares the standard error-source dispatch for
-  enums whose native causes occupy single-field variants.
-
-* `purrdf_lex::walk`: `WorkList` (the heap work list every whole-tree walk
-  keeps), `Nested`/`Dismantle` (an owned child box whose drop is iterative)
-  and `write_debug` with `Tok` (a recursive type's `Debug`, byte-identical to
-  the derive's, without recursing on the machine stack).
-* `purrdf_lex::assoc`: `get`, `get_mut` and `insert` over an ordered
-  `[(K, V)]` association list, read by first match.
-* `purrdf_lex::json_record!`: the one record codec over
-  `purrdf_lex::json::record` (`ToJson`, `FromJson`, or both from one member
-  list, optionally building through a validating constructor).
-* `purrdf_lex::message_error!` (an error that is one message),
-  `purrdf_hash::debug_non_exhaustive!` (a `Debug` that elides fields) and
-  `purrdf_hash::vector_backend!` (a named family of dispatch paths).
-
-**Constructors.** A type whose empty value is what `#[derive(Default)]`
-produces derives `Default` and has no trivial `new()`. Keep `new()` and
-generate `Default` from it with `purrdf_hash::default_from_new!` only when
-`new` must be a `const fn` or the default differs from the derived one
-(`default_from_new!(T => name)` names a constructor other than `new`). A
-constructor whose whole body is one conversion is declared through
-`purrdf_lex::constructors!`, and a `From` impl that wraps a source into one
-enum variant through `purrdf_lex::variant_from!` (`Variant(A, B) as convert`
-for a variant that holds a rendering of its sources).
-
-* `purrdf_core::hash::table`: the shared native explicit-hash table engine,
-  fixed-key maps, entries and iterators. Controlled operations admit actual
-  probe groups and transactional replacement while preserving original entries
-  on refusal. The inherited engine retains its original grants and provenance.
-
-### Removed external packages
-
-The native homes above replace these packages, and
-`scripts/check-banned-deps.py` (`BANNED_ANY_EDGE`) refuses every one of them on
-any edge — runtime, build, dev/test or transitive — in every committed
-`Cargo.lock`, each ban naming its replacement (`memchr` alone is refused as a
-direct dependency, in `BANNED_DIRECT_ONLY`):
-
-* JSON, YAML, CBOR and XML: `serde`, `serde_core`, `serde_derive`,
-  `serde_json`, `itoa`, `ryu`, `zmij`, `indexmap`, `equivalent`,
-  `serde_yaml_ng`, `unsafe-libyaml`, `ciborium`, `ciborium-io`, `ciborium-ll`,
-  `half`, `crunchy`, `zerocopy`, `zerocopy-derive` and `roxmltree` —
-  `purrdf_lex::{json, yaml, cbor, xml}`, with hand-written `to_json`/`from_json`
-  over `purrdf_lex::json::Value` in place of derives.
-* Ed25519: `ed25519-dalek`, `curve25519-dalek`, `curve25519-dalek-derive`,
-  `fiat-crypto`, `ed25519`, `signature`, `subtle`, `zeroize`, `rustc_version`,
-  `semver`, `pkcs8`, `spki`, `der` and `base64ct` — `purrdf-ed25519`.
-* Benchmarks: `criterion` and its closure (`criterion-plot`, `anes`,
-  `is-terminal`, `hermit-abi`, `cast`, `num-traits`, `autocfg`, `itertools`,
-  `oorandom`, `tinytemplate`, `walkdir`, `same-file`, `winapi-util`) —
-  `purrdf_testkit::bench`.
-* Native hash tables: `hashbrown` — `purrdf_core::hash::table`.
-* Byte search: `memchr` — `purrdf_lex::scan::find_byte`/`find_byte2`.
-  `regex` is built without its `perf-literal` prefilter, so neither `memchr`
-  nor `aho-corasick` is compiled into any build; Cargo keeps both in
-  `Cargo.lock` only because `regex`'s weak feature references name them.
-* Base16, dates and normalization: `hex` (`purrdf_hash::hex`), `time`,
-  `time-core`, `time-macros`, `deranged`, `num-conv` and `powerfmt`
-  (`purrdf_xsd::rfc3339`), `unicode-normalization`, `tinyvec` and
-  `tinyvec_macros` (`purrdf_lex::unicode`).
-
-`sha2` is retained: it is the workspace's one SHA-2 implementation.
-`dependency-ledger.toml` gives every package that remains a category, a reason
-and a census verdict (`distinct`, or `duplicates_native` naming the home that
-makes it removable).
+Three files are authoritative and are checked, so read them instead of a copy
+here: `layers.toml` (which crate may depend on which, and the external packages
+each ring-fenced crate may use), `helpers-ledger.toml` (the one home of every
+shared job, its specification, vectors and sanctioned variants) and
+`dependency-ledger.toml` (every external package, its reason and its verdict).
+`scripts/check-banned-deps.py` lists the packages the native homes replaced and
+refuses them on every edge.
 
 ## 2. Hard constraints (violating these fails CI or review)
 
 * **Preserve the v4 compatibility baseline.** Follow
-  [Compatibility after 4.0](./docs/MIGRATION-4.0.md#compatibility-after-40) for
-  post-release work. Preserve existing signatures, variant payloads, ownership,
-  generic/trait requirements, host behavior and valid v4 artifact readers.
-  Non-exhaustiveness permits additions, not replacement of existing payloads.
-  New semantic and identity laws require explicit versions. Fixed C layouts use
-  additive handles and entry points for new evidence.
+  [Compatibility after 4.0](./docs/MIGRATION-4.0.md#compatibility-after-40):
+  existing signatures, variant payloads, ownership, trait requirements, host
+  behavior and valid v4 artifact readers stay. Non-exhaustiveness permits
+  additions, not replacement. New semantic and identity laws carry explicit
+  versions. Fixed C layouts grow by additive handles and entry points.
+* **No semantic Cargo features, ever.** The sole exception is the empty
+  `purrdf-capi:capi = []` marker that `cargo-c` requires; it gates no code and
+  never appears in `cfg(feature = ...)` (`helper-census --no-features`). No
+  optional dependency and no feature-gated behavior: a carrier whose semantics
+  vary per consumer is not a carrier.
+* **Tooling and tests are Rust.** Checks, generators, gates and tests are
+  written in Rust. Python and JavaScript remain only where a language surface
+  itself is exercised. The non-Rust ratchet (`helper-census
+  --non-rust-ratchet`, `crates/helper-census/src/non_rust.rs`) compares the
+  target tree with the merge-base on the integration branch, by path, with no
+  rename detection:
+  1. **Explain.** A new path holding non-Rust code (`.py`, `.pyi`, `.js`,
+     `.mjs`, `.cjs`, `.ts`, `.tsx` and their variants, a Python or JavaScript
+     shebang, or such a heredoc inside a shell script) carries within its first
+     40 lines a `# Why not Rust: <reason>` or `// Why not Rust: <reason>`
+     comment of at least 30 characters. `vectors/`, `generated/` and files of
+     whitespace are exempt.
+  2. **Ratchet.** An existing path under `scripts/`, `bindings/python/tests/`,
+     `crates/*/tests/`, `crates/rdf-wasm/js/tests/` or
+     `crates/rdf-wasm/js/bench/` may not gain non-Rust lines. Shipped surfaces
+     (the JavaScript package, the playground, the Python package) are not
+     ratcheted.
 
-* **NO semantic Cargo features, ever.** The sole exception is the empty,
-  non-semantic `purrdf-capi:capi = []` marker that `cargo-c` requires. It gates
-  no code and must never appear in `cfg(feature = ...)`; CI checks both facts
-  with `helper-census --no-features`. PurRDF is a carrier; optionality changes
-  semantics per consumer, which is forbidden. Do not add any other feature,
-  optional dependency, or feature-gated behavior.
-* **Tooling and tests are Rust.** Checks, generators, gates and tests are written
-  in Rust (`helper-census`, an xtask, a Rust test). Python and JavaScript remain
-  only where a language surface itself must be exercised. The non-Rust ratchet,
-  `helper-census --non-rust-ratchet` (`crates/helper-census/src/non_rust.rs`),
-  compares a TARGET tree with a BASE tree, both read from git with no rename or
-  copy detection (a path is its identity; a moved or copied file is a new path)
-  and with line counts read from the blobs themselves (a `binary` or `-diff`
-  attribute hides nothing). BASE is the merge-base of the target with the
-  integration branch, so deleting a legacy file and re-adding it grown later on
-  the same branch is still compared with the integration branch's copy.
-  * **Non-Rust code** is a file whose extension is `.py`, `.pyw`, `.pyi`, `.mjs`,
-    `.js`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx` or `.jsx`, or any other file
-    whose first line is a shebang naming `python`/`python3` (any version), `node`,
-    `deno` or `bun`. In a shell script (`.sh`, `.bash`, … or a shell shebang) the
-    lines of each heredoc fed to one of those runtimes (`python3 - <<'PY'` …
-    `PY`) are non-Rust lines of that script.
-  1. **Explain.** Every path with non-Rust code that is in TARGET but not in BASE
-     carries within its first 40 lines a `# Why not Rust: <reason>` or
-     `// Why not Rust: <reason>` comment (any case) whose trimmed reason has at
-     least 30 characters, stating concretely why the job cannot be done in Rust.
-     Exempt: `vectors/` (frozen vendor corpora), `generated/` (generator output),
-     and a file holding only whitespace.
-  2. **Ratchet.** A path that exists in BASE under `scripts/`,
-     `bindings/python/tests/`, `crates/*/tests/`, `crates/rdf-wasm/js/tests/` or
-     `crates/rdf-wasm/js/bench/` may not hold more non-Rust lines in TARGET than
-     in BASE (removing it is fine). The shipped surfaces are not ratcheted:
-     `crates/rdf-wasm/js/index.mjs`, `index.d.ts` and `src/`, the
-     `docs/playground/` app, and the Python package under
-     `bindings/python/python/`.
-
-  It runs in three places: the pre-commit hook and the pre-merge-commit hook that
-  hands over to it (`make hooks`; the staged index), `make check` (the working
-  tree, tracked and untracked unignored files) and CI's `workspace` job (the pull
-  request's merge commit, or a push to `main` against the previous `main`). The
-  integration branch defaults to `origin/main`; set `PURRDF_RATCHET_BASE` to name
-  another.
-* **Kernel ring-fence.** `purrdf-core` must never depend on PyO3.
-  `purrdf-hash` (the `root` of `layers.toml`) has **zero runtime
-  dependencies**. The ring-fenced crates — the rows of `layers.toml` that carry
-  an `external` list: `purrdf-lex`, `purrdf-iri`, `purrdf-xsd`,
-  `purrdf-events`, `purrdf-deflate`, `purrdf-ed25519`, `purrdf-zstd` and `purrdf-testkit` —
-  depend only on the first-party crates in their `deps` and the external
-  packages in their `external` (empty for all but `purrdf-ed25519`, which takes
-  `sha2`, and `purrdf-testkit`, which takes `regex-syntax`, `sha2` and
-  `wasm-bindgen`). `make rdf-core-hygiene` checks both, reading the root, the
-  ring-fenced crates and their rows from `layers.toml`.
-* **One home per job.** `helpers-ledger.toml` names the single implementation
-  of each job the workspace provides once, what it replaces, and each sanctioned
-  second implementation with its criterion and documented reason;
-  `scripts/check-shared-helpers.py` (in `make check`, or `make helpers-hygiene`)
-  runs `crates/helper-census` and fails on an unresolvable home, a forbidden copy
-  outside an enforced job's home, a stale exemption, or a `#[path]` include that
-  leaves its crate. `layers.toml` declares which first-party crate may depend on
-  which, with `purrdf-hash` the root every crate may use;
-  `scripts/check-layers.py` (in `make check`, or `make layer-hygiene`) fails on
-  any first-party normal edge it does not allow and on any row the resolved graph
-  no longer matches, and `--home-for A B …` names the common dependency
-  closest to the given callers — where one implementation they share belongs.
-* **Terminal ring-fence: a scanner's character classes are exact, in both
-  directions.** They decide **token boundaries**, not merely membership, so
-  substituting a Unicode property for a production's enumerated set does not
-  just widen the accepted language — it silently *re-tokenizes documents both
-  the liberal and the conforming parser accept*. `?s<NBSP>?p` lexed as one
-  variable, turning a join into a cross product with exit zero and no
-  diagnostic. Every W3C terminal is spelled **once**, in
-  `purrdf_lex::terminals` (re-exported as `purrdf_iri::terminals`), with its production cited and its ranges asserted at
-  compile time; scanners call it rather than retyping a table.
-  `scripts/check-terminal-predicates.py` (in `make check`, or
-  `make terminal-hygiene`) refuses a Unicode-property test inside a file that
-  holds a character cursor, and names in `SCANNERS` the files whose cursor lives
-  in another module. This is **not** "Unicode properties are bad": a production
-  that *names* one must be implemented with it, and the gate's `ALLOWLIST` is
-  the reasoned ledger for exactly those cases. **Judge the clause, not the
-  specification** — one spec answers this differently in different places.
-  CommonMark defines a "Unicode whitespace character" and uses it for §6.2
-  emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
-  and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
-  nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every publishable crate, including
-  `purrdf-wasm`, must build for `wasm32-unknown-unknown` — CI
-  hard-fails otherwise (`make wasm` locally). Never add a dependency that
-  drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
-  on the wasm path; crypto stays pure-Rust for exactly this reason.
-* **Byte determinism.** Serializers and the GTS writer are byte-deterministic.
-  If your change alters emitted bytes, you must update the affected goldens and
-  say why in the PR. Never introduce iteration-order, time, or RNG dependence
-  into output paths (hashers are the fixed-key `purrdf_hash::fixed::FixedHasher`
-  for this reason). No `std` `HashMap`/`HashSet` is left on its random default hasher
-  anywhere, tests and benches included: clippy bans the `RandomState` types and
-  constructors, and the `fixed-hasher-everywhere` job in `helpers-ledger.toml`
-  refuses every other spelling (`HashMap<K, V>`, `HashMap::default()`, `from`,
-  `collect`) — name `purrdf_core::FastMap`/`FastSet` or a `FixedState` map.
-* **Conformance corpora are the contract**: W3C SPARQL 1.1
-  (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
-  shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
-  (`crates/shapes/corpus/`), RDFC-1.0 fixtures
-  (`crates/rdf/tests/fixtures/rdfc/`), the official JSON-Schema-Test-Suite
-  (`crates/jsonschema/tests/suite/`), and the **frozen** GTS vectors in
-  `vectors/` (shared byte-exact with the other GTS engines — never regenerate or
-  "fix" them here; the GTS wire format is governed in `gmeow-gts`). Harnesses
-  assert exact counts and enforce XPASS discipline on their xfail ledgers —
-  see [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) for the scoreboard.
-* **PurRDF is NOT an ontology.** Structural Markdown and ordered JSON codecs
-  offer explicitly named standard profiles and vocabularies under their shipped
-  specifications; callers must select them deliberately or supply a vocabulary.
-  There is no implicit namespace fallback. Every other
-  vocabulary the library reads or writes (slice manifests, statement-metadata
-  downcast, box roles, language retagging, SPARQL extension-function
-  namespaces, standpoint predicates, json_schema namespaces) is
-  **caller-supplied configuration with no fabricated default**: a feature
-  exercised without its vocabulary hard-errors or stays inactive. Never
-  hardcode a `blackcatinformatics.ca` namespace in library code (the GMEOW
-  ontology is a *consumer*; the dependency arrow never points from purrdf to
-  it). Test fixtures use `example.org`. W3C Recommendation terms are the one
-  built-in vocabulary: name them through `purrdf_iri::vocab` (and XSD through
-  `purrdf_xsd::datatype`), never as string literals — the helper census
-  (`w3c-vocab`) refuses a literal that spells a term or namespace of either.
-* **Generated artifacts** under `generated/` are projections — never hand-edit;
-  regenerate via `make metadata` (`scripts/check-generated.sh` gates drift).
-* **Dependency versions live in one place**: `[workspace.dependencies]` in the
-  root `Cargo.toml`. Member crates use `dep.workspace = true`. Do not pin a
-  version inside a member manifest.
-* **Lints are workspace-inherited** (`[workspace.lints]`, clippy pedantic +
-  nursery). `cargo clippy --workspace --all-targets` must be warning-free.
-  Prefer fixing code over `#[allow]`; a genuinely-right allow must be tightly
-  scoped and carry a reason comment.
-* **SPDX headers** on every source file: `MIT OR Apache-2.0 OR MulanPSL-2.0` (docs may be
-  `CC-BY-4.0`).
+  It runs in the commit hooks, in `make check` and in CI. The integration
+  branch defaults to `origin/main`; `PURRDF_RATCHET_BASE` names another.
+* **Kernel ring-fence.** `purrdf-core` never depends on PyO3. `purrdf-hash`
+  has zero runtime dependencies. Each ring-fenced crate depends only on what
+  its `layers.toml` row lists (`make rdf-core-hygiene`,
+  `scripts/check-layers.py`).
+* **One home per job.** Call the home `helpers-ledger.toml` names; never write
+  a second body. `scripts/check-shared-helpers.py` fails on an unresolvable
+  home, a forbidden copy, a stale exemption or a `#[path]` include that leaves
+  its crate. `scripts/check-layers.py --home-for A B` names where an
+  implementation shared by those callers belongs. Editing
+  `crates/rdf-core/src/dataset_view.rs`, anything under
+  `crates/rdf-core/src/ir/` or `crates/lex/src/allocation.rs` stales ledger
+  identities: refresh them last.
+* **Terminal ring-fence.** A scanner's character classes are exact in both
+  directions, because they decide token boundaries and not only membership: a
+  Unicode property in place of a production's enumerated set re-tokenizes
+  documents both parsers accept. Every W3C terminal is spelled once, in
+  `purrdf_lex::terminals`, with its production cited; scanners call it.
+  `scripts/check-terminal-predicates.py` refuses a Unicode-property test in a
+  file that holds a character cursor, and its `ALLOWLIST` records the
+  productions that really name one. Judge the clause, not the specification:
+  one specification answers this differently in different places.
+* **Everything is wasm-able.** Every publishable crate builds for
+  `wasm32-unknown-unknown` (`make wasm`). No dependency that brings threads,
+  the filesystem, a C toolchain, or ambient clock or random reads onto that
+  path; hosts supply those capabilities explicitly.
+* **Byte determinism.** Serializers, content identities and the GTS writer are
+  byte-deterministic: no iteration-order or ambient-entropy dependence in an
+  output path. No `std` map or set on its random default hasher anywhere,
+  tests and benches included; name `purrdf_core::FastMap`/`FastSet` or a
+  `FixedState` map. A change to emitted bytes updates the affected goldens and
+  says why.
+* **Conformance corpora are the contract.** The W3C SPARQL, SHACL and
+  canonicalization suites, shexTest, the JSON Schema suite, the first-party
+  corpora and the **frozen** vectors under `vectors/` are never regenerated or
+  "fixed" here; the GTS wire format is governed in `gmeow-gts`. Harnesses
+  assert exact counts and police their expected-failure ledgers
+  ([`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md)).
+* **PurRDF is not an ontology.** It mints no vocabulary. Every vocabulary the
+  library reads or writes is caller-supplied configuration with no fabricated
+  default: a function used without its vocabulary is a hard error or inactive.
+  Codecs with a shipped specification offer named profiles the caller selects
+  deliberately. Never hardcode a `blackcatinformatics.ca` namespace in library
+  code. Fixtures use `example.org`. W3C Recommendation terms are the one
+  built-in vocabulary, named through `purrdf_iri::vocab` and
+  `purrdf_xsd::datatype`, never as string literals.
+* **Generated artifacts** under `generated/` are projections: never hand-edit;
+  regenerate with `make metadata`.
+* **Dependency versions live in one place:** root `[workspace.dependencies]`.
+  Members use `dep.workspace = true`.
+* **Lints are workspace-inherited** (clippy pedantic and nursery) and must be
+  warning-free. Fix the code; a justified `#[allow]` is tightly scoped and
+  carries a reason.
+* **SPDX headers** on every source file: `MIT OR Apache-2.0 OR MulanPSL-2.0`
+  (documentation may be `CC-BY-4.0`).
+* **`.deficiencies` is an emergency ledger, never an authorization.** Its
+  normal content is the notice and marker only. An entry below the marker is a
+  bug and a failed piece of work: it blocks completion, pull-request creation
+  and merge of the work that produced it until the defect is verified and has a
+  durable, visible owner. Removing an entry resolves nothing. Never add one to
+  make incomplete work look complete.
 
 ## 3. Commands
 
 ```bash
 make check      # the full local gate: fmt, clippy, build, tests, hygiene
-make hooks      # install the pre-commit + pre-merge-commit hooks: rustfmt, the non-Rust ratchet + the fast hygiene gates, on the staged index
+make hooks      # install the commit hooks: rustfmt, the ratchet, the fast hygiene gates
 make test       # cargo test --workspace
-make metadata   # regenerate + verify generated artifacts
-make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)
-make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
-make lubm       # the LUBM comparison workload, per entailment regime (report-only; network)
-make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
+make metadata   # regenerate and verify generated artifacts
+make wasm       # build every release crate for wasm32-unknown-unknown
+make bench      # benchmarks (report-only)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
 
-`scale-corpus`, `lubm` and `watdiv` are the three comparison lanes. None is a
-gate and none runs in `make check`: `lubm` runs the original native Rust university generator and fetches the
-external ontology and query set by digest, `watdiv` fetches a 58 MB frozen dataset that expands
-past a gigabyte, and neither vendors a byte. They share one implementation of
-the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
-repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the
-parameters, the knobs and the comparison rules.
+`make check` stays a pure-Rust gate. `scale-corpus`, `lubm` and `watdiv` are
+report-only comparison lanes ([`docs/BENCHMARKS.md`](./docs/BENCHMARKS.md)).
 
-Read the canonical [Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md)
-before writing or reviewing Rust. Select focused development checks for the
-affected behavior and consumers. Required hooks and release gates run fully;
-completion or review alone does not require another whole-workspace run.
+**Verification is focused.** During development select the affected behavior,
+test, crate or real consumer, with the profile, target and warnings the gate
+uses. Whole-workspace runs (`make check`, `make test`) are for a mandatory gate
+or hook, integration work that needs them, or an explicit request: never a
+ritual after each change or before each report. Commit hooks run fully and are
+never bypassed; do not run by hand what the hook is about to run. `make check`,
+conformance, rustdoc, the WASM build and host execution establish different
+facts, and one does not stand in for another.
 
-Toolchain: `rust-toolchain.toml` names a **floating nightly** for development and
-ordinary CI gates. That is an analysis decision, not a licence: nightly clippy
-and rustdoc carry lints stable lacks, and its default borrow checker is the
-stronger one, so a finding is a real finding rather than a channel artifact.
-Floating is the point — a dated channel freezes that surface as of one day, and
-every check sharpened afterwards stops being a finding and becomes invisible debt
-while the gates still report green. Byte-determinism is no argument for freezing:
-it is a property of the code — sorted, deduplicated, explicitly ordered output,
-identities content-addressed over this workspace's own declared law — and the
-goldens and vectors prove it on whatever compiler runs them. A golden that moved
-under a compiler bump would be a serializer defect to fix, not a reason to stop
-bumping.
-
-**The source stays nightly-free.** There are zero `#![feature(...)]` attributes
-in `crates/` and `bindings/`, and adding one is forbidden. What consumers need
-is `rust-version` in `Cargo.toml` (the MSRV, currently 1.98) — a *lower* floor on
-the *stable* channel — enforced by the dedicated `msrv` CI job. Never "align" the
-MSRV to the dev pin; they answer different questions.
-
-Two traps, both load-bearing:
-
-* `dtolnay/rust-toolchain` selects with `rustup default`, which ranks **below**
-  `rust-toolchain.toml`. A workflow that installs one toolchain while the repo
-  pins another does not fail — it silently runs the pin. Only
-  `RUSTUP_TOOLCHAIN` outranks the file, which is why the `msrv` job and the
-  release lanes set it explicitly, and why the `msrv` job also asserts
-  `rustc --version` really is 1.98.x.
-* `scripts/check-toolchain-pin.py` (in `make check` and CI) fails on any
-  workflow whose install step disagrees with the pin without that explicit
-  override, and on a frozen development channel.
-
-Release lanes (`release-cargo`, `release-npm`, `release-pypi`) build on
-**stable** on purpose: nightly's sharper lints buy nothing for an artifact a
-consumer installs, and shipping one from an unreleased compiler is risk without
-upside.
+**Toolchain.** `rust-toolchain.toml` names a floating nightly for development
+and ordinary CI, for its sharper lints. The source stays free of nightly
+features: no `#![feature(...)]`. The MSRV is `rust-version` in `Cargo.toml`, a
+lower floor on stable, checked by the `msrv` job; never align it with the
+development channel. Release lanes build on stable. Only `RUSTUP_TOOLCHAIN`
+outranks the toolchain file, which is why those jobs set it
+(`scripts/check-toolchain-pin.py`). Do not change compiler selection to hide a
+diagnostic.
 
 ## 4. Performance discipline
 
-This library is a hot-path backbone. The IR is an immutable, value-interned
-dataset (`TermId` = niche-optimized `NonZeroU32`, string arena, store-once
-interner). When touching parse/serialize/eval paths:
+PurRDF is a hot-path backbone over an immutable, value-interned dataset.
 
-* **Measure first** — layout and algorithm choices are justified by the
-  benches (`crates/rdf-core/benches/ir_layout.rs` et al., on the
-  `purrdf_testkit::bench` harness), not by assertion. Add or extend a bench
-  when you claim a win.
-* Avoid per-token/per-term `String` allocation; move values out of buffers
-  instead of cloning; pre-size collections in parse loops.
-* Hot maps use the fixed-key `purrdf_hash::fixed::FixedHasher` (`FixedState`,
-  or `purrdf_core::FastHasher`; see `crates/rdf-core/src/ir/builder.rs` for
-  the canonical store-once interner pattern) — never default SipHash in a hot
-  path, and never a randomly-seeded hasher in an output path.
-
-**The gate is compute, so the gate is compiled like it.** `make check` runs the
-whole test surface and `make conformance` runs every W3C suite through it, so
-both are bounded by the codegen under them: `[profile.dev]` builds everything —
-our crates, dependencies, and (named separately, because they do not inherit the
-base profile) build scripts and proc-macros — at **opt-level 3**, with
-`debug-assertions` and `overflow-checks` **ON**. Those two are orthogonal to
-opt-level and are not negotiable: first-party code carries
-`#[cfg(debug_assertions)]` bodies that vanish silently with the flag, and
-overflow checks are what stop an arithmetic bug in a byte-deterministic codec
-becoming a wrong-but-green run. Optimizing the gate does not weaken it: the same
-assertions run over the same corpora, on better codegen.
-
-This is not self-enforcing, and it did fail once: four per-crate `opt-level = 2`
-tables made the manifest *read* as tuned while twenty-one members compiled at
-opt-level 0, because `package."*"` matches dependencies only. So the property is
-asserted against the graph Cargo actually resolves, not against the manifest:
-`make build-profile-hygiene` (in `make check`) reads the `--unit-graph` of
-`cargo test` and `cargo build` and checks every unit's **effective** profile.
-Reading effective values is deliberate — it catches a `[profile.*]` table in
-`$CARGO_HOME/config.toml` or anywhere on the walk up from the workspace (your
-home directory is on that walk), a `CARGO_PROFILE_*` variable, or a `--config`
-override, none of which the manifest can see. The `[profile.test]` block
-exists and sets only `debug = 0` (test binaries carry no debug info). It must
-not set `opt-level`, `debug-assertions` or `overflow-checks` — `test` inherits
-those from `dev`, and `scripts/check-build-profiles.py` asserts the inherited
-values — and neither it nor `[profile.dev]` may set `lto` or
-`codegen-units = 1`: both serialize codegen and inflate link memory, which is
-what a constantly-rebuilt, cold-in-CI gate wants least.
+* **Measure first.** A claimed improvement is shown against the same behavioral
+  contract, on the shared harness (`purrdf_testkit::bench`,
+  `purrdf_alloc_probe`), by work counters, allocation counts, requested and
+  retained bytes, with host and build conditions stated. Add or extend a bench
+  when you claim a win. A single run must not get dearer for work that only
+  pays back on a later one.
+* Avoid a `String` per token or term; move values out of buffers instead of
+  cloning; size collections before parse loops. Hot maps use the fixed-key
+  hasher.
+* **The gate is compiled like production.** `[profile.dev]` builds everything
+  at `opt-level = 3` with debug assertions and overflow checks on; those two
+  are not negotiable. `[profile.test]` sets only `debug = 0`. Neither profile
+  sets `lto` or `codegen-units = 1`. `make build-profile-hygiene` checks the
+  effective profile of every unit Cargo resolves, not the manifest.
 
 ## 5. Brand & naming
 
 The project name is written **PurRDF** in prose (never PurrDF/PURRDF); all
 package/crate/binary identifiers are lowercase `purrdf`. See
-[`docs/BRAND.md`](./docs/BRAND.md). Logo/social assets follow the shared
-black-cat family system — `#cat-head-core` is shared verbatim; only the
-`#service-triple` group is purrdf-specific.
+[`docs/BRAND.md`](./docs/BRAND.md).
 
 ## 6. Releases
 
@@ -560,15 +337,71 @@ crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
 `purrdf-shacl-conformance`, `purrdf-hash-conformance`, `purrdf-cli`,
 `purrdf-envelope-probe`, `purrdf-bench`, `wasm-link`, `helper-census`, and
 `purrdf-python` (PyPI via maturin instead). The published development libraries
-`purrdf-alloc-probe`, `purrdf-testkit` and `purrdf-conformance-kit` retain explicit
-versions and precede their consumers in publication order. The checkout-bound
-`purrdf-shacl-conformance` and host-only `helper-census` remain path-only,
-versionless development dependencies that Cargo strips from published manifests.
+`purrdf-alloc-probe`, `purrdf-testkit` and `purrdf-conformance-kit` keep explicit
+versions and precede their consumers in publication order. Tagging and
+publishing are the owner's decision; an agent prepares, and does not tag.
 
 ## 7. Provenance
 
-This repo was extracted from `gmeow-ontology` and `gmeow-gts` — see
-[`PROVENANCE.md`](./PROVENANCE.md) for source commits. PurRDF's replacement
-surfaces are being completed here, but the downstream `gmeow-ontology` cutover
-is not yet complete. Its legacy models are migration evidence only and should
-be deleted as each PurRDF replacement is integrated.
+This repository was extracted from `gmeow-ontology` and `gmeow-gts`; see
+[`PROVENANCE.md`](./PROVENANCE.md). The downstream `gmeow-ontology` cutover is
+not complete: its legacy models are migration evidence only and are deleted as
+each PurRDF replacement is integrated.
+
+---
+
+## Rust engineering
+
+The detailed guide is
+[docs/agents/RUST_GUIDELINES.md](./docs/agents/RUST_GUIDELINES.md); read it
+before writing or reviewing Rust. Its core, as it applies here:
+
+* **Make illegal states unrepresentable.** Parse into a type at the boundary
+  and pass that type, not a raw string or integer with domain meaning. Use
+  `let ... else` for early returns. Accept `&str`, slices and borrowed views;
+  own only when the value must outlive its producer.
+* **Visibility is a commitment.** Default to private, then `pub(crate)`. Every
+  `pub` item is a consumer contract under the compatibility baseline.
+* **Thin entry points, thick libraries.** Bindings and commands adapt inputs,
+  ownership and output transport to the one engine.
+* **Shared structures and constructors.** Reach for the workspace's own before
+  writing one: `purrdf_lex::walk` (`WorkList`, `Nested`, `write_debug`) for
+  whole-tree walks without machine-stack recursion, `purrdf_lex::assoc` for
+  ordered association lists, `purrdf_lex::json_record!` for record codecs, and
+  `purrdf_core::hash::table` for fixed-key tables. A type whose empty value is
+  the derived default derives `Default` and has no trivial `new()`; keep
+  `new()` with `purrdf_hash::default_from_new!` only when it must be `const`
+  or differs. A constructor that is one conversion uses
+  `purrdf_lex::constructors!`, a `From` that wraps a source into one variant
+  uses `purrdf_lex::variant_from!`, and an error that is one message uses
+  `purrdf_lex::message_error!`.
+* **Errors are typed.** Keep semantic failure data in the error and keep the
+  native cause (`source`). Inspect through `purrdf_hash::error`
+  (`StructuredError`, `error_visit!`); render with `Display` only at the
+  presentation boundary. Propagate with `?`. No `unwrap`, `expect` or panic for
+  invalid input or resource exhaustion in production paths; an unavoidable
+  invariant check carries a local proof. No typed failure is replaced by an
+  infallible allocation: admit storage through the allocation interfaces and
+  keep the refusal.
+* **No incidental output.** Libraries return values, bytes, diagnostics and
+  evidence. No `println!`, `eprintln!` or `dbg!` in an engine path. The command
+  tools write their results by design; keep their protocol.
+* **Unsafe is narrow.** Ordinary engine code is safe. FFI, SIMD and host
+  imports carry a local safety argument for each operation, and dispatch
+  establishes the instruction set before a target-specific kernel runs.
+* **Exact arithmetic stays exact.** Integer, decimal, rational and temporal
+  operations use their shared homes; a float never silently replaces an exact
+  result.
+* **Tests earn their keep.** A permanent test runs on every change forever, so
+  it protects a named production behavior, regression, boundary or invariant,
+  and says which. No tests of getters, compiler guarantees, mechanical
+  forwarding or an implementation's shape; no mocks that assert a call
+  sequence; no mutation testing. Prefer one property (`prop_test!`) to many
+  copied cases, and a byte-exact golden (`assert_golden!`) to a hand-written
+  comparison. Remove tests that are outdated or overlap.
+* **WASM tests are for WASM.** General semantics, grammar, arithmetic, refusal,
+  ownership and conformance run natively. WASM execution is limited to real
+  dispatch or SIMD kernels, shadow-stack floors, host interfaces and named
+  frozen byte or digest identities, each named in
+  [docs/WASM_TESTING.md](./docs/WASM_TESTING.md), running only its exact cases.
+  A portable build, a 32-bit integer or an existing selection is not a reason.
