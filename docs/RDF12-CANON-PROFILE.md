@@ -5,7 +5,7 @@
 
 English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
 
-**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
+**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 4 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Both values are readable from the library rather than only from this document —
@@ -18,10 +18,11 @@ This profile specifies the canonical byte form PurRDF produces for an RDF 1.2
 dataset. It takes W3C RDF Dataset Canonicalization (RDFC-1.0) as its base and
 extends it to cover the three RDF 1.2 constructs RDFC-1.0 does not address:
 reifiers, annotations, and triple terms. It also specifies a **reserved
-vocabulary** and the **refusal** of any input that carries it other than in the two
-shapes the profile's own output is written in — which is what makes the canonical
-bytes both safe to mint an identity from and re-derivable from that identity
-(§3.1).
+vocabulary** and, for the overlay presentation, the **refusal** of any input that
+carries it other than in the two shapes the profile's own output is written in —
+which is what makes the canonical bytes both safe to mint an identity from and
+re-derivable from that identity (§3.1). The flat assertion presentation (§3.3)
+writes no reserved IRI and refuses none.
 
 ## 1. Status: this is NOT RDFC-1.0
 
@@ -29,8 +30,9 @@ A digest taken over this profile's output **must never be labelled "RDFC-1.0"**.
 
 The profile differs from RDFC-1.0 in two directions, and both matter:
 
-* **It accepts less.** RDFC-1.0 canonicalizes any well-formed dataset. This profile
-  refuses datasets carrying the reserved vocabulary of §4 (§5).
+* **It can accept less.** RDFC-1.0 canonicalizes any well-formed dataset. The
+  overlay presentation of this profile refuses datasets carrying the reserved
+  vocabulary of §4 (§5). The flat assertion presentation (§3.3) refuses none.
 * **It produces different bytes.** A dataset carrying reifiers or annotations
   canonicalizes here to bytes an RDFC-1.0 implementation would not produce, because
   RDFC-1.0 has no notion of those constructs to emit (§3).
@@ -53,11 +55,32 @@ algorithm is part of the identity**: bytes produced under SHA-384 are not
 comparable to bytes produced under SHA-256, and a consumer pinning this profile
 must pin the algorithm alongside it.
 
-RDFC-1.0 canonicalizes **blank node labels only**. Literal lexical forms,
-datatype IRIs, language tags and base directions are emitted verbatim and are
-never normalized: `"0.70"` ≠ `"0.7"`, `@en--ltr` ≠ `@en--rtl`, and no Unicode
-normalization is applied to any lexical form. Two datasets differing only in a
-lexical form are different datasets under this profile.
+RDFC-1.0 canonicalizes **blank node labels only**. Literal lexical forms and
+datatype IRIs are emitted verbatim and are never normalized: `"0.70"` ≠ `"0.7"`,
+`@en--ltr` ≠ `@en--rtl`, and no Unicode normalization is applied to any lexical
+form. Two datasets differing only in a lexical form are different datasets under
+this profile. A language tag and a base direction are spelled in ASCII lower case
+(§2.1), which is a spelling of the same term and not a normalization: RDF 1.2
+Concepts §3.4 states that two language tags differing only by case are the same
+tag, and that the textual representation of a base direction is lower case.
+
+### 2.1 Spelling of terms
+
+The canonical lines follow the canonical form of RDF 1.2 N-Quads (section 3, "A
+Canonical form of N-Quads"), and equally RDF 1.2 N-Triples section 3. Each rule and
+its source:
+
+| Rule | Source |
+|---|---|
+| A literal's lexical form: `\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f` as `ECHAR`; every other scalar below U+0020, and U+007F, as `UCHAR` with a lower-case `\u` and four upper-case hexadecimal digits; every other scalar as UTF-8 | N-Quads 1.2 §3 (the `ECHAR` and `UCHAR` rules and "HEX MUST use only digits and uppercase letters") |
+| U+FFFE and U+FFFF in a literal are written `\uFFFE` and `\uFFFF`; the C1 controls U+0080 to U+009F are written raw | N-Quads 1.2 §3 and N-Triples 1.2 §3: "characters not matching the Char production from [XML11] MUST be represented by UCHAR". XML 1.1 `Char` ends at U+FFFD in the basic plane and admits U+0080 to U+009F |
+| A language tag and a base direction in ASCII lower case; the datatype of a language-tagged literal is not written; `xsd:string` is not written | N-Quads 1.2 §3: "Alphabetic characters in LANG_DIR MUST use only the lowercase letters ([a–z])"; RDF 1.2 Concepts §3.4 (language tags compare case-insensitively; base direction is `ltr` or `rtl` in lower case) |
+| An IRI is written between angle brackets with `\u00XX` for exactly the scalars the `IRIREF` production excludes: U+0000 to U+0020, `<`, `>`, `"`, `{`, `}`, `|`, `^`, the grave accent and `\`. DEL and the C1 controls are written raw | N-Quads 1.2 §5.3 grammar, production `IRIREF`. The canonical form of section 3 says nothing about escaping in an IRI, so this is the grammar's own requirement and nothing wider; a carrier that needs more (XML text) escapes more as its own choice |
+| A triple term is `<<( s p o )>>` with one space after each of its tokens | N-Triples 1.2 §3 (white space only after subject, predicate, object and the opening token) |
+| Blank nodes are `_:c14nN`; their source labels never appear | RDFC-1.0 §4.4; RDF 1.2 Concepts §3.5 (blank node identifiers are not part of the abstract data model) |
+
+First-degree and n-degree hashing write terms through the same spelling as the
+document, so a label issued from a hash and a line of the document agree on it.
 
 ## 3. The RDF 1.2 overlay
 
@@ -175,10 +198,11 @@ WITHOUT a `flat` infix (`try_canonicalize`, `try_canonicalize_view`,
 
 The two presentations answer the same question — "what canonical bytes does this
 ADMITTED RDF 1.2 statement layer produce" — with two different spellings of the
-SAME admitted content. Presentation is orthogonal to admissibility: §4's reserved
-vocabulary and §5's refusal rule are unchanged by which presentation a caller
-selects. Only what is EMITTED for an already-admitted reifier or annotation row
-differs.
+SAME admitted content. Presentation is NOT orthogonal to admissibility: §4's reserved
+vocabulary and §5's refusal rule govern the overlay presentation and no other. A
+sentinel is a spelling the overlay writes, so only the overlay needs the namespace
+kept free of forgeries. The flat presentation writes no sentinel and refuses
+nothing for its vocabulary.
 
 | Construct | Flat canonical row |
 |---|---|
@@ -192,8 +216,7 @@ differs.
 
 `rdf:reifies` here is the RDF 1.2 vocabulary's OWN reification predicate
 (`http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies`), not a PurRDF sentinel — the
-flat presentation never emits a `urn:purrdf:rdfc:` IRI, and **no reserved
-namespace IRI ever participates in a flat canonical document**. A reifier row is
+flat presentation never emits a `urn:purrdf:rdfc:` IRI **of its own making**. A reifier row is
 written in the graph it was DECLARED in; an annotation row is written in its OWN
 graph slot, independently of the reifier it annotates (§3.2). A row whose exact
 `(s, p, o, g)` already exists as a genuine base quad is emitted **exactly once**:
@@ -217,10 +240,56 @@ presentation lowers that same row exactly as it lowers a NATIVELY-held one, so t
 two spellings of one row are never assigned two different flat identities, and the
 row-level dedup above extends across all three ways a row can appear (a native
 side-table entry, a sentinel-spelled base quad, and a real-predicate base quad, in
-any combination): it is still emitted exactly once. This is what makes "no reserved
-namespace IRI ever participates in a flat canonical document" (above) a true
-statement about EVERY admitted input, including one that itself carries the
-sentinel spelling, rather than only about inputs that never exercise the fold.
+any combination): it is still emitted exactly once. This is what makes "the flat
+presentation never writes a sentinel" (above) a true statement about EVERY input,
+including one that itself carries the sentinel spelling, rather than only about
+inputs that never exercise the fold.
+
+#### Reserved IRIs under the flat presentation (version 2)
+
+The flat presentation applies no reservation and no refusal. An input carrying a
+`urn:purrdf:rdfc:` IRI is canonicalized. What it does with the IRI is fixed by one
+rule: **a reserved IRI that is not part of a fold shape is an ordinary IRI, written
+as it is, in every position and at every depth** (subject, predicate, object, graph,
+inside a triple term, as a datatype). The two fold shapes of §3.1 fold, in every
+slot they consume, to the rows they spell.
+
+Why no two different contents share bytes: the flat presentation writes
+`rdf:reifies` and the annotation's own predicate for its rows and never writes a
+sentinel, so every reserved IRI in a flat document is one the input carried, in the
+position it carried it. The only many-to-one steps in the presentation are the
+assertion projection of this section (a row spelled natively, as a fold shape and
+as its real-predicate quad is one row) and the row-level dedup law above, both of
+which identify spellings of one row and nothing else. A reserved IRI outside a fold
+shape is never read as a row, so `r <urn:purrdf:rdfc:reifies> "x"` (a sentinel
+predicate over a non-triple object) is the line it is written as, and differs from
+`r rdf:reifies "x"`, from `r <urn:purrdf:rdfc:annotation> "x"` and from a reifier
+row. The corpus of §8 pins these pairs.
+
+The flat document is not idempotent for one shape: a quad whose own graph is the
+annotation sentinel and which is not itself a fold shape reads back, on re-parse,
+as an annotation row. The overlay's idempotence (§3.1) is unchanged.
+
+#### No datatype-aware step (version 2)
+
+The standard flat presentation has no datatype-aware step. A lexical form is text.
+A blank-node label inside a `cdt:List` or `cdt:Map` lexical form is no blank node of
+the dataset, takes no part in labelling and is written as it is. Two datasets that
+differ only in such a label are different datasets under it. This matches the
+RDFC-1.0 position that only the blank nodes of the dataset's quads are labelled
+(RDFC-1.0 §4.4, §4.6 and §4.8 read quads, never a literal's text).
+
+The earlier relabelling is kept ONLY as a separately named presentation,
+`flat-assertion-composite-blanks` (`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`,
+version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION` → `1`),
+reached through `try_canonicalize_flat_composite_view` and
+`try_flat_composite_digest_view` and through nothing else. It is the standard flat
+presentation with one added step: a blank label inside a composite lexical form is a
+blank node of the graph, takes part in labelling and is written as its canonical
+label. It is its own presentation identifier rather than a request parameter of the
+standard one so that a receipt, a `Canonicalized::presentation()` value and every
+pin name it, and its documents and digests cannot be mistaken for standard flat
+ones. The overlay presentation keeps the relabelling it has always had.
 
 **The flat presentation is a second canonicalization-oracle spelling of the RDF 1.2
 statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop to
@@ -261,7 +330,8 @@ is **reserved by this profile**, and is exported as
 within it — `urn:purrdf:rdfc:reifies` and `urn:purrdf:rdfc:annotation` — but the
 reservation covers **the whole namespace**, not those two names.
 
-The reservation governs every use of the namespace. It disposes of a use in one of
+The reservation governs every use of the namespace **in the overlay presentation**
+(§3.3 states why the flat presentation has none). It disposes of a use in one of
 exactly two ways, and there is no third:
 
 | Use of the reserved namespace | Disposition |
@@ -283,8 +353,8 @@ nothing legitimate lives under this prefix.
 
 ## 5. Refusal rule (normative)
 
-> A dataset in which **any term, in any position, is an IRI beginning with
-> `urn:purrdf:rdfc:`** is INADMISSIBLE and MUST be refused — **except** where that
+> Under the overlay presentation, a dataset in which **any term, in any position,
+> is an IRI beginning with `urn:purrdf:rdfc:`** is INADMISSIBLE and MUST be refused — **except** where that
 > IRI occurs in one of the two quad shapes of §3.1, which are read back as the
 > statement-layer rows they denote before the sweep runs. An inadmissible dataset
 > MUST NOT be canonicalized, and no digest may be minted from it.
@@ -492,8 +562,29 @@ consumer nothing.
 | Version | Change |
 |---|---|
 | 1 | initial profile |
-| 3 | §6 requires explicit caller-selected finite or unlimited search policy and measured execution evidence; successful bytes are unchanged |
 | 2 | §5 narrowed: the two quad shapes §3 lowers into are **folded** back into the statement layer rather than refused, making canonicalization idempotent over its own output (§3.1) |
+| 3 | §6 requires explicit caller-selected finite or unlimited search policy and measured execution evidence; successful bytes are unchanged |
+| 4 | the spelling follows N-Quads 1.2 §3 (§2.1); the flat presentation refuses no reserved IRI and has no datatype-aware step (§3.3) |
+
+Version 4 moves bytes for exactly these inputs, and every other input keeps its
+version 3 bytes:
+
+* a literal holding U+FFFE or U+FFFF (written `\uFFFE` and `\uFFFF`; both
+  presentations, which is why the overlay presentation moves to version 2);
+* a language tag or a base direction that reaches canonicalization with an upper-case
+  letter (written in lower case). A term table that folds tags at intern time, as
+  PurRDF's does, already holds them in lower case, so this reaches only a source view
+  that keeps the written case;
+* a composite (`cdt:List` / `cdt:Map`) literal with a blank-node label in its lexical
+  form, under the standard flat presentation (written as it is, where it was written as
+  a canonical label); the overlay and the named composite option are unchanged;
+* an input carrying a reserved IRI outside a fold shape, under the flat presentation,
+  which version 3 refused and version 4 canonicalizes. The overlay presentation still
+  refuses it.
+
+The escape set of an IRI (§2.1) is the production's exclusions exactly; no input can
+observe the difference from version 3, because an IRI holding DEL or a C1 control is
+refused at every ingress.
 
 Version 2 moved **no** bytes: every input version 1 admitted canonicalizes to
 exactly the bytes version 1 produced. What changed is the refusal rule, and a
@@ -506,6 +597,16 @@ The corpus lives at `vectors/rdf12-canon/` and is **frozen**: every payload byte
 covered by a SHA-256 manifest checked on every build
 (`scripts/check-corpus-frozen.py`), so a silently edited expectation fails rather
 than passes.
+
+The cases run under three presentations: `golden` and `refusal` rows are the overlay,
+`golden-flat` rows the standard flat presentation and `golden-flat-composite` rows the
+named composite option, each with its own plain expected-document file beside the input
+(`.canonical`, `.flat.canonical`, `.flat-composite.canonical`). Version 4 adds cases for
+a mixed-case tag with and without a direction, both noncharacters, blank nodes at `s`, `o`,
+`o.s` and `o.o` of a nested triple term, reifier and annotation rows under flat, reserved
+IRIs under flat (admitted) and under the overlay (refused), and a composite literal with a
+blank label under flat (text) and under the named option (relabelled). Every version 3 case
+and expected document is unchanged.
 
 Under explicitly selected `RDFC_V2_CORPUS_POLICY`, it carries both halves of the version 2 contract — goldens that must canonicalize to exact
 bytes, and poison cases that must be refused with an exact error discriminant,
@@ -529,8 +630,8 @@ artifact it actually linked:
 | Field | Source |
 |---|---|
 | profile id | `purrdf_core::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile version | `purrdf_core::CANON_PROFILE_VERSION` → `2` |
-| presentation | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
+| profile version | `purrdf_core::CANON_PROFILE_VERSION` → `4` |
+| presentation | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `2`), `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `2`) or `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID` (→ `flat-assertion-composite-blanks`, version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION` → `1`) (§3.3) |
 | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
 | corpus digest | `purrdf_core::CANON_CORPUS_DIGEST` (§8) |
 | release | the tagged release the above were read from |

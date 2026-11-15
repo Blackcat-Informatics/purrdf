@@ -99,7 +99,7 @@ are holding is part of the identity:
   canonicalizes *that* triple set under conformant RDFC-1.0. This is what the
   CLI's `convert --canonical`, the wasm `Dataset.canonicalize("unlimited")` and the W3C
   conformance gate run.
-- **The `purrdf-rdfc12` v3 profile** — `try_canonicalize` in `purrdf-core` keeps
+- **The `purrdf-rdfc12` v4 profile** — `try_canonicalize` in `purrdf-core` keeps
   the statement layer and lowers it into a reserved `urn:purrdf:rdfc:`
   namespace instead (any input already carrying that namespace is refused,
   unless it is written in one of the two shapes the profile itself emits —

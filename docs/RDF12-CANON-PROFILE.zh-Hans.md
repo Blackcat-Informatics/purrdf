@@ -5,7 +5,7 @@
 
 [English](RDF12-CANON-PROFILE.md) | 简体中文
 
-**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 3 &nbsp;·&nbsp;
+**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 4 &nbsp;·&nbsp;
 **编辑：** Patrick Audley，Blackcat Informatics® Inc.
 
 这两个值不仅写在文档里，也可从库中读取：`purrdf_core::CANON_PROFILE_ID` 和 `purrdf_core::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
@@ -20,7 +20,7 @@
 
 本 profile 与 RDFC-1.0 有两方面区别，两者都不可忽略：
 
-* **接受的输入更少。** RDFC-1.0 对任何良构的数据集进行规范化。本 profile 会拒绝携带 §4 保留词汇的数据集（§5）。
+* **可能接受的输入更少。** RDFC-1.0 对任何良构的数据集进行规范化。本 profile 的叠加层表示会拒绝携带 §4 保留词汇的数据集（§5）；平铺断言表示（§3.3）不拒绝。
 * **生成的字节不同。** 携带具体化节点或注解的数据集，在这里生成的字节与 RDFC-1.0 实现不同，因为 RDFC-1.0 没有这些结构，也就无从输出它们（§3）。
 
 在 **RDF 1.1 子集**上，也就是没有具体化节点、注解、三元组项或保留 IRI 时，本 profile 与 RDFC-1.0 逐字节一致。这一性质由每次提交都运行的、仓库内固定版本的 W3C `rdf-canon` 测试套件把关，并非仅凭文档声明。
@@ -31,7 +31,22 @@
 
 默认散列算法是 SHA-256；也可选择 SHA-384（`purrdf_core::CanonHash::Sha384`），与 RDFC-1.0 §3 对应。**散列算法是身份的一部分**：SHA-384 下生成的字节不能与 SHA-256 下生成的字节直接比较。使用方固定本 profile 时，也必须同时固定算法。
 
-RDFC-1.0 **只规范化空节点标签**。字面量的词法形式、数据类型 IRI、语言标签和基础方向都原样输出，绝不归一化：`"0.70"` ≠ `"0.7"`，`@en--ltr` ≠ `@en--rtl`，任何词法形式都不执行 Unicode 归一化。在本 profile 下，仅词法形式不同的两个数据集也是不同的数据集。
+RDFC-1.0 **只规范化空节点标签**。字面量的词法形式和数据类型 IRI 都原样输出，绝不归一化：`"0.70"` ≠ `"0.7"`，`@en--ltr` ≠ `@en--rtl`，任何词法形式都不执行 Unicode 归一化。在本 profile 下，仅词法形式不同的两个数据集也是不同的数据集。语言标签和基础方向以 ASCII 小写书写（§2.1）；这是同一个项的书写形式，不是归一化：RDF 1.2 Concepts §3.4 规定，仅大小写不同的两个语言标签是同一个标签，基础方向的文本表示为小写。
+
+### 2.1 项的书写形式
+
+规范行遵循 RDF 1.2 N-Quads 的规范形式（第 3 节“A Canonical form of N-Quads”），同样遵循 RDF 1.2 N-Triples 第 3 节。各规则及其来源：
+
+| 规则 | 来源 |
+|---|---|
+| 字面量词法形式：`\"`、`\\`、`\n`、`\r`、`\t`、`\b`、`\f` 写作 `ECHAR`；U+0020 以下的其他标量和 U+007F 写作 `UCHAR`（小写 `\u` 加四位大写十六进制）；其余标量按 UTF-8 原样书写 | N-Quads 1.2 §3（`ECHAR` 与 `UCHAR` 规则，以及“HEX 只能使用数字和大写字母”） |
+| 字面量中的 U+FFFE 和 U+FFFF 写作 `\uFFFE` 和 `\uFFFF`；C1 控制字符 U+0080 至 U+009F 原样书写 | N-Quads 1.2 §3 与 N-Triples 1.2 §3：“不匹配 [XML11] `Char` 产生式的字符必须写作 UCHAR”。XML 1.1 `Char` 在基本平面止于 U+FFFD，并包含 U+0080 至 U+009F |
+| 语言标签和基础方向使用 ASCII 小写；带语言标签字面量的数据类型不写出；`xsd:string` 不写出 | N-Quads 1.2 §3：“LANG_DIR 中的字母只能使用小写字母 ([a–z])”；RDF 1.2 Concepts §3.4 |
+| IRI 写在尖括号之间，仅对 `IRIREF` 产生式排除的标量使用 `\u00XX`：U+0000 至 U+0020、`<`、`>`、`"`、`{`、`}`、`|`、`^`、重音符和 `\`。DEL 和 C1 控制字符原样书写 | N-Quads 1.2 §5.3 语法中的 `IRIREF`。第 3 节的规范形式未规定 IRI 内的转义，因此这是语法本身的要求，不更宽；需要更多转义的载体（XML 文本）自行选择更宽的集合 |
+| 三元组项为 `<<( s p o )>>`，其每个记号之后一个空格 | N-Triples 1.2 §3 |
+| 空节点为 `_:c14nN`，源标签不会出现 | RDFC-1.0 §4.4；RDF 1.2 Concepts §3.5 |
+
+一阶和 n 阶散列使用与文档相同的书写形式，因此由散列分配的标签与文档行一致。
 
 ## 3. RDF 1.2 叠加层
 
@@ -87,7 +102,7 @@ canon(parse(canon(D))) == canon(D)
 
 每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view`、`try_flat_digest_view` 和 `try_flat_blake3_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
 
-两种表示回答的是同一问题：“这个**可接纳的** RDF 1.2 陈述层生成哪些规范字节？”它们以不同书写形式表达**相同的可接纳内容**。表示选择与可接纳性相互独立：§4 的保留词汇和 §5 的拒绝规则不随调用方选择的表示而改变。不同之处仅在于：已接纳的具体化节点或注解行最终**如何输出**。
+两种表示回答的是同一问题：“这个**可接纳的** RDF 1.2 陈述层生成哪些规范字节？”它们以不同书写形式表达**相同的可接纳内容**。表示选择与可接纳性**并非**相互独立：§4 的保留词汇和 §5 的拒绝规则只约束叠加层表示。哨兵是叠加层写出的书写形式，所以只有叠加层需要防止命名空间被伪造；平铺表示不写哨兵，也不因词汇而拒绝任何输入。
 
 | 结构 | 平铺规范行 |
 |---|---|
@@ -106,6 +121,20 @@ canon(parse(canon(D))) == canon(D)
 **平铺表示是 RDF 1.2 陈述层的第二种规范化判定书写形式，绝不是 RDF 1.1 回退模式。** 选择它不会退回普通三元组语义：§3 规范化的每条陈述层行，都以其所断言的普通四元组出现在平铺文档中；§4/§5 的可接纳性、§6 的上限和 §3.2 的空节点标签分配规则仍然适用。不过，两种表示刻意给出不同的可区分性承诺。平铺表示标识的是**断言投影**：按行去重意味着，同时以具体化节点声明／注解声明和其自身的基础四元组断言一行，或通过折叠形状书写该行，所产生的字节与仅断言一次相同。所以，已声明的具体化节点绑定与普通 `rdf:reifies` 基础四元组，在平铺字节中不可区分；叠加表示则以哨兵行和普通谓词保持二者的区别。§3 无条件的无损身份性质是**叠加表示**的保证。必须始终观察陈述层结构（具体化节点数量、某行由哪种书写形式断言）的使用方应固定叠加表示；希望得到独立 RDFC-1.0 实现也能复现的 RDF 1.2 断言集合的使用方应固定平铺表示。
 
 在两种表示下，`Canonicalized::labels` 都有同一限制：标签仅在**允许自同构置换的意义上**具有同构不变性。图存在非平凡自同构时，n 阶搜索在其他方面等价的候选之间如何打破平局，取决于枚举顺序。因此，同构但不完全相同的输入，可能为处于自同构关系的空节点分配不同、但结构等价的标签。而 `Canonicalized::nquads` 本身在两种表示下都完全保持同构不变性：两个同构视图生成逐字节相同的规范文档。
+
+#### 平铺表示下的保留 IRI（版本 2）
+
+平铺表示不应用保留，也不拒绝。携带 `urn:purrdf:rdfc:` IRI 的输入会被规范化。处理规则只有一条：**不属于折叠形状的保留 IRI 是普通 IRI，按原样书写，在每个位置和每个深度都如此**（主体、谓词、客体、图、三元组项内部、数据类型）。§3.1 的两种折叠形状在其消耗的每个位置折叠为它们所表示的行。
+
+为什么不会有两个不同内容共享字节：平铺表示为其行写出 `rdf:reifies` 和注解自身的谓词，从不写哨兵，所以平铺文档中的每个保留 IRI 都是输入在其位置携带的。表示中仅有的多对一步骤是本节的断言投影和上文的按行去重，二者只标识同一行的不同书写，不标识其他内容。折叠形状之外的保留 IRI 从不被读作行，因此 `r <urn:purrdf:rdfc:reifies> "x"`（哨兵谓词配非三元组项客体）就是它书写的那一行，与 `r rdf:reifies "x"`、`r <urn:purrdf:rdfc:annotation> "x"` 以及具体化节点行都不同。§8 的语料固定了这些配对。
+
+平铺文档对一种形状不具幂等性：自身图为注解哨兵、且本身不是折叠形状的四元组，重新解析时会被读回为注解行。叠加层的幂等性（§3.1）不变。
+
+#### 无数据类型感知步骤（版本 2）
+
+标准平铺表示没有数据类型感知步骤。词法形式就是文本。`cdt:List` 或 `cdt:Map` 词法形式内部的空节点标签不是数据集的空节点，不参与标签分配，按原样书写。仅在这类标签上不同的两个数据集，在该表示下是不同的数据集。这与 RDFC-1.0 的立场一致：只有数据集四元组中的空节点被标记（RDFC-1.0 §4.4、§4.6、§4.8 读取四元组，不读取字面量文本）。
+
+原有的重新标记仅作为单独命名的表示保留：`flat-assertion-composite-blanks`（`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`，版本 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION` → `1`），只能通过 `try_canonicalize_flat_composite_view` 和 `try_flat_composite_digest_view` 使用。它是在标准平铺表示上增加一步：复合词法形式内部的空节点标签是图的空节点，参与标签分配，并写作其规范标签。它是独立的表示标识符，而不是标准表示的请求参数，这样回执、`Canonicalized::presentation()` 的值和每个固定值都会指明它，其文档和摘要不会被误认为标准平铺文档。叠加层表示保留其一贯的重新标记。
 
 ## 4. 保留词汇
 
@@ -131,7 +160,7 @@ urn:purrdf:rdfc:
 
 ## 5. 拒绝规则（规范性）
 
-> 如果数据集中的**任意项，在任意位置，是以 `urn:purrdf:rdfc:` 开头的 IRI**，该数据集就不可接纳，必须拒绝。**仅有的例外**是该 IRI 出现在 §3.1 的两种四元组形状之一中：在检查开始前，先将它们读回其所表示的陈述层行。不可接纳的数据集不得规范化，也不得从中分配任何摘要。
+> 在叠加层表示下，如果数据集中的**任意项，在任意位置，是以 `urn:purrdf:rdfc:` 开头的 IRI**，该数据集就不可接纳，必须拒绝。**仅有的例外**是该 IRI 出现在 §3.1 的两种四元组形状之一中：在检查开始前，先将它们读回其所表示的陈述层行。不可接纳的数据集不得规范化，也不得从中分配任何摘要。
 
 例外精确且穷尽：只有 §3.1 表中列出的、§3 展开所生成的两种形状，没有其他例外。以哨兵为谓词但客体不是三元组项、哨兵出现在主体、客体或数据类型位置、注解哨兵出现在单独图槽位以外，以及命名空间中的其他所有名称，都被拒绝。折叠作用于整个四元组，绝不孤立地作用于一个项。折叠未消耗的位置仍和其他位置一样接受检查：嵌套在折叠行的三元组项内部，或作为折叠注解谓词的保留 IRI，仍会导致拒绝。
 
@@ -232,12 +261,24 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 | 版本 | 变更 |
 |---|---|
 | 1 | 初始 profile |
-| 3 | §6 要求显式有限或无限搜索策略及实际执行证据，成功输出字节不变 |
 | 2 | 收窄 §5：§3 展开所生成的两种四元组形状会折叠回陈述层，而不是被拒绝，使规范化对自身输出具有幂等性（§3.1） |
+| 3 | §6 要求显式有限或无限搜索策略及实际执行证据，成功输出字节不变 |
+| 4 | 书写形式遵循 N-Quads 1.2 §3（§2.1）；平铺表示不拒绝保留 IRI，且没有数据类型感知步骤（§3.3） |
+
+版本 4 仅对下列输入改变字节，其他所有输入保持版本 3 的字节：
+
+* 字面量含 U+FFFE 或 U+FFFF（写作 `\uFFFE`、`\uFFFF`；两种表示都改变，所以叠加层表示升为版本 2）；
+* 到达规范化时带有大写字母的语言标签或基础方向（写作小写）。在写入时折叠标签的项表可（如 PurRDF 的）已经保存小写，因此只影响保留书写大小写的源视图；
+* 标准平铺表示下，词法形式中含空节点标签的复合（`cdt:List` / `cdt:Map`）字面量（原样书写，此前写作规范标签）；叠加层和具名复合选项不变；
+* 平铺表示下，携带折叠形状之外的保留 IRI 的输入：版本 3 拒绝，版本 4 规范化。叠加层表示仍然拒绝。
+
+IRI 的转义集合（§2.1）恰为产生式的排除集；因为含 DEL 或 C1 控制字符的 IRI 在每个入口都被拒绝，任何输入都无法观察到与版本 3 的差异。
 
 版本 2 **没有改变任何输出字节**：版本 1 接纳的每个输入，生成的规范字节都与版本 1 完全相同。改变的是拒绝规则，而拒绝也是使用方固定的契约的一部分。版本 1 拒绝的两类输入现在可以规范化，因此仅这一变化就已按 §7 第三项要求递增版本。
 
 ## 8. 规范性测试向量语料
+
+用例在三种表示下运行：`golden` 与 `refusal` 行为叠加层，`golden-flat` 行为标准平铺表示，`golden-flat-composite` 行为具名复合选项，每种在输入旁各有普通文本的期望文档（`.canonical`、`.flat.canonical`、`.flat-composite.canonical`）。版本 4 新增的用例涵盖：带与不带方向的混合大小写标签、两个非字符、嵌套三元组项中 `s`、`o`、`o.s`、`o.o` 位置的空节点、平铺下的具体化节点行与注解行、平铺下（接纳）与叠加层下（拒绝）的保留 IRI，以及平铺下（文本）与具名选项下（重新标记）含空节点标签的复合字面量。所有版本 3 用例及其期望文档均不变。
 
 语料位于 `vectors/rdf12-canon/`，并且已经**冻结**：每个载荷字节都由每次构建检查的 SHA-256 清单覆盖（`scripts/check-corpus-frozen.py`），所以静默修改期望结果会导致失败，而不是让检查通过。
 
@@ -252,8 +293,8 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 | 字段 | 来源 |
 |---|---|
 | profile 标识符 | `purrdf_core::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile 版本 | `purrdf_core::CANON_PROFILE_VERSION` → `2` |
-| 表示 | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
+| profile 版本 | `purrdf_core::CANON_PROFILE_VERSION` → `4` |
+| 表示 | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `2`）、`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `2`）或 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`（→ `flat-assertion-composite-blanks`，版本 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION` → `1`）（§3.3） |
 | 散列算法 | `CanonHash::Sha256` 或 `CanonHash::Sha384`（§2） |
 | 语料摘要 | `purrdf_core::CANON_CORPUS_DIGEST`（§8） |
 | 发布版本 | 读取上述值时所依据的带标签发布版本 |

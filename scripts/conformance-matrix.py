@@ -1126,7 +1126,7 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
             detail="65 vectors (64 eval + 1 negative), sharded",
         )),
         ("core", lambda: _suite_cargo(
-            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v2 (first-party)",
+            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v4 (first-party)",
             ["cargo", "test", "-p", "purrdf-rdf", "--locked",
              "--test", "rdf12_canon_profile"],
             detail="19 goldens + 7 refusals, frozen and content-addressed",

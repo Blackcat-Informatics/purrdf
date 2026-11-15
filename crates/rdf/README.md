@@ -35,7 +35,7 @@ loss ledger) and adds what the kernel deliberately leaves out:
   the realized count handed to the loss ledger.
 - **Canonicalization entry points** — `canonical_flat_nquads`, W3C RDFC-1.0
   over the statement layer flattened to plain `rdf:reifies`/annotation
-  triples, and `canonicalize`, the first-party `purrdf-rdfc12` v2 profile
+  triples, and `canonicalize`, the first-party `purrdf-rdfc12` v4 profile
   (RDFC-1.0 plus a reserved-namespace lowering of reifiers and annotations;
   byte-identical to RDFC-1.0 only on the RDF 1.1 subset; idempotent over its
   own output).
