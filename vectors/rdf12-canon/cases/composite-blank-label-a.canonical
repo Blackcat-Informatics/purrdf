@@ -1,0 +1,2 @@
+<http://example.org/s> <http://example.org/p> "[_:c14n0, 42]"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List> .
+_:c14n0 <http://example.org/q> <http://example.org/o> .

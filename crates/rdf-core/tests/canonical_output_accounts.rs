@@ -10,6 +10,9 @@
 //! the previous document construction produced: the poll count and the phase
 //! boundary must not move, and a reservation may only shrink. Digest-only rows
 //! record the digest route's own totals and keep the earlier maxima as the bound.
+//! Flat rows carry the totals of a run with no reserved-vocabulary sweep, which the
+//! flat presentation does not make, and the identity of a composite literal's blank
+//! labels written as text.
 
 use std::fmt;
 use std::sync::Arc;
@@ -456,8 +459,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "blank_free",
         entry: Entry::FlatDocument,
-        polls: 1092,
-        first_output: 547,
+        polls: 821,
+        first_output: 276,
         scratch: 11364,
         owned: 6044,
         digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
@@ -467,8 +470,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "blank_free",
         entry: Entry::FlatSha256,
-        polls: 1092,
-        first_output: 547,
+        polls: 821,
+        first_output: 276,
         scratch: 8742,
         owned: 0,
         digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
@@ -489,8 +492,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "blank_free",
         entry: Entry::FlatBlake3,
-        polls: 1092,
-        first_output: 547,
+        polls: 821,
+        first_output: 276,
         scratch: 8742,
         owned: 0,
         digest: "7e8a5d1e3084a3037568be98a21d0eda48a9c55aa4a7632fe563f196380f8d33",
@@ -544,8 +547,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "reifier",
         entry: Entry::FlatDocument,
-        polls: 1776,
-        first_output: 1183,
+        polls: 1481,
+        first_output: 888,
         scratch: 7600,
         owned: 5228,
         digest: "af5cdb72d4b9ee9995853807bdcf6d74eabed2a7e2bc50781cd44eae165c4b5f",
@@ -555,8 +558,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "reifier",
         entry: Entry::FlatSha256,
-        polls: 1776,
-        first_output: 1183,
+        polls: 1481,
+        first_output: 888,
         scratch: 7094,
         owned: 0,
         digest: "af5cdb72d4b9ee9995853807bdcf6d74eabed2a7e2bc50781cd44eae165c4b5f",
@@ -577,8 +580,8 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "reifier",
         entry: Entry::FlatBlake3,
-        polls: 1776,
-        first_output: 1183,
+        polls: 1481,
+        first_output: 888,
         scratch: 7094,
         owned: 0,
         digest: "53b31cae2c52621681e220eb75f4f9d1f3f1206c09cd200565aa966fb8c0a7e8",
@@ -621,22 +624,22 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "mixed",
         entry: Entry::FlatDocument,
-        polls: 986,
-        first_output: 750,
+        polls: 851,
+        first_output: 615,
         scratch: 2848,
         owned: 1917,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
+        digest: "1ca7a79c93931d02291f873d42c345958a0088f33b663a3a99607d3be9f3cb0a",
         before_scratch: 2848,
         before_owned: 1917,
     },
     Frozen {
         fixture: "mixed",
         entry: Entry::FlatSha256,
-        polls: 986,
-        first_output: 750,
+        polls: 851,
+        first_output: 615,
         scratch: 2514,
         owned: 0,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
+        digest: "1ca7a79c93931d02291f873d42c345958a0088f33b663a3a99607d3be9f3cb0a",
         before_scratch: 2514,
         before_owned: 1917,
     },
@@ -654,11 +657,11 @@ const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "mixed",
         entry: Entry::FlatBlake3,
-        polls: 986,
-        first_output: 750,
+        polls: 851,
+        first_output: 615,
         scratch: 2514,
         owned: 0,
-        digest: "75a612f366688be11eaad6977a483e2fcbcd9eadc4427f1d1dcbfec626e82d5c",
+        digest: "aa693595b3ac13ba55ce733cb6defc9b3355aa15ff8c0e7b72fcef6762fc6d26",
         before_scratch: 2514,
         before_owned: 1917,
     },

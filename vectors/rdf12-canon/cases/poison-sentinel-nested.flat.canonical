@@ -1,0 +1,1 @@
+<http://example.org/r> <http://example.org/reifies> <<( <http://example.org/s> <urn:purrdf:rdfc:reifies> <http://example.org/o> )>> .

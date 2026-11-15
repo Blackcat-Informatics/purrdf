@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v3.
+//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v4.
 //!
 //! The corpus at `vectors/rdf12-canon/` is the executable half of
 //! `docs/RDF12-CANON-PROFILE.md`: every clause a consumer pins is a case here, so a
@@ -34,15 +34,16 @@
 //! point — it makes an accidental golden refresh impossible to mistake for a no-op.
 
 use purrdf_gts::files::media_type_for_path;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use purrdf_rdf::{
-    CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
-    CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
-    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonPresentation, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition,
-    ViewCanonError, parse_dataset, try_canonicalize_flat_view, try_canonicalize_with,
+    CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID,
+    CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION,
+    CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
+    CANON_PRESENTATION_OVERLAY_ID, CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID,
+    CANON_PROFILE_VERSION, CanonError, CanonHash, CanonPresentation, RESERVED_NAMESPACE,
+    RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset,
+    try_canonicalize_flat_composite_view, try_canonicalize_flat_view, try_canonicalize_with,
 };
 use purrdf_testkit::golden::regenerating;
 use purrdf_testkit::paths::workspace_root;
@@ -56,8 +57,14 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// What the manifest says must happen to a case.
 #[derive(Debug, PartialEq, Eq)]
 enum Expectation {
-    /// Canonicalizes; the bytes are pinned in `<stem>.canonical`.
+    /// Canonicalizes under the overlay; the bytes are pinned in `<stem>.canonical`.
     Golden,
+    /// Canonicalizes under the standard flat presentation; the bytes are pinned in
+    /// `<stem>.flat.canonical`.
+    GoldenFlat,
+    /// Canonicalizes under the named composite option; the bytes are pinned in
+    /// `<stem>.flat-composite.canonical`.
+    GoldenFlatComposite,
     /// Refused with this exact discriminant (profile §5.2).
     Refusal(String),
 }
@@ -98,14 +105,18 @@ fn load_manifest() -> Vec<Case> {
         );
         let expectation = fields.get(2).copied().unwrap_or("");
         let expect = match fields[1] {
-            "golden" => {
+            kind @ ("golden" | "golden-flat" | "golden-flat-composite") => {
                 assert!(
                     expectation.is_empty(),
                     "manifest.tsv line {}: a golden carries no expectation column, but \
                      this one says {expectation:?}",
                     n + 1
                 );
-                Expectation::Golden
+                match kind {
+                    "golden" => Expectation::Golden,
+                    "golden-flat" => Expectation::GoldenFlat,
+                    _ => Expectation::GoldenFlatComposite,
+                }
             }
             "refusal" => {
                 assert!(
@@ -127,34 +138,107 @@ fn load_manifest() -> Vec<Case> {
     cases
 }
 
-/// The canonical bytes for a case, or its refusal rendered in the manifest's
-/// discriminant spelling.
-fn run_case(case: &Case) -> Result<purrdf_core::Canonicalized, String> {
-    let bytes = std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
-    let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
-        .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
-    match try_canonicalize_with(
-        &dataset,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
-    ) {
-        Ok(canonicalized) => Ok(canonicalized),
-        Err(CanonError::ReservedVocabulary(err)) => {
-            let position = match err.position() {
-                TermPosition::Subject => "subject",
-                TermPosition::Predicate => "predicate",
-                TermPosition::Object => "object",
-                TermPosition::Graph => "graph",
-                // The profile fixes exactly four positions; a fifth would be a
-                // profile change, and naming it "unknown" in a receipt a consumer
-                // pins would be worse than failing here.
-                other => panic!("unspecified term position {other:?}"),
-            };
-            Err(format!("reserved-vocabulary {position} {}", err.iri()))
+/// The presentation a case is run under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Presentation {
+    Overlay,
+    Flat,
+    FlatComposite,
+}
+
+impl Presentation {
+    /// The extension of the expected-document file beside the input.
+    const fn golden_extension(self) -> &'static str {
+        match self {
+            Self::Overlay => "canonical",
+            Self::Flat => "flat.canonical",
+            Self::FlatComposite => "flat-composite.canonical",
         }
-        Err(CanonError::BudgetExceeded(_)) => Err("budget-exceeded".to_owned()),
-        Err(other) => panic!("unspecified refusal {other:?}"),
     }
+
+    /// The extension of the digest file beside the input.
+    const fn digest_extension(self) -> &'static str {
+        match self {
+            Self::Overlay => "digest",
+            Self::Flat => "flat.digest",
+            Self::FlatComposite => "flat-composite.digest",
+        }
+    }
+}
+
+fn position_name(position: TermPosition) -> &'static str {
+    match position {
+        TermPosition::Subject => "subject",
+        TermPosition::Predicate => "predicate",
+        TermPosition::Object => "object",
+        TermPosition::Graph => "graph",
+        // The profile fixes exactly four positions; a fifth would be a
+        // profile change, and naming it "unknown" in a receipt a consumer
+        // pins would be worse than failing here.
+        other => panic!("unspecified term position {other:?}"),
+    }
+}
+
+fn refusal_text(error: CanonError) -> String {
+    match error {
+        CanonError::ReservedVocabulary(err) => format!(
+            "reserved-vocabulary {} {}",
+            position_name(err.position()),
+            err.iri()
+        ),
+        CanonError::BudgetExceeded(_) => "budget-exceeded".to_owned(),
+        other => panic!("unspecified refusal {other:?}"),
+    }
+}
+
+/// The canonical document of the input file under `presentation`, or its refusal
+/// rendered in the manifest's discriminant spelling.
+fn run_file(
+    file: &std::path::Path,
+    rel: &str,
+    presentation: Presentation,
+) -> Result<purrdf_core::Canonicalized, String> {
+    let bytes = std::fs::read(file).unwrap_or_else(|e| panic!("read {file:?}: {e}"));
+    let dataset = parse_dataset(&bytes, media_type_for_path(file), None)
+        .unwrap_or_else(|e| panic!("{rel} must parse: {e}"));
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    match presentation {
+        Presentation::Overlay => {
+            try_canonicalize_with(&dataset, CanonHash::Sha256, &mut control).map_err(refusal_text)
+        }
+        Presentation::Flat => try_canonicalize_flat_view(
+            &*dataset,
+            CanonHash::Sha256,
+            &mut control,
+        )
+        .map_err(|error| match error {
+            ViewCanonError::Refused(error) => refusal_text(error),
+            other @ ViewCanonError::NotReady { .. } => panic!("unspecified refusal {other:?}"),
+        }),
+        Presentation::FlatComposite => {
+            try_canonicalize_flat_composite_view(&*dataset, CanonHash::Sha256, &mut control)
+                .map_err(|error| match error {
+                    ViewCanonError::Refused(error) => refusal_text(error),
+                    other @ ViewCanonError::NotReady { .. } => {
+                        panic!("unspecified refusal {other:?}")
+                    }
+                })
+        }
+    }
+}
+
+/// The presentation a manifest expectation runs its case under.
+const fn presentation_of(expect: &Expectation) -> Presentation {
+    match expect {
+        Expectation::Golden | Expectation::Refusal(_) => Presentation::Overlay,
+        Expectation::GoldenFlat => Presentation::Flat,
+        Expectation::GoldenFlatComposite => Presentation::FlatComposite,
+    }
+}
+
+fn run_case(case: &Case) -> Result<purrdf_core::Canonicalized, String> {
+    run_file(&case.file, &case.rel, presentation_of(&case.expect))
 }
 
 /// Every golden canonicalizes to its pinned bytes, and every refusal is refused with
@@ -164,10 +248,14 @@ fn the_corpus_matches_its_pinned_expectations() {
     for case in load_manifest() {
         let actual = run_case(&case);
         match (&case.expect, actual) {
-            (Expectation::Golden, Ok(canonicalized)) => {
+            (
+                Expectation::Golden | Expectation::GoldenFlat | Expectation::GoldenFlatComposite,
+                Ok(canonicalized),
+            ) => {
                 let nquads = canonicalized.nquads();
-                let canonical = case.file.with_extension("canonical");
-                let digest = case.file.with_extension("digest");
+                let presentation = presentation_of(&case.expect);
+                let canonical = case.file.with_extension(presentation.golden_extension());
+                let digest = case.file.with_extension(presentation.digest_extension());
                 let hex = format!(
                     "{}",
                     purrdf_hash::hex::Lower(&Sha256::digest(nquads.as_bytes()))
@@ -203,7 +291,10 @@ fn the_corpus_matches_its_pinned_expectations() {
                 "{} was refused, but not with the discriminant the corpus pins",
                 case.rel
             ),
-            (Expectation::Golden, Err(got)) => {
+            (
+                Expectation::Golden | Expectation::GoldenFlat | Expectation::GoldenFlatComposite,
+                Err(got),
+            ) => {
                 panic!("{} must canonicalize, but was refused: {got}", case.rel)
             }
             (Expectation::Refusal(want), Ok(_)) => panic!(
@@ -221,10 +312,6 @@ fn the_corpus_matches_its_pinned_expectations() {
 fn the_corpus_pairs_hold_their_declared_relations() {
     let root = corpus_root();
     let text = std::fs::read_to_string(root.join("pairs.tsv")).expect("corpus pairs");
-    let manifest: BTreeMap<String, Case> = load_manifest()
-        .into_iter()
-        .map(|c| (c.rel.clone(), c))
-        .collect();
     let mut checked = 0usize;
     for (n, line) in text.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with('#') {
@@ -232,11 +319,32 @@ fn the_corpus_pairs_hold_their_declared_relations() {
         }
         let fields: Vec<&str> = line.split('\t').collect();
         assert_eq!(fields.len(), 3, "pairs.tsv line {} malformed", n + 1);
-        let left_owner = run_case(&manifest[fields[0]]).expect("a paired case must canonicalize");
+        // `same` and `differ` run both inputs under the overlay; `flat-` and
+        // `flat-composite-` prefixed relations run both under that presentation;
+        // `option-differs` runs the left input under the standard flat presentation and
+        // the right under the named composite option.
+        let (left_presentation, right_presentation, relation) = match fields[2] {
+            "same" | "differ" => (Presentation::Overlay, Presentation::Overlay, fields[2]),
+            "flat-same" | "flat-differ" => (
+                Presentation::Flat,
+                Presentation::Flat,
+                &fields[2]["flat-".len()..],
+            ),
+            "flat-composite-same" | "flat-composite-differ" => (
+                Presentation::FlatComposite,
+                Presentation::FlatComposite,
+                &fields[2]["flat-composite-".len()..],
+            ),
+            "option-differs" => (Presentation::Flat, Presentation::FlatComposite, "differ"),
+            other => panic!("pairs.tsv line {}: unknown relation {other:?}", n + 1),
+        };
+        let left_owner = run_file(&root.join(fields[0]), fields[0], left_presentation)
+            .expect("a paired case must canonicalize");
         let left = left_owner.nquads();
-        let right_owner = run_case(&manifest[fields[1]]).expect("a paired case must canonicalize");
+        let right_owner = run_file(&root.join(fields[1]), fields[1], right_presentation)
+            .expect("a paired case must canonicalize");
         let right = right_owner.nquads();
-        match fields[2] {
+        match relation {
             "same" => assert_eq!(
                 left, right,
                 "{} and {} are declared isomorphic but canonicalized differently",
@@ -248,12 +356,12 @@ fn the_corpus_pairs_hold_their_declared_relations() {
                  collision the profile forbids",
                 fields[0], fields[1]
             ),
-            other => panic!("pairs.tsv line {}: unknown relation {other:?}", n + 1),
+            other => unreachable!("relation {other:?} was mapped above"),
         }
         checked += 1;
     }
     assert!(
-        checked >= 9,
+        checked >= 17,
         "the pair relations were not all read: {checked}"
     );
 }
@@ -453,24 +561,35 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     );
 
     // Near miss: the reserved namespace in a NON-foldable shape (the sentinel
-    // predicate over a plain IRI object, not a triple term) is still refused,
-    // typed, under the flat presentation exactly as under the overlay.
+    // predicate over a plain IRI object, not a triple term). The overlay refuses it;
+    // the flat presentation writes no sentinel, so it is an ordinary IRI there, written
+    // as it is and never read as a reifier row.
     let mut b = RdfDatasetBuilder::new();
     let r = b.intern_iri("http://example.org/r").unwrap();
     let reifies = b.intern_iri("urn:purrdf:rdfc:reifies").unwrap();
     let o = b.intern_iri("http://example.org/o").unwrap();
     b.push_quad(r, reifies, o, None).unwrap();
     let near_miss = b.freeze().expect("valid");
-    match try_canonicalize_flat_view(
+    let written = try_canonicalize_flat_view(
         &*near_miss,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the flat presentation refuses no reserved IRI");
+    assert_eq!(
+        written.nquads(),
+        "<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n"
+    );
+    match try_canonicalize_with(
+        &near_miss,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     ) {
-        Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
+        Err(CanonError::ReservedVocabulary(err)) => {
             assert_eq!(err.iri(), "urn:purrdf:rdfc:reifies");
             assert_eq!(err.position(), TermPosition::Predicate);
         }
-        other => panic!("refused for the wrong reason: {other:?}"),
+        other => panic!("the overlay must still refuse it: {other:?}"),
     }
 
     // Its neighbouring VALID case: the same subject/object but a TRIPLE-TERM object
@@ -583,11 +702,19 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
 #[test]
 fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-    assert_eq!(CANON_PROFILE_VERSION, 3);
+    assert_eq!(CANON_PROFILE_VERSION, 4);
     assert_eq!(CANON_PRESENTATION_OVERLAY_ID, "overlay");
-    assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 1);
+    assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 2);
     assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_ID, "flat-assertion");
-    assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_VERSION, 1);
+    assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_VERSION, 2);
+    assert_eq!(
+        CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID,
+        "flat-assertion-composite-blanks"
+    );
+    assert_eq!(
+        CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION,
+        1
+    );
 
     let empty = RdfDatasetBuilder::new()
         .freeze()
@@ -617,6 +744,19 @@ fn the_profile_identity_is_readable_from_the_api() {
         .expect("empty dataset canonicalizes")
         .presentation(),
         CanonPresentation::FlatAssertion
+    );
+    assert_eq!(
+        try_canonicalize_flat_composite_view(
+            &*empty,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("empty dataset canonicalizes")
+        .presentation(),
+        CanonPresentation::FlatAssertionCompositeBlanks
     );
 }
 

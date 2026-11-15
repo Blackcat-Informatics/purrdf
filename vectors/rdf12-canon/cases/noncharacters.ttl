@@ -1,0 +1,5 @@
+@prefix ex: <http://example.org/> .
+
+ex:s ex:p "a\uFFFEb" .
+ex:s ex:q "c\uFFFFd" .
+ex:s ex:r "e\uFFFDf" .

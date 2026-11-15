@@ -219,6 +219,8 @@ pub use ir::segmented::{
 };
 pub use ir::{
     BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST,
+    CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID,
+    CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION,
     CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
     CANON_PRESENTATION_OVERLAY_ID, CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID,
     CANON_PROFILE_VERSION, CanonError, CanonHash, CanonPresentation, CanonScopeName,
@@ -244,10 +246,11 @@ pub use ir::{
     canonical_paged_seal, canonical_relabel, canonical_relabel_with_mapping, check_admissible,
     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
     deskolemize, fold_term, skolemize, try_blank_count_view, try_canonical_blake3_view,
-    try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_blake3_view, try_flat_digest_view,
-    try_fold_nested, try_graph_digest_view, visit_nested,
+    try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_composite_view,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_sha256_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_blake3_view, try_flat_composite_digest_view, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     DatasetMaterializationError, PackBuilder, PackCheckpoint, PackDigest, PackError, PackId,

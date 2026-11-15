@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0 -->
 
-# `purrdf-rdfc12` v2 — normative vector corpus
+# `purrdf-rdfc12` v4 — normative vector corpus
 
 The executable half of [`docs/RDF12-CANON-PROFILE.md`](../../docs/RDF12-CANON-PROFILE.md).
 Every clause a consumer pins has a case here, so running this corpus against a
@@ -35,8 +35,17 @@ regenerating a digest.
 | `manifest.tsv` | the case list: input file, kind, expectation |
 | `pairs.tsv` | relations BETWEEN cases (`same` / `differ`) |
 | `cases/<name>.ttl` or `.trig` | input, in Turtle 1.2 / TriG 1.2 |
-| `cases/<name>.canonical` | expected canonical bytes (goldens only) |
-| `cases/<name>.digest` | SHA-256 of those bytes (goldens only) |
+| `cases/<name>.canonical` | expected overlay canonical bytes (`golden` rows) |
+| `cases/<name>.digest` | SHA-256 of those bytes |
+| `cases/<name>.flat.canonical`, `.flat.digest` | expected bytes under the standard flat presentation (`golden-flat` rows) |
+| `cases/<name>.flat-composite.canonical`, `.flat-composite.digest` | expected bytes under the named composite-blanks option (`golden-flat-composite` rows) |
+
+The same input may appear under several kinds: the kind is the presentation the case is
+run under (`golden` and `refusal` are the overlay). `pairs.tsv` relations are `same` and
+`differ` (overlay), `flat-same` and `flat-differ`, `flat-composite-same` and
+`flat-composite-differ`, and `option-differs` (the left input under standard flat, the
+right under the named option). Every expected document is a plain file a peer
+implementation can diff against.
 
 A case's syntax is taken from its **extension**, not from the manifest, so a case
 cannot be listed under a syntax it is not written in.
@@ -150,6 +159,23 @@ shapes wide, and those two cases are what keeps it from widening.
 
 Every use of the reserved namespace other than the two folded shapes above refuses
 exactly as it did under v1, with the same position-bearing discriminant.
+
+### Version 4 additions (profile §2.1, §3.3, §7.1)
+
+Every version 3 case and expected document is unchanged; these are new files.
+
+| Case | Covers |
+|---|---|
+| `lang-mixed-case` / `lang-lower-case` | a tag written with capitals canonicalizes to the lower-case document — **must match** (overlay and flat) |
+| `lang-mixed-case-direction` | tag and base direction in lower case in the line |
+| `noncharacters` | U+FFFE and U+FFFF written `\uFFFE` and `\uFFFF`; U+FFFD, its neighbour, raw |
+| `triple-term-blank-positions` | blank nodes at `s`, `o`, `o.s` and `o.o` of a nested triple term |
+| `reserved-reifies-literal-object`, `reserved-in-triple-term` | reserved IRIs outside a fold shape: refused by the overlay, written as ordinary IRIs by flat |
+| every `poison-sentinel-*`, `poison-forgery` | the existing reserved-IRI cases, now also run under flat: admitted |
+| `composite-blank-label-a` / `-b` | a blank label inside a `cdt:List` lexical form: text under standard flat (renaming it changes the bytes) and a blank node under the named option (renaming it does not) |
+
+The reifier and annotation rows under flat are the `reifier-*` and `annotation-*`
+cases run as `golden-flat`.
 
 ### Refusals — complexity poisoning (profile §6)
 

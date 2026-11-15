@@ -1,5 +1,9 @@
-# purrdf-rdfc12 profile v2 — normative vector manifest.
+# purrdf-rdfc12 profile v4 — normative vector manifest (the v3 rows are unchanged).
 # Columns: input-file <TAB> kind <TAB> expectation
+#   kind=golden-flat            as golden, under the standard flat presentation:
+#                 expected bytes in cases/<stem>.flat.canonical and .flat.digest
+#   kind=golden-flat-composite  as golden, under the named composite-blanks option:
+#                 expected bytes in cases/<stem>.flat-composite.canonical and .flat-composite.digest
 #   kind=golden   expectation is empty; the expected canonical bytes are
 #                 cases/<stem>.canonical and their SHA-256 is cases/<stem>.digest
 #   kind=refusal  expectation is the exact error discriminant, one of
@@ -39,3 +43,45 @@ cases/poison-sentinel-nested.ttl	refusal	reserved-vocabulary object urn:purrdf:r
 cases/poison-sentinel-datatype.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
 cases/poison-sentinel-unminted.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:no-such-sentinel
 cases/poison-complexity.ttl	refusal	budget-exceeded
+
+# Version 4: the spelling cases (overlay, both presentations pin the same bytes).
+cases/lang-mixed-case.ttl	golden
+cases/lang-lower-case.ttl	golden
+cases/lang-mixed-case-direction.ttl	golden
+cases/noncharacters.ttl	golden
+cases/triple-term-blank-positions.ttl	golden
+cases/composite-blank-label-a.ttl	golden
+cases/composite-blank-label-b.ttl	golden
+# Version 4: reserved IRIs the overlay still refuses (the flat rows below admit them).
+cases/reserved-reifies-literal-object.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:reifies
+cases/reserved-in-triple-term.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
+# Version 4: the standard flat presentation (profile 3.3, flat version 2).
+cases/plain-rdf11.ttl	golden-flat
+cases/reifier-simple.ttl	golden-flat
+cases/reifier-nested.ttl	golden-flat
+cases/reifier-count-two.ttl	golden-flat
+cases/annotation-simple.ttl	golden-flat
+cases/annotation-named-graph.trig	golden-flat
+cases/triple-term-object.ttl	golden-flat
+cases/triple-term-nested.ttl	golden-flat
+cases/triple-term-blank-inside.ttl	golden-flat
+cases/triple-term-blank-positions.ttl	golden-flat
+cases/lang-mixed-case.ttl	golden-flat
+cases/lang-lower-case.ttl	golden-flat
+cases/lang-mixed-case-direction.ttl	golden-flat
+cases/noncharacters.ttl	golden-flat
+cases/poison-forgery.ttl	golden-flat
+cases/poison-sentinel-graph.trig	golden-flat
+cases/poison-sentinel-subject.ttl	golden-flat
+cases/poison-sentinel-predicate.ttl	golden-flat
+cases/poison-sentinel-object.ttl	golden-flat
+cases/poison-sentinel-nested.ttl	golden-flat
+cases/poison-sentinel-datatype.ttl	golden-flat
+cases/poison-sentinel-unminted.ttl	golden-flat
+cases/reserved-reifies-literal-object.ttl	golden-flat
+cases/reserved-in-triple-term.ttl	golden-flat
+cases/composite-blank-label-a.ttl	golden-flat
+cases/composite-blank-label-b.ttl	golden-flat
+# Version 4: the named composite-blanks option (profile 3.3).
+cases/composite-blank-label-a.ttl	golden-flat-composite
+cases/composite-blank-label-b.ttl	golden-flat-composite

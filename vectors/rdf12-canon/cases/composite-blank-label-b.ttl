@@ -1,0 +1,4 @@
+@prefix ex: <http://example.org/> .
+
+_:y ex:q ex:o .
+ex:s ex:p "[_:y, 42]"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List> .

@@ -1,0 +1,3 @@
+<http://example.org/s> <http://example.org/p> "a\uFFFEb" .
+<http://example.org/s> <http://example.org/q> "c\uFFFFd" .
+<http://example.org/s> <http://example.org/r> "e�f" .

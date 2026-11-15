@@ -357,8 +357,9 @@ const G: &str = "http://example.org/g";
 // The review's two counterexamples to ordering by symbol rank alone.
 
 /// Rank order of whole symbols disagrees with byte order when a tag holds a
-/// space: `"x"@en ` is a prefix of `"x"@en US `, yet the line holding the longer
-/// symbol sorts first because its next byte (`U`) is below `_`. The document
+/// space: `"x"@en ` is a prefix of `"x"@en 1 `, yet the line holding the longer
+/// symbol sorts first because its next byte (`1`) is below `_`. The tag is in lower
+/// case, the one spelling the canonical line writes. The document
 /// must keep today's bytewise order, which the irregular line makes the merge
 /// decide.
 #[test]
@@ -369,13 +370,13 @@ fn counterexample_a_a_tag_with_a_space_keeps_the_bytewise_line_order() {
         t.b.intern_literal(RdfLiteral::language_tagged("x", "en"))
             .unwrap();
     let blank_graph = t.blank("g");
-    let spaced = t.tagged("x", "en US");
+    let spaced = t.tagged("x", "en 1");
     t.quad(s, p, en, Some(blank_graph));
     t.quad(s, p, spaced, Some(g));
     let view = t.build();
     assert_eq!(
         check(&view),
-        "<http://example.org/s> <http://example.org/p> \"x\"@en US <http://example.org/g> .\n\
+        "<http://example.org/s> <http://example.org/p> \"x\"@en 1 <http://example.org/g> .\n\
          <http://example.org/s> <http://example.org/p> \"x\"@en _:c14n0 .\n"
     );
 }

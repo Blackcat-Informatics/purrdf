@@ -13,3 +13,18 @@ cases/triple-term-object.ttl	cases/triple-term-nested.ttl	differ
 # fixture also carries, so the spelled row and the full structure stay distinct.
 cases/poison-forgery.ttl	cases/reifier-simple.ttl	differ
 cases/poison-sentinel-graph.trig	cases/annotation-simple.ttl	differ
+# Version 4. `flat-same` / `flat-differ` run both inputs under the standard flat
+# presentation, `flat-composite-same` / `flat-composite-differ` under the named
+# composite-blanks option, and `option-differs` runs the left input under the standard
+# flat presentation and the right under the option.
+cases/lang-mixed-case.ttl	cases/lang-lower-case.ttl	same
+cases/lang-mixed-case.ttl	cases/lang-lower-case.ttl	flat-same
+# A blank label inside a composite lexical form is text under flat: renaming it changes the bytes.
+cases/composite-blank-label-a.ttl	cases/composite-blank-label-b.ttl	flat-differ
+# Under the named option it is a blank node of the graph: renaming it does not.
+cases/composite-blank-label-a.ttl	cases/composite-blank-label-b.ttl	flat-composite-same
+cases/composite-blank-label-a.ttl	cases/composite-blank-label-a.ttl	option-differs
+# A reserved IRI outside a fold shape is the line it is written as: no two of these share bytes.
+cases/reserved-reifies-literal-object.ttl	cases/poison-sentinel-predicate.ttl	flat-differ
+cases/reserved-reifies-literal-object.ttl	cases/reserved-in-triple-term.ttl	flat-differ
+cases/poison-forgery.ttl	cases/reifier-simple.ttl	flat-differ

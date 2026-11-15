@@ -1,0 +1,3 @@
+@prefix ex: <http://example.org/> .
+
+ex:r <urn:purrdf:rdfc:reifies> "x" .

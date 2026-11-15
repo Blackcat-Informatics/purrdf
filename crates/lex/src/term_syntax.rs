@@ -7,14 +7,19 @@
 //!
 //! # The contract
 //!
-//! This is the canonical term form of RDF 1.2 N-Triples (N-Triples 1.2 §4
-//! "Canonical N-Triples"), which Turtle, TriG, N-Quads and SPARQL all accept
-//! for a term:
+//! This is the canonical term form of RDF 1.2 N-Quads (section 3, "A Canonical
+//! form of N-Quads") and RDF 1.2 N-Triples (section 3), which Turtle, TriG
+//! and SPARQL all accept for a term:
 //!
-//! * an IRI is `<` + its body through [`crate::iri_escape`] + `>`;
+//! * an IRI is `<` + its body through the
+//!   [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier of
+//!   [`crate::iri_escape`] + `>`: escaped exactly where the `IRIREF`
+//!   production forbids a scalar;
 //! * a literal is `"` + its lexical form through the
 //!   [`Canonical`](Carrier::Canonical) carrier of [`crate::literal_escape`] +
-//!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`. A literal whose
+//!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`, with the language tag
+//!   and the base direction in ASCII lower case ("Alphabetic characters in
+//!   LANG_DIR MUST use only the lowercase letters"). A literal whose
 //!   datatype is `xsd:string` is written with no suffix at all (the canonical
 //!   form omits it), and a language-tagged literal's datatype is implied by
 //!   its tag and never written;
@@ -44,7 +49,8 @@ pub const TRIPLE_TERM_CLOSE: &str = ")>>";
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Append `iri` as an `IRIREF`: `<`, the body escaped by
-/// [`crate::iri_escape::push_escaped`], `>`.
+/// [`crate::iri_escape::push_escaped_for`] with the
+/// [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier, `>`.
 ///
 /// ```
 /// use purrdf_lex::term_syntax::write_iri;
@@ -55,14 +61,19 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// ```
 pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
     out.push('<');
-    crate::iri_escape::push_escaped(iri, out);
+    crate::iri_escape::push_escaped_for(iri, crate::iri_escape::Carrier::Canonical, out);
     out.push('>');
 }
 
 /// Append a literal in its canonical form.
 ///
 /// `lang` is the language tag and `dir` the RDF 1.2 base direction token
-/// (`ltr` or `rtl`), written `@lang--dir`. When `lang` is present the literal
+/// (`ltr` or `rtl`), written `@lang--dir`, both in ASCII lower case (N-Quads
+/// 1.2 and N-Triples 1.2 section 3: "Alphabetic characters in LANG_DIR MUST
+/// use only the lowercase letters"). A term table that folds a tag at intern
+/// time already holds it in that spelling, so the lowering here changes nothing
+/// for it; a source that keeps the written case is spelled the same as one that
+/// folds. When `lang` is present the literal
 /// is `rdf:langString` or `rdf:dirLangString` by its tag, so `datatype` is not
 /// written. A base direction exists only on a language-tagged literal
 /// (RDF 1.2 Concepts §3.3), so `dir` is read only beside a `lang`; a
@@ -79,9 +90,10 @@ pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
 /// write_literal("1", &xsd("integer"), None, None, &mut out);
 /// write_literal("chat", "ignored", Some("fr"), None, &mut out);
 /// write_literal("x", "ignored", Some("ar"), Some("rtl"), &mut out);
+/// write_literal("y", "ignored", Some("EN-us"), Some("LTR"), &mut out);
 /// assert_eq!(
 ///     out,
-///     "\"a\"\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>\"chat\"@fr\"x\"@ar--rtl"
+///     "\"a\"\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>\"chat\"@fr\"x\"@ar--rtl\"y\"@en-us--ltr"
 /// );
 /// ```
 pub fn write_literal<W: TextOut + ?Sized>(
@@ -100,14 +112,27 @@ pub fn write_literal<W: TextOut + ?Sized>(
     out.push('"');
     if let Some(lang) = lang {
         out.push('@');
-        out.push_str(lang);
+        push_ascii_lower(lang, out);
         if let Some(dir) = dir {
             out.push_str("--");
-            out.push_str(dir);
+            push_ascii_lower(dir, out);
         }
     } else if datatype != XSD_STRING {
         out.push_str("^^");
         write_iri(datatype, out);
+    }
+}
+
+/// Append `text` with every ASCII letter in lower case, borrowing the whole
+/// value when it holds no upper-case letter.
+fn push_ascii_lower<W: TextOut + ?Sized>(text: &str, out: &mut W) {
+    let Some(first) = text.bytes().position(|b| b.is_ascii_uppercase()) else {
+        out.push_str(text);
+        return;
+    };
+    out.push_str(&text[..first]);
+    for c in text[first..].chars() {
+        out.push(c.to_ascii_lowercase());
     }
 }
 
@@ -177,11 +202,38 @@ mod tests {
     }
 
     #[test]
+    fn language_and_direction_are_spelled_in_ascii_lower_case() {
+        // N-Quads 1.2 section 3: "Alphabetic characters in LANG_DIR MUST use only
+        // the lowercase letters". The lowering is ASCII only and leaves a folded tag as is.
+        assert_eq!(
+            literal("hi", "unused", Some("EN-us"), Some("LTR")),
+            "\"hi\"@en-us--ltr"
+        );
+        assert_eq!(
+            literal("hi", "unused", Some("zh-Hant-TW"), None),
+            "\"hi\"@zh-hant-tw"
+        );
+        assert_eq!(literal("hi", "unused", Some("en-us"), None), "\"hi\"@en-us");
+    }
+
+    #[test]
     fn the_lexical_form_uses_the_canonical_carrier() {
         assert_eq!(
             literal("a\"b\\\u{8}\u{85}", &format!("{XSD}string"), None, None),
             "\"a\\\"b\\\\\\b\u{85}\""
         );
+        // N-Quads 1.2 section 3: a character outside XML 1.1 `Char` is a UCHAR.
+        assert_eq!(
+            literal("a\u{fffe}\u{ffff}b", &format!("{XSD}string"), None, None),
+            "\"a\\uFFFE\\uFFFFb\""
+        );
+    }
+
+    #[test]
+    fn an_iri_escapes_what_the_production_forbids_and_keeps_del_and_c1_raw() {
+        let mut out = String::new();
+        write_iri("urn:ex:a\u{7f}\u{85}\u{a0}b c", &mut out);
+        assert_eq!(out, "<urn:ex:a\u{7f}\u{85}\u{a0}b\\u0020c>");
     }
 
     #[test]

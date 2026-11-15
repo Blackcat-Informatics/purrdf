@@ -1,0 +1,4 @@
+@prefix ex: <http://example.org/> .
+
+ex:s ex:p "chat"@EN-us .
+ex:s ex:q "hallo"@De-CH-1996 .
