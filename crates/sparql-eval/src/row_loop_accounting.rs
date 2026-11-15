@@ -273,7 +273,7 @@ const HOST_TOTALS: [[u64; 4]; 8] = [
 /// The stop polls a host-governed run of each query makes.
 const HOST_POLLS: [u64; 8] = [23, 23, 28, 44, 292, 20, 41, 36];
 
-/// **A host-governed run is charged, polled and stopped as it always was.** Under a
+/// **A host-governed run is charged, polled and stopped at its pinned values.** Under a
 /// host's ceilings GROUP BY takes its sequential route, so each query must consume the
 /// pinned fuel, scratch, cells and rows, make the pinned number of stop polls, complete
 /// at its own scratch and refuse one byte below, stop when the signal fires on a poll it

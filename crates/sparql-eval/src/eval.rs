@@ -446,8 +446,8 @@ pub(crate) enum PreparedExists {
             crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
         >,
         /// What holds for [`Self::Pattern::normalized`] whatever row or outer schema
-        /// reaches it, learned on the site's second visit (see
-        /// [`crate::expr::SiteFacts`]).
+        /// reaches it, learned on the site's second visit, with the route history of
+        /// the site's in-place requests (see [`crate::expr::SiteFacts`]).
         facts: crate::expr::SiteFacts,
     },
 }

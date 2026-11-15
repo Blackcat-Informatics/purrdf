@@ -717,7 +717,8 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
             };
             match frame.poll(ctx)? {
                 crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
-                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                    if self.checkpoint.finished_a_row()
+                        && frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
                 {
                     self.active = Some(frame);
                 }
@@ -725,6 +726,7 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
                     let (linked, row, keep, evidence) =
                         frame.finish_filter(expression, &self.schema, value, ctx)?;
                     self.linked = Some(linked);
+                    self.checkpoint.finish_row();
                     if keep {
                         self.output
                             .push_row(row.with_optional_evidence(evidence, &ctx.growth)?)?;
@@ -905,7 +907,8 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
             };
             match frame.poll(ctx)? {
                 crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
-                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
+                    if self.checkpoint.finished_a_row()
+                        && frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
                 {
                     self.active = Some(frame);
                 }
@@ -916,6 +919,7 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
                 crate::vm::VmStep::Value(value) => {
                     let (linked, mut row, value, computed) = frame.finish_term(value)?;
                     self.linked = Some(linked);
+                    self.checkpoint.finish_row();
                     row.set_unpublished_cell_unique(self.column, value)?;
                     let source = self.source.take().expect("one BIND source row");
                     let evidence = extend_evidence(&source, computed, expression, var)?;
@@ -1440,7 +1444,7 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
 ) -> Result<Option<bool>, EvalError> {
     // The two booleans this evaluation interned (an `EXISTS` answer, a comparison)
     // are their own effective boolean value. Only an unbounded evaluation answers
-    // here, so a bounded one parses, admits and is charged as it always was.
+    // here, so a bounded one parses, admits and is charged for the literal.
     if !ctx.growth.is_bounded()
         && let Some(slot) = ctx
             .cached_bool_terms
@@ -1523,7 +1527,7 @@ fn xsd_of_term<D: DatasetView + Sync>(
         SolutionTerm::Computed(sid) => {
             // A boolean the comparison operators yield is a constant of the query too.
             // It joins the memo only on an unbounded evaluation, so a bounded one is
-            // charged as it always was, and only once a constant is registered, which
+            // charged for each parse, and only once a constant is registered, which
             // only a second use does, so a one-row query allocates nothing for it.
             let constant = ctx.constant_parses.contains(sid)
                 || (!ctx.growth.is_bounded()
@@ -2816,11 +2820,12 @@ fn exists_use_probe(
 ///
 /// Learned on the site's second visit, so a site reached once allocates nothing
 /// for them. Both are properties of the immutable body alone, which is why a
-/// preparation shared across runs may keep them: every flag lives as long as its
-/// preparation, so the first row of a later run of one plan finds the site already
-/// visited and is asked in place at once. Only a workspace without a
-/// storage budget reads them: a bounded run keeps its original per-row walks and
-/// their exact admission.
+/// preparation shared across runs may keep them. The remaining flags (visited, and
+/// the two that record a child) are route history, not properties of the body: they
+/// too live as long as the preparation, and only the route a row takes depends on
+/// them. Only a workspace without a storage budget sets any flag or acts on the two
+/// facts: a bounded run keeps its original per-row walks and their exact admission,
+/// and the child flag it loads is never set for it.
 #[derive(Debug, Default)]
 pub(crate) struct SiteFacts(std::sync::atomic::AtomicU8);
 
@@ -3067,7 +3072,9 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
 /// it again from the start: a decision that ends in a child has charged nothing and
 /// published nothing, so deciding twice answers and charges as deciding once.
 ///
-/// Only an ordinary resident evaluation asks: a bounded workspace or a query that
+/// Only an ordinary resident evaluation asks, and a row loop asks only after it has
+/// finished a row, so a loop over one row never pays for a request the suspended
+/// route then repeats: a bounded workspace or a query that
 /// records evidence keeps the suspended route. A site whose last such request ended
 /// in a child is not asked again until a suspended decision completes, and a site
 /// whose child was a per-row definition is not asked again for the life of its

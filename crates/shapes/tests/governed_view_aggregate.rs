@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! **A GROUP BY under a SHACL host's governors is charged what it always was.**
+//! **A GROUP BY under a SHACL host's governors is charged its pinned scratch.**
 //!
 //! A host that sets a scratch ceiling, an intermediate-cell ceiling and a stop signal runs
 //! the aggregate on its sequential, suspendable route. That route reads each argument and

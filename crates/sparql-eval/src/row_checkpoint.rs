@@ -1023,6 +1023,10 @@ pub(crate) struct RowCheckpoint {
     /// ceiling cannot admit them, so the commit charges the first of them as the
     /// sequential loop's refused charge.
     withheld: bool,
+    /// Sequential: whether this loop has finished a row. A loop that can answer an
+    /// `EXISTS` request in place leaves every request of its first row to the suspending
+    /// route, so a loop over one row does no work that route would repeat.
+    finished_a_row: bool,
     /// Forked: this worker's ledger.
     ledger: WorkerLedger,
 }
@@ -1039,8 +1043,19 @@ impl RowCheckpoint {
             since: 0,
             forked_len: usize::MAX,
             withheld: false,
+            finished_a_row: false,
             ledger: WorkerLedger::at((u64::MAX, u64::MAX)),
         }
+    }
+
+    /// Record that the loop finished a row.
+    pub(crate) const fn finish_row(&mut self) {
+        self.finished_a_row = true;
+    }
+
+    /// Whether the loop has finished a row.
+    pub(crate) const fn finished_a_row(&self) -> bool {
+        self.finished_a_row
     }
 
     /// The checkpoint for a `FILTER`, `BIND` or `UNFOLD` row loop over `len` input rows
