@@ -29,7 +29,13 @@ CURIE/prefix handling.
   fragment) exposed without re-encoding.
 - **Reference resolution** — RFC 3986 §5 strict resolution (`Iri::resolve`).
 - **Syntax normalization** — RFC 3986 §6.2.2 (`Iri::normalize`): case,
-  percent-encoding, and dot-segment normalization; idempotent.
+  percent-encoding, and dot-segment normalization; idempotent. A reference
+  with no scheme, no authority and a path that does not begin with `/` keeps
+  the leading dot segments only a base can interpret, and keeps a segment that
+  would decode to `.` or `..` percent-encoded, so it resolves to the same IRI
+  before and after. Under a scheme, an authority or a leading `/`, a
+  percent-encoded dot segment is decoded and removed, which resolution of the
+  undecoded text does not do.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
 - **W3C vocabularies** — `vocab`: one module per W3C namespace (`rdf`,

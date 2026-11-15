@@ -203,9 +203,11 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) 
 
 /// The two RFC-3986 path repairs (§3.3 and §4.2), applied at recomposition (§5.3),
 /// in one place. The returned
-/// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
-/// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
-/// point. It is empty when no repair is needed.
+/// prefix is applied AFTER dot-segment removal, where the text is rebuilt. A
+/// second normalization drops it again and then re-applies it, so the guarded
+/// form is a fixed point: `remove_dot_segments` strips `/.` and a leading `./`,
+/// and `collapse_unresolved_dot_segments` drops the `.` of a leading `./`. It is
+/// empty when no repair is needed.
 ///
 /// * `"/."` (§3.3): with no authority a path may not begin with `//`, or the text
 ///   would read as `scheme://...` and turn the path into an authority.
@@ -383,6 +385,77 @@ fn remove_dot_segments_with_memory<S: Admission + ?Sized>(
         }
     }
     Ok(out)
+}
+
+/// RFC-3986 §6.2.2.3 for a path that has NOT been resolved: the rootless path of a
+/// reference with neither scheme nor authority (`path` is non-empty and does not
+/// begin with `/`).
+///
+/// §5.2.4 is defined on a path already merged with a base (§4.1: dot segments
+/// exist for relative references and are removed by resolution). Applied to such
+/// a reference on its own it discards the segments only a base can interpret, so
+/// this keeps them. The result resolves to the same IRI as `path` against every
+/// absolute base. Only a literal `.` or `..` is a dot segment here, as in
+/// resolution; the caller keeps a segment that merely decodes to one encoded.
+///
+/// * a `.` segment is dropped, and a `..` removes the segment before it;
+/// * a `..` with nothing before it to remove is kept (`../a`), because it names
+///   the base's parent;
+/// * the first segment the reference itself contributes is never removed
+///   (`a/../b` is kept): against a base whose path has no directory part, §5.2.4
+///   turns that pair into a leading `/`, which no shorter spelling reproduces;
+/// * a final `.` or `..` leaves the directory form (`a/.` is `a/`, `.` and `./`
+///   are `.`, `../` is `..`), which is distinct from the empty path that names
+///   the base document itself;
+/// * a result that would begin with `/` keeps a `./` prefix, so that an empty
+///   first segment (`.//x`) does not become an absolute-path reference.
+pub(crate) fn collapse_unresolved_dot_segments(path: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    // `kept[..floor]` are literal `..` segments (and the retained first segment
+    // before one): nothing below `floor` may be removed.
+    let mut floor = 0;
+    // The reference's first own segment sits at `kept[floor]` and is protected.
+    let mut first_is_protected = false;
+    let mut seen_segment = false;
+    // A final dot segment behaves as that segment followed by an empty one.
+    let directory_end = path
+        .rsplit('/')
+        .next()
+        .filter(|last| matches!(*last, "." | ".."))
+        .map(|_| "");
+    for segment in path.split('/').chain(directory_end) {
+        match segment {
+            "." => {}
+            ".." => {
+                if kept.len() > floor + usize::from(first_is_protected) {
+                    kept.pop();
+                } else {
+                    kept.push("..");
+                    floor = kept.len();
+                    first_is_protected = false;
+                }
+            }
+            other => {
+                if !seen_segment {
+                    seen_segment = true;
+                    first_is_protected = true;
+                }
+                kept.push(other);
+            }
+        }
+    }
+    // `..` and `../` resolve alike; the shorter form is the normal one.
+    if let [.., "..", ""] = kept.as_slice() {
+        kept.pop();
+    }
+    let joined = kept.join("/");
+    if joined.is_empty() {
+        ".".to_owned()
+    } else if joined.starts_with('/') {
+        format!("./{joined}")
+    } else {
+        joined
+    }
 }
 
 /// Pop the trailing segment (and its preceding '/') from the output buffer — the
