@@ -29,7 +29,9 @@ The crate owns the wire-format machinery:
 - **`reader`** — chain-verified reading and deterministic folding of GTS bytes
   into the container graph model (quads, reifiers, annotations, blobs).
 - **`writer`** — frame authoring and byte-deterministic single-segment
-  snapshots (`Writer::deterministic`), with optional per-frame COSE signing.
+  snapshots (`Writer::deterministic`), with optional per-frame COSE signing,
+  and streaming output to a caller's sink (`StreamWriter`): the same bytes one
+  frame at a time, resumable from a stored previous-frame id.
 - **`model`** — the folded transport-graph rows and fold diagnostics.
 - **`verify`, `cose`, `openpgp`, `policy`** — integrity, signature, and
   trust-policy checks; encryption and signing use pure-Rust crypto, so the

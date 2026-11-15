@@ -104,6 +104,15 @@ pub enum FrameError {
         /// Original codec or dictionary name.
         name: String,
     },
+    /// A stored previous-frame id must be one 32-byte BLAKE3-256 digest.
+    PreviousHashLength {
+        /// Byte length of the supplied previous-frame id.
+        actual: usize,
+    },
+    /// An explicit signature was supplied for a frame the caller left unsigned.
+    ConflictingSigning,
+    /// A frame whose payload arrives from a reader carries no other source.
+    ReaderSource,
 }
 
 impl fmt::Display for FrameError {
@@ -170,6 +179,16 @@ impl fmt::Display for FrameError {
             Self::DictionaryTransform { .. } => {
                 f.write_str("a frame dictionary requires a zstd or zstd-rsyncable transform")
             }
+            Self::PreviousHashLength { actual } => write!(
+                f,
+                "a previous-frame id is 32 bytes (BLAKE3-256), not {actual}"
+            ),
+            Self::ConflictingSigning => {
+                f.write_str("an explicit signature contradicts leaving the frame unsigned")
+            }
+            Self::ReaderSource => {
+                f.write_str("a frame fed from a reader takes neither payload nor raw")
+            }
         }
     }
 }
@@ -207,5 +226,8 @@ impl purrdf_hash::error::StructuredError for FrameError {
         LevelMismatch { requested, declared } => "gts-writer-level-mismatch" { "requested" => Signed(i128::from(*requested)), "declared" => Signed(i128::from(*declared)) },
         UnknownDictionary { name } => "gts-writer-unknown-dictionary" { "name" => Text(name) },
         DictionaryTransform { name } => "gts-writer-dictionary-transform" { "name" => Text(name) },
+        PreviousHashLength { actual } => "gts-writer-previous-hash-length" { "actual" => ByteCount(*actual as u128) },
+        ConflictingSigning => "gts-writer-conflicting-signing" {},
+        ReaderSource => "gts-writer-reader-source" {},
     }
 }
