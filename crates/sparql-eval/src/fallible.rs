@@ -116,6 +116,15 @@ impl std::fmt::Display for QueryControlFailure {
 
 impl std::error::Error for QueryControlFailure {}
 
+impl purrdf_hash::error::StructuredError for QueryControlFailure {
+    purrdf_hash::error_visit! {
+        Unpriced(construct) => "sparql-control-unpriced" { "construct" => Text(construct) },
+        LayoutOverflow => "sparql-control-layout-overflow" {},
+        DiagnosticFormatting => "sparql-control-diagnostic-formatting" {},
+        WorkspaceStopped => "sparql-control-workspace-stopped" {},
+    }
+}
+
 /// A query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView) that did not
 /// reach a complete result.
 ///
@@ -181,6 +190,34 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
         /// that produced the trip travels with the view's own evidence.
         evidence: Evidence,
     },
+}
+
+/// The view's root cause and receipt are borrowed as their own structured values,
+/// so a caller-defined operational error is inspected without being formatted.
+impl<OperationalError, Evidence> purrdf_hash::error::StructuredError
+    for FallibleSparqlError<OperationalError, Evidence>
+where
+    OperationalError: purrdf_hash::error::StructuredError,
+    Evidence: purrdf_hash::error::StructuredError,
+{
+    purrdf_hash::error_visit! {
+        Query { diagnostic, evidence } => "sparql-fallible-query" {
+            "cause" => Cause(diagnostic), "evidence" => Record(evidence),
+        },
+        Operational { error, evidence } => "sparql-fallible-operational" {
+            "cause" => Cause(error), "evidence" => Record(evidence),
+        },
+        AllocationFailed { construct, evidence } => "sparql-fallible-allocation-failed" {
+            "construct" => Text(construct), "evidence" => Record(evidence),
+        },
+        ControlFailure { failure, evidence } => "sparql-fallible-control" {
+            "cause" => Cause(failure), "evidence" => Record(evidence),
+        },
+        BudgetExhausted { tripped, partial, evidence } => "sparql-fallible-budget-exhausted" {
+            "tripped" => Record(tripped), "partial" => Record(partial),
+            "evidence" => Record(evidence),
+        },
+    }
 }
 
 impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence> {
