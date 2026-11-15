@@ -72,6 +72,37 @@ The writer authors frames and produces **byte-deterministic single-segment
 snapshots** (`Writer::deterministic`) — the GTS writer is under the same
 determinism invariant as every PurRDF serializer.
 
+### Streaming a log to a sink
+
+`Writer` holds the whole log in memory. `writer::StreamWriter` frames the same
+bytes into a destination the caller supplies, one frame at a time: any
+`std::io::Write`, or a `FrameSink` (or a closure wrapped in `FnSink`) whose own
+error type comes back unchanged in `StreamError::Sink`. `StreamWriter::new`
+writes the header; each `add_frame_with_options` call encodes one frame, hands
+it to the sink and returns its id, so memory is bounded by the largest frame
+and not by the log. Both writers run one frame encoder, and for the same calls
+their bytes are identical.
+
+A long-lived log is a concatenation of segments, each a header and its frames.
+Keep `head()` and `bytes_written()` after each frame that must survive. After
+a restart, cut the file back to that length and call `StreamWriter::resume`
+with the stored head and the header's catalog options: the chain continues
+with no earlier frame in memory. To start the next segment, put the previous
+segment's head in the new header's `meta`.
+
+Per frame, `add_frame_signing` chooses whether the installed Ed25519 signer
+signs it (`FrameSigning::Installed` or `Unsigned`), so a round can sign its
+last frame only; a signature never changes a frame id. Sealing takes the
+caller's nonce in `Encrypt0Options`. `add_frame_from_reader` reads a payload of
+a declared length from a reader: a clear payload is streamed in one pass,
+holding one 128 KiB chunk, while a transformed or sealed payload is read whole
+first, because its encoded length precedes it on the wire.
+
+If the sink fails, or a streamed payload's reader fails, part of a frame may be
+in the destination: the writer refuses further frames, and `head()` and
+`bytes_written()` stay at the last whole frame, which is where to cut back and
+resume. `index` footers and composite signatures are not streamed.
+
 The `RdfDataset` import/export path lives one layer up: the umbrella crate's
 `gts` module combines the container engine with the RDF-level adapter
 (snapshot composition, content-chain verification), so RDF-facing GTS work

@@ -8,6 +8,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Streaming GTS writer:** `purrdf_gts::writer::StreamWriter` frames a GTS
+  log into a caller's sink one frame at a time, byte-identical to `Writer` for
+  the same calls, so a consumer that writes a long log no longer holds it in
+  memory or rebuilds the frame framing itself. The sink is any
+  `std::io::Write`, or a `FrameSink` (or a closure in `FnSink`) whose own error
+  type is returned unchanged in `StreamError::Sink`. `StreamWriter::new` writes
+  the header (caller catalog, `meta`, optional self-describe tag);
+  `StreamWriter::resume` continues a chain from a stored 32-byte previous-frame
+  id with no earlier frame in memory; `head` and `bytes_written` report the
+  last whole frame. `add_frame_with_options` takes the same `FrameOptions` as
+  `Writer`, and `add_frame_signing` chooses per frame whether the installed
+  Ed25519 signer signs it (`FrameSigning`), which `Writer` cannot do;
+  `FrameOptions` itself is unchanged. `add_frame_from_reader` reads a payload
+  of a declared length from a reader: a clear payload is streamed in one pass
+  holding one 128 KiB chunk, and a transformed or sealed payload is read whole
+  first, because a frame's data is one definite-length byte string and the
+  codecs and AES-GCM here are single-shot. After a sink failure, or a reader
+  failure inside a streamed frame, the writer refuses further frames
+  (`StreamError::Poisoned`) and stays at the last whole frame. `index` footers
+  and composite signatures are not streamed. `FrameError` gains
+  `PreviousHashLength`, `ConflictingSigning` and `ReaderSource`. The
+  files-profile packers (`pack_to_writer`, `pack_entries_v2_to_writer`,
+  `pack_entries_v2_with_blob_bytes`, `pack_entries_v2_with_blob_ranges`,
+  `pack_entries_v2_with_blob_paths`) now write their blob frames through
+  `StreamWriter`, with the same bytes as before; a regular file is still read
+  twice, once to check its digest before anything is written and once to
+  frame it.
 - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`

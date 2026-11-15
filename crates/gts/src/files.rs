@@ -15,12 +15,15 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use purrdf_hash::error::IoFailure;
 use purrdf_lex::cbor::Value;
-use purrdf_lex::cbor::head::{BYTES, MAP, write_bytes, write_head, write_text};
 
 use crate::model::{Graph, Quad, Term, TermKind};
 use crate::wire::digest_label;
-use crate::writer::{Writer, WriterOptions, digest_string};
+use crate::writer::{
+    FrameOptions, FrameSigning, PayloadError, StreamError, StreamWriter, Writer, WriterOptions,
+    digest_string,
+};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
 const FILE_ENTRY: &str = "https://w3id.org/gts/files#FileEntry";
@@ -479,26 +482,6 @@ pub fn media_type_for_path_among(
         .unwrap_or(fallback)
 }
 
-fn write_blob_pub_map<W: Write>(
-    writer: &mut W,
-    digest: &str,
-    media_type: Option<&str>,
-    representation: Option<&str>,
-) -> std::io::Result<()> {
-    let len = 1 + u64::from(media_type.is_some()) + u64::from(representation.is_some());
-    write_head(writer, MAP, len)?;
-    if let Some(media_type) = media_type {
-        write_text(writer, "mt")?;
-        write_text(writer, media_type)?;
-    }
-    if let Some(representation) = representation {
-        write_text(writer, "rep")?;
-        write_text(writer, representation)?;
-    }
-    write_text(writer, "digest")?;
-    write_text(writer, digest)
-}
-
 fn copy_counted_and_hash<R: Read, W: Write>(
     mut reader: R,
     writer: &mut W,
@@ -528,93 +511,149 @@ fn copy_counted_and_hash<R: Read, W: Write>(
     Ok((digest_label(digest.finalize().as_bytes()), written))
 }
 
-fn write_blob_preimage<R: Read, W: Write>(
-    writer: &mut W,
-    reader: R,
+/// What a blob frame records about its payload.
+struct BlobFrame<'a> {
     size: u64,
-    media_type: Option<&str>,
-    representation: Option<&str>,
-    prev: &[u8],
-) -> std::io::Result<String> {
-    write_head(writer, MAP, 4)?;
-    write_text(writer, "d")?;
-    write_head(writer, BYTES, size)?;
-    let (digest, _) = copy_counted_and_hash(reader, writer, size)?;
-    write_text(writer, "t")?;
-    write_text(writer, "blob")?;
-    write_text(writer, "pub")?;
-    write_blob_pub_map(writer, &digest, media_type, representation)?;
-    write_text(writer, "prev")?;
-    write_bytes(writer, prev)?;
-    Ok(digest)
-}
-
-struct BlobFrameMeta<'a> {
-    size: u64,
-    id: &'a [u8],
     digest: &'a str,
     media_type: Option<&'a str>,
     representation: Option<&'a str>,
-    prev: &'a [u8],
 }
 
-fn write_blob_frame<R: Read, W: Write>(
-    writer: &mut W,
+/// A payload reader that hashes what it yields and, at its end, refuses bytes
+/// whose digest is no longer the one the metadata records.
+struct DigestCheck<'a, R> {
     reader: R,
-    meta: &BlobFrameMeta<'_>,
-) -> std::io::Result<()> {
-    write_head(writer, MAP, 5)?;
-    write_text(writer, "d")?;
-    write_head(writer, BYTES, meta.size)?;
-    let (observed_digest, _) = copy_counted_and_hash(reader, writer, meta.size)?;
-    if observed_digest != meta.digest {
-        return Err(purrdf_hash::error::io_error(
-            std::io::ErrorKind::InvalidData,
-            FileError::BlobChangedDigest {
-                expected: meta.digest.to_owned(),
-                actual: observed_digest,
-            },
-        ));
+    hasher: purrdf_hash::blake3::Hasher,
+    expected: &'a str,
+}
+
+impl<R: Read> Read for DigestCheck<'_, R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.reader.read(out)?;
+        if read != 0 {
+            self.hasher.update(&out[..read]);
+            return Ok(read);
+        }
+        let observed = digest_label(self.hasher.finalize().as_bytes());
+        if observed != self.expected {
+            return Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::InvalidData,
+                FileError::BlobChangedDigest {
+                    expected: self.expected.to_owned(),
+                    actual: observed,
+                },
+            ));
+        }
+        Ok(0)
     }
-    write_text(writer, "t")?;
-    write_text(writer, "blob")?;
-    write_text(writer, "id")?;
-    write_bytes(writer, meta.id)?;
-    write_text(writer, "pub")?;
-    write_blob_pub_map(writer, meta.digest, meta.media_type, meta.representation)?;
-    write_text(writer, "prev")?;
-    write_bytes(writer, meta.prev)
+}
+
+/// A stream-writer failure as the files profile reports it.
+fn stream_failure(
+    error: StreamError<std::io::Error>,
+    operation: &'static str,
+    path: Option<&Path>,
+) -> FileError {
+    let cause: IoFailure = match error {
+        StreamError::Frame(cause) => return FileError::Writer(cause),
+        StreamError::Sink { cause, .. } => cause.into(),
+        StreamError::Payload(PayloadError::Read(cause)) => cause,
+        StreamError::Payload(PayloadError::Length { declared, observed }) => {
+            purrdf_hash::error::io_error(
+                std::io::ErrorKind::UnexpectedEof,
+                FileError::BlobSize {
+                    expected: declared,
+                    actual: observed,
+                },
+            )
+            .into()
+        }
+        // Every packer returns at its first failure, so it never offers a
+        // frame to a writer that refused one; this arm keeps the cause typed
+        // if one ever does.
+        StreamError::Poisoned => std::io::Error::from(std::io::ErrorKind::BrokenPipe).into(),
+    };
+    FileError::Io {
+        operation,
+        path: path.map(Path::to_path_buf),
+        cause,
+    }
+}
+
+/// Write a metadata prefix to `output` and continue its chain there.
+fn continue_on<W: Write>(
+    prefix: Writer,
+    output: W,
+    operation: &'static str,
+) -> Result<StreamWriter<W>, FileError> {
+    let mut output = output;
+    let head = prefix.head().to_vec();
+    output
+        .write_all(&prefix.into_bytes())
+        .map_err(|cause| FileError::Io {
+            operation,
+            path: None,
+            cause: cause.into(),
+        })?;
+    StreamWriter::resume(output, WriterOptions::default(), &head)
+        .map_err(|error| stream_failure(error, operation, None))
+}
+
+/// Append one clear blob frame whose payload is read from `reader` in bounded
+/// chunks and checked against the digest its metadata records.
+fn append_blob_frame<R: Read, W: Write>(
+    stream: &mut StreamWriter<W>,
+    reader: R,
+    frame: &BlobFrame<'_>,
+    operation: &'static str,
+    path: Option<&Path>,
+) -> Result<(), FileError> {
+    let mut meta: Vec<(Value, Value)> = Vec::with_capacity(3);
+    if let Some(media_type) = frame.media_type {
+        meta.push(("mt".into(), media_type.into()));
+    }
+    if let Some(representation) = frame.representation {
+        meta.push(("rep".into(), representation.into()));
+    }
+    meta.push(("digest".into(), frame.digest.into()));
+    stream
+        .add_frame_from_reader(
+            "blob",
+            frame.size,
+            DigestCheck {
+                reader,
+                hasher: purrdf_hash::blake3::Hasher::new(),
+                expected: frame.digest,
+            },
+            FrameOptions {
+                pub_meta: Some(Value::Map(meta)),
+                ..FrameOptions::default()
+            },
+            FrameSigning::Installed,
+        )
+        .map(drop)
+        .map_err(|error| stream_failure(error, operation, path))
 }
 
 fn append_blob_path<W: Write>(
-    writer: &mut W,
-    prev: &mut Vec<u8>,
+    stream: &mut StreamWriter<W>,
     source: &FileBlobSource,
     expected_digest: &str,
 ) -> Result<(), FileError> {
-    let media_type = source.media_type.as_deref();
-    let representation = source.representation.as_deref();
     let mut file = fs::File::open(&source.path).map_err(|cause| FileError::Io {
         operation: "read",
         path: Some(source.path.clone()),
         cause: cause.into(),
     })?;
-    let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let digest = {
-        write_blob_preimage(
-            &mut hasher,
-            &mut file,
-            source.size,
-            media_type,
-            representation,
-            prev,
-        )
-        .map_err(|cause| FileError::Io {
-            operation: "hash blob",
-            path: Some(source.path.clone()),
-            cause: cause.into(),
-        })?
-    };
+    // First pass: nothing is written for a file that is not the declared blob.
+    let (digest, _) =
+        copy_counted_and_hash(&mut file, &mut std::io::sink(), source.size).map_err(|cause| {
+            FileError::Io {
+                operation: "hash blob",
+                path: Some(source.path.clone()),
+                cause: cause.into(),
+            }
+        })?;
     if digest != expected_digest {
         return Err(FileError::BlobDigest {
             kind: "file",
@@ -623,51 +662,31 @@ fn append_blob_path<W: Write>(
             actual: digest,
         });
     }
-    let id = hasher.finalize().as_bytes().to_vec();
     file.rewind().map_err(|cause| FileError::Io {
         operation: "seek",
         path: Some(source.path.clone()),
         cause: cause.into(),
     })?;
-    let meta = BlobFrameMeta {
-        size: source.size,
-        id: &id,
-        digest: &digest,
-        media_type,
-        representation,
-        prev,
-    };
-    write_blob_frame(writer, &mut file, &meta).map_err(|cause| FileError::Io {
-        operation: "write blob",
-        path: Some(source.path.clone()),
-        cause: cause.into(),
-    })?;
-    *prev = id;
-    Ok(())
+    append_blob_frame(
+        stream,
+        &mut file,
+        &BlobFrame {
+            size: source.size,
+            digest: &digest,
+            media_type: source.media_type.as_deref(),
+            representation: source.representation.as_deref(),
+        },
+        "write blob",
+        Some(source.path.as_path()),
+    )
 }
 
 fn append_blob_bytes<W: Write>(
-    writer: &mut W,
-    prev: &mut Vec<u8>,
+    stream: &mut StreamWriter<W>,
     source: FileBlobBytes<'_>,
     expected_digest: &str,
 ) -> Result<(), FileError> {
-    let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let digest = {
-        write_blob_preimage(
-            &mut hasher,
-            source.data,
-            source.data.len() as u64,
-            source.media_type,
-            source.representation,
-            prev,
-        )
-        .map_err(|cause| FileError::Io {
-            operation: "hash inline blob",
-            path: None,
-            cause: cause.into(),
-        })?
-    };
+    let digest = digest_string(source.data);
     if digest != expected_digest {
         return Err(FileError::BlobDigest {
             kind: "inline blob",
@@ -676,54 +695,27 @@ fn append_blob_bytes<W: Write>(
             actual: digest,
         });
     }
-    let id = hasher.finalize().as_bytes().to_vec();
-    let meta = BlobFrameMeta {
-        size: source.data.len() as u64,
-        id: &id,
-        digest: &digest,
-        media_type: source.media_type,
-        representation: source.representation,
-        prev,
-    };
-    write_blob_frame(writer, source.data, &meta).map_err(|cause| FileError::Io {
-        operation: "write inline blob",
-        path: None,
-        cause: cause.into(),
-    })?;
-    *prev = id;
-    Ok(())
+    append_blob_frame(
+        stream,
+        source.data,
+        &BlobFrame {
+            size: source.data.len() as u64,
+            digest: &digest,
+            media_type: source.media_type,
+            representation: source.representation,
+        },
+        "write inline blob",
+        None,
+    )
 }
 
 fn append_blob_range<R: Read + Seek, W: Write>(
-    writer: &mut W,
-    prev: &mut Vec<u8>,
+    stream: &mut StreamWriter<W>,
     reader: &mut R,
     source: FileBlobRange<'_>,
     expected_digest: &str,
 ) -> Result<(), FileError> {
-    let mut hasher = purrdf_hash::blake3::Hasher::new();
-    let digest = {
-        reader
-            .seek(SeekFrom::Start(source.offset))
-            .map_err(|cause| FileError::Io {
-                operation: "seek inline blob",
-                path: None,
-                cause: cause.into(),
-            })?;
-        write_blob_preimage(
-            &mut hasher,
-            reader.take(source.size),
-            source.size,
-            source.media_type,
-            source.representation,
-            prev,
-        )
-        .map_err(|cause| FileError::Io {
-            operation: "hash inline blob range",
-            path: None,
-            cause: cause.into(),
-        })?
-    };
+    let digest = digest_blob_range(reader, source)?;
     if digest != expected_digest {
         return Err(FileError::BlobDigest {
             kind: "inline blob range",
@@ -732,7 +724,6 @@ fn append_blob_range<R: Read + Seek, W: Write>(
             actual: digest,
         });
     }
-    let id = hasher.finalize().as_bytes().to_vec();
     reader
         .seek(SeekFrom::Start(source.offset))
         .map_err(|cause| FileError::Io {
@@ -740,21 +731,18 @@ fn append_blob_range<R: Read + Seek, W: Write>(
             path: None,
             cause: cause.into(),
         })?;
-    let meta = BlobFrameMeta {
-        size: source.size,
-        id: &id,
-        digest: &digest,
-        media_type: source.media_type,
-        representation: source.representation,
-        prev,
-    };
-    write_blob_frame(writer, reader.take(source.size), &meta).map_err(|cause| FileError::Io {
-        operation: "write inline blob range",
-        path: None,
-        cause: cause.into(),
-    })?;
-    *prev = id;
-    Ok(())
+    append_blob_frame(
+        stream,
+        reader.take(source.size),
+        &BlobFrame {
+            size: source.size,
+            digest: &digest,
+            media_type: source.media_type,
+            representation: source.representation,
+        },
+        "write inline blob range",
+        None,
+    )
 }
 
 pub(crate) fn digest_blob_range<R: Read + Seek>(
@@ -848,7 +836,7 @@ pub fn pack(sources: &[&Path]) -> Result<Vec<u8>, FileError> {
 
 /// Pack files/directories into a deterministic GTS files-profile archive without
 /// retaining regular-file payloads in memory.
-pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), FileError> {
+pub fn pack_to_writer<W: Write>(sources: &[&Path], output: W) -> Result<(), FileError> {
     let mut w = Writer::new("files");
 
     let shared = vec![
@@ -917,14 +905,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
         w.add_quads(&quads);
     }
 
-    let mut prev = w.head().to_vec();
-    output
-        .write_all(&w.into_bytes())
-        .map_err(|cause| FileError::Io {
-            operation: "write files-profile metadata",
-            path: None,
-            cause: cause.into(),
-        })?;
+    let mut stream = continue_on(w, output, "write files-profile metadata")?;
     let mut seen: FastSet<String> = FastSet::default();
     for entry in &entries {
         if !seen.insert(entry.digest.clone()) {
@@ -936,7 +917,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
             media_type: Some(entry.media_type.clone()),
             representation: None,
         };
-        append_blob_path(&mut output, &mut prev, &source, &entry.digest)?;
+        append_blob_path(&mut stream, &source, &entry.digest)?;
     }
     Ok(())
 }
@@ -954,21 +935,13 @@ pub fn pack_entries_v2(entries: &[FileEntry]) -> Result<Vec<u8>, FileError> {
 /// Author an opt-in files-profile v2 archive directly to a writer.
 pub fn pack_entries_v2_to_writer<W: Write>(
     entries: &[FileEntry],
-    mut output: W,
+    output: W,
 ) -> Result<(), FileError> {
     let (writer, blobs) = build_entries_v2_prefix(entries)?;
-    let mut prev = writer.head().to_vec();
-    output
-        .write_all(&writer.into_bytes())
-        .map_err(|cause| FileError::Io {
-            operation: "write files-profile-v2 metadata",
-            path: None,
-            cause: cause.into(),
-        })?;
+    let mut stream = continue_on(writer, output, "write files-profile-v2 metadata")?;
     for (digest, (data, media_type)) in blobs {
         append_blob_bytes(
-            &mut output,
-            &mut prev,
+            &mut stream,
             FileBlobBytes {
                 data,
                 media_type,
@@ -984,19 +957,12 @@ pub fn pack_entries_v2_to_writer<W: Write>(
 pub fn pack_entries_v2_with_blob_bytes<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobBytes<'_>>,
-    mut output: W,
+    output: W,
 ) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
-    let mut prev = writer.head().to_vec();
-    output
-        .write_all(&writer.into_bytes())
-        .map_err(|cause| FileError::Io {
-            operation: "write files-profile-v2 metadata",
-            path: None,
-            cause: cause.into(),
-        })?;
+    let mut stream = continue_on(writer, output, "write files-profile-v2 metadata")?;
     for (digest, source) in blob_sources {
-        append_blob_bytes(&mut output, &mut prev, *source, digest)?;
+        append_blob_bytes(&mut stream, *source, digest)?;
     }
     Ok(())
 }
@@ -1006,19 +972,12 @@ pub fn pack_entries_v2_with_blob_ranges<R: Read + Seek, W: Write>(
     entries: &[FileEntry],
     reader: &mut R,
     blob_sources: &BTreeMap<String, FileBlobRange<'_>>,
-    mut output: W,
+    output: W,
 ) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
-    let mut prev = writer.head().to_vec();
-    output
-        .write_all(&writer.into_bytes())
-        .map_err(|cause| FileError::Io {
-            operation: "write files-profile-v2 metadata",
-            path: None,
-            cause: cause.into(),
-        })?;
+    let mut stream = continue_on(writer, output, "write files-profile-v2 metadata")?;
     for (digest, source) in blob_sources {
-        append_blob_range(&mut output, &mut prev, reader, *source, digest)?;
+        append_blob_range(&mut stream, reader, *source, digest)?;
     }
     Ok(())
 }
@@ -1031,19 +990,12 @@ pub fn pack_entries_v2_with_blob_ranges<R: Read + Seek, W: Write>(
 pub fn pack_entries_v2_with_blob_paths<W: Write>(
     entries: &[FileEntry],
     blob_sources: &BTreeMap<String, FileBlobSource>,
-    mut output: W,
+    output: W,
 ) -> Result<(), FileError> {
     let (writer, _inline_blobs) = build_entries_v2_prefix(entries)?;
-    let mut prev = writer.head().to_vec();
-    output
-        .write_all(&writer.into_bytes())
-        .map_err(|cause| FileError::Io {
-            operation: "write files-profile-v2 metadata",
-            path: None,
-            cause: cause.into(),
-        })?;
+    let mut stream = continue_on(writer, output, "write files-profile-v2 metadata")?;
     for (digest, source) in blob_sources {
-        append_blob_path(&mut output, &mut prev, source, digest)?;
+        append_blob_path(&mut stream, source, digest)?;
     }
     Ok(())
 }
@@ -2217,5 +2169,145 @@ mod media_type_tests {
             media_type_for_path(Path::new("dir.ttl/readme.md")),
             "text/markdown"
         );
+    }
+}
+
+// The paths packer reads real files: a native filesystem test.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod streamed_blob_tests {
+    use std::collections::BTreeMap;
+    use std::io::Cursor;
+
+    use purrdf_lex::cbor::Value;
+
+    use super::{
+        FileBlobBytes, FileBlobRange, FileBlobSource, FileEntry, build_entries_v2_prefix,
+        pack_entries_v2, pack_entries_v2_with_blob_bytes, pack_entries_v2_with_blob_paths,
+        pack_entries_v2_with_blob_ranges,
+    };
+    use crate::writer::{FrameOptions, digest_string};
+
+    /// Every v2 packer that writes its blob frames straight to the output
+    /// emits the log the in-memory writer builds from the same metadata prefix
+    /// and the same blobs: bytes in memory, ranges of a seekable source and
+    /// files read in bounded chunks frame identically, with and without a
+    /// media type and a representation, for an empty payload and for one
+    /// longer than a read chunk.
+    #[test]
+    fn streamed_blob_frames_are_the_in_memory_writers_frames() {
+        let payloads: [(&str, Vec<u8>, Option<&str>); 3] = [
+            ("a.txt", b"nine lives".to_vec(), Some("text/plain")),
+            (
+                "b.bin",
+                (0..300_000_u32).map(|i| (i % 253) as u8).collect(),
+                None,
+            ),
+            ("empty", Vec::new(), Some("application/octet-stream")),
+        ];
+        let root = purrdf_testkit::TempDir::for_unit_test().expect("temp dir");
+        for representation in [None, Some("identity")] {
+            let inline: Vec<FileEntry> = payloads
+                .iter()
+                .map(|(path, data, media_type)| FileEntry {
+                    path: (*path).to_string(),
+                    media_type: media_type.map(str::to_string),
+                    data: Some(data.clone()),
+                    ..FileEntry::default()
+                })
+                .collect();
+            let declared: Vec<FileEntry> = inline
+                .iter()
+                .map(|entry| {
+                    let data = entry.data.as_deref().expect("inline data");
+                    FileEntry {
+                        digest: Some(digest_string(data)),
+                        size: Some(data.len() as u64),
+                        data: None,
+                        ..entry.clone()
+                    }
+                })
+                .collect();
+
+            let (mut writer, blobs) = build_entries_v2_prefix(&inline).expect("prefix");
+            for (digest, (data, media_type)) in blobs {
+                let mut meta: Vec<(Value, Value)> = vec![("digest".into(), digest.into())];
+                if let Some(media_type) = media_type {
+                    meta.push(("mt".into(), media_type.into()));
+                }
+                if let Some(representation) = representation {
+                    meta.push(("rep".into(), representation.into()));
+                }
+                writer
+                    .add_frame_with_options(
+                        "blob",
+                        FrameOptions {
+                            raw: Some(data.to_vec()),
+                            pub_meta: Some(Value::Map(meta)),
+                            ..FrameOptions::default()
+                        },
+                    )
+                    .expect("blob frame");
+            }
+            let expected = writer.into_bytes();
+
+            if representation.is_none() {
+                assert!(pack_entries_v2(&inline).expect("inline pack") == expected);
+            }
+
+            let mut bytes = BTreeMap::new();
+            let mut ranges = BTreeMap::new();
+            let mut paths = BTreeMap::new();
+            let mut concatenated = Vec::new();
+            for (entry, (name, data, media_type)) in declared.iter().zip(&payloads) {
+                let digest = entry.digest.clone().expect("declared digest");
+                bytes.insert(
+                    digest.clone(),
+                    FileBlobBytes {
+                        data,
+                        media_type: *media_type,
+                        representation,
+                    },
+                );
+                ranges.insert(
+                    digest.clone(),
+                    FileBlobRange {
+                        offset: concatenated.len() as u64,
+                        size: data.len() as u64,
+                        media_type: *media_type,
+                        representation,
+                    },
+                );
+                concatenated.extend_from_slice(data);
+                let path = root.path().join(name);
+                std::fs::write(&path, data).expect("write source");
+                paths.insert(
+                    digest,
+                    FileBlobSource {
+                        path,
+                        size: data.len() as u64,
+                        media_type: media_type.map(str::to_string),
+                        representation: representation.map(str::to_string),
+                    },
+                );
+            }
+
+            let mut out = Vec::new();
+            pack_entries_v2_with_blob_bytes(&declared, &bytes, &mut out).expect("bytes pack");
+            assert!(out == expected, "borrowed bytes, rep {representation:?}");
+
+            let mut out = Vec::new();
+            pack_entries_v2_with_blob_ranges(
+                &declared,
+                &mut Cursor::new(&concatenated),
+                &ranges,
+                &mut out,
+            )
+            .expect("ranges pack");
+            assert!(out == expected, "ranges, rep {representation:?}");
+
+            let mut out = Vec::new();
+            pack_entries_v2_with_blob_paths(&declared, &paths, &mut out).expect("paths pack");
+            assert!(out == expected, "paths, rep {representation:?}");
+        }
     }
 }

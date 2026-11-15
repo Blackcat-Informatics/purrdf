@@ -7,9 +7,18 @@
 //! This is the encoder counterpart to [`crate::reader`]. It supports the core
 //! graph/file frame families plus transformed, encrypted, and signed payloads.
 //! Deterministic CBOR and BLAKE3 self-hashes are handled by [`crate::wire`].
+//!
+//! [`Writer`] accumulates the whole log in memory. [`StreamWriter`] frames the
+//! same bytes into a caller's sink one frame at a time, holding one frame (or,
+//! for a clear payload read from a reader, one bounded chunk of it) and able to
+//! resume a chain from a stored previous-frame id. Both run one frame encoder,
+//! so their output is byte-identical for the same calls. `index` footers are
+//! not streamed.
 
 mod error;
+mod stream;
 pub use error::FrameError;
+pub use stream::{FnSink, FrameSigning, FrameSink, PayloadError, StreamError, StreamWriter};
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -602,13 +611,7 @@ impl Drop for Randomizer {
 // `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
 #[derive(Debug)]
 pub struct Writer<M: FrameMode = Infallible> {
-    // Catalog lookup keyed by `(codec_name, dictionary_name)` — see
-    // `assign_catalog_ids`. A plain `HashMap<String, i64>` cannot express a
-    // catalog carrying N `zstd-rsyncable` entries (one per dictionary): the
-    // same-named entries collapse and the surviving id becomes whichever one
-    // HashMap iteration happened to visit last, which would make the emitted
-    // bundle bytes NONDETERMINISTIC.
-    catalog_ids: BTreeMap<CatalogKey, i64>,
+    enc: FrameEncoder<M>,
     prev: Vec<u8>,
     buf: Vec<u8>,
     // Per-frame byte offsets and types, in append order — the raw material
@@ -617,7 +620,23 @@ pub struct Writer<M: FrameMode = Infallible> {
     offsets: Vec<usize>,
     types: Vec<String>,
     frame_ids: Vec<Vec<u8>>,
-    // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
+}
+
+/// The one frame encoder: everything a frame needs from its segment (the
+/// catalog, the pinned dictionaries, the declared level) and from its author
+/// (the installed signer). [`Writer`] appends its frames to a buffer and
+/// [`StreamWriter`] hands them to a sink; neither frames anything itself.
+// `SigningKey`'s `Debug` impl redacts the secret scalar, so deriving is safe here.
+#[derive(Debug)]
+struct FrameEncoder<M> {
+    // Catalog lookup keyed by `(codec_name, dictionary_name)` — see
+    // `assign_catalog_ids`. A plain `HashMap<String, i64>` cannot express a
+    // catalog carrying N `zstd-rsyncable` entries (one per dictionary): the
+    // same-named entries collapse and the surviving id becomes whichever one
+    // HashMap iteration happened to visit last, which would make the emitted
+    // bundle bytes NONDETERMINISTIC.
+    catalog_ids: BTreeMap<CatalogKey, i64>,
+    // When set, appended frames are COSE_Sign1-signed over their id (§9.2).
     signer: Option<FrameSigner>,
     mode: M,
     // The pinned in-band pack dictionaries by name (§5 header `"dct"`), which a
@@ -701,6 +720,421 @@ fn assign_catalog_ids(
 /// Whether a codec accepts an in-band `dct` dictionary (§8.5).
 fn is_dict_capable(name: &str) -> bool {
     matches!(name, "zstd" | "zstd-rsyncable")
+}
+
+/// A segment's transform catalog as its header declares it and as its frames
+/// name it: the id of every `(codec, dictionary)` pair, the pinned
+/// dictionaries, the header's `"cat"` entries and the declared level.
+struct CatalogPlan {
+    ids: BTreeMap<CatalogKey, i64>,
+    dicts: BTreeMap<String, Vec<u8>>,
+    entries: Vec<(Value, Value)>,
+    zstd_level: Option<i32>,
+}
+
+/// Plan the catalog from the header options that define it. A pure function of
+/// its inputs, so a header and a later continuation of its chain that are given
+/// the same options name the same ids.
+fn plan_catalog(
+    catalog: Option<Vec<(i64, Codec)>>,
+    pinned: Vec<(String, Vec<u8>)>,
+    zstd_level: Option<i32>,
+) -> Result<CatalogPlan, WriterError> {
+    let base_catalog = catalog.unwrap_or_else(default_catalog);
+
+    // Pinned dictionaries, keyed by name. A duplicate or empty name is a
+    // hard error: `"dct"` is a map, so a duplicate would silently drop one
+    // dictionary's bytes while frames still referenced it by name.
+    let mut dicts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (name, bytes) in pinned {
+        if name.is_empty() {
+            return Err(WriterError::InvalidFrame(FrameError::EmptyDictionaryName));
+        }
+        if dicts.insert(name.clone(), bytes).is_some() {
+            return Err(WriterError::InvalidFrame(
+                FrameError::DuplicateDictionaryName { name },
+            ));
+        }
+    }
+    let dict_names: BTreeSet<&str> = dicts.keys().map(String::as_str).collect();
+    if !dict_names.is_empty()
+        && !base_catalog
+            .iter()
+            .any(|(_, codec)| is_dict_capable(&codec.name))
+    {
+        // Fail closed: pinning a dictionary no catalog entry can reference
+        // would ship dead weight no frame could ever name.
+        return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
+    }
+    let ids = assign_catalog_ids(&base_catalog, &dict_names)?;
+
+    // The declared level is only meaningful on a zstd-family entry.
+    if let Some(level) = zstd_level
+        && !ids.keys().any(|(name, _)| is_dict_capable(name))
+    {
+        return Err(WriterError::InvalidFrame(FrameError::CatalogLevel {
+            level,
+        }));
+    }
+
+    let cls_by_name: BTreeMap<&str, &str> = base_catalog
+        .iter()
+        .map(|(_, codec)| (codec.name.as_str(), codec.cls.as_str()))
+        .collect();
+    let entries: Vec<(Value, Value)> = ids
+        .iter()
+        .map(|((name, dict), id)| {
+            let cls = cls_by_name.get(name.as_str()).copied().unwrap_or("encode");
+            let mut ce: Vec<(Value, Value)> = vec![
+                ("name".into(), name.clone().into()),
+                ("cls".into(), cls.to_string().into()),
+            ];
+            if let Some(dict) = dict {
+                // §5 codec `"dct"` references the header `"dct"` map key.
+                ce.push(("dct".into(), dict.clone().into()));
+            }
+            if let Some(level) = zstd_level.filter(|_| is_dict_capable(name)) {
+                // §8.5 `level?`: declared so the authoring level is
+                // recoverable from the wire, not merely asserted.
+                ce.push(("level".into(), Value::from(i64::from(level))));
+            }
+            (Value::from(*id), Value::Map(ce))
+        })
+        .collect();
+    Ok(CatalogPlan {
+        ids,
+        dicts,
+        entries,
+        zstd_level,
+    })
+}
+
+impl CatalogPlan {
+    fn into_encoder(self) -> FrameEncoder<Infallible> {
+        FrameEncoder {
+            catalog_ids: self.ids,
+            signer: None,
+            mode: Infallible,
+            dicts: self.dicts,
+            declared_zstd_level: self.zstd_level,
+        }
+    }
+}
+
+impl FrameEncoder<Infallible> {
+    /// Mint a segment: the encoder for its frames, the header id its first
+    /// frame names as `"prev"`, and the header item's bytes.
+    fn mint(
+        profile: &str,
+        options: WriterOptions,
+    ) -> Result<(Self, Vec<u8>, Vec<u8>), WriterError> {
+        // §5: "streamable" is the only layout this revision defines; a typo'd
+        // claim would persist into the tamper-evident header.
+        if options
+            .layout
+            .as_deref()
+            .is_some_and(|layout| layout != "streamable")
+        {
+            return Err(WriterError::InvalidFrame(FrameError::Layout {
+                actual: options.layout,
+            }));
+        }
+        let mut plan = plan_catalog(options.catalog, options.dicts, options.zstd_level)?;
+
+        let mut header: Vec<(Value, Value)> = vec![
+            ("gts".into(), "GTS1".into()),
+            ("v".into(), Value::from(1)),
+            ("prof".into(), profile.into()),
+            ("cat".into(), Value::Map(std::mem::take(&mut plan.entries))),
+        ];
+        if let Some(layout) = options.layout {
+            // The layout-state claim is part of the header content, so it is
+            // covered by the genesis self-hash (§3.3, §5).
+            header.push(("layout".into(), layout.into()));
+        }
+        if !plan.dicts.is_empty() {
+            // §5: dictionaries are stored uncompressed and in-band; the header
+            // "dct" map covers the genesis self-hash below like every other key.
+            header.push((
+                "dct".into(),
+                Value::Map(
+                    plan.dicts
+                        .iter()
+                        .map(|(name, bytes)| (name.clone().into(), Value::Bytes(bytes.clone())))
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(meta) = options.meta {
+            header.push(("meta".into(), meta));
+        }
+        let id = header_id(&header);
+        header.push(("id".into(), Value::Bytes(id.clone())));
+
+        let header_value = Value::Map(header);
+        let bytes = if options.magic_tag {
+            canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(header_value)))
+        } else {
+            canonical(&header_value)
+        };
+        Ok((plan.into_encoder(), id, bytes))
+    }
+}
+
+/// Push the entries that follow a frame's data in authoring order: `"pub"`,
+/// `"to"` and the `"prev"` link.
+fn push_envelope(
+    frame: &mut Vec<(Value, Value)>,
+    pub_meta: Option<Value>,
+    recipients: Vec<Value>,
+    prev: &[u8],
+) {
+    if let Some(meta) = pub_meta {
+        frame.push(("pub".into(), meta));
+    }
+    if !recipients.is_empty() {
+        frame.push(("to".into(), Value::Array(recipients)));
+    }
+    frame.push(("prev".into(), Value::Bytes(prev.to_vec())));
+}
+
+impl<M: FrameMode> FrameEncoder<M> {
+    /// Install the Ed25519 key that signs frames under an opaque byte-string id.
+    fn sign_ed25519_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &[u8]) {
+        self.signer = Some(FrameSigner::Ed25519(Box::new(key), kid.to_vec()));
+    }
+
+    /// Resolve a transform chain to catalog ids, binding every zstd-family
+    /// codec to `dict` when one is selected.
+    ///
+    /// A dict-capable codec with a selected dictionary MUST resolve to the
+    /// `(codec, dict)` catalog entry — silently falling back to the plain entry
+    /// would emit frames whose declared chain does not describe how they were
+    /// actually encoded, and no reader could recover the payload.
+    fn chain_ids(&self, chain: &[String], dict: Option<&str>) -> Result<Vec<i64>, WriterError> {
+        chain
+            .iter()
+            .map(|name| {
+                let key = match dict {
+                    Some(dict) if is_dict_capable(name) => (name.clone(), Some(dict.to_string())),
+                    _ => (name.clone(), None),
+                };
+                self.catalog_ids
+                    .get(&key)
+                    .copied()
+                    .ok_or_else(|| WriterError::MissingCatalogEntry(name.clone()))
+            })
+            .collect()
+    }
+
+    /// Look up a codec id by canonical name with no dictionary bound.
+    fn plain_codec_id(&self, name: &str) -> Result<i64, WriterError> {
+        self.catalog_ids
+            .get(&(name.to_string(), None))
+            .copied()
+            .ok_or_else(|| WriterError::MissingCatalogEntry(name.to_string()))
+    }
+
+    /// Refuse a contradictory option set before any byte is authored, and
+    /// resolve the selected dictionary's bytes. `sources` counts the payload
+    /// sources supplied (`payload`, `raw`, or a reader standing in for `raw`).
+    fn admit(
+        &self,
+        sources: usize,
+        transform: &[String],
+        zstd_level: Option<i32>,
+        dict: Option<&str>,
+        encrypted: bool,
+    ) -> Result<Option<&[u8]>, WriterError> {
+        if sources > 1 {
+            return Err(WriterError::InvalidFrame(FrameError::ConflictingSources));
+        }
+        if (!transform.is_empty() || encrypted) && sources == 0 {
+            return Err(WriterError::InvalidFrame(FrameError::MissingSource {
+                transforms: transform.len(),
+                encrypted,
+            }));
+        }
+        if let Some(level) = zstd_level
+            && !transform.iter().any(|name| is_dict_capable(name))
+        {
+            return Err(WriterError::InvalidFrame(FrameError::FrameLevel { level }));
+        }
+        // A frame may not encode at a level the catalog does not declare — the
+        // declared `level` is a wire fact readers gate on, not a hint.
+        if let (Some(declared), Some(requested)) = (self.declared_zstd_level, zstd_level)
+            && declared != requested
+        {
+            return Err(WriterError::InvalidFrame(FrameError::LevelMismatch {
+                requested,
+                declared,
+            }));
+        }
+        // Fail closed on an unknown dictionary name: never a silent no-dict encode.
+        let dict_bytes: Option<&[u8]> = match dict {
+            None => None,
+            Some(name) => Some(self.dicts.get(name).map(Vec::as_slice).ok_or_else(|| {
+                WriterError::InvalidFrame(FrameError::UnknownDictionary {
+                    name: name.to_owned(),
+                })
+            })?),
+        };
+        if let Some(name) = dict
+            && !transform.iter().any(|name| is_dict_capable(name))
+        {
+            return Err(WriterError::InvalidFrame(FrameError::DictionaryTransform {
+                name: name.to_owned(),
+            }));
+        }
+        Ok(dict_bytes)
+    }
+
+    /// Whether [`Self::sign`] yields a `"sig"` entry for these choices.
+    fn signs(&self, explicit: bool, signing: FrameSigning) -> bool {
+        explicit || (signing == FrameSigning::Installed && self.signer.is_some())
+    }
+
+    /// The frame's `"sig"`: the caller's explicit bytes, else the installed
+    /// signer's COSE_Sign1 over `id` unless the caller left the frame unsigned.
+    ///
+    /// The signature is not part of the frame-id preimage (§9.2), so this
+    /// choice never changes an id or the chain.
+    fn sign(
+        &mut self,
+        id: &[u8],
+        explicit: Option<Vec<u8>>,
+        signing: FrameSigning,
+    ) -> Result<Option<Vec<u8>>, WriterError> {
+        if explicit.is_some() {
+            return Ok(explicit);
+        }
+        if signing == FrameSigning::Unsigned {
+            return Ok(None);
+        }
+        match &self.signer {
+            None => Ok(None),
+            Some(FrameSigner::Ed25519(key, kid)) => Ok(Some(
+                crate::cose::sign_id_hedged(
+                    id,
+                    crate::cose::SigningKeyRef::Ed25519(key),
+                    kid,
+                    &[0; 32],
+                )
+                .map_err(WriterError::Signing)?,
+            )),
+            Some(FrameSigner::Composite(key, kid)) => {
+                let mut randomizer = Randomizer([0; 32]);
+                self.mode.fill(&mut randomizer.0)?;
+                Ok(Some(
+                    crate::cose::sign_id_hedged(
+                        id,
+                        crate::cose::SigningKeyRef::Composite(key),
+                        kid,
+                        &randomizer.0,
+                    )
+                    .map_err(WriterError::Signing)?,
+                ))
+            }
+        }
+    }
+
+    /// Encode one frame that follows `prev` and append its bytes to `out`,
+    /// returning its `"id"`.
+    ///
+    /// The append is the last statement and the only one that touches `out`:
+    /// a refused frame leaves `out` exactly as it was.
+    fn encode_frame(
+        &mut self,
+        prev: &[u8],
+        frame_type: &str,
+        options: FrameOptions,
+        signing: FrameSigning,
+        out: &mut Vec<u8>,
+    ) -> Result<Vec<u8>, WriterError> {
+        let FrameOptions {
+            payload,
+            raw,
+            transform,
+            zstd_level,
+            dict,
+            pub_meta,
+            mut recipients,
+            signature,
+            encrypt,
+        } = options;
+
+        let dict_bytes = self.admit(
+            usize::from(payload.is_some()) + usize::from(raw.is_some()),
+            &transform,
+            zstd_level,
+            dict.as_deref(),
+            encrypt.is_some(),
+        )?;
+        if signature.is_some() && signing == FrameSigning::Unsigned {
+            return Err(WriterError::InvalidFrame(FrameError::ConflictingSigning));
+        }
+        let transforms_data = !transform.is_empty() || encrypt.is_some();
+        let mut frame: Vec<(Value, Value)> = vec![("t".into(), frame_type.into())];
+
+        let data: Option<Value> = if transforms_data {
+            let mut source = match (raw, payload) {
+                (Some(raw), _) => raw,
+                (None, Some(payload)) => canonical(&payload),
+                (None, None) => unreachable!("validated transform source above"),
+            };
+            let mut x_ids: Vec<i64> = self.chain_ids(&transform, dict.as_deref())?;
+            if !transform.is_empty() {
+                // §8.5: BOTH zstd-family transforms take a dictionary. For
+                // `zstd-rsyncable` the dictionary primes each independent block,
+                // so the block-boundary/delta property survives intact.
+                source = encode_chain_with_options(
+                    &transform,
+                    &source,
+                    EncodeOptions {
+                        // Inherit the declared pack level, but only for a chain
+                        // that actually carries a zstd-family transform.
+                        zstd_level: zstd_level.or_else(|| {
+                            self.declared_zstd_level
+                                .filter(|_| transform.iter().any(|name| is_dict_capable(name)))
+                        }),
+                        dict: dict_bytes,
+                    },
+                )?;
+            }
+            if let Some(encrypt) = encrypt {
+                let encrypt_id = self.plain_codec_id("cose-encrypt0")?;
+                source = crate::cose::encrypt0(&source, &encrypt.kid, &encrypt.key, &encrypt.iv);
+                x_ids.push(encrypt_id);
+                recipients.push(Value::Map(vec![("kid".into(), encrypt.kid.into())]));
+            }
+            frame.push((
+                "x".into(),
+                Value::Array(x_ids.into_iter().map(Value::from).collect()),
+            ));
+            Some(Value::Bytes(source))
+        } else {
+            match (raw, payload) {
+                (Some(raw), _) => Some(Value::Bytes(raw)),
+                (None, Some(payload)) => Some(payload),
+                _ => None,
+            }
+        };
+        if let Some(data) = data {
+            frame.push(("d".into(), data));
+        }
+        push_envelope(&mut frame, pub_meta, recipients, prev);
+
+        // The signature is not part of the frame-id preimage (§9.2). This lets
+        // signatures be verified against the same id after streamable
+        // compaction carries them as detached evidence.
+        let id = content_id(&frame);
+        frame.push(("id".into(), Value::Bytes(id.clone())));
+        if let Some(sig) = self.sign(&id, signature, signing)? {
+            frame.push(("sig".into(), Value::Bytes(sig)));
+        }
+        append_canonical(&Value::Map(frame), out);
+        Ok(id)
+    }
 }
 
 impl Writer {
@@ -848,127 +1282,14 @@ impl Writer {
 
     /// Create a writer with explicit header options.
     pub fn with_options(profile: &str, options: WriterOptions) -> Result<Self, WriterError> {
-        // §5: "streamable" is the only layout this revision defines; a typo'd
-        // claim would persist into the tamper-evident header.
-        if options
-            .layout
-            .as_deref()
-            .is_some_and(|layout| layout != "streamable")
-        {
-            return Err(WriterError::InvalidFrame(FrameError::Layout {
-                actual: options.layout,
-            }));
-        }
-        let base_catalog = options.catalog.unwrap_or_else(default_catalog);
-
-        // Pinned dictionaries, keyed by name. A duplicate or empty name is a
-        // hard error: `"dct"` is a map, so a duplicate would silently drop one
-        // dictionary's bytes while frames still referenced it by name.
-        let mut dicts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-        for (name, bytes) in options.dicts {
-            if name.is_empty() {
-                return Err(WriterError::InvalidFrame(FrameError::EmptyDictionaryName));
-            }
-            if dicts.insert(name.clone(), bytes).is_some() {
-                return Err(WriterError::InvalidFrame(
-                    FrameError::DuplicateDictionaryName { name },
-                ));
-            }
-        }
-        let dict_names: BTreeSet<&str> = dicts.keys().map(String::as_str).collect();
-        if !dict_names.is_empty()
-            && !base_catalog
-                .iter()
-                .any(|(_, codec)| is_dict_capable(&codec.name))
-        {
-            // Fail closed: pinning a dictionary no catalog entry can reference
-            // would ship dead weight no frame could ever name.
-            return Err(WriterError::MissingCatalogEntry("zstd".to_string()));
-        }
-        let catalog_ids = assign_catalog_ids(&base_catalog, &dict_names)?;
-
-        // The declared level is only meaningful on a zstd-family entry.
-        if let Some(level) = options.zstd_level
-            && !catalog_ids.keys().any(|(name, _)| is_dict_capable(name))
-        {
-            return Err(WriterError::InvalidFrame(FrameError::CatalogLevel {
-                level,
-            }));
-        }
-
-        let cls_by_name: BTreeMap<&str, &str> = base_catalog
-            .iter()
-            .map(|(_, codec)| (codec.name.as_str(), codec.cls.as_str()))
-            .collect();
-        let cat_entries: Vec<(Value, Value)> = catalog_ids
-            .iter()
-            .map(|((name, dict), id)| {
-                let cls = cls_by_name.get(name.as_str()).copied().unwrap_or("encode");
-                let mut ce: Vec<(Value, Value)> = vec![
-                    ("name".into(), name.clone().into()),
-                    ("cls".into(), cls.to_string().into()),
-                ];
-                if let Some(dict) = dict {
-                    // §5 codec `"dct"` references the header `"dct"` map key.
-                    ce.push(("dct".into(), dict.clone().into()));
-                }
-                if let Some(level) = options.zstd_level.filter(|_| is_dict_capable(name)) {
-                    // §8.5 `level?`: declared so the authoring level is
-                    // recoverable from the wire, not merely asserted.
-                    ce.push(("level".into(), Value::from(i64::from(level))));
-                }
-                (Value::from(*id), Value::Map(ce))
-            })
-            .collect();
-
-        let mut header: Vec<(Value, Value)> = vec![
-            ("gts".into(), "GTS1".into()),
-            ("v".into(), Value::from(1)),
-            ("prof".into(), profile.into()),
-            ("cat".into(), Value::Map(cat_entries)),
-        ];
-        if let Some(layout) = options.layout {
-            // The layout-state claim is part of the header content, so it is
-            // covered by the genesis self-hash (§3.3, §5).
-            header.push(("layout".into(), layout.into()));
-        }
-        if !dicts.is_empty() {
-            // §5: dictionaries are stored uncompressed and in-band; the header
-            // "dct" map covers the genesis self-hash below like every other key.
-            header.push((
-                "dct".into(),
-                Value::Map(
-                    dicts
-                        .iter()
-                        .map(|(name, bytes)| (name.clone().into(), Value::Bytes(bytes.clone())))
-                        .collect(),
-                ),
-            ));
-        }
-        if let Some(meta) = options.meta {
-            header.push(("meta".into(), meta));
-        }
-        let id = header_id(&header);
-        header.push(("id".into(), Value::Bytes(id.clone())));
-
-        let header_value = Value::Map(header);
-        let buf = if options.magic_tag {
-            canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(header_value)))
-        } else {
-            canonical(&header_value)
-        };
-
+        let (enc, prev, buf) = FrameEncoder::mint(profile, options)?;
         Ok(Self {
-            catalog_ids,
-            prev: id,
+            enc,
+            prev,
             buf,
             offsets: Vec::new(),
             types: Vec::new(),
             frame_ids: Vec::new(),
-            signer: None,
-            mode: Infallible,
-            dicts,
-            declared_zstd_level: options.zstd_level,
         })
     }
 
@@ -1032,16 +1353,18 @@ impl Writer {
         let declared_zstd_level = declared_levels.first().copied();
         let (dicts, head) = (state.dicts, state.head);
         Ok(Self {
-            catalog_ids,
+            enc: FrameEncoder {
+                catalog_ids,
+                signer: None,
+                mode: Infallible,
+                dicts,
+                declared_zstd_level,
+            },
             prev: head,
             buf: Vec::new(),
             offsets: Vec::new(),
             types: Vec::new(),
             frame_ids: Vec::new(),
-            signer: None,
-            mode: Infallible,
-            dicts,
-            declared_zstd_level,
         })
     }
 }
@@ -1064,16 +1387,18 @@ impl<M: FrameMode> Writer<M> {
         provider: P,
     ) -> Writer<Hedged<P>> {
         Writer {
-            catalog_ids: self.catalog_ids,
+            enc: FrameEncoder {
+                catalog_ids: self.enc.catalog_ids,
+                signer: Some(FrameSigner::Composite(Box::new(key), kid.as_ref().to_vec())),
+                mode: Hedged { provider },
+                dicts: self.enc.dicts,
+                declared_zstd_level: self.enc.declared_zstd_level,
+            },
             prev: self.prev,
             buf: self.buf,
             offsets: self.offsets,
             types: self.types,
             frame_ids: self.frame_ids,
-            signer: Some(FrameSigner::Composite(Box::new(key), kid.as_ref().to_vec())),
-            mode: Hedged { provider },
-            dicts: self.dicts,
-            declared_zstd_level: self.declared_zstd_level,
         }
     }
 
@@ -1084,7 +1409,7 @@ impl<M: FrameMode> Writer<M> {
 
     /// Sign subsequent frames with Ed25519 and an explicit opaque byte-string id.
     pub fn sign_ed25519_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &[u8]) {
-        self.signer = Some(FrameSigner::Ed25519(Box::new(key), kid.to_vec()));
+        self.enc.sign_ed25519_with(key, kid);
     }
 
     /// Sign every subsequently appended frame with an unencrypted OpenPGP Ed25519 secret key.
@@ -1105,37 +1430,6 @@ impl<M: FrameMode> Writer<M> {
     /// The id the next appended frame must reference as `"prev"`.
     pub fn head(&self) -> &[u8] {
         &self.prev
-    }
-
-    /// Resolve a transform chain to catalog ids, binding every zstd-family
-    /// codec to `dict` when one is selected.
-    ///
-    /// A dict-capable codec with a selected dictionary MUST resolve to the
-    /// `(codec, dict)` catalog entry — silently falling back to the plain entry
-    /// would emit frames whose declared chain does not describe how they were
-    /// actually encoded, and no reader could recover the payload.
-    fn chain_ids(&self, chain: &[String], dict: Option<&str>) -> Result<Vec<i64>, WriterError> {
-        chain
-            .iter()
-            .map(|name| {
-                let key = match dict {
-                    Some(dict) if is_dict_capable(name) => (name.clone(), Some(dict.to_string())),
-                    _ => (name.clone(), None),
-                };
-                self.catalog_ids
-                    .get(&key)
-                    .copied()
-                    .ok_or_else(|| WriterError::MissingCatalogEntry(name.clone()))
-            })
-            .collect()
-    }
-
-    /// Look up a codec id by canonical name with no dictionary bound.
-    fn plain_codec_id(&self, name: &str) -> Result<i64, WriterError> {
-        self.catalog_ids
-            .get(&(name.to_string(), None))
-            .copied()
-            .ok_or_else(|| WriterError::MissingCatalogEntry(name.to_string()))
     }
 
     /// Append one frame and return its `"id"`.
@@ -1170,156 +1464,17 @@ impl<M: FrameMode> Writer<M> {
         frame_type: &str,
         options: FrameOptions,
     ) -> Result<Vec<u8>, WriterError> {
-        let FrameOptions {
-            payload,
-            raw,
-            transform,
-            zstd_level,
-            dict,
-            pub_meta,
-            mut recipients,
-            signature,
-            encrypt,
-        } = options;
-
-        if payload.is_some() && raw.is_some() {
-            return Err(WriterError::InvalidFrame(FrameError::ConflictingSources));
-        }
-        let transforms_data = !transform.is_empty() || encrypt.is_some();
-        if transforms_data && payload.is_none() && raw.is_none() {
-            return Err(WriterError::InvalidFrame(FrameError::MissingSource {
-                transforms: transform.len(),
-                encrypted: encrypt.is_some(),
-            }));
-        }
-        if let Some(level) = zstd_level
-            && !transform.iter().any(|name| is_dict_capable(name))
-        {
-            return Err(WriterError::InvalidFrame(FrameError::FrameLevel { level }));
-        }
-        // A frame may not encode at a level the catalog does not declare — the
-        // declared `level` is a wire fact readers gate on, not a hint.
-        if let (Some(declared), Some(requested)) = (self.declared_zstd_level, zstd_level)
-            && declared != requested
-        {
-            return Err(WriterError::InvalidFrame(FrameError::LevelMismatch {
-                requested,
-                declared,
-            }));
-        }
-        // Fail closed on an unknown dictionary name: never a silent no-dict encode.
-        let dict_bytes: Option<&[u8]> = match dict.as_deref() {
-            None => None,
-            Some(name) => Some(self.dicts.get(name).map(Vec::as_slice).ok_or_else(|| {
-                WriterError::InvalidFrame(FrameError::UnknownDictionary {
-                    name: name.to_owned(),
-                })
-            })?),
-        };
-        if let Some(name) = dict.as_ref()
-            && !transform.iter().any(|name| is_dict_capable(name))
-        {
-            return Err(WriterError::InvalidFrame(FrameError::DictionaryTransform {
-                name: name.clone(),
-            }));
-        }
-        let mut frame: Vec<(Value, Value)> = vec![("t".into(), frame_type.into())];
-
-        let data: Option<Value> = if transforms_data {
-            let mut source = match (raw, payload) {
-                (Some(raw), _) => raw,
-                (None, Some(payload)) => canonical(&payload),
-                (None, None) => unreachable!("validated transform source above"),
-            };
-            let mut x_ids: Vec<i64> = self.chain_ids(&transform, dict.as_deref())?;
-            if !transform.is_empty() {
-                // §8.5: BOTH zstd-family transforms take a dictionary. For
-                // `zstd-rsyncable` the dictionary primes each independent block,
-                // so the block-boundary/delta property survives intact.
-                source = encode_chain_with_options(
-                    &transform,
-                    &source,
-                    EncodeOptions {
-                        // Inherit the declared pack level, but only for a chain
-                        // that actually carries a zstd-family transform.
-                        zstd_level: zstd_level.or_else(|| {
-                            self.declared_zstd_level
-                                .filter(|_| transform.iter().any(|name| is_dict_capable(name)))
-                        }),
-                        dict: dict_bytes,
-                    },
-                )?;
-            }
-            if let Some(encrypt) = encrypt {
-                let encrypt_id = self.plain_codec_id("cose-encrypt0")?;
-                source = crate::cose::encrypt0(&source, &encrypt.kid, &encrypt.key, &encrypt.iv);
-                x_ids.push(encrypt_id);
-                recipients.push(Value::Map(vec![("kid".into(), encrypt.kid.into())]));
-            }
-            frame.push((
-                "x".into(),
-                Value::Array(x_ids.into_iter().map(Value::from).collect()),
-            ));
-            Some(Value::Bytes(source))
-        } else {
-            match (raw, payload) {
-                (Some(raw), _) => Some(Value::Bytes(raw)),
-                (None, Some(payload)) => Some(payload),
-                _ => None,
-            }
-        };
-        if let Some(data) = data {
-            frame.push(("d".into(), data));
-        }
-
-        if let Some(meta) = pub_meta {
-            frame.push(("pub".into(), meta));
-        }
-        if !recipients.is_empty() {
-            frame.push(("to".into(), Value::Array(recipients)));
-        }
-        frame.push(("prev".into(), Value::Bytes(self.prev.clone())));
-
-        // The signature is not part of the frame-id preimage (§9.2). This lets
-        // signatures be verified against the same id after streamable
-        // compaction carries them as detached evidence.
-        let id = content_id(&frame);
-        frame.push(("id".into(), Value::Bytes(id.clone())));
-        let sig = match signature {
-            Some(sig) => Some(sig),
-            None => match &self.signer {
-                None => None,
-                Some(FrameSigner::Ed25519(key, kid)) => Some(
-                    crate::cose::sign_id_hedged(
-                        &id,
-                        crate::cose::SigningKeyRef::Ed25519(key),
-                        kid,
-                        &[0; 32],
-                    )
-                    .map_err(WriterError::Signing)?,
-                ),
-                Some(FrameSigner::Composite(key, kid)) => {
-                    let mut randomizer = Randomizer([0; 32]);
-                    self.mode.fill(&mut randomizer.0)?;
-                    Some(
-                        crate::cose::sign_id_hedged(
-                            &id,
-                            crate::cose::SigningKeyRef::Composite(key),
-                            kid,
-                            &randomizer.0,
-                        )
-                        .map_err(WriterError::Signing)?,
-                    )
-                }
-            },
-        };
-        if let Some(sig) = sig {
-            frame.push(("sig".into(), Value::Bytes(sig)));
-        }
-        self.offsets.push(self.buf.len());
+        let start = self.buf.len();
+        let id = self.enc.encode_frame(
+            &self.prev,
+            frame_type,
+            options,
+            FrameSigning::Installed,
+            &mut self.buf,
+        )?;
+        self.offsets.push(start);
         self.types.push(frame_type.to_string());
         self.frame_ids.push(id.clone());
-        append_canonical(&Value::Map(frame), &mut self.buf);
         self.prev.clone_from(&id);
         Ok(id)
     }
@@ -1484,13 +1639,13 @@ impl<P: RandomnessProvider> Writer<Hedged<P>> {
     /// Rotate to a dedicated composite key while retaining the provider and
     /// fallible append contract. Provider freshness is required per signature.
     pub fn sign_composite_with(&mut self, key: crate::cose::composite::SigningKey, kid: &[u8]) {
-        self.signer = Some(FrameSigner::Composite(Box::new(key), kid.to_vec()));
+        self.enc.signer = Some(FrameSigner::Composite(Box::new(key), kid.to_vec()));
     }
 
     /// Access the caller's provider, for explicit recovery or reconfiguration
     /// after a failed request. No writer state is appended on provider failure.
     pub fn randomness_provider_mut(&mut self) -> &mut P {
-        &mut self.mode.provider
+        &mut self.enc.mode.provider
     }
 }
 
