@@ -1019,19 +1019,36 @@ pub(crate) struct RowCheckpoint {
     since: u64,
     /// How many leading input rows a forked loop forks; unbounded unless fuel is engaged.
     forked_len: usize,
-    /// Forked: whether input rows past `forked_len` were withheld because the fuel
-    /// ceiling cannot admit them, so the commit charges the first of them as the
-    /// sequential loop's refused charge.
-    withheld: bool,
-    /// Sequential: whether this loop has finished a row. A loop that can answer an
-    /// `EXISTS` request in place leaves every request of its first row to the suspending
-    /// route, so a loop over one row does no work that route would repeat.
-    finished_a_row: bool,
+    /// Two independent marks in one byte, so that neither adds to the checkpoint's size
+    /// on a target whose one-byte fields already fill their slot.
+    ///
+    /// [`Self::WITHHELD`], forked loops only: input rows past `forked_len` were withheld
+    /// because the fuel ceiling cannot admit them, so the commit charges the first of
+    /// them as the sequential loop's refused charge.
+    ///
+    /// [`Self::FINISHED_A_ROW`], loops that run on the evaluation's own context, charged
+    /// or free: the loop has finished a row. A loop that can answer an `EXISTS` request in
+    /// place leaves every request of its first row to the suspending route, so a loop over
+    /// one row does no work that route would repeat.
+    marks: u8,
     /// Forked: this worker's ledger.
     ledger: WorkerLedger,
 }
 
+// The checkpoint sits inside every suspended FILTER and BIND sequence, whose frame a bounded
+// workspace admits by size, so its size is part of what such a run is charged. These are the
+// sizes of the type before it carried the finished-row mark.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<RowCheckpoint>() == 200);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<RowCheckpoint>() == 136);
+
 impl RowCheckpoint {
+    /// The [`Self::marks`] bit of a forked loop whose trailing rows were withheld.
+    const WITHHELD: u8 = 1;
+    /// The [`Self::marks`] bit of a loop that has finished a row.
+    const FINISHED_A_ROW: u8 = 2;
+
     /// A checkpoint in `admission` mode charging `point`, before any row.
     const fn with_mode(admission: RowAdmission, point: ChargePoint) -> Self {
         Self {
@@ -1042,20 +1059,19 @@ impl RowCheckpoint {
             row_work: 0,
             since: 0,
             forked_len: usize::MAX,
-            withheld: false,
-            finished_a_row: false,
+            marks: 0,
             ledger: WorkerLedger::at((u64::MAX, u64::MAX)),
         }
     }
 
     /// Record that the loop finished a row.
     pub(crate) const fn finish_row(&mut self) {
-        self.finished_a_row = true;
+        self.marks |= Self::FINISHED_A_ROW;
     }
 
     /// Whether the loop has finished a row.
     pub(crate) const fn finished_a_row(&self) -> bool {
-        self.finished_a_row
+        self.marks & Self::FINISHED_A_ROW != 0
     }
 
     /// The checkpoint for a `FILTER`, `BIND` or `UNFOLD` row loop over `len` input rows
@@ -1109,7 +1125,11 @@ impl RowCheckpoint {
             ledger: WorkerLedger::forking(headroom(ctx), ctx.needs_bounded_loop_blocks()),
             // Under a trip latched before the loop, the sequential loop's first charge is
             // refused without being counted, so there is no refused admission to commit.
-            withheld: forked_len < len && state.tripped().is_none(),
+            marks: if forked_len < len && state.tripped().is_none() {
+                Self::WITHHELD
+            } else {
+                0
+            },
             ..Self::with_mode(RowAdmission::Forked, point)
         }
     }
@@ -1328,7 +1348,7 @@ impl RowCheckpoint {
             state.note_work(unreported);
         }
         let committing = Committing::of(chunks.into_iter().map(|chunk| chunk.ledger));
-        let withheld = self.withheld.then(|| self.point.cost());
+        let withheld = (self.marks & Self::WITHHELD != 0).then(|| self.point.cost());
         let evaluated = committing.items();
         let stopped = committing.stopped;
         let (out, trip) =

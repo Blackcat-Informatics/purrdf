@@ -2820,7 +2820,7 @@ fn exists_use_probe(
 ///
 /// Learned on the site's second visit, so a site reached once allocates nothing
 /// for them. Both are properties of the immutable body alone, which is why a
-/// preparation shared across runs may keep them. The remaining flags (visited, and
+/// preparation shared across runs may keep them. The remaining flags (visited, known, and
 /// the two that record a child) are route history, not properties of the body: they
 /// too live as long as the preparation, and only the route a row takes depends on
 /// them. Only a workspace without a storage budget sets any flag or acts on the two
@@ -3072,10 +3072,10 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
 /// it again from the start: a decision that ends in a child has charged nothing and
 /// published nothing, so deciding twice answers and charges as deciding once.
 ///
-/// Only an ordinary resident evaluation asks, and a row loop asks only after it has
+/// Only an ordinary resident evaluation asks: a bounded workspace or a query that
+/// records evidence keeps the suspended route. A row loop asks only after it has
 /// finished a row, so a loop over one row never pays for a request the suspended
-/// route then repeats: a bounded workspace or a query that
-/// records evidence keeps the suspended route. A site whose last such request ended
+/// route then repeats. A site whose last such request ended
 /// in a child is not asked again until a suspended decision completes, and a site
 /// whose child was a per-row definition is not asked again for the life of its
 /// preparation (which a plan shares across runs), so a site that always needs a child

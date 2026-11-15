@@ -651,3 +651,31 @@ fn each_resident_fast_path_engages_on_its_shape_and_not_on_an_accounted_workspac
         );
     }
 }
+
+/// **A row loop leaves the `EXISTS` requests of its first row to the suspending route.**
+/// A body that folds to no solutions is the one site that could be answered in place on a
+/// first row, so it shows the rule exactly: a loop over one row is answered in place
+/// never, and a loop over twelve rows on every row but its first.
+#[test]
+fn a_row_loop_asks_in_place_only_after_its_first_row() {
+    let dataset = dataset();
+    let [one_row, ..] = engaged(
+        &dataset,
+        "SELECT ?s WHERE { ex:s0 ex:score ?s \
+         FILTER NOT EXISTS { SELECT * WHERE { ex:s0 ex:status ?o } LIMIT 0 } }",
+        false,
+        false,
+    );
+    assert_eq!(one_row, 0, "a loop over one row is never answered in place");
+    let [twelve_rows, ..] = engaged(
+        &dataset,
+        "SELECT ?x ?s WHERE { ?x ex:score ?s \
+         FILTER NOT EXISTS { SELECT * WHERE { ?x ex:status ?o } LIMIT 0 } }",
+        false,
+        false,
+    );
+    assert_eq!(
+        twelve_rows, 11,
+        "every row after the first is answered in place"
+    );
+}
