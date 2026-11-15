@@ -208,7 +208,7 @@ struct Recording {
     scratch: Arc<Account>,
     owned: Arc<Account>,
     has_owned: bool,
-    identified: bool,
+    identity_of: Option<Arc<RdfDataset>>,
 }
 
 impl Recording {
@@ -218,13 +218,19 @@ impl Recording {
             scratch: Account::new(scratch_limit),
             owned: Account::new(owned_limit),
             has_owned: true,
-            identified: false,
+            identity_of: None,
         }
     }
 
     /// The same view presenting its dataset's snapshot identity.
-    fn identified(mut self) -> Self {
-        self.identified = true;
+    fn identified(self) -> Self {
+        let own = Arc::clone(&self.inner);
+        self.claiming(&own)
+    }
+
+    /// The same view presenting the snapshot identity of `other`, whatever it holds.
+    fn claiming(mut self, other: &Arc<RdfDataset>) -> Self {
+        self.identity_of = Some(Arc::clone(other));
         self
     }
 }
@@ -276,10 +282,10 @@ impl DatasetView for Recording {
         self.inner.term_count()
     }
     fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Refused> {
-        if !self.identified {
+        let Some(claimed) = &self.identity_of else {
             return Ok(None);
-        }
-        match DatasetView::snapshot_identity(self.inner.as_ref()) {
+        };
+        match DatasetView::snapshot_identity(claimed.as_ref()) {
             Ok(identity) => Ok(identity),
             Err(never) => match never {},
         }
@@ -1301,8 +1307,10 @@ fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
 }
 
 /// Quad data with `lines` rows and `blanks` blank nodes, every blank told apart by
-/// its own literal; no graphs and no triple terms.
-fn quads_with_blanks(lines: usize, blanks: usize) -> Arc<RdfDataset> {
+/// its own literal; no graphs and no triple terms. The first `lists` of those
+/// literals are composite and name their blank node, so the canonical form
+/// rewrites them.
+fn quads_with_blanks(lines: usize, blanks: usize, lists: usize) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let p = b.intern_iri("https://example.org/p").unwrap();
     let q = b.intern_iri("https://example.org/q").unwrap();
@@ -1313,9 +1321,12 @@ fn quads_with_blanks(lines: usize, blanks: usize) -> Arc<RdfDataset> {
         })
         .collect();
     for (i, &node) in nodes.iter().enumerate() {
-        let tag = b
-            .intern_literal(RdfLiteral::simple(format!("tag-{i}")))
-            .unwrap();
+        let tag = if i < lists {
+            RdfLiteral::typed(format!("[_:n{i}, {i}]"), LIST)
+        } else {
+            RdfLiteral::simple(format!("tag-{i}"))
+        };
+        let tag = b.intern_literal(tag).unwrap();
         b.push_quad(node, q, tag, None).unwrap();
     }
     for i in blanks..lines {
@@ -1330,68 +1341,147 @@ fn quads_with_blanks(lines: usize, blanks: usize) -> Arc<RdfDataset> {
     b.freeze().unwrap()
 }
 
-/// The space-separated tokens of one canonical line, a quoted literal as one.
+/// The space-separated tokens of one canonical line, a literal with its quotes,
+/// datatype and tag as one.
 fn tokens(row: &str) -> Vec<&str> {
     let mut found = Vec::new();
     let mut rest = row;
     while !rest.is_empty() {
-        let end = rest.strip_prefix('"').map_or_else(
-            || rest.find(' ').unwrap_or(rest.len()),
-            |quoted| quoted.find('"').unwrap() + 2,
-        );
+        let quoted = rest
+            .strip_prefix('"')
+            .map_or(0, |inner| inner.find('"').unwrap() + 2);
+        let end = rest[quoted..]
+            .find(' ')
+            .map_or(rest.len(), |at| quoted + at);
         found.push(&rest[..end]);
         rest = rest[end..].trim_start();
     }
     found
 }
 
-/// The stated bound holds: with `W` rank words, `S` distinct symbols, `B` blank
-/// nodes and `T` label bytes the product holds at most `4W + 12S + (id + 4)B + T` plus a
-/// fixed header, and for quad data without graphs or triple terms at most `68` bytes per
-/// line plus the blank-node terms. The product is smaller than the document it
-/// stands for.
-#[test]
-fn the_prepared_state_stays_within_its_stated_bound_in_lines_and_blank_nodes() {
+/// Holds one prepared state to the stated bound, with `I` the size of the view's
+/// term identifier: at most `4W + (I + 8)S + 16R + (I + 4)B + T` plus a fixed
+/// header, for `W` rank words, `S` distinct symbols, `R` rewritten literals, `B`
+/// blank nodes and `T` bytes of label and rewritten-literal text; and, for this
+/// quad data without graphs or triple terms, at most `20 + 4(I + 8)` bytes per
+/// line plus the same blank-node and rewritten-literal terms.
+fn assert_within_the_stated_bound<D>(view: &D, lines: usize, blanks: usize, lists: usize)
+where
+    D: FallibleDatasetView,
+    D::Error: fmt::Debug,
+    D::Evidence: fmt::Debug,
+{
     const HEADER: usize = 1024;
-    for (lines, blanks) in [(200, 0), (200, 40), (2000, 300), (2000, 1)] {
-        let dataset = quads_with_blanks(lines, blanks);
-        let view = identified(&dataset);
-        let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet!()).unwrap();
-        let document =
-            try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut quiet!()).unwrap();
-        let rows: Vec<&str> = document.nquads().lines().collect();
-        assert_eq!(rows.len(), lines);
-        assert_eq!(prepared.line_count(), lines);
-        assert_eq!(prepared.blank_count(), blanks);
-        // Words: one per space-separated token, the `.` terminator included. Symbols:
-        // the distinct tokens other than the terminator. Literals here hold a space,
-        // so tokens are counted with the literal as one.
-        let mut words = 0usize;
-        let mut symbols = std::collections::BTreeSet::new();
-        for row in &rows {
-            for token in tokens(row) {
-                words += 1;
-                if token != "." {
-                    symbols.insert(token.to_owned());
-                }
+    let id = size_of::<D::Id>();
+    let prepared = prepare_canon_view(view, FLAT_REQUEST, &mut quiet!()).unwrap();
+    let document =
+        try_canonicalize_prepared_view(view, FLAT_REQUEST, &prepared, &mut quiet!()).unwrap();
+    let rows: Vec<&str> = document.nquads().lines().collect();
+    assert_eq!(rows.len(), lines);
+    assert_eq!(prepared.line_count(), lines);
+    assert_eq!(prepared.blank_count(), blanks);
+    // Words: one per token, the `.` terminator included. Symbols: the distinct
+    // tokens other than the terminator.
+    let mut words = 0usize;
+    let mut symbols = std::collections::BTreeSet::new();
+    for row in &rows {
+        for token in tokens(row) {
+            words += 1;
+            if token != "." {
+                symbols.insert(token);
             }
         }
-        let label_bytes: usize = document.labels().map(|(_, label)| label.len()).sum();
-        let blank_term = size_of::<TermId>() + size_of::<u32>();
-        let stated = 4 * words + 12 * symbols.len() + blank_term * blanks + label_bytes + HEADER;
-        let per_line = 68 * lines + blank_term * blanks + label_bytes + HEADER;
-        let held = prepared.retained_bytes();
-        assert!(
-            held <= stated,
-            "{lines} lines {blanks} blanks: {held} > {stated}"
-        );
-        assert!(
-            held <= per_line,
-            "{lines} lines {blanks} blanks: {held} > {per_line}"
-        );
-        assert!(
-            held < prepared.document_len(),
-            "{lines} lines: the product ({held}) is no smaller than the document"
-        );
     }
+    let rewritten: Vec<&str> = symbols
+        .iter()
+        .copied()
+        .filter(|token| token.ends_with(&format!("^^<{LIST}>")))
+        .collect();
+    assert_eq!(rewritten.len(), lists, "every composite literal is found");
+    let text: usize = document
+        .labels()
+        .map(|(_, label)| label.len())
+        .chain(rewritten.iter().map(|token| token.len()))
+        .sum();
+    let fixed = 16 * rewritten.len() + (id + 4) * blanks + text + HEADER;
+    let stated = 4 * words + (id + 8) * symbols.len() + fixed;
+    let per_line = (20 + 4 * (id + 8)) * lines + fixed;
+    let held = prepared.retained_bytes();
+    let case = format!("{lines} lines, {blanks} blanks, {lists} lists, {id}-byte id");
+    assert!(held <= stated, "{case}: {held} > {stated}");
+    assert!(held <= per_line, "{case}: {held} > {per_line}");
+    assert!(
+        held < prepared.document_len(),
+        "{case}: the state ({held}) is no smaller than the document"
+    );
+}
+
+/// The retained bytes of a prepared state stay within the bound its
+/// documentation states, in lines, blank nodes, rewritten literals and the width
+/// of the view's term identifier: over a resident dataset (a four-byte
+/// identifier) and over a delta view of the same data (an eight-byte one), with
+/// and without composite literals the canonical form rewrites.
+#[test]
+fn the_prepared_state_stays_within_its_stated_bound_in_lines_and_blank_nodes() {
+    assert_eq!(size_of::<TermId>(), 4);
+    assert_eq!(size_of::<purrdf_core::DeltaViewId>(), 8);
+    for (lines, blanks, lists) in [
+        (200, 0, 0),
+        (200, 40, 0),
+        (2000, 300, 0),
+        (2000, 1, 1),
+        (2000, 300, 120),
+    ] {
+        let dataset = quads_with_blanks(lines, blanks, lists);
+        assert_within_the_stated_bound(&identified(&dataset), lines, blanks, lists);
+        let delta = purrdf_core::MutableDataset::new(Arc::clone(&dataset))
+            .snapshot_view()
+            .unwrap();
+        assert_within_the_stated_bound(&delta, lines, blanks, lists);
+    }
+}
+
+/// One blank node, one quad about it, and one more quad whose subject is an IRI
+/// or, with `second_blank`, a second blank node interned in the IRI's place.
+fn one_subject_swapped(second_blank: bool) -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let p = b.intern_iri("https://example.org/p").unwrap();
+    let subject = if second_blank {
+        b.intern_blank("x", BlankScope::DEFAULT).unwrap()
+    } else {
+        b.intern_iri("https://example.org/s").unwrap()
+    };
+    let value = b.intern_literal(RdfLiteral::simple("v")).unwrap();
+    let node = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+    b.push_quad(subject, p, value, None).unwrap();
+    b.push_quad(node, p, value, None).unwrap();
+    b.freeze().unwrap()
+}
+
+/// A view that claims the snapshot a state was built from while presenting other
+/// data is refused as inconsistent, by every reusing entry, when it presents a
+/// blank node the state holds no label for; it does not panic and returns no
+/// output. The view that really holds that snapshot is served.
+#[test]
+fn a_view_presenting_a_blank_node_the_state_has_no_label_for_is_refused() {
+    let prepared_from = one_subject_swapped(false);
+    let other = one_subject_swapped(true);
+    let honest = identified(&prepared_from);
+    let prepared = prepare_canon_view(&honest, FLAT_REQUEST, &mut quiet!()).unwrap();
+    assert_eq!(prepared.blank_count(), 1);
+    reused_outputs(FLAT_REQUEST, &honest, &prepared).expect("the bound snapshot is served");
+    let lying = Recording::new(&other, u64::MAX, u64::MAX).claiming(&prepared_from);
+    let inconsistent = |refused: bool| assert!(refused, "not refused as inconsistent");
+    inconsistent(matches!(
+        try_canonicalize_prepared_view(&lying, FLAT_REQUEST, &prepared, &mut quiet!()),
+        Err(ViewCanonError::Refused(CanonError::SourceInconsistent))
+    ));
+    inconsistent(matches!(
+        try_digest_prepared_view(&lying, FLAT_REQUEST, &prepared, &mut quiet!()),
+        Err(ViewCanonError::Refused(CanonError::SourceInconsistent))
+    ));
+    inconsistent(matches!(
+        try_blake3_prepared_view(&lying, FLAT_REQUEST, &prepared, &mut quiet!()),
+        Err(ViewCanonError::Refused(CanonError::SourceInconsistent))
+    ));
 }

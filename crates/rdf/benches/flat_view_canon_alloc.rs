@@ -22,8 +22,11 @@
 //!   `collision` fixture ignores both), so an external instruction
 //!   counter can compare `n` calls with none. `<shape>` is `blank_free`, `reifier`
 //!   or `collision`, optionally followed by `_digest` (flat SHA-256 digest),
-//!   `_prepared` (flat document against a state prepared once, before the calls)
-//!   or `_prepared_digest`; with no suffix each call is a flat document run.
+//!   `_prepared` (flat document against a state prepared once, before the calls),
+//!   `_prepared_digest`, `_prepare` (each call prepares a state and drops it; the
+//!   first also computes the dataset's snapshot identity, which the dataset then
+//!   keeps) or `_identity` (each call reads the snapshot identity); with no suffix
+//!   each call is a flat document run.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,10 +34,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::{CanonPhase, CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
 use purrdf_rdf::{
-    CanonHash, CanonPresentation, CanonRequest, ContentDigest, PreparedCanon, RdfDataset,
-    StopSignal, prepare_canon_view, try_blake3_prepared_view, try_canonical_sha256_view,
-    try_canonicalize_flat_view, try_canonicalize_prepared_view, try_canonicalize_sha256_view,
-    try_digest_prepared_view, try_flat_blake3_view, try_flat_digest_view,
+    CanonHash, CanonPresentation, CanonRequest, ContentDigest, DatasetView, PreparedCanon,
+    RdfDataset, StopSignal, prepare_canon_view, try_blake3_prepared_view,
+    try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_prepared_view,
+    try_canonicalize_sha256_view, try_digest_prepared_view, try_flat_blake3_view,
+    try_flat_digest_view,
 };
 
 #[path = "support/canon_load.rs"]
@@ -469,10 +473,16 @@ fn calls(spec: &str) {
     let n: usize = n.parse().expect("n is an integer");
     let lines: usize = std::env::var("PURRDF_CANON_ALLOC_CALL_LINES")
         .map_or(32_768, |raw| raw.parse().expect("a line count"));
-    let (fixture, mode) = ["_prepared_digest", "_prepared", "_digest"]
-        .into_iter()
-        .find_map(|suffix| shape.strip_suffix(suffix).map(|name| (name, suffix)))
-        .unwrap_or((shape, ""));
+    let (fixture, mode) = [
+        "_prepared_digest",
+        "_prepared",
+        "_prepare",
+        "_identity",
+        "_digest",
+    ]
+    .into_iter()
+    .find_map(|suffix| shape.strip_suffix(suffix).map(|name| (name, suffix)))
+    .unwrap_or((shape, ""));
     let order = match std::env::var("PURRDF_CANON_ALLOC_CALL_ORDER").as_deref() {
         Ok("unsorted") => load::Order::Unsorted,
         Ok("sorted") | Err(_) => load::Order::Sorted,
@@ -505,6 +515,15 @@ fn calls(spec: &str) {
             ("_digest", _) => {
                 let digest = try_flat_digest_view(&*ds, HASH, &mut control(None)).expect("digest");
                 std::hint::black_box(digest);
+            }
+            ("_prepare", _) => {
+                let state =
+                    prepare_canon_view(&*ds, FLAT_REQUEST, &mut control(None)).expect("prepare");
+                std::hint::black_box(state);
+            }
+            ("_identity", _) => {
+                let identity = DatasetView::snapshot_identity(&*ds).expect("identity");
+                std::hint::black_box(identity);
             }
             _ => {
                 let doc =

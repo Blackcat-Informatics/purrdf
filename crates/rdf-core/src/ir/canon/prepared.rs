@@ -212,11 +212,23 @@ pub(super) struct Fields<Id> {
 /// released when the last clone is dropped. [`retained_bytes`](Self::retained_bytes)
 /// states what it holds. Cloning shares one immutable payload.
 ///
-/// For `W` rank words (one per symbol occurrence plus one per line), `S` distinct
-/// symbols, `B` blank nodes and `T` bytes of label and rewritten-literal text,
-/// `retained_bytes()` is at most `4W + 12S + 8B + T` plus a header of fixed size and
-/// the capacity slack of each array. For data without triple terms, `W <= 5L` and
-/// `S <= 4L` for `L` canonical lines.
+/// `retained_bytes()` is at most
+/// `4W + (I + 8)S + 16(G + R) + (I + 4)B + T` plus a header of fixed size, where
+///
+/// * `I` is the size in bytes of the view's term identifier (`Id`);
+/// * `W` is the number of rank words: one per symbol occurrence in the canonical
+///   document plus one per line;
+/// * `S` is the number of distinct symbols (distinct leaf terms of the document);
+/// * `G` is the number of symbols whose text is 2^27 - 1 bytes or longer, and `R`
+///   the number of literals the canonical form rewrites (composite literals that
+///   name blank nodes), each of which keeps one 16-byte index entry;
+/// * `B` is the number of blank nodes;
+/// * `T` is the bytes of label text plus the bytes of rewritten-literal text.
+///
+/// Every array is reserved at its exact length, so there is no capacity slack. For
+/// data without triple terms, `W <= 5L` and `S <= 4L` for `L` canonical lines, so
+/// the first two terms are at most `(20 + 4(I + 8))L`: 68 bytes per line for a
+/// four-byte identifier and 84 for an eight-byte one.
 ///
 /// [`try_canonicalize_prepared_view`]: super::try_canonicalize_prepared_view
 /// [`try_digest_prepared_view`]: super::try_digest_prepared_view

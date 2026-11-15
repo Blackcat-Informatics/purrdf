@@ -57,10 +57,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `CanonRequest` (label hash, presentation, and whole dataset or one named
   graph). Used with any other, it is refused before any work with the new
   `CanonError::Prepared`, whose `PreparedRefusal` names the component that
-  differs; a view that carries no snapshot identity cannot be prepared. The
-  state is admitted to the source's owned account, reports its size as
-  `PreparedCanon::retained_bytes`, and is released when its last clone is
-  dropped. Entries that take no state are unchanged. This is a Rust API; the C,
+  differs; a view that carries no snapshot identity cannot be prepared, and a
+  view that presents other terms under the identity a state is bound to is
+  refused with `CanonError::SourceInconsistent`. The state is admitted to the
+  source's owned account, reports its size as `PreparedCanon::retained_bytes`,
+  and is released when its last clone is dropped. Preparing costs about one
+  canonical run without its spelling, plus the dataset's snapshot identity when
+  that has not been computed yet, so it pays back from the second output on.
+  Entries that take no state return the same bytes, labels and digests and make
+  the same allocations and stop checks as before. This is a Rust API; the C,
   WebAssembly and Python surfaces are unchanged.
 
 ## [4.0.2] - 2026-11-10

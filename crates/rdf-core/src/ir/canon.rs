@@ -1068,10 +1068,16 @@ fn prepared_state<'a, D: DatasetView>(
 /// its last clone is dropped. The run is recorded as one receipt that states a
 /// [`CanonOutput::Document`] run; nothing is spelled, hashed or published.
 ///
-/// A view that returns no snapshot identity cannot be bound and is refused. A view
-/// must give its identity the strength [`DatasetView::snapshot_identity`] states:
-/// the blank and term identifiers the product keeps are meaningful only for the
-/// snapshot it names.
+/// A view that returns no snapshot identity cannot be bound and is refused. The
+/// identity must bind the view's assignment of term identifiers, not its content
+/// alone: the product keeps identifiers, and they are meaningful only for the
+/// snapshot it names. Where a view presents other data under the same identity, a
+/// reusing run refuses with [`CanonError::SourceInconsistent`] when a term has
+/// another kind or length than the one recorded; a change that keeps both is not
+/// detected.
+///
+/// The first call over a dataset whose identity has not been computed pays for
+/// computing it, which reads every term and row once.
 ///
 /// # Errors
 /// Exactly the refusals of [`try_canonicalize_flat_view`] (or of
@@ -2368,9 +2374,6 @@ enum BlankRender<'a, Id> {
     FirstDegree { focus: Id },
     /// Final output (§4.4 step 7): each blank → its issued `_:c14nN` label.
     Canonical { issuer: &'a IdIssuer<Id> },
-    /// Final output of a run that reuses a prepared state: each blank → the
-    /// label that state kept for it.
-    Prepared { labels: &'a prepared::Labels<Id> },
 }
 
 impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
@@ -2389,9 +2392,6 @@ impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
             BlankRender::Canonical { issuer } => issuer
                 .issued_for(id)
                 .expect("every blank has a canonical id at output time"),
-            BlankRender::Prepared { labels } => labels
-                .get(id)
-                .expect("a prepared state labels every blank of the snapshot it is bound to"),
         }
     }
 }
@@ -3400,8 +3400,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             .ds
             .reserve_workspace(0)
             .map_err(CanonError::Read)?;
-        rendering::ScratchGrant::new(reservation)
-            .run(|memory| canonical.emit_lines(memory, &mut output::Discard, Some(&mut builder)))?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            canonical.emit_lines(memory, &mut output::Unspelled, Some(&mut builder))
+        })?;
         canonical
             .run
             .check_stop()
@@ -3462,9 +3463,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         sink: &mut dyn output::LineSink<D::ReadError>,
     ) -> Result<(), CanonError<D::ReadError>> {
         let retained = &prepared.lines;
-        let render = BlankRender::Prepared {
-            labels: &prepared.labels,
-        };
+        let labels = &prepared.labels;
         let spelling = retained.spelling();
         let table = retained.table();
         let ranks = retained.ranks();
@@ -3481,7 +3480,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 let rank = ranks[at];
                 let symbol = table.symbols[rank as usize];
                 let meta = order::Meta::from_bits(table.meta[rank as usize]);
-                self.render_symbol_as(&spelling, symbol, meta, render, &mut line, memory)?;
+                self.render_prepared_symbol(&spelling, symbol, meta, labels, &mut line, memory)?;
                 at += 1;
                 if rank == table.term {
                     break;
@@ -3497,6 +3496,55 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             return Err(CanonError::SourceInconsistent);
         }
         memory.release_string(line)?;
+        Ok(())
+    }
+
+    /// Spell one symbol of a prepared state, a leaf with its trailing space, at
+    /// `out`'s end. A blank node is spelled from the kept label without reading the
+    /// view. Any other leaf is read from the view again.
+    ///
+    /// A view that does not present the snapshot the state was built from is refused
+    /// as [`CanonError::SourceInconsistent`] wherever that shows: a blank node the
+    /// state holds no label for, a blank node where another term was recorded, a
+    /// triple term where a leaf was recorded, or a different length.
+    fn render_prepared_symbol<S: Admission + ?Sized>(
+        &self,
+        spelling: &order::Spelling<'_, D::Id>,
+        symbol: u32,
+        meta: order::Meta,
+        labels: &prepared::Labels<D::Id>,
+        out: &mut String,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let kind = meta.kind();
+        if kind == order::Kind::Fixed {
+            return self.write_fixed(symbol, out, memory);
+        }
+        let before = out.len();
+        if meta.arena() {
+            memory.push_str(out, spelling.arena_text(symbol))?;
+        } else if kind == order::Kind::Blank {
+            let label = labels
+                .get(spelling.rep(symbol))
+                .ok_or(CanonError::SourceInconsistent)?;
+            memory.append_text(out, |out| write_blank(label, out))?;
+        } else {
+            // No label can come from this renderer: a recorded blank node was spelled
+            // above, and one found here, where another term was recorded, is refused.
+            let rep = spelling.rep(symbol);
+            let unlabelled = BlankRender::FirstDegree { focus: rep };
+            match self.write_leaf(rep, unlabelled, out, memory, None)? {
+                Leaf::Written(LeafKind::Blank) | Leaf::Triple { .. } => {
+                    return Err(CanonError::SourceInconsistent);
+                }
+                Leaf::Written(_) => {}
+                Leaf::NotReady => return Err(self.latched_read_error()),
+            }
+        }
+        if out.len() - before != spelling.len(symbol, meta) {
+            return Err(CanonError::SourceInconsistent);
+        }
+        memory.push_char(out, ' ')?;
         Ok(())
     }
 
@@ -4190,7 +4238,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     /// [`emit_canonical_lines`](Self::emit_canonical_lines), or, with a `capture`,
     /// the same run stopped once the lines are ordered and measured: they are kept
-    /// in the builder's account instead of being spelled.
+    /// in the builder's account and nothing is spelled into `sink`.
     fn emit_lines<S: Admission + ?Sized>(
         &self,
         memory: &mut Memory<'_, S>,
@@ -4248,16 +4296,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let (total, longest) = lines.measure(term, len_of)?;
         self.check_stop().map_err(CanonError::with_read_error)?;
         if let Some(builder) = capture {
-            builder.retain(|owned| {
-                let table = ranked.table(term);
-                order::Retained::capture(&symbols, &ranked, &lines, table, (total, longest), owned)
-            })?;
-            memory.release_string(first)?;
-            memory.release_string(second)?;
-            lines.release(memory)?;
-            ranked.release(memory)?;
-            symbols.release(memory)?;
-            return Ok(());
+            Self::keep_lines(builder, &symbols, &ranked, &lines, (term, total, longest))?;
+            return Self::release_ordering(memory, [first, second], lines, ranked, symbols);
         }
         memory.reserve_string(&mut first, longest)?;
         memory.release_string(second)?;
@@ -4283,6 +4323,43 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         Ok(())
     }
 
+    /// Copy the ordered lines of a preparing run into `builder`'s account.
+    ///
+    /// Never inlined, with [`release_ordering`](Self::release_ordering): the line
+    /// emitter is the hot path of every run that takes no prepared state, and its
+    /// code must not change for a run that prepares one.
+    #[inline(never)]
+    fn keep_lines(
+        builder: &mut prepared::Builder<D::Id, D::ReadError>,
+        symbols: &order::Symbols<D::Id>,
+        ranked: &order::Ranked,
+        lines: &order::Lines,
+        (term, total, longest): (u32, usize, usize),
+    ) -> Result<(), CanonError<D::ReadError>> {
+        builder.retain(|owned| {
+            let table = ranked.table(term);
+            order::Retained::capture(symbols, ranked, lines, table, (total, longest), owned)
+        })
+    }
+
+    /// Release the scratch a preparing run ordered its lines in.
+    #[inline(never)]
+    fn release_ordering<S: Admission + ?Sized>(
+        memory: &mut Memory<'_, S>,
+        buffers: [String; 2],
+        lines: order::Lines,
+        ranked: order::Ranked,
+        symbols: order::Symbols<D::Id>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        for buffer in buffers {
+            memory.release_string(buffer)?;
+        }
+        lines.release(memory)?;
+        ranked.release(memory)?;
+        symbols.release(memory)?;
+        Ok(())
+    }
+
     /// Spell one symbol, a leaf with its trailing space, at `out`'s end, from what
     /// was recorded when it was found.
     ///
@@ -4298,23 +4375,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         out: &mut String,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        let render = BlankRender::Canonical {
-            issuer: &self.canonical,
-        };
-        self.render_symbol_as(spelling, symbol, meta, render, out, memory)
-    }
-
-    /// [`render_symbol`](Self::render_symbol) with the blank labels of `render`.
-    #[inline]
-    fn render_symbol_as<S: Admission + ?Sized>(
-        &self,
-        spelling: &order::Spelling<'_, D::Id>,
-        symbol: u32,
-        meta: order::Meta,
-        render: BlankRender<'_, D::Id>,
-        out: &mut String,
-        memory: &mut Memory<'_, S>,
-    ) -> Result<(), CanonError<D::ReadError>> {
         if meta.kind() == order::Kind::Fixed {
             return self.write_fixed(symbol, out, memory);
         }
@@ -4322,6 +4382,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         if meta.arena() {
             memory.push_str(out, spelling.arena_text(symbol))?;
         } else {
+            let render = BlankRender::Canonical {
+                issuer: &self.canonical,
+            };
             match self.write_leaf(spelling.rep(symbol), render, out, memory, None)? {
                 Leaf::Written(_) => {}
                 Leaf::NotReady => return Err(self.latched_read_error()),

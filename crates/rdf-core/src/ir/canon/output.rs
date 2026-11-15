@@ -40,10 +40,10 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> LineSink<E> for ResultBuilder<Id,
     }
 }
 
-/// The sink of a run that stops before any line is spelled.
-pub(super) struct Discard;
+/// The sink of a preparing run, which stops before any line is spelled.
+pub(super) struct Unspelled;
 
-impl<E> LineSink<E> for Discard {
+impl<E> LineSink<E> for Unspelled {
     fn begin(&mut self, _: usize) -> Result<(), CanonError<E>> {
         Ok(())
     }
