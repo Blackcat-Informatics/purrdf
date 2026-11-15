@@ -3064,6 +3064,45 @@ pub(crate) fn exists_row_collision<'a>(
     exists_row_collision_admitted(pattern, &scope, &workspace).expect("resident row-collision walk")
 }
 
+/// Whether any node of `pattern` can introduce a binding that
+/// [`exists_row_collision_admitted`] would check against a row: an `Extend` (a
+/// `BIND` or projected expression target), an `UNFOLD`, a `VALUES` table or a
+/// `GROUP`. Every collision that walk reports names a variable one of these
+/// introduces, so when there is none it answers "no collision" for every row.
+/// Like that walk, this one never enters an expression.
+pub(crate) fn introduces_row_binding(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(pattern)?;
+    while let Some(pattern) = pending.pop() {
+        if matches!(
+            pattern,
+            GraphPattern::Extend { .. }
+                | GraphPattern::Unfold { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::Group { .. }
+        ) {
+            return Ok(true);
+        }
+        let mut refused = None;
+        visit_pattern_parts(pattern, &mut |part| {
+            if let PatternPart::Child(child, _) = part
+                && let Err(error) = pending.push(child)
+            {
+                refused = Some(error);
+                return true;
+            }
+            false
+        });
+        if let Some(error) = refused {
+            return Err(error);
+        }
+    }
+    Ok(false)
+}
+
 pub(crate) fn exists_row_collision_admitted<'a>(
     pattern: &'a GraphPattern,
     row_scope: &VarSchema,
