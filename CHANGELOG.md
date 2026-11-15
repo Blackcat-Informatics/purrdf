@@ -8,6 +8,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Structured inspection of fallible query outcomes:** `FallibleSparqlError`
+  now implements `purrdf_hash::error::StructuredError` whenever its operational
+  error and evidence types do, so a consumer records each outcome (`Query`,
+  `Operational`, `AllocationFailed`, `ControlFailure`, `BudgetExhausted`) with
+  its typed fields and never formats it: the retained diagnostic and the view's
+  own error are nested causes, the governor trip keeps its ceiling and
+  consumption, and the certified partial rows are reached as rows. The values
+  it carries gained the same inspection: `QueryControlFailure`,
+  `PartialAnswers`, `PartialSparqlResult`, `RetainedSparqlResult`,
+  `RetainedPartialSparqlResult`, `NonMonotoneBarrier` and `GovernedEvidence`.
+  `GraphBuildError`, `protocol::ProtocolError` and `protocol::OperationKind`
+  implement it as well; a protocol refusal reports byte offsets as byte counts
+  and parameter and clause names as codes, and its `reason` and `message`
+  fields remain the text their producer wrote. Additive: no signature, variant
+  or payload changed.
+
 - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
