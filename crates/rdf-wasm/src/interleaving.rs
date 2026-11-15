@@ -358,6 +358,36 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/eval.rs",
+        name: "EXISTS_DECISION_COUNT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/sparql-eval/src/eval.rs",
+        name: "IN_PLACE_ANSWER_COUNT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/sparql-eval/src/eval.rs",
+        name: "SITE_FACTS_READ_COUNT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/sparql-eval/src/eval.rs",
+        name: "BOOLEAN_SHORTCUT_COUNT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
+        file: "crates/sparql-eval/src/eval.rs",
+        name: "LONE_VARIABLE_READ_COUNT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/expr.rs",
         name: "FORCE_EXISTS_STRATEGY",
         safety: Safety::NotCompiledIn,

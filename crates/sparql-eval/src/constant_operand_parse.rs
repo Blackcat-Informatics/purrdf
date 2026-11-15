@@ -72,9 +72,10 @@ fn constant_operand_is_parsed_once_per_query() {
         "the constant must not be parsed again for each of the extra rows"
     );
     assert_eq!(
-        many, 5,
-        "the dataset value once, and the constant and the boolean the comparison \
-         yields twice each: on the first row and on the second, which stores them"
+        many, 3,
+        "the dataset value once, and the constant twice: on the first row and on the \
+         second, which stores it; the boolean the comparison yields is read as the \
+         interned boolean it is and is never parsed"
     );
 }
 
@@ -84,7 +85,31 @@ fn constant_operand_is_parsed_once_per_query() {
 fn constant_operand_memo_keeps_the_answer() {
     let (kept, parses) = parses_of(400, "?v > 8.5e0");
     assert_eq!(kept, 0);
-    assert_eq!(parses, 5);
+    assert_eq!(parses, 3);
+}
+
+/// **A boolean that differs from the constant it is compared with is read as the interned
+/// boolean it is, not parsed per row.** In `(?v > 5.5e0) = true` both operands are the same
+/// interned term, so the equality answers at the sameTerm check before any parse and the
+/// case only holds the answer. In `(?v > 5.5e0) = false` the two terms differ, so the
+/// comparison's own boolean reaches the operand reader, and its parse count must not
+/// grow with the rows.
+#[test]
+fn a_boolean_operand_is_not_parsed_per_row() {
+    let (few_kept, _) = parses_of(4, "(?v > 5.5e0) = true");
+    let (many_kept, _) = parses_of(400, "(?v > 5.5e0) = true");
+    assert_eq!(
+        (few_kept, many_kept),
+        (4, 400),
+        "the comparison holds on every row"
+    );
+    let (few_kept, few) = parses_of(4, "(?v > 5.5e0) = false");
+    let (many_kept, many) = parses_of(400, "(?v > 5.5e0) = false");
+    assert_eq!((few_kept, many_kept), (0, 0), "no row compares false");
+    assert_eq!(
+        few, many,
+        "the boolean the comparison yields must not be parsed again for each extra row"
+    );
 }
 
 /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a

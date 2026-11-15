@@ -445,6 +445,10 @@ pub(crate) enum PreparedExists {
         normalized_sites: std::sync::OnceLock<
             crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
         >,
+        /// What holds for [`Self::Pattern::normalized`] whatever row or outer schema
+        /// reaches it, learned on the site's second visit (see
+        /// [`crate::expr::SiteFacts`]).
+        facts: crate::expr::SiteFacts,
     },
 }
 
@@ -462,6 +466,27 @@ thread_local! {
     /// happens on the SAME thread the test itself is running on, and the thread-local keeps
     /// that thread's count from ever being touched by another test's thread.
     pub(crate) static PREPARED_EXISTS_BUILD_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+
+    /// Test-only counter of strategy decisions an `EXISTS` site makes
+    /// (`exists_prepared_decide` entries), thread-local for the same reason as
+    /// [`PREPARED_EXISTS_BUILD_COUNT`]. It pins how often a row loop decides a site
+    /// before it answers.
+    pub(crate) static EXISTS_DECISION_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+
+    /// Test-only witnesses that each resident fast path engages on the shape it claims:
+    /// an `EXISTS` row resumed in place, a site read through its learned facts, an
+    /// interned boolean read as its own effective boolean value, and an aggregate
+    /// argument read straight from the row. Thread-local like the counters above; a test
+    /// reads them under `force_sequential`.
+    pub(crate) static IN_PLACE_ANSWER_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static SITE_FACTS_READ_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static BOOLEAN_SHORTCUT_COUNT: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    pub(crate) static LONE_VARIABLE_READ_COUNT: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
 }
 

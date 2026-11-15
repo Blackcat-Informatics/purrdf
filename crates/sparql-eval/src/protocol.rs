@@ -94,6 +94,13 @@ impl OperationKind {
     }
 }
 
+impl purrdf_hash::error::StructuredError for OperationKind {
+    purrdf_hash::error_visit! {
+        Query => "sparql-operation-query" {},
+        Update => "sparql-operation-update" {},
+    }
+}
+
 /// The shapes a query result takes, which decide the formats it can be sent in
 /// (Protocol §2.1.5 → the SPARQL 1.1 result formats and the RDF syntaxes).
 ///
@@ -343,6 +350,52 @@ impl fmt::Display for ProtocolError {
 }
 
 impl std::error::Error for ProtocolError {}
+
+/// Request text stays text and each protocol parameter or clause name stays a
+/// code. The four `reason`/`message` fields hold what their producer rendered;
+/// they are borrowed as that text and never parsed back.
+impl purrdf_hash::error::StructuredError for ProtocolError {
+    purrdf_hash::error_visit! {
+        UnsupportedMethod { method } => "sparql-protocol-unsupported-method" {
+            "method" => Text(method),
+        },
+        MissingContentType => "sparql-protocol-missing-content-type" {},
+        UnsupportedContentType { content_type } => "sparql-protocol-unsupported-content-type" {
+            "content_type" => Text(content_type),
+        },
+        UnsupportedCharset { charset } => "sparql-protocol-unsupported-charset" {
+            "charset" => Text(charset),
+        },
+        NonUtf8Body { valid_up_to } => "sparql-protocol-non-utf8-body" {
+            "valid_up_to" => ByteCount(*valid_up_to as u128),
+        },
+        BodyOnGet => "sparql-protocol-body-on-get" {},
+        MalformedForm { reason } => "sparql-protocol-malformed-form" {
+            "reason" => Text(reason),
+        },
+        MissingOperation => "sparql-protocol-missing-operation" {},
+        AmbiguousOperation { reason } => "sparql-protocol-ambiguous-operation" {
+            "reason" => Text(reason),
+        },
+        QueryViaGetIsNotUpdate => "sparql-protocol-update-via-get" {},
+        DatasetParametersOnUpdate { parameter } => "sparql-protocol-dataset-parameters-on-update" {
+            "parameter" => Code(parameter),
+        },
+        UsingParametersOnQuery { parameter } => "sparql-protocol-using-parameters-on-query" {
+            "parameter" => Code(parameter),
+        },
+        InvalidGraphIri { parameter, value, reason } => "sparql-protocol-invalid-graph-iri" {
+            "parameter" => Code(parameter), "value" => Text(value), "reason" => Text(reason),
+        },
+        UsingConflictsWithClause { parameter, operation, clause } => "sparql-protocol-using-conflicts-with-clause" {
+            "parameter" => Code(parameter), "operation" => Unsigned(*operation as u128),
+            "clause" => Code(clause),
+        },
+        MalformedOperation { kind, message } => "sparql-protocol-malformed-operation" {
+            "kind" => Record(kind), "message" => Text(message),
+        },
+    }
+}
 
 /// One SPARQL 1.1 Protocol operation, read from an HTTP request by
 /// [`ProtocolRequest::parse`].
