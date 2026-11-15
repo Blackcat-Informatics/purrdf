@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/558-slice",
+  "branch": "paudley/558-structured-errors-rest",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "0dc9d688ce9fcb9286ce403f433b0f17f2455b2e",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/558-slice/.stage/sync/sync/20261115T073051-a3f068d86238420997223b65b7c005f4",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "da14ae9f3c58e159e9388b5d31807fc7e90f3dc5",
+  "merge_bases": [
+    "681808c3e8c129400c2af67a86907a5ae4803e44"
+  ],
+  "merge_index": "688bba1639cd2bd1cae363e2fbac361ff3241413d5cac4f1cd15179613e36725",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "353dea5bbc6cd31d92afe83cb68218e3e92ee577",
+  "candidate_patch": "candidate-e1b9093c14f146f2b5aac6b1e91c9cd1.patch",
+  "validation_records": [],
+  "commit": "85a3c5c13e2b202fde9363a1434626fc66b1de80",
+  "tree": "353dea5bbc6cd31d92afe83cb68218e3e92ee577"
+}

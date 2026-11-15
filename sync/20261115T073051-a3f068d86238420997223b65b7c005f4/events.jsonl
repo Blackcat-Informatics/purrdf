@@ -1,0 +1,6 @@
+{"time": "2026-11-15T07:30:51.267215+00:00", "status": "started"}
+{"time": "2026-11-15T07:30:52.593592+00:00", "status": "merging"}
+{"time": "2026-11-15T07:30:53.579146+00:00", "status": "conflicted"}
+{"time": "2026-11-15T07:30:53.776440+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n"}
+{"time": "2026-11-15T07:38:19.528621+00:00", "status": "committing", "candidate_tree": "353dea5bbc6cd31d92afe83cb68218e3e92ee577", "candidate_patch": "candidate-e1b9093c14f146f2b5aac6b1e91c9cd1.patch", "validation_records": []}
+{"time": "2026-11-15T07:40:13.873541+00:00", "status": "completed", "commit": "85a3c5c13e2b202fde9363a1434626fc66b1de80", "tree": "353dea5bbc6cd31d92afe83cb68218e3e92ee577"}

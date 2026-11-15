@@ -1,0 +1,2754 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 210012a16..9329d021a 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -24,6 +24,57 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   fields remain the text their producer wrote. Additive: no signature, variant
+   or payload changed.
+ 
++- **iri: `Iri::normalize` keeps what a rootless relative reference resolves
++  to.** **Behaviour change**, confined to a reference with no scheme and no
++  authority whose path is not empty and does not begin with `/`. There,
++  `normalize` no longer applies RFC 3986 §5.2.4 `remove_dot_segments`, which is
++  defined for a path already merged with a base and discarded the segments only
++  a base can interpret, and it no longer decodes a segment into a dot segment.
++  For such a reference and any absolute base, resolving the normal form now
++  names the same IRI as resolving the original (equal once both results are
++  normalized). The rules, each with the inputs whose normal form changes:
++
++  | Rule | Reference | Before | Now |
++  | --- | --- | --- | --- |
++  | A `..` with nothing before it stays | `../a`, `./../a` | `a` | `../a` |
++  | | `../a:b` | `./a:b` | `../a:b` |
++  | | `..`, `../`, `./..`, `.././` | `.` | `..` |
++  | A reference that reduces to its directory keeps the path `.` beside a query or fragment | `.?q`, `./?q` | `?q` | `.?q` |
++  | | `./#f` | `#f` | `.#f` |
++  | An empty first segment stays behind its dot segment | `.//x` | `/x` | `.//x` |
++  | | `..//x` | `/x` | `..//x` |
++  | The reference's own first segment is never removed by a `..` | `a/..`, `a/../` | `/` | `a/..` |
++  | | `a/../b` | `/b` | `a/../b` |
++  | | `a/b/../../c` | `/c` | `a/../c` |
++  | A segment that decodes to `.` or `..` stays encoded, as `%2E` or `%2E%2E`, and is an ordinary segment | `%2e` | `.` | `%2E` |
++  | | `%2e%2e`, `.%2E` | `.` | `%2E%2E` |
++  | | `%2e%2e/a` | `a` | `%2E%2E/a` |
++  | | `a/%2e/b` | `a/b` | `a/%2E/b` |
++  | | `a/%2e/../b` | `/b` | `a/b` |
++  | | `x/%2e%2e/../a` | `/a` | `x/a` |
++  | | `x/%2e/..` | `/` | `x/` |
++  | | `%2e%2e/..` | `.` | `%2E%2E/..` |
++  | | `%2e/%2e/..` | `.` | `%2E/` |
++
++  A normal form changes exactly when the reference is of that kind and has a
++  leading `..`; or reduces to its directory beside a query or fragment; or has
++  an empty segment directly after its leading dot segments; or has a `..` that
++  reaches its own first segment; or has a segment that decodes to `.` or `..`
++  without being spelled so. Every other such reference is unchanged: `.`, `./`
++  and `./.` are `.`, `./a` is `a`, `a/./b` is `a/b`, `a/b/../c` is `a/c`,
++  `a/.` is `a/`, `./a:b` is `./a:b`. The first-segment rule exists because a
++  base whose path has no directory part (`urn:x`) resolves `a/../b` to a
++  leading `/`.
++
++  Unchanged, byte for byte: every IRI with a scheme, every reference with an
++  authority and every absolute-path reference (`/a/../b` is `/b`). Not covered
++  by the guarantee: under a scheme, an authority or a leading `/`, a
++  percent-encoded dot segment is still decoded and then removed as a dot
++  segment (`/a/%2e%2e/../b` is `/b`, while the reference itself resolves to
++  `/a/b`). The signature is unchanged. A caller that stored normal forms of
++  rootless relative references holds the old spelling for the inputs described
++  above.
++
+ - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
+   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
+   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
+diff --git crates/iri/README.md crates/iri/README.md
+index aff0c9a8c..8ca7b3864 100644
+--- crates/iri/README.md
++++ crates/iri/README.md
+@@ -29,7 +29,13 @@ CURIE/prefix handling.
+   fragment) exposed without re-encoding.
+ - **Reference resolution** — RFC 3986 §5 strict resolution (`Iri::resolve`).
+ - **Syntax normalization** — RFC 3986 §6.2.2 (`Iri::normalize`): case,
+-  percent-encoding, and dot-segment normalization; idempotent.
++  percent-encoding, and dot-segment normalization; idempotent. A reference
++  with no scheme, no authority and a path that does not begin with `/` keeps
++  the leading dot segments only a base can interpret, and keeps a segment that
++  would decode to `.` or `..` percent-encoded, so it resolves to the same IRI
++  before and after. Under a scheme, an authority or a leading `/`, a
++  percent-encoded dot segment is decoded and removed, which resolution of the
++  undecoded text does not do.
+ - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
+   `PrefixMap`.
+ - **W3C vocabularies** — `vocab`: one module per W3C namespace (`rdf`,
+diff --git crates/iri/src/lib.rs crates/iri/src/lib.rs
+index cbf37b5d2..c098f91b8 100644
+--- crates/iri/src/lib.rs
++++ crates/iri/src/lib.rs
+@@ -26,7 +26,13 @@
+ //!   force and where it came from. [`BaseIri::relativize`] is the inverse, letting a
+ //!   serializer emit `<>` or `<foo>` under a base.
+ //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
+-//!   encoding, and dot-segment normalization. Idempotent.
++//!   encoding, and dot-segment normalization. Idempotent. A reference with no
++//!   scheme, no authority and a path that does not begin with `/` keeps the
++//!   leading dot segments only a base can interpret, and keeps a segment that
++//!   would decode to `.` or `..` percent-encoded, so it resolves to the same
++//!   IRI before and after. Under a scheme, an authority or a leading `/`, a
++//!   percent-encoded dot segment is decoded and removed, which resolution of
++//!   the undecoded text does not do.
+ //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
+ //!   [`PrefixMap`], and the namespace/local-name split
+ //!   [`split_local_name`]/[`local_name`].
+diff --git crates/iri/src/normalize.rs crates/iri/src/normalize.rs
+index de6b29386..a2dc569c2 100644
+--- crates/iri/src/normalize.rs
++++ crates/iri/src/normalize.rs
+@@ -11,20 +11,49 @@
+ //!   upper-cased.
+ //! * §6.2.2.2 **Percent-encoding** — `%XX` triplets that encode an *unreserved*
+ //!   character are decoded to that character.
+-//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to the path.
++//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to a path that
++//!   resolution would treat the same way: any path under a scheme or an
++//!   authority, and an absolute path. The rootless path of a reference with
++//!   neither is not resolved yet, so only the dot segments that mean the same
++//!   against every base collapse (`a/./b`, `a/b/../c`); `../a`, `..` and `.`
++//!   keep the segments a base must interpret.
++//!
++//! The steps interact in one place. §6.2.2.2 decodes `%2E`, and a segment that
++//! decodes to `.` or `..` then reads as a dot segment, which resolution of the
++//! undecoded text does not see. In the unresolved case such a segment therefore
++//! keeps its encoding, as `%2E` or `%2E%2E`, and only a literal `.` or `..` is a
++//! dot segment. Everywhere else it is decoded first and removed as a dot
++//! segment.
++//!
++//! **Guarantee and its scope.** For a reference `r` with no scheme, no authority
++//! and a path that does not begin with `/`, and any absolute base `b`,
++//! `b.resolve(r)` and `b.resolve(r.normalize())` name the same IRI: they are
++//! equal once both are normalized, and byte-equal when `r` holds no
++//! percent-encoded unreserved character and no lower-case hex digit. The
++//! guarantee does not extend to a path under a scheme, an authority or a
++//! leading `/` that holds a percent-encoded dot segment: `/a/%2e%2e/../b`
++//! normalizes to `/b` and resolves to `/a/b`.
+ //!
+ //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
+ 
+ use purrdf_lex::percent;
+ 
+ use crate::parse::{Iri, parse};
+-use crate::resolve::{recomposition_guard, remove_dot_segments};
++use crate::resolve::{collapse_unresolved_dot_segments, recomposition_guard, remove_dot_segments};
+ 
+ impl Iri {
+     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
+     /// parsed/validated; for every IRI `parse` accepts, the result has the same
+     /// scheme and authority presence and is a fixed point of `normalize`.
+     ///
++    /// A reference with no scheme, no authority and a path that does not begin
++    /// with `/` keeps its meaning: resolving the result against an absolute base
++    /// names the IRI the original resolves to. It therefore keeps the leading
++    /// dot segments only a base can interpret, and a segment that would decode
++    /// to `.` or `..` stays percent-encoded (`%2E`, `%2E%2E`). Under a scheme,
++    /// an authority or a leading `/`, a percent-encoded dot segment is decoded
++    /// and removed, which resolution of the undecoded text would not do.
++    ///
+     /// # Examples
+     ///
+     /// ```rust
+@@ -35,6 +64,12 @@ impl Iri {
+     ///
+     /// // Normalization is idempotent.
+     /// assert_eq!(norm.normalize(), norm);
++    ///
++    /// // Interior dot segments of a relative reference collapse; leading ones stay.
++    /// assert_eq!(purrdf_iri::parse("a/./b/../c")?.normalize().as_str(), "a/c");
++    /// assert_eq!(purrdf_iri::parse("../a")?.normalize().as_str(), "../a");
++    /// // There, an encoded dot segment is an ordinary segment and stays encoded.
++    /// assert_eq!(purrdf_iri::parse("a/%2e/../b")?.normalize().as_str(), "a/b");
+     /// # Ok::<(), purrdf_iri::IriError>(())
+     /// ```
+     #[must_use]
+@@ -49,7 +84,18 @@ impl Iri {
+             out.push_str("//");
+             out.push_str(&normalize_authority(auth));
+         }
+-        let path = remove_dot_segments(&percent::normalize(self.path()));
++        let raw = self.path();
++        // A rootless path under no scheme and no authority has not been resolved:
++        // its leading dot segments belong to the base it will meet.
++        let unresolved = self.scheme().is_none()
++            && self.authority().is_none()
++            && !raw.is_empty()
++            && !raw.starts_with('/');
++        let path = if unresolved {
++            collapse_unresolved_dot_segments(&decode_unresolved_segments(raw))
++        } else {
++            remove_dot_segments(&percent::normalize(raw))
++        };
+         out.push_str(recomposition_guard(
+             self.scheme().is_some(),
+             self.authority().is_some(),
+@@ -65,20 +111,39 @@ impl Iri {
+             out.push_str(&percent::normalize(frag));
+         }
+ 
+-        // A reference with no scheme, authority, path, query or fragment has no
+-        // parseable spelling; `.` is its normal form (and `.` normalizes to `.`).
+-        if out.is_empty() {
+-            out.push('.');
+-        }
+-
+         // Re-parse. Every step keeps the text a valid IRI of the same shape: ASCII
+-        // lower-casing, decoding unreserved characters, dot-segment removal, the
+-        // `recomposition_guard` prefixes and the `.` for an empty result. A parse
+-        // failure here is therefore a genuine bug, not user input - hence `expect`.
++        // lower-casing, decoding unreserved characters, dot-segment removal and the
++        // `recomposition_guard` prefixes. The text is never empty: a scheme, an
++        // authority, a rooted path and an unresolved path each leave at least one
++        // character, and an empty path parsed only with a query or fragment. A
++        // parse failure here is therefore a genuine bug, not user input - hence
++        // `expect`.
+         parse(&out).expect("normalized IRI must re-parse")
+     }
+ }
+ 
++/// §6.2.2.2 for an unresolved rootless path, segment by segment (`/` is reserved,
++/// so decoding never moves a segment boundary). Resolution reads a segment such
++/// as `%2e` or `.%2E` as an ordinary one, so a segment that decodes to `.` or `..`
++/// without being spelled that way is written fully encoded instead: decoding it
++/// would turn it into a dot segment and change what the reference resolves to.
++/// `%2E` and `%2E%2E` are fixed points of this step.
++fn decode_unresolved_segments(path: &str) -> String {
++    let mut out = String::with_capacity(path.len());
++    for (index, segment) in path.split('/').enumerate() {
++        if index > 0 {
++            out.push('/');
++        }
++        let decoded = percent::normalize(segment);
++        match decoded.as_ref() {
++            "." if segment != "." => out.push_str("%2E"),
++            ".." if segment != ".." => out.push_str("%2E%2E"),
++            other => out.push_str(other),
++        }
++    }
++    out
++}
++
+ /// Case-normalize the host (lower-case) without disturbing a case-significant
+ /// userinfo, then percent-normalize. Userinfo (before `@`) keeps its case; the
+ /// host + port (after `@`) is lower-cased for the host portion.
+diff --git crates/iri/src/resolve.rs crates/iri/src/resolve.rs
+index 07b2e6961..c4937245d 100644
+--- crates/iri/src/resolve.rs
++++ crates/iri/src/resolve.rs
+@@ -203,9 +203,11 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>)
+ 
+ /// The two RFC-3986 path repairs (§3.3 and §4.2), applied at recomposition (§5.3),
+ /// in one place. The returned
+-/// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
+-/// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
+-/// point. It is empty when no repair is needed.
++/// prefix is applied AFTER dot-segment removal, where the text is rebuilt. A
++/// second normalization drops it again and then re-applies it, so the guarded
++/// form is a fixed point: `remove_dot_segments` strips `/.` and a leading `./`,
++/// and `collapse_unresolved_dot_segments` drops the `.` of a leading `./`. It is
++/// empty when no repair is needed.
+ ///
+ /// * `"/."` (§3.3): with no authority a path may not begin with `//`, or the text
+ ///   would read as `scheme://...` and turn the path into an authority.
+@@ -385,6 +387,77 @@ fn remove_dot_segments_with_memory<S: Admission + ?Sized>(
+     Ok(out)
+ }
+ 
++/// RFC-3986 §6.2.2.3 for a path that has NOT been resolved: the rootless path of a
++/// reference with neither scheme nor authority (`path` is non-empty and does not
++/// begin with `/`).
++///
++/// §5.2.4 is defined on a path already merged with a base (§4.1: dot segments
++/// exist for relative references and are removed by resolution). Applied to such
++/// a reference on its own it discards the segments only a base can interpret, so
++/// this keeps them. The result resolves to the same IRI as `path` against every
++/// absolute base. Only a literal `.` or `..` is a dot segment here, as in
++/// resolution; the caller keeps a segment that merely decodes to one encoded.
++///
++/// * a `.` segment is dropped, and a `..` removes the segment before it;
++/// * a `..` with nothing before it to remove is kept (`../a`), because it names
++///   the base's parent;
++/// * the first segment the reference itself contributes is never removed
++///   (`a/../b` is kept): against a base whose path has no directory part, §5.2.4
++///   turns that pair into a leading `/`, which no shorter spelling reproduces;
++/// * a final `.` or `..` leaves the directory form (`a/.` is `a/`, `.` and `./`
++///   are `.`, `../` is `..`), which is distinct from the empty path that names
++///   the base document itself;
++/// * a result that would begin with `/` keeps a `./` prefix, so that an empty
++///   first segment (`.//x`) does not become an absolute-path reference.
++pub(crate) fn collapse_unresolved_dot_segments(path: &str) -> String {
++    let mut kept: Vec<&str> = Vec::new();
++    // `kept[..floor]` are literal `..` segments (and the retained first segment
++    // before one): nothing below `floor` may be removed.
++    let mut floor = 0;
++    // The reference's first own segment sits at `kept[floor]` and is protected.
++    let mut first_is_protected = false;
++    let mut seen_segment = false;
++    // A final dot segment behaves as that segment followed by an empty one.
++    let directory_end = path
++        .rsplit('/')
++        .next()
++        .filter(|last| matches!(*last, "." | ".."))
++        .map(|_| "");
++    for segment in path.split('/').chain(directory_end) {
++        match segment {
++            "." => {}
++            ".." => {
++                if kept.len() > floor + usize::from(first_is_protected) {
++                    kept.pop();
++                } else {
++                    kept.push("..");
++                    floor = kept.len();
++                    first_is_protected = false;
++                }
++            }
++            other => {
++                if !seen_segment {
++                    seen_segment = true;
++                    first_is_protected = true;
++                }
++                kept.push(other);
++            }
++        }
++    }
++    // `..` and `../` resolve alike; the shorter form is the normal one.
++    if let [.., "..", ""] = kept.as_slice() {
++        kept.pop();
++    }
++    let joined = kept.join("/");
++    if joined.is_empty() {
++        ".".to_owned()
++    } else if joined.starts_with('/') {
++        format!("./{joined}")
++    } else {
++        joined
++    }
++}
++
+ /// Pop the trailing segment (and its preceding '/') from the output buffer — the
+ /// §5.2.4 case-C operation.
+ fn pop_last_segment(out: &mut String) {
+diff --git crates/iri/tests/iri_suite.rs crates/iri/tests/iri_suite.rs
+index f9e85ba45..c633e9f44 100644
+--- crates/iri/tests/iri_suite.rs
++++ crates/iri/tests/iri_suite.rs
+@@ -179,49 +179,218 @@ fn normalize_adds_no_guard_where_none_is_needed() {
+     }
+ }
+ 
+-/// What `normalize` guarantees for any parse-accepted input: it returns, its
+-/// text re-parses, scheme and authority presence are unchanged, and a second
+-/// call is identical.
+-fn assert_contract(input: &str) {
++/// Bases that separate the spellings a relative reference could be confused
++/// with: a deep hierarchical path, one with a query, an authority with an empty
++/// path, an authority-less rooted path, and paths with no directory part.
++const DISTINGUISHING_BASES: [&str; 7] = [
++    "http://h/x/y/z",
++    "http://h/x/y/z?bq",
++    "http://h",
++    "a:/p/q",
++    "urn:x",
++    "urn:x/y",
++    "a:",
++];
++
++/// RFC 3986 §4.1 and §5.2.4: dot segments in a relative reference are
++/// interpreted by resolution against a base, so `normalize` must not remove the
++/// ones only a base can interpret. Asserts the exact normal form, that it is a
++/// fixed point, and that it resolves like the original against each base.
++fn assert_normal_form_keeps_meaning(input: &str, expected: &str) {
+     let original = parse(input).expect("input parses");
+     let n = original.normalize();
+-    let reparsed = parse(n.as_str()).expect("normal form re-parses");
++    assert_eq!(n.as_str(), expected, "{input}");
+     assert_eq!(
+-        reparsed.scheme().is_some(),
+-        original.scheme().is_some(),
+-        "{input}"
++        n.normalize().as_str(),
++        expected,
++        "{input}: not a fixed point"
+     );
+-    assert_eq!(
+-        reparsed.authority().is_some(),
+-        original.authority().is_some(),
+-        "{input}"
+-    );
+-    assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
++    assert_eq!(n.scheme(), None, "{input}: became absolute");
++    assert_eq!(n.authority(), None, "{input}: gained an authority");
++    for base in DISTINGUISHING_BASES {
++        let base = parse(base).expect("base parses");
++        assert_eq!(
++            base.resolve(n.as_str())
++                .expect("normal form resolves")
++                .as_str(),
++            base.resolve(input).expect("input resolves").as_str(),
++            "{input} against {}",
++            base.as_str()
++        );
++    }
+ }
+ 
+-/// A reference whose path reduces to nothing has no empty spelling (`parse`
+-/// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
+-/// otherwise-empty reference, and a query or fragment keeps the empty path.
+-/// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
+-/// reference. The exact normal form of a reference with a leading `..` is
+-/// decided separately, so those inputs assert only the contract, not a string.
++/// Protects the meaning of a reference with leading `..` segments: `../a` names
++/// a sibling of the base's directory and `a` a child of it, so the leading
++/// segments stay, however they were spelled.
+ #[test]
+-fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
+-    for input in [".", "./", "./."] {
++fn normalize_keeps_leading_parent_segments_of_a_relative_reference() {
++    for (input, expected) in [
++        ("../a", "../a"),
++        ("../../a/./b", "../../a/b"),
++        ("./../a", "../a"),
++        ("../a/b/../c", "../a/c"),
++        ("..", ".."),
++        ("../", ".."),
++        ("./..", ".."),
++        (".././", ".."),
++        ("../..", "../.."),
++        ("..?q#f", "..?q#f"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects the difference between the base's directory (`.`) and the base
++/// document itself (the empty path): a reference that reduces to its directory
++/// keeps the path `.`, with or without a query or fragment. An empty path with a
++/// query or fragment is a different reference and is not rewritten.
++#[test]
++fn normalize_keeps_the_directory_reference_apart_from_the_empty_path() {
++    for (input, expected) in [
++        (".", "."),
++        ("./", "."),
++        ("./.", "."),
++        (".?q", ".?q"),
++        ("./?q", ".?q"),
++        ("./#f", ".#f"),
++        ("a/.", "a/"),
++        ("a/b/..", "a/"),
++        ("?q", "?q"),
++        ("#f", "#f"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects a relative-path reference from becoming an absolute-path one: an
++/// empty first segment stays behind `./` or `..`, where dropping the dot segment
++/// would leave a leading `/`.
++#[test]
++fn normalize_keeps_a_relative_reference_with_an_empty_segment_relative() {
++    for (input, expected) in [
++        (".//x", ".//x"),
++        ("..//x", "..//x"),
++        (".//", ".//"),
++        ("./a//b", "a//b"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects resolution against a base whose path has no directory part (`urn:x`):
++/// there RFC 3986 §5.2.4 turns the reference's own first segment followed by
++/// `..` into a leading `/`, so that pair is kept, while every later pair and
++/// every `.` collapses.
++#[test]
++fn normalize_collapses_only_the_dot_segments_every_base_agrees_on() {
++    for (input, expected) in [
++        ("a/./b", "a/b"),
++        ("a/b/../c", "a/c"),
++        ("./a", "a"),
++        ("x", "x"),
++        ("a/b/c/../../d", "a/d"),
++        ("a/../b", "a/../b"),
++        ("a/..", "a/.."),
++        ("a/../", "a/.."),
++        ("a/b/../../c", "a/../c"),
++        ("a/../b/../c", "a/../c"),
++        ("a/../../b", "a/../../b"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects a rootless reference that holds a percent-encoded dot. RFC 3986
++/// §5.2.4 recognises only a literal `.` or `..`, so resolution reads `%2e` as an
++/// ordinary segment; decoding it during normalization would make it a dot
++/// segment and move the reference. Such a segment stays encoded (`%2E`,
++/// `%2E%2E`), may be removed by a later `..` like any segment, and the form is a
++/// fixed point. Resolved results are compared in normal form, because the
++/// original keeps its own hex case.
++#[test]
++fn normalize_keeps_a_percent_encoded_dot_an_ordinary_segment_when_unresolved() {
++    for (input, expected) in [
++        ("%2e", "%2E"),
++        ("%2e%2e", "%2E%2E"),
++        (".%2E", "%2E%2E"),
++        ("%2e.", "%2E%2E"),
++        ("%2e%2e/a", "%2E%2E/a"),
++        ("a/%2e/b", "a/%2E/b"),
++        ("a/%2e/../b", "a/b"),
++        ("x/%2e%2e/../a", "x/a"),
++        ("x/%2e/..", "x/"),
++        ("%2e%2e/..", "%2E%2E/.."),
++        ("%2e/%2e/..", "%2E/"),
++        ("./%2e/%2E%2e/..", "%2E/"),
++        ("../%2e", "../%2E"),
++        ("a/%2E%2E", "a/%2E%2E"),
++        ("%2e?q#f", "%2E?q#f"),
++        // Neighbours: a segment that only contains an encoded dot decodes as
++        // before, and a literal dot segment beside one keeps its meaning.
++        ("x%2e/%2ey", "x./.y"),
++        ("%2e%2e%2e", "..."),
++        ("./%7e/../a", "~/../a"),
++    ] {
+         let n = parse(input).expect("input parses").normalize();
+-        assert_eq!(n.as_str(), ".", "{input}");
+-        assert_eq!(n.normalize().as_str(), ".", "{input}");
++        assert_eq!(n.as_str(), expected, "{input}");
++        assert_eq!(
++            n.normalize().as_str(),
++            expected,
++            "{input}: not a fixed point"
++        );
++        for base in DISTINGUISHING_BASES {
++            let base = parse(base).expect("base parses");
++            assert_eq!(
++                base.resolve(expected)
++                    .expect("normal form resolves")
++                    .normalize()
++                    .as_str(),
++                base.resolve(input)
++                    .expect("input resolves")
++                    .normalize()
++                    .as_str(),
++                "{input} against {}",
++                base.as_str()
++            );
++        }
+     }
+-    for input in ["..", "../", "./..", ".././"] {
+-        assert_contract(input);
++    // The upper-case spelling is already the normal form, so there the resolved
++    // texts are equal byte for byte.
++    let base = parse("http://h/d/e/f").unwrap();
++    assert_eq!(
++        base.resolve("a/%2E/../b").unwrap().as_str(),
++        "http://h/d/e/a/b"
++    );
++    assert_eq!(parse("a/%2E/../b").unwrap().normalize().as_str(), "a/b");
++}
++
++/// Neighbours of the relative-path rule that resolution treats as already
++/// rooted, and so keep full RFC 3986 §5.2.4 removal: an absolute IRI, a
++/// reference with an authority, and an absolute-path reference.
++#[test]
++fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
++    for (input, expected) in [
++        ("http://h/../a", "http://h/a"),
++        ("http://h/a/../b", "http://h/b"),
++        ("a:../b", "a:b"),
++        ("a:b/../c", "a:/c"),
++        ("//h/../a", "//h/a"),
++        ("//h/a/./b", "//h/a/b"),
++        ("/a/../b", "/b"),
++        ("/../a", "/a"),
++        ("/.", "/"),
++        // A percent-encoded dot segment is decoded first here, as before.
++        ("/a/%2e%2e/../b", "/b"),
++        ("http://h/a/%2e/b", "http://h/a/b"),
++        ("//h/a/%2E%2E/b", "//h/b"),
++    ] {
++        assert_eq!(
++            parse(input).unwrap().normalize().as_str(),
++            expected,
++            "{input}"
++        );
+     }
+-    // Neighbours that must keep their current result: an empty path with a query
+-    // or fragment is not rewritten, and non-empty results gain nothing.
+-    assert_eq!(parse("?q").unwrap().normalize().as_str(), "?q");
+-    assert_eq!(parse(".?q").unwrap().normalize().as_str(), "?q");
+-    assert_eq!(parse("./#f").unwrap().normalize().as_str(), "#f");
+-    assert_eq!(parse("x").unwrap().normalize().as_str(), "x");
+-    assert_eq!(parse("./a").unwrap().normalize().as_str(), "a");
+ }
+ 
+ /// RFC 3986 §4.2: the first segment of a scheme-less relative path may not hold
+@@ -240,7 +409,11 @@ fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
+         assert_eq!(n.scheme(), None, "{input}: became absolute");
+         assert_eq!(n.normalize().as_str(), expected, "{input}");
+     }
+-    assert_contract("../a:b"); // exact form of a leading `..` is decided separately
++    // A leading `..` stays, so the colon is not in the first segment and needs no
++    // `./`; a retained first segment that holds one still does.
++    assert_normal_form_keeps_meaning("../a:b", "../a:b");
++    assert_normal_form_keeps_meaning("./a:b/../c", "./a:b/../c");
++    assert_normal_form_keeps_meaning("./a/../b:c", "a/../b:c");
+     // Neighbours: no prefix where the colon is not in the first segment, where
+     // the path is rooted, or where a scheme is present.
+     for (input, expected) in [
+diff --git crates/iri/tests/property.rs crates/iri/tests/property.rs
+index 8ad0d4c62..554c4da8a 100644
+--- crates/iri/tests/property.rs
++++ crates/iri/tests/property.rs
+@@ -4,8 +4,9 @@
+ //! Property tests.
+ //!
+ //! Two families live here. The IRI one asserts that parse is verbatim-faithful,
+-//! that normalization is idempotent, and that resolving a reference against an
+-//! absolute base yields an absolute IRI.
++//! that normalization is idempotent and keeps what a relative reference resolves
++//! to, and that resolving a reference against an absolute base yields an absolute
++//! IRI.
+ //!
+ //! The RFC 5646 language-tag one asserts the invariants the module documents but
+ //! that no finite corpus can pin: the parser is **total** (no input panics it,
+@@ -100,6 +101,96 @@ prop_test! {
+     }
+ }
+ 
++/// Scheme-less, authority-less references built from the segments whose
++/// handling decides what a reference means: `.`, `..`, empty, plain, one holding
++/// a colon, one holding a percent-encoded unreserved character, and the
++/// percent-encoded spellings of `.` and `..` in either hex case and mixed with a
++/// literal dot. Resolution reads those as ordinary segments, so they may appear
++/// in leading, interior and final position. A leading `/` gives the
++/// absolute-path and network-path neighbours, which the property skips when
++/// they hold an encoded dot.
++fn relative_reference() -> impl Strategy<Value = String> {
++    let prefix = prop::sample::select(vec!["", "", "", "./", "../", "%2e/", "%2E%2e/", "/"]);
++    let seg = prop::sample::select(vec![
++        "", ".", "..", "..", "x", "y", "a:b", "%7e", "%3A", "%2e", "%2E", "%2e%2E", ".%2e", "%2E.",
++        "x%2e",
++    ]);
++    let segs = prop::collection::vec(seg, 0..7);
++    let query = prop::option::of(prop::sample::select(vec!["", "q"]));
++    let frag = prop::option::of(prop::sample::select(vec!["", "f"]));
++    (prefix, segs, query, frag).prop_map(|(pre, segs, q, f)| {
++        let mut out = format!("{pre}{}", segs.join("/"));
++        if let Some(q) = q {
++            out.push('?');
++            out.push_str(q);
++        }
++        if let Some(f) = f {
++            out.push('#');
++            out.push_str(f);
++        }
++        out
++    })
++}
++
++/// Absolute bases of every path shape RFC 3986 §5.2.3 merges differently: an
++/// authority with an empty, rooted, dotted or double-slash path, no authority
++/// with a rooted path, and no authority with a rootless path that has, lacks or
++/// only pretends to have a directory part.
++fn absolute_base() -> impl Strategy<Value = &'static str> {
++    prop::sample::select(vec![
++        "http://h",
++        "http://h/",
++        "http://h/x",
++        "http://h/x/y/z?bq",
++        "http://h/x/y/",
++        "http://h/x/../y/./z",
++        "http://h//x//y",
++        "a:/",
++        "a:/p/q",
++        "a:/p/../q/r",
++        "a:",
++        "urn:x",
++        "urn:x/y",
++        "urn:x/y/z",
++        "urn:x/../y",
++        "a:./x",
++        "a:../x/y",
++        "a:.//x",
++    ])
++}
++
++prop_test! {
++    /// Protects the meaning of a relative reference under `normalize` (RFC 3986
++    /// §4.1, §5.2.4, §6.2.2.3): dot segments are interpreted by resolution, so for
++    /// every reference with no scheme and every absolute base, resolving the
++    /// normal form names the same IRI as resolving the original. That includes a
++    /// rootless reference with a percent-encoded dot segment, which resolution
++    /// reads as an ordinary segment. The two results are compared in normal form
++    /// because the reference's case and percent-encoding normalization carry
++    /// into the resolved text. The normal form also stays scheme-less and is a
++    /// fixed point. A reference with an authority or a leading `/` that holds an
++    /// encoded dot is outside the guarantee and is skipped.
++    #[test]
++    fn normalize_preserves_what_a_relative_reference_resolves_to(
++        r in relative_reference(),
++        b in absolute_base(),
++    ) {
++        if let Ok(reference) = parse(&r) {
++            prop_assume!(!reference.has_scheme());
++            let rooted = reference.authority().is_some() || reference.path().starts_with('/');
++            prop_assume!(!(rooted && reference.path().to_ascii_lowercase().contains("%2e")));
++            let base = parse(b).expect("base parses");
++            let n = reference.normalize();
++            prop_assert!(!n.has_scheme());
++            prop_assert_eq!(n.authority().is_some(), reference.authority().is_some());
++            prop_assert_eq!(n.normalize().as_str(), n.as_str());
++            let direct = base.resolve(&r).expect("reference resolves").normalize();
++            let through = base.resolve(n.as_str()).expect("normal form resolves").normalize();
++            prop_assert_eq!(through.as_str(), direct.as_str());
++        }
++    }
++}
++
+ prop_test! {
+     /// The parser never rewrites its input: `as_str()` is byte-identical.
+     #[test]
+diff --git crates/rdf-wasm/src/interleaving.rs crates/rdf-wasm/src/interleaving.rs
+index 837cb49b9..6a0c02442 100644
+--- crates/rdf-wasm/src/interleaving.rs
++++ crates/rdf-wasm/src/interleaving.rs
+@@ -357,6 +357,36 @@ pub const LEDGER: &[ThreadLocal] = &[
+         safety: Safety::NotCompiledIn,
+         reason: TEST_ONLY,
+     },
++    ThreadLocal {
++        file: "crates/sparql-eval/src/eval.rs",
++        name: "EXISTS_DECISION_COUNT",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
++    ThreadLocal {
++        file: "crates/sparql-eval/src/eval.rs",
++        name: "IN_PLACE_ANSWER_COUNT",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
++    ThreadLocal {
++        file: "crates/sparql-eval/src/eval.rs",
++        name: "SITE_FACTS_READ_COUNT",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
++    ThreadLocal {
++        file: "crates/sparql-eval/src/eval.rs",
++        name: "BOOLEAN_SHORTCUT_COUNT",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
++    ThreadLocal {
++        file: "crates/sparql-eval/src/eval.rs",
++        name: "LONE_VARIABLE_READ_COUNT",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
+     ThreadLocal {
+         file: "crates/sparql-eval/src/expr.rs",
+         name: "FORCE_EXISTS_STRATEGY",
+diff --git crates/shapes/benches/support/frozen_eval.rs crates/shapes/benches/support/frozen_eval.rs
+index 4c8fff97c..947dfa3c6 100644
+--- crates/shapes/benches/support/frozen_eval.rs
++++ crates/shapes/benches/support/frozen_eval.rs
+@@ -412,9 +412,19 @@ pub(crate) enum Query {
+     Q4,
+     /// NOT EXISTS with FILTER.
+     Q5,
++    /// Two patterns scanned, bound and joined, then only counted. Like every row here
++    /// it runs ungoverned, with no stop signal and no ceiling: the first pattern scans
++    /// into the row sink and the last through the retained cursor. It is not the
++    /// governed run, in which every stage scans into the sink. Many rows are bound and
++    /// one answer row is returned, so the witness count is always 1 and the check on
++    /// this row is agreement between the freeze variants, not a known count.
++    Scan,
+ }
+ 
+ impl Query {
++    /// Every query, in report order.
++    const ALL: [Self; 6] = [Self::Q1, Self::Q2, Self::Q3, Self::Q4, Self::Q5, Self::Scan];
++
+     pub(crate) fn label(self) -> String {
+         match self {
+             Self::Q1 => "q1_not_exists_group_having".into(),
+@@ -422,6 +432,7 @@ impl Query {
+             Self::Q3 => "q3_not_exists_group_subquery".into(),
+             Self::Q4 => "q4_filter".into(),
+             Self::Q5 => "q5_not_exists_filter".into(),
++            Self::Scan => "scan_two_patterns_count".into(),
+         }
+     }
+ 
+@@ -454,6 +465,9 @@ impl Query {
+             Self::Q5 => "SELECT ?x ?s WHERE { ?x ex:score ?s ; ex:status ?st . \
+                  FILTER NOT EXISTS { ?x ex:parent ?p . ?p ex:score ?ps . FILTER(?ps > ?s) } }"
+                 .to_owned(),
++            Self::Scan => {
++                "SELECT (COUNT(*) AS ?n) WHERE { ?x ex:score ?s ; ex:status ?st }".to_owned()
++            }
+         };
+         format!("{}{body}", prologue())
+     }
+@@ -682,10 +696,9 @@ pub(crate) fn rows() -> Vec<Row> {
+         );
+     }
+ 
+-    let reported = [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5];
+     // Cold: a fresh engine plans on a dataset whose identity is sealed. Warm: the
+     // same engine runs the prepared query again.
+-    for query in reported {
++    for query in Query::ALL {
+         for data in [Data::Ordinary, Data::Eager] {
+             for warm in [false, true] {
+                 add(
+@@ -790,7 +803,7 @@ impl Fixtures {
+             );
+             let _ = DatasetView::snapshot_identity(&*dataset);
+             let engine = NativeSparqlEngine::new();
+-            for query in [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5] {
++            for query in Query::ALL {
+                 let prepared = engine
+                     .prepare_query(&query.text(&self.layout), None)
+                     .expect("the query prepares");
+diff --git crates/shapes/tests/governed_view_aggregate.rs crates/shapes/tests/governed_view_aggregate.rs
+new file mode 100644
+index 000000000..a8f6dae00
+--- /dev/null
++++ crates/shapes/tests/governed_view_aggregate.rs
+@@ -0,0 +1,126 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! **A GROUP BY under a SHACL host's governors is charged what it always was.**
++//!
++//! A host that sets a scratch ceiling, an intermediate-cell ceiling and a stop signal runs
++//! the aggregate on its sequential, suspendable route. That route reads each argument and
++//! copies each value without the admission frame a bounded account needs, and it must
++//! still charge the same scratch bytes, complete at the same smallest ceiling and refuse
++//! one byte below it, over the SHACL view exactly as over the plain dataset.
++
++use std::sync::Arc;
++
++use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest};
++use purrdf_shapes::data_view::ShaclDatasetView;
++use purrdf_sparql_eval::{
++    CancellationFlag, GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions,
++};
++
++const NS: &str = "http://example.org/";
++
++/// Twelve subjects, each with one of five statuses.
++fn dataset() -> Arc<RdfDataset> {
++    let mut b = RdfDatasetBuilder::new();
++    let status = b.intern_iri(&format!("{NS}status")).unwrap();
++    for i in 0..12_u64 {
++        let s = b.intern_iri(&format!("{NS}s{i}")).unwrap();
++        let st = b.intern_iri(&format!("{NS}st{}", i % 5)).unwrap();
++        b.push_quad(s, status, st, None).unwrap();
++    }
++    let literal = b
++        .intern_literal(RdfLiteral::typed(
++            "7",
++            "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
++        ))
++        .unwrap();
++    let count = b.intern_iri(&format!("{NS}count")).unwrap();
++    let s0 = b.intern_iri(&format!("{NS}s0")).unwrap();
++    b.push_quad(s0, count, literal, None).unwrap();
++    b.freeze().unwrap()
++}
++
++const GROUP_COUNT: &str = "PREFIX ex: <http://example.org/>\n\
++    SELECT ?st (COUNT(?x) AS ?n) WHERE { ?x ex:status ?st } GROUP BY ?st";
++const GROUP_LITERAL: &str = "PREFIX ex: <http://example.org/>\n\
++    SELECT (MIN(?c) AS ?m) (COUNT(?c) AS ?n) WHERE { ?x ex:count ?c }";
++const GROUP_VARIABLE: &str = "PREFIX ex: <http://example.org/>\n\
++    SELECT ?x (COUNT(?v) AS ?n) ?v WHERE { ?v ex:status ?o } GROUP BY ?x ?v HAVING (?n > 0)";
++
++fn governors(scratch: u64) -> QueryGovernors {
++    QueryGovernors::UNBOUNDED
++        .with_max_scratch_bytes(scratch)
++        .with_max_intermediate_cells(1 << 40)
++        .with_stop_signal(Arc::new(CancellationFlag::new()))
++}
++
++/// The rendered result, its row count and the scratch consumed by a complete run, or
++/// `None` when a governor stopped it.
++fn run<D: purrdf_core::DatasetView + Sync>(
++    dataset: &D,
++    query: &str,
++    scratch: u64,
++) -> Option<(String, usize, u64)> {
++    let engine = NativeSparqlEngine::new();
++    let request = SparqlRequest {
++        query,
++        base_iri: None,
++        substitutions: &[],
++    };
++    let outcome = engine
++        .query_governed_view(dataset, request, &QueryOptions::EMPTY, &governors(scratch))
++        .expect("the query parses and is admitted");
++    match outcome {
++        GovernedOutcome::Complete {
++            result, evidence, ..
++        } => {
++            let rows = match &result {
++                purrdf_core::SparqlResult::Solutions { rows, .. } => rows.len(),
++                other => panic!("a SELECT answers solutions, got {other:?}"),
++            };
++            Some((
++                format!("{result:?}"),
++                rows,
++                evidence.consumed_in(ResourceDimension::ScratchBytes),
++            ))
++        }
++        GovernedOutcome::BudgetExhausted(_) => None,
++    }
++}
++
++/// What each query answers over the twelve subjects: its row count and the scratch it is
++/// charged. `GROUP_VARIABLE` keeps no row, since its `HAVING` drops every group; the
++/// literal query reads the `ex:count 7` literal through the view.
++const EXPECTED: [(usize, u64); 3] = [(5, 784), (0, 784), (1, 219)];
++
++#[test]
++fn the_shacl_view_answers_and_is_charged_as_the_plain_dataset_and_refuses_one_byte_below() {
++    let source = dataset();
++    let view = ShaclDatasetView::native(Arc::clone(&source));
++    let queries = [GROUP_COUNT, GROUP_VARIABLE, GROUP_LITERAL];
++    let observed = queries.map(|query| {
++        let (_, rows, scratch) = run(&view, query, 1 << 40).expect("completes");
++        (rows, scratch)
++    });
++    assert_eq!(
++        observed, EXPECTED,
++        "rows and scratch consumed by each query"
++    );
++    for (query, (_, pinned)) in queries.into_iter().zip(EXPECTED) {
++        let plain = run(&*source, query, 1 << 40).unwrap();
++        let viewed = run(&view, query, 1 << 40).unwrap();
++        assert_eq!(
++            viewed, plain,
++            "{query}: the view answers and is charged as the dataset"
++        );
++        assert_eq!(
++            run(&view, query, pinned).map(|(rendered, ..)| rendered),
++            Some(viewed.0),
++            "{query}: completes at its own consumption"
++        );
++        assert!(
++            run(&view, query, pinned - 1).is_none(),
++            "{query}: refused one byte below"
++        );
++    }
++}
+diff --git crates/sparql-eval/benches/exists_decorrelation.rs crates/sparql-eval/benches/exists_decorrelation.rs
+index d013948ac..8da0a6f83 100644
+--- crates/sparql-eval/benches/exists_decorrelation.rs
++++ crates/sparql-eval/benches/exists_decorrelation.rs
+@@ -156,6 +156,15 @@ const OPTIONAL_INSIDE_EXISTS_QUERY: &str = "SELECT ?s WHERE { ?s <http://ex/know
+        FILTER(?w != <http://ex/nobody>) \
+      } }";
+ 
++/// The aggregate-and-negation shape a SHACL view runs: a correlated `NOT EXISTS` over a
++/// body that carries its own `FILTER`, grouped and filtered by `HAVING`. Every outer row
++/// decides the site, and each survivor feeds a group, so the row loop's per-row decision
++/// and the aggregate's per-cell value read are both on the measured path.
++const NOT_EXISTS_GROUPED_QUERY: &str = "SELECT ?o (COUNT(?s) AS ?n) WHERE { \
++     ?s <http://ex/knows> ?o \
++     FILTER NOT EXISTS { ?s <http://ex/likes> ?z FILTER(?z = <http://ex/z0>) } \
++     } GROUP BY ?o HAVING (COUNT(?s) > 0)";
++
+ /// `d` nested `FILTER EXISTS`, every level correlated with the one around it through
+ /// `?s` and `?o`.
+ fn nested_correlated_query(depth: usize) -> String {
+@@ -239,6 +248,14 @@ fn bench_exists_decorrelation(c: &mut Bench) {
+         OPTIONAL_INSIDE_EXISTS_QUERY,
+         DEFINITION_MEMO_ARMS,
+     );
++    // The grouped NOT EXISTS shape over the hub dataset: only `:s0` has the excluded
++    // `:likes` target, so every other outer row survives into the one group on `:hub`.
++    bench_pair(
++        c,
++        "exists_not_exists_grouped",
++        &hub,
++        NOT_EXISTS_GROUPED_QUERY,
++    );
+ }
+ 
+ fn bench_nested_correlated_depth(c: &mut Bench) {
+diff --git crates/sparql-eval/src/bgp.rs crates/sparql-eval/src/bgp.rs
+index 5395fa29c..d06265c3c 100644
+--- crates/sparql-eval/src/bgp.rs
++++ crates/sparql-eval/src/bgp.rs
+@@ -307,6 +307,17 @@ struct CompiledPattern<I: ViewTermId = TermId> {
+     o: Pos<I>,
+ }
+ 
++impl<I: ViewTermId> CompiledPattern<I> {
++    /// Whether no position is a nested quoted-triple pattern, so binding a candidate
++    /// never has to resolve a term.
++    #[inline]
++    const fn is_flat(&self) -> bool {
++        !matches!(self.s, Pos::Triple(_))
++            && !matches!(self.p, Pos::Triple(_))
++            && !matches!(self.o, Pos::Triple(_))
++    }
++}
++
+ /// Immutable positions and column layout for repeated occurrences of one BGP.
+ /// The input schema stays fixed; binding masks and candidate scans remain local
+ /// to each occurrence. A missing ground term retains the full empty header.
+@@ -3320,6 +3331,22 @@ fn bind_row<D: DatasetView + Sync>(
+     // plain copy of the cells in place. The accounted build below is the same row.
+     if !workspace.is_bounded() && ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+         let mut out = RetainedRow::resident_copy(cells)?;
++        if cp.is_flat() {
++            // No nested position: the test above settled every constant and every slot
++            // the driving row binds, so each slot is written where it stands and only a
++            // variable repeated inside this pattern can still disagree. The general
++            // loop below does the same writes in the same order through a work list.
++            for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
++                if let Pos::Slot(col) = pos {
++                    let value = SolutionTerm::Existing(id);
++                    match out[*col] {
++                        Some(existing) if existing != value => return Ok(None),
++                        _ => out[*col] = Some(value),
++                    }
++                }
++            }
++            return Ok(Some(RetainedRow::from_resident(out)));
++        }
+         for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+             if !bind_pos_admitted(&mut out, pos, id, dataset, workspace)? {
+                 return Ok(None);
+diff --git crates/sparql-eval/src/bgp/expansion.rs crates/sparql-eval/src/bgp/expansion.rs
+index d7b04e1b9..7298593f9 100644
+--- crates/sparql-eval/src/bgp/expansion.rs
++++ crates/sparql-eval/src/bgp/expansion.rs
+@@ -41,6 +41,13 @@ pub(super) enum ExpansionStep<I: ViewTermId> {
+     Stop,
+ }
+ 
++/// What a candidate is before its row is bound.
++enum Examined {
++    Bind,
++    Skip,
++    Stop,
++}
++
+ #[cfg(test)]
+ thread_local! {
+     /// Virtual statement-layer sources opened on this thread, for tests that pin when
+@@ -161,22 +168,37 @@ impl<I: ViewTermId> Expansion<I> {
+         quad: QuadIds<I>,
+         ctx: &EvalCtx<'_, D>,
+     ) -> Result<ExpansionStep<I>, EvalError> {
++        Ok(match self.examine(&quad, ctx)? {
++            Examined::Stop => ExpansionStep::Stop,
++            Examined::Skip => ExpansionStep::Skip,
++            Examined::Bind => match bind_row(input.row, input.pattern, &quad, ctx)? {
++                Some(row) => ExpansionStep::Row(row),
++                None => ExpansionStep::Skip,
++            },
++        })
++    }
++
++    /// The stop poll, the candidate charge and the merged-scope de-duplication: every
++    /// step of a candidate before its row is bound.
++    #[inline]
++    fn examine<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        quad: &QuadIds<I>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<Examined, EvalError> {
+         if ctx.stop_check().is_some() {
+             self.stopped = true;
+-            return Ok(ExpansionStep::Stop);
++            return Ok(Examined::Stop);
+         }
+         self.charge.fuel = self.charge.fuel.saturating_add(1);
+         if self.merged {
+             let key = (quad.s, quad.p, quad.o);
+             if self.seen.get(&key).is_some() {
+-                return Ok(ExpansionStep::Skip);
++                return Ok(Examined::Skip);
+             }
+             self.seen.insert_admitted(key, (), &ctx.growth)?;
+         }
+-        Ok(match bind_row(input.row, input.pattern, &quad, ctx)? {
+-            Some(row) => ExpansionStep::Row(row),
+-            None => ExpansionStep::Skip,
+-        })
++        Ok(Examined::Bind)
+     }
+ 
+     pub(super) fn committed(&mut self) {
+@@ -190,14 +212,21 @@ impl<I: ViewTermId> Expansion<I> {
+         ctx: &EvalCtx<'_, D>,
+         sink: &mut crate::parallel::RowSink<'_, RetainedRow<I>>,
+     ) -> std::ops::ControlFlow<()> {
+-        match self.candidate(input, quad, ctx) {
+-            Ok(ExpansionStep::Row(row)) => {
++        // The bound row moves straight into the sink; `candidate` hands the same row
++        // to a caller that keeps it.
++        let bound = match self.examine(&quad, ctx) {
++            Ok(Examined::Bind) => bind_row(input.row, input.pattern, &quad, ctx),
++            Ok(Examined::Skip) => Ok(None),
++            Ok(Examined::Stop) => return std::ops::ControlFlow::Break(()),
++            Err(error) => Err(error),
++        };
++        match bound {
++            Ok(Some(row)) => {
+                 if sink.push(row) {
+                     self.committed();
+                 }
+             }
+-            Ok(ExpansionStep::Skip) => {}
+-            Ok(ExpansionStep::Stop) => return std::ops::ControlFlow::Break(()),
++            Ok(None) => {}
+             Err(error) => {
+                 sink.fail(error);
+                 return std::ops::ControlFlow::Break(());
+diff --git crates/sparql-eval/src/constant_operand_parse.rs crates/sparql-eval/src/constant_operand_parse.rs
+index 7cd25396e..601ab4ae6 100644
+--- crates/sparql-eval/src/constant_operand_parse.rs
++++ crates/sparql-eval/src/constant_operand_parse.rs
+@@ -72,9 +72,10 @@ fn constant_operand_is_parsed_once_per_query() {
+         "the constant must not be parsed again for each of the extra rows"
+     );
+     assert_eq!(
+-        many, 5,
+-        "the dataset value once, and the constant and the boolean the comparison \
+-         yields twice each: on the first row and on the second, which stores them"
++        many, 3,
++        "the dataset value once, and the constant twice: on the first row and on the \
++         second, which stores it; the boolean the comparison yields is read as the \
++         interned boolean it is and is never parsed"
+     );
+ }
+ 
+@@ -84,7 +85,31 @@ fn constant_operand_is_parsed_once_per_query() {
+ fn constant_operand_memo_keeps_the_answer() {
+     let (kept, parses) = parses_of(400, "?v > 8.5e0");
+     assert_eq!(kept, 0);
+-    assert_eq!(parses, 5);
++    assert_eq!(parses, 3);
++}
++
++/// **A boolean that differs from the constant it is compared with is read as the interned
++/// boolean it is, not parsed per row.** In `(?v > 5.5e0) = true` both operands are the same
++/// interned term, so the equality answers at the sameTerm check before any parse and the
++/// case only holds the answer. In `(?v > 5.5e0) = false` the two terms differ, so the
++/// comparison's own boolean reaches the operand reader, and its parse count must not
++/// grow with the rows.
++#[test]
++fn a_boolean_operand_is_not_parsed_per_row() {
++    let (few_kept, _) = parses_of(4, "(?v > 5.5e0) = true");
++    let (many_kept, _) = parses_of(400, "(?v > 5.5e0) = true");
++    assert_eq!(
++        (few_kept, many_kept),
++        (4, 400),
++        "the comparison holds on every row"
++    );
++    let (few_kept, few) = parses_of(4, "(?v > 5.5e0) = false");
++    let (many_kept, many) = parses_of(400, "(?v > 5.5e0) = false");
++    assert_eq!((few_kept, many_kept), (0, 0), "no row compares false");
++    assert_eq!(
++        few, many,
++        "the boolean the comparison yields must not be parsed again for each extra row"
++    );
+ }
+ 
+ /// **An operand computed from the row is still evaluated per row.** `?v + 1` is not a
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index ac2ab5e4d..3c01fd5f4 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -445,6 +445,10 @@ pub(crate) enum PreparedExists {
+         normalized_sites: std::sync::OnceLock<
+             crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
+         >,
++        /// What holds for [`Self::Pattern::normalized`] whatever row or outer schema
++        /// reaches it, learned on the site's second visit (see
++        /// [`crate::expr::SiteFacts`]).
++        facts: crate::expr::SiteFacts,
+     },
+ }
+ 
+@@ -463,6 +467,27 @@ thread_local! {
+     /// that thread's count from ever being touched by another test's thread.
+     pub(crate) static PREPARED_EXISTS_BUILD_COUNT: std::cell::Cell<u64> =
+         const { std::cell::Cell::new(0) };
++
++    /// Test-only counter of strategy decisions an `EXISTS` site makes
++    /// (`exists_prepared_decide` entries), thread-local for the same reason as
++    /// [`PREPARED_EXISTS_BUILD_COUNT`]. It pins how often a row loop decides a site
++    /// before it answers.
++    pub(crate) static EXISTS_DECISION_COUNT: std::cell::Cell<u64> =
++        const { std::cell::Cell::new(0) };
++
++    /// Test-only witnesses that each resident fast path engages on the shape it claims:
++    /// an `EXISTS` row resumed in place, a site read through its learned facts, an
++    /// interned boolean read as its own effective boolean value, and an aggregate
++    /// argument read straight from the row. Thread-local like the counters above; a test
++    /// reads them under `force_sequential`.
++    pub(crate) static IN_PLACE_ANSWER_COUNT: std::cell::Cell<u64> =
++        const { std::cell::Cell::new(0) };
++    pub(crate) static SITE_FACTS_READ_COUNT: std::cell::Cell<u64> =
++        const { std::cell::Cell::new(0) };
++    pub(crate) static BOOLEAN_SHORTCUT_COUNT: std::cell::Cell<u64> =
++        const { std::cell::Cell::new(0) };
++    pub(crate) static LONE_VARIABLE_READ_COUNT: std::cell::Cell<u64> =
++        const { std::cell::Cell::new(0) };
+ }
+ 
+ /// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
+diff --git crates/sparql-eval/src/expr.rs crates/sparql-eval/src/expr.rs
+index 568a57887..31710ae94 100644
+--- crates/sparql-eval/src/expr.rs
++++ crates/sparql-eval/src/expr.rs
+@@ -716,6 +716,11 @@ impl<'e, I: ViewTermId> FilterSequence<'e, I> {
+                 )?
+             };
+             match frame.poll(ctx)? {
++                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
++                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
++                {
++                    self.active = Some(frame);
++                }
+                 crate::vm::VmStep::Value(value) => {
+                     let (linked, row, keep, evidence) =
+                         frame.finish_filter(expression, &self.schema, value, ctx)?;
+@@ -899,6 +904,11 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
+                 )?
+             };
+             match frame.poll(ctx)? {
++                crate::vm::VmStep::Suspend(crate::vm::Suspend::Exists(site))
++                    if frame.resume_exists_in_place(site, expression, &self.schema, ctx)? =>
++                {
++                    self.active = Some(frame);
++                }
+                 crate::vm::VmStep::Suspend(request) => {
+                     self.active = Some(frame);
+                     return Ok(ExtendStep::Suspend(self, request));
+@@ -1428,6 +1438,19 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+     term: SolutionTerm<D::Id>,
+ ) -> Result<Option<bool>, EvalError> {
++    // The two booleans this evaluation interned (an `EXISTS` answer, a comparison)
++    // are their own effective boolean value. Only an unbounded evaluation answers
++    // here, so a bounded one parses, admits and is charged as it always was.
++    if !ctx.growth.is_bounded()
++        && let Some(slot) = ctx
++            .cached_bool_terms
++            .iter()
++            .position(|cached| *cached == Some(term))
++    {
++        #[cfg(test)]
++        crate::eval::BOOLEAN_SHORTCUT_COUNT.with(|count| count.set(count.get() + 1));
++        return Ok(Some(slot == 1));
++    }
+     let is_lang_tagged = match term {
+         SolutionTerm::Existing(id) => ctx
+             .dataset
+@@ -2759,6 +2782,7 @@ fn exists_apply_first_witness_wrap() -> bool {
+ fn exists_use_probe(
+     correlated: bool,
+     stateful: bool,
++    every_schema: bool,
+     normalized: &GraphPattern,
+     analysis: &crate::governor::soundness::NodeAnalysisTable,
+     outer_schema: &VarSchema,
+@@ -2768,7 +2792,7 @@ fn exists_use_probe(
+     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
+         return Ok(forced == ForcedExistsStrategy::Probe);
+     }
+-    if !correlated && !stateful {
++    if (!correlated && !stateful) || every_schema {
+         return Ok(true);
+     }
+     crate::governor::soundness::probe_admissible_admitted(
+@@ -2779,8 +2803,97 @@ fn exists_use_probe(
+     )
+ }
+ 
+-/// Evaluate `EXISTS { pattern }` for the current solution.
++/// What holds for one prepared `EXISTS` body whatever outer row or schema reaches
++/// it, so a resident evaluation can skip the per-row walks these facts decide.
+ ///
++/// * The body introduces no binding (no `BIND` or projection target, `UNFOLD`
++///   target, `VALUES` column or `GROUP`): the row-collision walk then answers "no
++///   collision" for every row, since every collision it reports names one of those.
++/// * The memoized probe is admissible with every free variable of the body treated
++///   as a current-row variable: probe admissibility only ever refuses because a
++///   current-row variable is present, and the variables a real outer schema
++///   supplies are a subset of those, so it is then admissible for every schema.
++///
++/// Learned on the site's second visit, so a site reached once allocates nothing
++/// for them. Both are properties of the immutable body alone, which is why a
++/// preparation shared across runs may keep them: every flag lives as long as its
++/// preparation, so the first row of a later run of one plan finds the site already
++/// visited and is asked in place at once. Only a workspace without a
++/// storage budget reads them: a bounded run keeps its original per-row walks and
++/// their exact admission.
++#[derive(Debug, Default)]
++pub(crate) struct SiteFacts(std::sync::atomic::AtomicU8);
++
++impl SiteFacts {
++    const VISITED: u8 = 1;
++    const KNOWN: u8 = 2;
++    const NO_BINDING: u8 = 4;
++    const PROBE_EVERY_SCHEMA: u8 = 8;
++    /// The last row loop that asked for an answer in place got a child instead.
++    const CHILD_LAST: u8 = 16;
++    /// That child was a per-row definition (or a deferred one). A definition-memo hit can
++    /// complete a later decision without a child, but a hit is followed by a miss on most
++    /// data, and clearing the flag on a hit would decide the next fresh row twice. The
++    /// site therefore keeps `CHILD_LAST` for the life of its preparation, and a
++    /// preparation a plan shares keeps every flag across the runs of that plan: only the
++    /// route a row takes depends on them, never an answer or a charge.
++    const DEFINITION: u8 = 32;
++
++    /// The facts for `normalized`, or `None` on its first visit.
++    fn read(
++        &self,
++        normalized: &GraphPattern,
++        analysis: &crate::governor::soundness::NodeAnalysisTable,
++        free_vars: &VarSchema,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<u8>, EvalError> {
++        use std::sync::atomic::Ordering::Relaxed;
++        let state = self.0.load(Relaxed);
++        if state & Self::KNOWN != 0 {
++            return Ok(Some(state));
++        }
++        if state & Self::VISITED == 0 {
++            self.0.fetch_or(Self::VISITED, Relaxed);
++            return Ok(None);
++        }
++        let mut facts = Self::VISITED | Self::KNOWN;
++        if !crate::governor::soundness::introduces_row_binding(normalized, workspace)? {
++            facts |= Self::NO_BINDING;
++        }
++        if crate::governor::soundness::probe_admissible_admitted(
++            normalized, analysis, free_vars, workspace,
++        )? {
++            facts |= Self::PROBE_EVERY_SCHEMA;
++        }
++        Ok(Some(self.0.fetch_or(facts, Relaxed) | facts))
++    }
++
++    fn visited(&self) -> bool {
++        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::VISITED != 0
++    }
++
++    fn child_last(&self) -> bool {
++        self.0.load(std::sync::atomic::Ordering::Relaxed) & Self::CHILD_LAST != 0
++    }
++
++    /// Record that a request for an answer in place got a child; `definition` says it
++    /// was a definition child, which keeps the flag for the life of the preparation.
++    fn set_child_last(&self, definition: bool) {
++        let bits = Self::CHILD_LAST | if definition { Self::DEFINITION } else { 0 };
++        self.0.fetch_or(bits, std::sync::atomic::Ordering::Relaxed);
++    }
++
++    /// A suspended decision completed without a child: a probe answered from its cache
++    /// may be asked in place again. A definition site never is.
++    fn clear_child_last(&self) {
++        use std::sync::atomic::Ordering::Relaxed;
++        let state = self.0.load(Relaxed);
++        if state & Self::DEFINITION == 0 && state & Self::CHILD_LAST != 0 {
++            self.0.fetch_and(!Self::CHILD_LAST, Relaxed);
++        }
++    }
++}
++
+ /// # The one-definition theorem
+ ///
+ /// Stated once, in full, in `crate::enf`'s module doc (cited from there by
+@@ -2917,10 +3030,17 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
+         ));
+     }
+     let prepared = ctx.prepared_exists(pattern)?;
+-    let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
++    let crate::eval::PreparedExists::Pattern {
++        ledger_source,
++        facts,
++        ..
++    } = prepared.as_ref()
++    else {
+         return Ok(ExistsDecision::Complete(false));
+     };
+-    exists_prepared_decide(
++    // A row loop that last met a child here asks again once this path completes.
++    let hint = facts.child_last().then(|| prepared.clone());
++    let decision = exists_prepared_decide(
+         PreparedSite {
+             key: address,
+             plan_map: ledger_source.clone(),
+@@ -2931,7 +3051,71 @@ pub(crate) fn exists_recorded_decide<D: DatasetView + Sync>(
+         schema,
+         ctx,
+         evidence,
+-    )
++    )?;
++    if let Some(prepared) = hint
++        && matches!(decision, ExistsDecision::Complete(_))
++        && let crate::eval::PreparedExists::Pattern { facts, .. } = prepared.as_ref()
++    {
++        facts.clear_child_last();
++    }
++    Ok(decision)
++}
++
++/// The answer of an `EXISTS` site for this row when its decision completes without a
++/// graph child, for a row loop that can then resume its row in place instead of
++/// suspending it. `None` leaves the request to the suspending caller, which decides
++/// it again from the start: a decision that ends in a child has charged nothing and
++/// published nothing, so deciding twice answers and charges as deciding once.
++///
++/// Only an ordinary resident evaluation asks: a bounded workspace or a query that
++/// records evidence keeps the suspended route. A site whose last such request ended
++/// in a child is not asked again until a suspended decision completes, and a site
++/// whose child was a per-row definition is not asked again for the life of its
++/// preparation (which a plan shares across runs), so a site that always needs a child
++/// is decided once per row.
++pub(crate) fn exists_answer_in_place<D: DatasetView + Sync>(
++    pattern: &GraphPattern,
++    row: &[Option<SolutionTerm<D::Id>>],
++    schema: &VarSchema,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Option<bool>, EvalError> {
++    crate::stack::check("EXISTS")?;
++    // A body inside a substituted EXISTS is rebuilt for every outer row, so no site there
++    // has a history to learn from: it keeps the suspending route.
++    if ctx.in_substituted_exists
++        || ctx.deferred_exists.is_some()
++        || crate::deferred_exists::is_placeholder(pattern)
++    {
++        return Ok(None);
++    }
++    let prepared = ctx.prepared_exists(pattern)?;
++    let crate::eval::PreparedExists::Pattern {
++        ledger_source,
++        facts,
++        ..
++    } = prepared.as_ref()
++    else {
++        return Ok(Some(false));
++    };
++    // A site never decided before takes the suspending route, which decides it once:
++    // a body substituted afresh for every row is always such a site, and deciding it
++    // here as well would double its work whenever the decision ends in a child.
++    if !facts.visited() || facts.child_last() {
++        return Ok(None);
++    }
++    let site = PreparedSite {
++        key: std::ptr::from_ref(pattern) as usize,
++        plan_map: ledger_source.clone(),
++        prepared: prepared.clone(),
++        source_owner: None,
++    };
++    match exists_prepared_decide(site, row, schema, ctx, None)? {
++        ExistsDecision::Complete(answer) => Ok(Some(answer)),
++        ExistsDecision::Child(child) => {
++            facts.set_child_last(!matches!(child, ExistsChild::Probe { .. }));
++            Ok(None)
++        }
++    }
+ }
+ 
+ /// One `EXISTS` site ready to answer: its preparation and what its evaluation needs to
+@@ -3401,13 +3585,15 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+     evidence: Option<&mut crate::evidence_exec::RowEvidence>,
+ ) -> Result<ExistsDecision<D::Id>, EvalError> {
++    #[cfg(test)]
++    crate::eval::EXISTS_DECISION_COUNT.with(|count| count.set(count.get() + 1));
+     let PreparedSite {
+         key,
+         prepared,
+         plan_map: ledger_source,
+         source_owner,
+     } = site;
+-    let (normalized, analysis, free_vars, stateful) = match prepared.as_ref() {
++    let (normalized, analysis, free_vars, stateful, facts) = match prepared.as_ref() {
+         // ENF law 4b: `Slice(_, Some(0))` on the spine makes the inner empty for
+         // every μ — the whole EXISTS is constant `false`, no evaluation needed.
+         crate::eval::PreparedExists::FoldedFalse => return Ok(ExistsDecision::Complete(false)),
+@@ -3416,8 +3602,19 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
+             analysis,
+             free_vars,
+             stateful,
++            facts,
+             ..
+-        } => (normalized, analysis, free_vars, *stateful),
++        } => (normalized, analysis, free_vars, *stateful, facts),
++    };
++    // A bounded run keeps every per-row walk below with its original admission.
++    let facts = if ctx.growth.is_bounded() {
++        0
++    } else {
++        let learned = facts.read(normalized, analysis, free_vars, &ctx.growth)?;
++        #[cfg(test)]
++        crate::eval::SITE_FACTS_READ_COUNT
++            .with(|count| count.set(count.get() + u64::from(learned.is_some())));
++        learned.unwrap_or(0)
+     };
+ 
+     // SEP-0007 Part 3, enforced at evaluation admission: a `BIND`/`(expr AS ?v)` target or a
+@@ -3456,7 +3653,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
+     // deferred ([`exists_deferred_decide`]) and that reaches this function with nothing owed:
+     // it is the body the eager copy would have been, reached inside the same window,
+     // and skipped exactly as that copy was.
+-    if !ctx.in_substituted_exists {
++    if !ctx.in_substituted_exists && facts & SiteFacts::NO_BINDING == 0 {
+         // The outer-bound variables (a concrete binding in the current row), built
+         // only for this check: it is the one consumer that needs the set itself.
+         let outer_bound = VarSchema::from_vars_admitted(
+@@ -3513,6 +3710,7 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
+     if exists_use_probe(
+         correlated,
+         stateful,
++        facts & SiteFacts::PROBE_EVERY_SCHEMA != 0,
+         normalized,
+         analysis,
+         schema,
+@@ -16043,6 +16241,7 @@ impl crate::eval::PreparedExists {
+             )?,
+             witness_sites: std::sync::OnceLock::new(),
+             normalized_sites: std::sync::OnceLock::new(),
++            facts: SiteFacts::default(),
+         })
+     }
+ }
+diff --git crates/sparql-eval/src/governor/soundness.rs crates/sparql-eval/src/governor/soundness.rs
+index b03df7c9d..28a69a0cf 100644
+--- crates/sparql-eval/src/governor/soundness.rs
++++ crates/sparql-eval/src/governor/soundness.rs
+@@ -3064,6 +3064,45 @@ pub(crate) fn exists_row_collision<'a>(
+     exists_row_collision_admitted(pattern, &scope, &workspace).expect("resident row-collision walk")
+ }
+ 
++/// Whether any node of `pattern` can introduce a binding that
++/// [`exists_row_collision_admitted`] would check against a row: an `Extend` (a
++/// `BIND` or projected expression target), an `UNFOLD`, a `VALUES` table or a
++/// `GROUP`. Every collision that walk reports names a variable one of these
++/// introduces, so when there is none it answers "no collision" for every row.
++/// Like that walk, this one never enters an expression.
++pub(crate) fn introduces_row_binding(
++    pattern: &GraphPattern,
++    workspace: &WorkspaceCapability,
++) -> Result<bool, EvalError> {
++    let mut pending = AdmittedVec::new(workspace);
++    pending.push(pattern)?;
++    while let Some(pattern) = pending.pop() {
++        if matches!(
++            pattern,
++            GraphPattern::Extend { .. }
++                | GraphPattern::Unfold { .. }
++                | GraphPattern::Values { .. }
++                | GraphPattern::Group { .. }
++        ) {
++            return Ok(true);
++        }
++        let mut refused = None;
++        visit_pattern_parts(pattern, &mut |part| {
++            if let PatternPart::Child(child, _) = part
++                && let Err(error) = pending.push(child)
++            {
++                refused = Some(error);
++                return true;
++            }
++            false
++        });
++        if let Some(error) = refused {
++            return Err(error);
++        }
++    }
++    Ok(false)
++}
++
+ pub(crate) fn exists_row_collision_admitted<'a>(
+     pattern: &'a GraphPattern,
+     row_scope: &VarSchema,
+diff --git crates/sparql-eval/src/lib.rs crates/sparql-eval/src/lib.rs
+index 6df1ecfe9..bd705b4ea 100644
+--- crates/sparql-eval/src/lib.rs
++++ crates/sparql-eval/src/lib.rs
+@@ -129,6 +129,8 @@ mod nested_lateral_gate;
+ mod op_count;
+ pub(crate) mod parallel;
+ mod parsed_value;
++#[cfg(test)]
++mod row_loop_accounting;
+ mod xpath_regex;
+ pub use parallel::chunk_len_for_threads;
+ #[cfg(test)]
+diff --git crates/sparql-eval/src/modifier.rs crates/sparql-eval/src/modifier.rs
+index f48095632..2c7bca5a0 100644
+--- crates/sparql-eval/src/modifier.rs
++++ crates/sparql-eval/src/modifier.rs
+@@ -2225,63 +2225,92 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
+         rows: &[RetainedRow<I>],
+         ctx: &mut EvalCtx<'d, D>,
+     ) -> Result<BuiltinAggregateStep<'e, 'd, I>, EvalError> {
++        // A resident run reads a lone variable argument straight from the row (an unbound
++        // one skips its row there too, as the frame route does) and copies each dataset
++        // value without a native admission frame: an unbounded workspace admits and
++        // charges nothing, so the value, the scratch charge and the typed read and
++        // allocation refusals are those of the frame route, in the same order.
++        let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
+         loop {
+-            let mut frame = match self.active.take() {
+-                Some(frame) => frame,
+-                None => {
+-                    let Some(&index) = indices.get(self.ordinal) else {
+-                        break;
+-                    };
+-                    crate::vm::RowExpressionFrame::begin(
+-                        self.linked.take().expect("available aggregate link"),
+-                        rows.get(index)
+-                            .ok_or_else(|| EvalError::internal("aggregate source row missing"))?
+-                            .clone_admitted(&ctx.growth)?,
+-                        ctx,
+-                    )?
++            let direct = if resident && self.active.is_none() {
++                indices
++                    .get(self.ordinal)
++                    .and_then(|&index| {
++                        let linked = self.linked.as_ref()?;
++                        Some(linked.sole_variable(rows.get(index)?))
++                    })
++                    .flatten()
++            } else {
++                None
++            };
++            let term = if let Some(term) = direct {
++                #[cfg(test)]
++                crate::eval::LONE_VARIABLE_READ_COUNT.with(|count| count.set(count.get() + 1));
++                self.ordinal += 1;
++                term
++            } else {
++                let mut frame = match self.active.take() {
++                    Some(frame) => frame,
++                    None => {
++                        let Some(&index) = indices.get(self.ordinal) else {
++                            break;
++                        };
++                        crate::vm::RowExpressionFrame::begin(
++                            self.linked.take().expect("available aggregate link"),
++                            rows.get(index)
++                                .ok_or_else(|| EvalError::internal("aggregate source row missing"))?
++                                .clone_admitted(&ctx.growth)?,
++                            ctx,
++                        )?
++                    }
++                };
++                match frame.poll(ctx)? {
++                    crate::vm::VmStep::Suspend(request) => {
++                        self.active = Some(frame);
++                        return Ok(BuiltinAggregateStep::Suspend(self, request));
++                    }
++                    crate::vm::VmStep::Value(value) => {
++                        let (linked, _row, term, _evidence) = frame.finish_term(value)?;
++                        self.linked = Some(linked);
++                        self.ordinal += 1;
++                        term
++                    }
+                 }
+             };
+-            match frame.poll(ctx)? {
+-                crate::vm::VmStep::Suspend(request) => {
+-                    self.active = Some(frame);
+-                    return Ok(BuiltinAggregateStep::Suspend(self, request));
+-                }
+-                crate::vm::VmStep::Value(value) => {
+-                    let (linked, _row, term, _evidence) = frame.finish_term(value)?;
+-                    self.linked = Some(linked);
+-                    self.ordinal += 1;
+-                    let Some(term) = term else {
+-                        continue;
+-                    };
+-                    // The original schedule is argument, checkpoint, DISTINCT,
+-                    // destination admission, owned value, ScratchBytes, retain.
+-                    if let Err(tripped) = self.checkpoint.pass(ctx) {
+-                        ctx.record_barrier(tripped);
+-                        return Ok(self.complete(None));
+-                    }
+-                    if let Some(seen) = &mut self.seen {
+-                        if seen.get(&term).is_some() {
+-                            continue;
+-                        }
+-                        let _ = seen.insert_admitted(term, (), &ctx.growth)?;
+-                    }
+-                    self.survivors.reserve_next()?;
+-                    let value = ctx.scratch.try_owned_value_of(
+-                        ctx.dataset,
+-                        term,
+-                        &ctx.growth,
+-                        |error| ctx.workspace.source_error(error),
+-                    )?;
+-                    if let Err(tripped) = ctx.charge_amount(
+-                        purrdf_core::ResourceDimension::ScratchBytes,
+-                        crate::scratch::value_bytes(&value),
+-                    ) {
+-                        ctx.record_barrier(tripped);
+-                        return Ok(self.complete(None));
+-                    }
+-                    self.survivors.push(value)?;
+-                }
++            let Some(term) = term else {
++                continue;
++            };
++            // The original schedule is argument, checkpoint, DISTINCT,
++            // destination admission, owned value, ScratchBytes, retain.
++            if let Err(tripped) = self.checkpoint.pass(ctx) {
++                ctx.record_barrier(tripped);
++                return Ok(self.complete(None));
+             }
++            if let Some(seen) = &mut self.seen {
++                if seen.get(&term).is_some() {
++                    continue;
++                }
++                let _ = seen.insert_admitted(term, (), &ctx.growth)?;
++            }
++            self.survivors.reserve_next()?;
++            let value = if resident {
++                resident_aggregate_value(ctx.dataset, &ctx.scratch, term, |error| {
++                    ctx.workspace.source_error(error)
++                })?
++            } else {
++                ctx.scratch
++                    .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
++                        ctx.workspace.source_error(error)
++                    })?
++            };
++            if let Err(tripped) = ctx.charge_amount(
++                purrdf_core::ResourceDimension::ScratchBytes,
++                crate::scratch::value_bytes(&value),
++            ) {
++                ctx.record_barrier(tripped);
++                return Ok(self.complete(None));
++            }
++            self.survivors.push(value)?;
+         }
+         let value = finish_builtin_aggregate(aggregate, &self.survivors, ctx)?;
+         Ok(self.complete(value))
+@@ -4719,6 +4748,41 @@ fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -
+     )
+ }
+ 
++/// A survivor's value for a run with no storage budget: a copy that keeps the failures
++/// the admitted route reports (a refused clone, a refused read buffer, a failed read, a
++/// foreign id) as typed errors rather than the infallible resident read's panic, without
++/// the native admission frame an unbounded workspace has no use for.
++pub(crate) fn resident_aggregate_value<D: DatasetView>(
++    dataset: &D,
++    scratch: &crate::scratch::ScratchInterner,
++    term: SolutionTerm<D::Id>,
++    source_error: impl Fn(D::ReadError) -> EvalError,
++) -> Result<crate::WorkspaceTerm, EvalError> {
++    let value = match term {
++        SolutionTerm::Computed(id) => {
++            scratch
++                .computed_value(id)
++                .try_clone()
++                .map_err(|_| EvalError::AllocationFailed {
++                    construct: "native term clone",
++                })?
++        }
++        SolutionTerm::Existing(id) => dataset.term_value_with_storage(
++            id,
++            |error| match error {
++                purrdf_core::TermLookupError::Read(error) => source_error(error),
++                purrdf_core::TermLookupError::ForeignId => {
++                    EvalError::source_read("foreign dataset term id")
++                }
++            },
++            |_| EvalError::AllocationFailed {
++                construct: "resolved term value",
++            },
++        )?,
++    };
++    Ok(crate::WorkspaceTerm::resident(value))
++}
++
+ /// Native row completion admitted only for arguments that cannot suspend.
+ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     agg: &AggregateExpression,
+@@ -4805,8 +4869,25 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+             ctx,
+             ChargePoint::AggregateAccumulation,
+         );
++        // A resident run reads a lone variable argument straight from the row (an unbound
++        // one skips its row there too, as the frame route does) and copies each dataset
++        // value without a native admission frame: an unbounded workspace admits and
++        // charges nothing, so the value, every governor charge and the typed read and
++        // allocation refusals are those of the admitted route.
++        let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
+         for &i in idxs {
+-            let Some(term) = first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)? else {
++            let term = match resident
++                .then(|| first_arg.sole_variable(&rows[i]))
++                .flatten()
++            {
++                Some(term) => {
++                    #[cfg(test)]
++                    crate::eval::LONE_VARIABLE_READ_COUNT.with(|count| count.set(count.get() + 1));
++                    term
++                }
++                None => first_arg.term(Some(&agg.args()[0]), &rows[i], schema, ctx)?,
++            };
++            let Some(term) = term else {
+                 continue;
+             };
+             if let Err(tripped) = checkpoint.pass(ctx) {
+@@ -4820,11 +4901,16 @@ fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+                 let _ = seen.insert_admitted(term, (), &ctx.growth)?;
+             }
+             survivors.reserve_next()?;
+-            let value =
++            let value = if resident {
++                resident_aggregate_value(ctx.dataset, &ctx.scratch, term, |error| {
++                    ctx.workspace.source_error(error)
++                })?
++            } else {
+                 ctx.scratch
+                     .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+                         ctx.workspace.source_error(error)
+-                    })?;
++                    })?
++            };
+             if let Err(tripped) = ctx.charge_amount(
+                 purrdf_core::ResourceDimension::ScratchBytes,
+                 crate::scratch::value_bytes(&value),
+diff --git crates/sparql-eval/src/row_loop_accounting.rs crates/sparql-eval/src/row_loop_accounting.rs
+new file mode 100644
+index 000000000..07172514c
+--- /dev/null
++++ crates/sparql-eval/src/row_loop_accounting.rs
+@@ -0,0 +1,653 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Accounting pins for the per-row `EXISTS` and aggregate paths.
++//!
++//! The row loops of `FILTER`, `BIND` and inline aggregates take shorter routes
++//! when the workspace reports no storage budget. These cases pin what those
++//! routes must not change: the answers, the smallest bounded account each
++//! query completes under (with one byte less refusing), the governor totals a
++//! metered run reports, what a host's own governors charge the sequential aggregate
++//! route, the run of a shared plan twice, that each fast path engages on the shape it
++//! claims, and that an `EXISTS` scope collision is refused with its variable and
++//! construct once a row binds it, with the neighbouring case accepted.
++
++use std::sync::Arc;
++
++use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension};
++use purrdf_sparql_algebra::{
++    Child, Expression, GraphPattern, Literal, NamedNode, NamedNodePattern, SparqlParser,
++    TermPattern, TriplePattern, Variable,
++};
++
++use crate::SolutionTerm;
++use crate::error::EvalError;
++use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, eval_evaluated, evaluate_query_evaluated};
++use crate::modifier::resident_aggregate_value;
++use crate::scratch::ScratchInterner;
++use crate::workspace::owned_row_regressions::account;
++use crate::{GovernorState, QueryGovernors};
++
++const EX: &str = "http://example.org/";
++const XSD_FLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
++
++/// Twelve subjects, each with a float score and one of five statuses.
++fn dataset() -> Arc<RdfDataset> {
++    let mut b = RdfDatasetBuilder::new();
++    let score = b.intern_iri(&format!("{EX}score")).unwrap();
++    let status = b.intern_iri(&format!("{EX}status")).unwrap();
++    for i in 0..12_u64 {
++        let s = b.intern_iri(&format!("{EX}s{i}")).unwrap();
++        let v = i.wrapping_mul(2_654_435_761) % 1000;
++        let lit = b
++            .intern_literal(RdfLiteral::typed(format!("{v}.0"), XSD_FLOAT.to_owned()))
++            .unwrap();
++        b.push_quad(s, score, lit, None).unwrap();
++        let st = b.intern_iri(&format!("{EX}st{}", i % 5)).unwrap();
++        b.push_quad(s, status, st, None).unwrap();
++    }
++    b.freeze().unwrap()
++}
++
++fn query(body: &str) -> purrdf_sparql_algebra::Query {
++    SparqlParser::new()
++        .parse_query(&format!("PREFIX ex: <{EX}>\n{body}"))
++        .unwrap()
++}
++
++/// `FILTER NOT EXISTS` over a one-pattern body, correlated on `?x`.
++const NOT_EXISTS: &str =
++    "SELECT ?x ?s WHERE { ?x ex:score ?s . FILTER NOT EXISTS { ?x ex:status ex:st0 } }";
++/// `BIND(EXISTS ...)`: the answer is kept as a column.
++const BIND_EXISTS: &str =
++    "SELECT ?x ?h WHERE { ?x ex:score ?s . BIND(EXISTS { ?x ex:status ex:st0 } AS ?h) }";
++/// Two sites in one expression, with different bodies.
++const TWO_SITES: &str = "SELECT ?x WHERE { ?x ex:score ?s . \
++     FILTER(NOT EXISTS { ?x ex:status ex:st0 } && EXISTS { ?x ex:status ex:st1 }) }";
++/// Two distinct sites with the same text, in two branches that bind different columns. One
++/// preparation meeting several outer schemas needs a shared plan, which the two-run test
++/// below covers.
++const BRANCH_SCHEMAS: &str = "SELECT ?x ?s ?st WHERE { \
++     { ?x ex:score ?s . FILTER NOT EXISTS { ?x ex:status ex:st2 } } UNION \
++     { ?x ex:status ?st . FILTER NOT EXISTS { ?x ex:status ex:st2 } } }";
++/// OPTIONAL leaves the correlated `?st` unbound on some rows of one FILTER.
++const OPTIONAL_ROWS: &str = "SELECT ?x ?st WHERE { ?x ex:score ?s . \
++     OPTIONAL { ?x ex:status ?st . FILTER(?st = ex:st3) } \
++     FILTER NOT EXISTS { ?y ex:status ?st . FILTER(?y != ?x) } }";
++/// `COUNT` of one variable per group.
++const GROUP_COUNT: &str = "SELECT ?st (COUNT(?x) AS ?n) WHERE { ?x ex:status ?st } GROUP BY ?st";
++/// `NOT EXISTS`, `GROUP BY` and `HAVING` in one query.
++const GROUP_NOT_EXISTS: &str = "SELECT ?st (COUNT(?x) AS ?n) WHERE { ?x ex:score ?s ; ex:status ?st . \
++     FILTER NOT EXISTS { ?x ex:status ex:st0 } } GROUP BY ?st HAVING (COUNT(?x) > 1)";
++/// `DISTINCT`, `SAMPLE` and `MIN` read their argument variable too.
++const GROUP_VALUES: &str = "SELECT ?st (COUNT(DISTINCT ?x) AS ?n) (MIN(?s) AS ?low) (SAMPLE(?x) AS ?one) \
++     WHERE { ?x ex:score ?s ; ex:status ?st } GROUP BY ?st";
++
++const QUERIES: [&str; 8] = [
++    NOT_EXISTS,
++    BIND_EXISTS,
++    TWO_SITES,
++    BRANCH_SCHEMAS,
++    OPTIONAL_ROWS,
++    GROUP_COUNT,
++    GROUP_NOT_EXISTS,
++    GROUP_VALUES,
++];
++
++/// The answer a query reports — its variables and each row's cells, a computed cell
++/// by its value — without the storage the rows happen to be kept in.
++fn render(outcome: &EvaluatedOutcome, ctx: &EvalCtx<'_, RdfDataset>) -> String {
++    let EvaluatedOutcome::Complete(Outcome::Solutions(solutions)) = outcome else {
++        panic!("every query here completes with solutions: {outcome:?}");
++    };
++    use std::fmt::Write as _;
++    let mut out = format!("{:?}", solutions.schema.vars());
++    for row in &solutions.rows {
++        out.push('\n');
++        for cell in row {
++            match cell {
++                None => out.push_str("- "),
++                Some(SolutionTerm::Existing(id)) => write!(out, "{id:?} ").unwrap(),
++                Some(SolutionTerm::Computed(sid)) => {
++                    write!(out, "{:?} ", ctx.scratch.computed_value(*sid)).unwrap();
++                }
++            }
++        }
++    }
++    out
++}
++
++/// The rendered answer of an unbounded, ungoverned run.
++fn answer(dataset: &RdfDataset, text: &str) -> String {
++    let mut ctx = EvalCtx::new(dataset);
++    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).unwrap();
++    render(&outcome, &ctx)
++}
++
++/// The rendered answer under a bounded account of `limit` bytes, or `None` when the
++/// account refuses the query.
++fn bounded(dataset: &RdfDataset, text: &str, limit: u64) -> Option<String> {
++    let (workspace, _ledger, _) = account(limit);
++    let mut ctx = EvalCtx::new(dataset);
++    ctx.growth = workspace.capability();
++    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).ok()?;
++    Some(render(&outcome, &ctx))
++}
++
++/// The consumption a metered run reports, per dimension, with its rendered answer.
++fn metered(dataset: &RdfDataset, text: &str) -> ([u64; 4], String) {
++    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
++    let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
++    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).unwrap();
++    let evidence = state.evidence();
++    assert_eq!(evidence.tripped(), None, "a metered run never refuses");
++    (
++        [
++            ResourceDimension::Fuel,
++            ResourceDimension::ScratchBytes,
++            ResourceDimension::IntermediateCells,
++            ResourceDimension::AnswerRows,
++        ]
++        .map(|dimension| evidence.consumed_in(dimension)),
++        render(&outcome, &ctx),
++    )
++}
++
++/// The smallest account each query completes under: a property of the bounded
++/// (admitted) path, which the shorter unbounded routes leave untouched.
++const BOUNDED_MINIMUM: [u64; 8] = [25147, 26499, 32349, 34191, 59323, 18598, 30641, 33902];
++
++/// What a metered run of each query reports: fuel, scratch bytes, intermediate
++/// cells and answer rows.
++const METERED_TOTALS: [[u64; 4]; 8] = [
++    [65, 153, 24, 9],
++    [71, 153, 36, 12],
++    [61, 153, 24, 3],
++    [150, 153, 60, 20],
++    [694, 153, 36, 0],
++    [65, 784, 24, 5],
++    [121, 1328, 36, 4],
++    [133, 2318, 36, 5],
++];
++
++#[test]
++fn bounded_accounts_complete_at_the_pinned_minimum_and_refuse_one_byte_below() {
++    let dataset = dataset();
++    for (text, minimum) in QUERIES.into_iter().zip(BOUNDED_MINIMUM) {
++        let expected = answer(&dataset, text);
++        assert_eq!(
++            bounded(&dataset, text, minimum).as_deref(),
++            Some(expected.as_str()),
++            "{text}: completes with the unbounded answer at {minimum} bytes"
++        );
++        assert_eq!(
++            bounded(&dataset, text, minimum - 1),
++            None,
++            "{text}: refused one byte below"
++        );
++    }
++}
++
++#[test]
++fn metered_runs_report_the_pinned_totals_and_the_unbounded_answer() {
++    let dataset = dataset();
++    for (text, totals) in QUERIES.into_iter().zip(METERED_TOTALS) {
++        let (consumed, rendered) = metered(&dataset, text);
++        assert_eq!(consumed, totals, "{text}: metered totals");
++        assert_eq!(rendered, answer(&dataset, text), "{text}: metered answer");
++    }
++}
++
++/// A stop signal that counts its polls and fires, and stays fired, from poll `fire_at`.
++#[derive(Debug)]
++struct StopFrom {
++    polls: std::sync::atomic::AtomicU64,
++    fire_at: u64,
++}
++
++impl crate::StopSignal for StopFrom {
++    fn poll(&self) -> Option<purrdf_core::StopCause> {
++        let seen = self
++            .polls
++            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++            + 1;
++        (seen >= self.fire_at).then_some(purrdf_core::StopCause::Cancelled)
++    }
++}
++
++/// What a host's governors report for one run: the answer when it completes, the fuel,
++/// scratch, intermediate cells and answer rows consumed, and the stop polls made.
++struct Host {
++    rendered: Option<String>,
++    totals: [u64; 4],
++    polls: u64,
++}
++
++/// Run `text` under the governors of a host that sets a fuel, scratch, cell and answer
++/// ceiling and a stop signal that fires from poll `fire_at`, as a SHACL host does. A
++/// ceiling on cells keeps GROUP BY on its sequential, suspendable aggregate route.
++fn host_run(dataset: &RdfDataset, text: &str, scratch: u64, fire_at: u64) -> Host {
++    let stop = Arc::new(StopFrom {
++        polls: std::sync::atomic::AtomicU64::new(0),
++        fire_at,
++    });
++    let governors = QueryGovernors::UNBOUNDED
++        .with_fuel(1 << 40)
++        .with_max_scratch_bytes(scratch)
++        .with_max_intermediate_cells(1 << 40)
++        .with_max_answers(1 << 40)
++        .with_stop_signal(Arc::clone(&stop) as Arc<dyn crate::StopSignal>);
++    let state = Arc::new(GovernorState::new(&governors));
++    let mut ctx = EvalCtx::new(dataset).with_governors(Arc::clone(&state));
++    let outcome = evaluate_query_evaluated(&query(text), &mut ctx).ok();
++    let evidence = state.evidence();
++    let rendered = outcome
++        .filter(|_| evidence.tripped().is_none())
++        .map(|outcome| render(&outcome, &ctx));
++    Host {
++        rendered,
++        totals: [
++            ResourceDimension::Fuel,
++            ResourceDimension::ScratchBytes,
++            ResourceDimension::IntermediateCells,
++            ResourceDimension::AnswerRows,
++        ]
++        .map(|dimension| evidence.consumed_in(dimension)),
++        polls: stop.polls.load(std::sync::atomic::Ordering::Relaxed),
++    }
++}
++
++/// What a host-governed run of each query consumes: fuel, scratch bytes, intermediate
++/// cells and answer rows.
++const HOST_TOTALS: [[u64; 4]; 8] = [
++    [65, 153, 24, 9],
++    [71, 153, 36, 12],
++    [61, 153, 24, 3],
++    [150, 153, 60, 20],
++    [694, 153, 36, 0],
++    [65, 784, 24, 5],
++    [121, 1328, 36, 4],
++    [133, 2318, 36, 5],
++];
++
++/// The stop polls a host-governed run of each query makes.
++const HOST_POLLS: [u64; 8] = [23, 23, 28, 44, 292, 20, 41, 36];
++
++/// **A host-governed run is charged, polled and stopped as it always was.** Under a
++/// host's ceilings GROUP BY takes its sequential route, so each query must consume the
++/// pinned fuel, scratch, cells and rows, make the pinned number of stop polls, complete
++/// at its own scratch and refuse one byte below, stop when the signal fires on a poll it
++/// makes, and complete when the signal fires only after its last poll.
++#[test]
++fn host_governed_runs_report_the_pinned_totals_polls_and_scratch_boundary() {
++    let dataset = dataset();
++    for (index, text) in QUERIES.into_iter().enumerate() {
++        let expected = answer(&dataset, text);
++        let run = host_run(&dataset, text, 1 << 40, u64::MAX);
++        assert_eq!(
++            run.rendered.as_deref(),
++            Some(expected.as_str()),
++            "{text}: answer"
++        );
++        assert_eq!(
++            run.totals, HOST_TOTALS[index],
++            "{text}: fuel, scratch, cells, rows"
++        );
++        assert_eq!(run.polls, HOST_POLLS[index], "{text}: stop polls");
++        // The scratch ceiling: complete at what was consumed, refused one byte below.
++        let scratch = run.totals[1];
++        assert_eq!(
++            host_run(&dataset, text, scratch, u64::MAX)
++                .rendered
++                .as_deref(),
++            Some(expected.as_str()),
++            "{text}: completes at {scratch} bytes of scratch"
++        );
++        if scratch > 0 {
++            assert_eq!(
++                host_run(&dataset, text, scratch - 1, u64::MAX).rendered,
++                None,
++                "{text}: refused one byte below"
++            );
++        }
++        // The stop signal: observed on the first poll and part-way through, the run is
++        // stopped; fired only after its last poll, it completes with the same answer.
++        for fire_at in [1, run.polls.div_ceil(2)] {
++            assert_eq!(
++                host_run(&dataset, text, 1 << 40, fire_at).rendered,
++                None,
++                "{text}: stopped at poll {fire_at} of {}",
++                run.polls
++            );
++        }
++        assert_eq!(
++            host_run(&dataset, text, 1 << 40, run.polls + 1)
++                .rendered
++                .as_deref(),
++            Some(expected.as_str()),
++            "{text}: completes when the stop fires after its last poll"
++        );
++    }
++}
++
++/// Aggregate shapes whose value path differs: `SUM` over IRIs (an error, so an unbound
++/// result), `AVG` and `SUM` of floats, `GROUP_CONCAT` and an unbound argument.
++const ROUTE_QUERIES: [&str; 4] = [
++    "SELECT ?st (SUM(?x) AS ?t) WHERE { ?x ex:status ?st } GROUP BY ?st",
++    "SELECT ?st (AVG(?s) AS ?a) (SUM(?s) AS ?t) WHERE { ?x ex:score ?s ; ex:status ?st } GROUP BY ?st",
++    "SELECT ?st (GROUP_CONCAT(?s; SEPARATOR=\",\") AS ?g) WHERE { ?x ex:score ?s ; ex:status ?st } GROUP BY ?st",
++    "SELECT ?x (COUNT(?o) AS ?n) WHERE { ?x ex:score ?s OPTIONAL { ?x ex:status ?o FILTER(?o = ex:st1) } } GROUP BY ?x",
++];
++
++/// **Each aggregate route yields the accounted run's answer and one scratch charge.**
++/// The inline route, the sequential route a cell ceiling forces and a bounded account
++/// must agree on these value shapes, where an error, a float sum, a concatenation or an
++/// unbound argument reaches the value copy.
++#[test]
++fn the_sequential_and_inline_aggregate_routes_answer_as_the_accounted_run() {
++    let dataset = dataset();
++    for text in ROUTE_QUERIES {
++        let inline = answer(&dataset, text);
++        let accounted = bounded(&dataset, text, 1 << 40);
++        let sequential = host_run(&dataset, text, 1 << 40, u64::MAX);
++        assert_eq!(
++            accounted.as_deref(),
++            Some(inline.as_str()),
++            "{text}: accounted run"
++        );
++        assert_eq!(
++            sequential.rendered.as_deref(),
++            Some(inline.as_str()),
++            "{text}: sequential route"
++        );
++        // The scratch each route charges is one number.
++        assert_eq!(
++            metered(&dataset, text).0[1],
++            sequential.totals[1],
++            "{text}: scratch charged"
++        );
++    }
++}
++
++/// Hand-built algebra the parser would refuse: `FILTER NOT EXISTS { BIND("x" AS ?o) }`
++/// over rows of which only the last binds `?o`.
++fn collision_pattern(with_binding_row: bool) -> GraphPattern {
++    let triple = |object: TermPattern| GraphPattern::Bgp {
++        patterns: vec![TriplePattern {
++            subject: TermPattern::Variable(Variable::new("x")),
++            predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(format!("{EX}score"))),
++            object,
++        }],
++    };
++    let unbound = triple(TermPattern::Variable(Variable::new("w")));
++    let inner = if with_binding_row {
++        GraphPattern::union(unbound, triple(TermPattern::Variable(Variable::new("o"))))
++    } else {
++        unbound
++    };
++    let body = GraphPattern::Extend {
++        inner: Child::new(GraphPattern::Bgp {
++            patterns: Vec::new(),
++        }),
++        variable: Variable::new("o"),
++        expression: Expression::Literal(Literal::new_simple("x")),
++    };
++    GraphPattern::Filter {
++        expr: Expression::Not(Child::new(Expression::Exists(Child::new(body)))),
++        inner: Child::new(inner),
++    }
++}
++
++#[test]
++fn exists_scope_collision_is_refused_once_a_row_binds_the_variable() {
++    let dataset = dataset();
++    // Twelve rows leave `?o` unbound; every one of them is answered.
++    let mut ctx = EvalCtx::new(dataset.as_ref());
++    let kept = eval_evaluated(&collision_pattern(false), &mut ctx).unwrap();
++    assert_eq!(
++        kept.rows().len(),
++        0,
++        "BIND always yields a row, so NOT EXISTS keeps none"
++    );
++    // The same twelve rows, then twelve that bind `?o`: the first of those refuses.
++    let mut ctx = EvalCtx::new(dataset.as_ref());
++    match eval_evaluated(&collision_pattern(true), &mut ctx) {
++        Err(EvalError::ExistsScopeCollision { variable, intro }) => {
++            assert_eq!(variable.as_str(), "o");
++            assert_eq!(intro, "BIND target");
++        }
++        other => panic!("expected the scope collision, got {other:?}"),
++    }
++}
++
++/// A view whose value reads are refused by the allocator, as an exhausted one would.
++struct RefusingReads;
++
++impl purrdf_core::DatasetView for RefusingReads {
++    type Id = purrdf_core::TermId;
++    type ReadError = std::convert::Infallible;
++    type TermGuard<'a> = purrdf_core::TermRef<'a>;
++    type ProbePlan = ();
++    fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
++        std::iter::empty()
++    }
++    fn resolve(&self, _: purrdf_core::TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
++        Ok(purrdf_core::TermRef::Iri("http://example.org/original"))
++    }
++    fn term_id_by_value(
++        &self,
++        _: &purrdf_core::TermValue,
++    ) -> Result<Option<purrdf_core::TermId>, Self::ReadError> {
++        Ok(None)
++    }
++    fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
++        purrdf_core::RdfStoreCapabilities::default()
++    }
++    fn term_count(&self) -> u64 {
++        1
++    }
++    fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
++    fn quads_for_pattern_with_plan(
++        &self,
++        (): &(),
++        _: Option<purrdf_core::TermId>,
++        _: Option<purrdf_core::TermId>,
++        _: Option<purrdf_core::TermId>,
++        _: purrdf_core::GraphMatch,
++    ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
++        std::iter::empty()
++    }
++    fn term_value_with_storage<E>(
++        &self,
++        _: purrdf_core::TermId,
++        _: impl Fn(purrdf_core::TermLookupError<Self::ReadError>) -> E,
++        storage_error: impl Fn(std::collections::TryReserveError) -> E,
++    ) -> Result<purrdf_core::TermValue, E> {
++        Err(storage_error(
++            Vec::<u8>::new()
++                .try_reserve(usize::MAX)
++                .expect_err("a request past the address space is refused"),
++        ))
++    }
++}
++
++/// A resident aggregate run copies each survivor without the admission frame, and a
++/// refused read buffer is the typed error the admitted route reports, never a panic.
++/// The neighbouring readable value is copied unchanged.
++#[test]
++fn a_refused_resident_read_is_the_typed_allocation_error() {
++    let mut builder = RdfDatasetBuilder::new();
++    let id = builder.intern_iri("http://example.org/original").unwrap();
++    let refused = resident_aggregate_value(
++        &RefusingReads,
++        &ScratchInterner::default(),
++        SolutionTerm::Existing(id),
++        |error| match error {},
++    )
++    .expect_err("the refused buffer is an error");
++    assert!(matches!(
++        refused,
++        EvalError::AllocationFailed {
++            construct: "resolved term value"
++        }
++    ));
++
++    let dataset = builder.freeze().unwrap();
++    let (value, _) = resident_aggregate_value(
++        dataset.as_ref(),
++        &ScratchInterner::default(),
++        SolutionTerm::Existing(id),
++        EvalError::source_read,
++    )
++    .expect("a readable value is copied")
++    .into_parts();
++    assert_eq!(
++        value,
++        purrdf_core::TermValue::Iri("http://example.org/original".to_owned())
++    );
++}
++
++/// A site whose child is a per-row definition is decided once per row, with one extra
++/// decision at most: the request for an answer in place that learns it needs a child.
++/// Rows alternate between a restriction already answered (memoized) and a fresh one, so
++/// a flag cleared by a memoized answer would ask in place again on the next fresh row
++/// and decide it twice. The neighbouring probe site answers the same rows within the
++/// same bound.
++#[test]
++fn a_definition_site_is_not_decided_again_in_place_after_a_memoized_answer() {
++    let dataset = dataset();
++    let rows = 10_u64;
++    let text = "SELECT ?st WHERE { \
++                VALUES ?st { ex:st0 ex:st1 ex:st0 ex:st2 ex:st0 ex:st3 ex:st0 ex:st4 ex:st0 ex:st5 } \
++                FILTER NOT EXISTS { ?y ex:status ?st } }";
++    for strategy in [
++        crate::expr::ForcedExistsStrategy::Definition,
++        crate::expr::ForcedExistsStrategy::Probe,
++    ] {
++        let _guard = crate::expr::force_exists_strategy_for_test(strategy);
++        let mut ctx = EvalCtx::new(dataset.as_ref()).with_eval_options(crate::eval::EvalOptions {
++            force_sequential: true,
++            ..crate::eval::EvalOptions::default()
++        });
++        crate::eval::EXISTS_DECISION_COUNT.with(|count| count.set(0));
++        evaluate_query_evaluated(&query(text), &mut ctx).unwrap();
++        let decisions = crate::eval::EXISTS_DECISION_COUNT.with(std::cell::Cell::get);
++        assert!(
++            decisions <= rows + 1,
++            "{decisions} decisions for {rows} rows under the forced strategy"
++        );
++    }
++}
++
++/// A prepared plan keeps what its `EXISTS` sites learned between runs. The second run of
++/// each query answers and is charged exactly as the first, which began with nothing
++/// learned.
++#[test]
++fn a_second_run_of_one_prepared_plan_answers_and_is_charged_as_the_first() {
++    let dataset = dataset();
++    let engine = crate::NativeSparqlEngine::default();
++    for text in QUERIES.into_iter().chain(ROUTE_QUERIES) {
++        let prepared = engine
++            .prepare_query(&format!("PREFIX ex: <{EX}>\n{text}"), None)
++            .expect("prepares");
++        let mut runs = Vec::new();
++        for _ in 0..2 {
++            let outcome = engine
++                .query_prepared_governed_view(
++                    &*dataset,
++                    &prepared,
++                    &[],
++                    &crate::QueryOptions::EMPTY,
++                    &QueryGovernors::METERED,
++                )
++                .expect("completes");
++            let crate::GovernedOutcome::Complete {
++                result, evidence, ..
++            } = outcome
++            else {
++                panic!("{text}: a metered run completes");
++            };
++            runs.push((
++                format!("{result:?}"),
++                [
++                    ResourceDimension::Fuel,
++                    ResourceDimension::ScratchBytes,
++                    ResourceDimension::IntermediateCells,
++                    ResourceDimension::AnswerRows,
++                ]
++                .map(|dimension| evidence.consumed_in(dimension)),
++            ));
++        }
++        assert_eq!(runs[0], runs[1], "{text}: the second run of one plan");
++    }
++}
++
++/// A comparison `FILTER`: its boolean result is the interned boolean the shortcut reads.
++const COMPARISON: &str = "SELECT ?x ?s WHERE { ?x ex:score ?s FILTER(?s > 5.5e0) }";
++
++/// The four witnesses a resident run raises, in the order of their declaration, for one
++/// sequential run of `text` (under the host's governors when `host`) over an unbounded or
++/// an accounted workspace.
++fn engaged(dataset: &RdfDataset, text: &str, accounted: bool, host: bool) -> [u64; 4] {
++    let counters = [
++        &crate::eval::IN_PLACE_ANSWER_COUNT,
++        &crate::eval::SITE_FACTS_READ_COUNT,
++        &crate::eval::BOOLEAN_SHORTCUT_COUNT,
++        &crate::eval::LONE_VARIABLE_READ_COUNT,
++    ];
++    for counter in counters {
++        counter.with(|count| count.set(0));
++    }
++    let mut ctx = EvalCtx::new(dataset).with_eval_options(crate::eval::EvalOptions {
++        force_sequential: true,
++        ..crate::eval::EvalOptions::default()
++    });
++    let (workspace, _ledger, _) = account(1 << 40);
++    if accounted {
++        ctx.growth = workspace.capability();
++    }
++    if host {
++        let state = Arc::new(GovernorState::new(
++            &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1 << 40),
++        ));
++        ctx = ctx.with_governors(state);
++    }
++    evaluate_query_evaluated(&query(text), &mut ctx).expect("completes");
++    counters.map(|counter| counter.with(std::cell::Cell::get))
++}
++
++/// Each fast path engages on the shape it claims, and none does on an accounted
++/// workspace, which keeps the original routes.
++#[test]
++fn each_resident_fast_path_engages_on_its_shape_and_not_on_an_accounted_workspace() {
++    let dataset = dataset();
++    let [in_place, facts, ..] = engaged(&dataset, NOT_EXISTS, false, false);
++    assert!(in_place > 0, "an EXISTS row is resumed in place");
++    assert!(facts > 0, "the site is read through its learned facts");
++    let [_, _, boolean, _] = engaged(&dataset, COMPARISON, false, false);
++    assert!(
++        boolean > 0,
++        "the boolean a comparison yields is read as itself"
++    );
++    let [in_place, ..] = engaged(&dataset, BIND_EXISTS, false, false);
++    assert!(in_place > 0, "a BIND of EXISTS is resumed in place too");
++    // The lone-variable read, on the inline route and on the sequential one.
++    let [.., inline] = engaged(&dataset, GROUP_COUNT, false, false);
++    assert!(
++        inline > 0,
++        "the inline aggregate reads its argument from the row"
++    );
++    let [.., sequential] = engaged(&dataset, GROUP_COUNT, false, true);
++    assert!(
++        sequential > 0,
++        "the sequential aggregate reads its argument from the row"
++    );
++    // The neighbour: an accounted workspace takes none of them.
++    for text in [NOT_EXISTS, BIND_EXISTS, GROUP_COUNT] {
++        assert_eq!(
++            engaged(&dataset, text, true, false),
++            [0; 4],
++            "{text}: accounted"
++        );
++    }
++}
+diff --git crates/sparql-eval/src/row_path_parity.rs crates/sparql-eval/src/row_path_parity.rs
+index 2e8a26f37..7aade7736 100644
+--- crates/sparql-eval/src/row_path_parity.rs
++++ crates/sparql-eval/src/row_path_parity.rs
+@@ -172,6 +172,93 @@ fn the_direct_row_path_answers_as_the_accounted_row_path_does() {
+     }
+ }
+ 
++/// The answer on the unbounded workspace under a stop signal that never fires and a
++/// cell ceiling nothing reaches: every stage, the last one included, scans into the
++/// row sink instead of the retained cursor.
++fn unbounded_into_the_sink(text: &str, dataset: &Arc<RdfDataset>) -> Rows {
++    let governors = crate::QueryGovernors::UNBOUNDED
++        .with_max_intermediate_cells(1 << 40)
++        .with_stop_signal(Arc::new(crate::CancellationFlag::new()));
++    let mut ctx = EvalCtx::new(dataset.as_ref())
++        .with_governors(Arc::new(crate::governor::GovernorState::new(&governors)));
++    ctx.options.force_sequential = true;
++    assert!(!ctx.growth.is_bounded());
++    assert!(ctx.stop_signal().is_some());
++    run(text, &mut ctx).expect("the governed unbounded run completes")
++}
++
++/// INVARIANT: a candidate binds to the same row whichever scan loop offers it, and
++/// the direct binder of a pattern with no nested position equals the general one,
++/// which the accounted run still uses.
++///
++/// What each case exercises:
++/// - The pinned shapes, and `?s ex:w ?o . ?o ex:w ?o`: constants, slots the driving row
++///   already binds (the index filters those, so the binder only ever sees agreeing
++///   candidates, a repeated variable included) and a nested triple pattern, which
++///   keeps the general binder.
++/// - The four shapes over [`repeat_dataset`]: a variable repeated inside one pattern
++///   that the driving row does NOT bind, so the index offers every quad and the
++///   binder's own comparison is what rejects. Each has one candidate that agrees
++///   with itself and must bind, beside candidates that disagree and must not.
++#[test]
++fn the_sink_scan_binds_as_the_cursor_scan_does() {
++    let bound_repeat = "SELECT ?s ?o WHERE { ?s ex:w ?o . ?o ex:w ?o }";
++    let data = dataset(true);
++    for shape in SHAPES.into_iter().chain([bound_repeat]) {
++        let cursor = unbounded(shape, &data);
++        let sink = unbounded_into_the_sink(shape, &data);
++        assert_eq!(cursor, sink, "{shape}");
++        let limit = smallest_completing_limit(shape, &data);
++        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
++    }
++
++    let data = repeat_dataset();
++    let iri = |name: &str| Some(TermValue::Iri(format!("{EX}{name}")));
++    let cases = [
++        // Subject and object, from the empty driving row.
++        ("SELECT ?s WHERE { ?s ex:w ?s }", vec![iri("n")]),
++        // Two such patterns with no shared variable: whichever is scanned second is
++        // offered a driving row that binds the other variable and not its own.
++        (
++            "SELECT ?x ?y WHERE { ?x ex:w ?x . ?y ex:t ?y }",
++            vec![iri("n"), iri("m")],
++        ),
++        // Subject and predicate.
++        ("SELECT ?x ?o WHERE { ?x ?x ?o }", vec![iri("w"), iri("n")]),
++        // Predicate and object.
++        ("SELECT ?s ?p WHERE { ?s ?p ?p }", vec![iri("e"), iri("t")]),
++    ];
++    for (shape, only_row) in cases {
++        let sink = unbounded_into_the_sink(shape, &data);
++        assert_eq!(sink.1, vec![only_row], "{shape}");
++        assert_eq!(unbounded(shape, &data), sink, "{shape}");
++        let limit = smallest_completing_limit(shape, &data);
++        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
++    }
++}
++
++/// Six quads over two predicates. For each way a variable can repeat inside one
++/// pattern exactly one quad agrees with itself: `n w n` (subject and object under
++/// `ex:w`), `m t m` (the same under `ex:t`), `w w n` (subject and predicate) and
++/// `e t t` (predicate and object). `e w n` and `k t m` agree with none.
++fn repeat_dataset() -> Arc<RdfDataset> {
++    let mut b = RdfDatasetBuilder::new();
++    let mut id = |name: &str| b.intern_iri(&format!("{EX}{name}")).unwrap();
++    let (w, t) = (id("w"), id("t"));
++    let (n, e, m, k) = (id("n"), id("e"), id("m"), id("k"));
++    for (s, p, o) in [
++        (n, w, n),
++        (e, w, n),
++        (m, t, m),
++        (k, t, m),
++        (w, w, n),
++        (e, t, t),
++    ] {
++        b.push_quad(s, p, o, None).unwrap();
++    }
++    b.freeze().unwrap()
++}
++
+ #[test]
+ fn the_statement_layer_is_skipped_only_when_the_view_certifies_it_empty() {
+     use crate::bgp::VIRTUAL_SOURCES;
+diff --git crates/sparql-eval/src/solution.rs crates/sparql-eval/src/solution.rs
+index 37cdbb52a..96561650a 100644
+--- crates/sparql-eval/src/solution.rs
++++ crates/sparql-eval/src/solution.rs
+@@ -457,7 +457,10 @@ impl VarSchema {
+ /// the common row lives inline with no heap allocation and spills to the heap
+ /// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
+ /// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
+-pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; 4]>;
++pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; INLINE_CELLS]>;
++
++/// The cells a [`Solution`] holds inline, with no heap allocation.
++pub(crate) const INLINE_CELLS: usize = 4;
+ 
+ /// One immutable row whose clone retains its admitted cell owner.
+ #[derive(Clone, Debug)]
+@@ -715,12 +718,19 @@ impl<I: ViewTermId> RetainedRow<I> {
+         }
+     }
+ 
+-    /// A resident copy of `cells` for a workspace that admits nothing: one exact
+-    /// reservation and one copy, the same typed refusal `try_build` gives an allocator
+-    /// that cannot supply the cells.
++    /// A resident copy of `cells` for a workspace that admits nothing: a bound scan
++    /// candidate, and a kept row cloned by [`Self::clone_admitted`]. A row that fits
++    /// the inline capacity is copied in place: nothing is allocated, so there is no
++    /// refusal to report. A wider row takes one exact reservation and one copy, with
++    /// the same typed refusal `try_build` gives an allocator that cannot supply the
++    /// cells.
++    #[inline]
+     pub(crate) fn resident_copy(
+         cells: &[Option<SolutionTerm<I>>],
+     ) -> Result<Solution<I>, crate::EvalError> {
++        if cells.len() <= INLINE_CELLS {
++            return Ok(Solution::from_slice(cells));
++        }
+         let mut row = Solution::new();
+         row.try_reserve_exact(cells.len())
+             .map_err(|_| crate::EvalError::AllocationFailed {
+diff --git crates/sparql-eval/src/vm/mod.rs crates/sparql-eval/src/vm/mod.rs
+index 765838025..d2abf2769 100644
+--- crates/sparql-eval/src/vm/mod.rs
++++ crates/sparql-eval/src/vm/mod.rs
+@@ -749,6 +749,38 @@ impl<'e, I: purrdf_core::ViewTermId> RowExpressionFrame<'e, I> {
+     ) -> Result<(), EvalError> {
+         self.state.resume(&mut self.linked, value, record, ctx)
+     }
++
++    /// Resume this row with the answer of its `EXISTS` request when that answer
++    /// needs no graph child ([`crate::expr::exists_answer_in_place`]), as the
++    /// suspending caller would resume it. `false` leaves the request untouched.
++    /// Kept out of line so the row loops that call it keep their frame size.
++    #[inline(never)]
++    pub(crate) fn resume_exists_in_place<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        site: u32,
++        expression: &Expression,
++        schema: &VarSchema,
++        ctx: &mut EvalCtx<'_, D>,
++    ) -> Result<bool, EvalError> {
++        if ctx.growth.is_bounded() || ctx.may_have_evidence() {
++            return Ok(false);
++        }
++        let sites = self
++            .linked
++            .exists
++            .as_deref()
++            .ok_or_else(|| EvalError::Invariant(EvaluatorInvariant::ExistsPatternMissing))?;
++        let pattern = sites.pattern(site, Some(expression))?;
++        let Some(answer) = helpers::exists_answer_in_place(pattern, &self.row, schema, ctx)? else {
++            return Ok(false);
++        };
++        let value = helpers::intern_boolean(ctx, answer)?;
++        #[cfg(test)]
++        crate::eval::IN_PLACE_ANSWER_COUNT.with(|count| count.set(count.get() + 1));
++        self.state
++            .resume(&mut self.linked, Some(value), None, ctx)?;
++        Ok(true)
++    }
+ }
+ 
+ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+@@ -1167,6 +1199,26 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
+         }
+     }
+ 
++    /// The current row's binding of the one variable this program reads, when the
++    /// whole program is that read and records no evidence: exactly the value
++    /// [`Self::term`] returns for it, without entering the interpreter.
++    #[expect(
++        clippy::option_option,
++        reason = "the outer option says whether the program is a lone variable read, the \
++                  inner one whether that variable is bound in the row"
++    )]
++    pub(crate) fn sole_variable(
++        &self,
++        row: &[Option<SolutionTerm<I>>],
++    ) -> Option<Option<SolutionTerm<I>>> {
++        match self.program.ops.as_slice() {
++            [Op::Var(slot)] if self.evidence.is_none() => {
++                Some(self.slots[*slot as usize].and_then(|column| row[column]))
++            }
++            _ => None,
++        }
++    }
++
+     /// Start one expression exactly once; a suspended execution retains its
+     /// program counter and stack instead of replaying any previous instruction.
+     fn begin_term<D: DatasetView<Id = I> + Sync>(
+diff --git docs/CONFORMANCE.md docs/CONFORMANCE.md
+index e21d2e535..55d8e2693 100644
+--- docs/CONFORMANCE.md
++++ docs/CONFORMANCE.md
+@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
+ <!-- BEGIN GENERATED: conformance-matrix -->
+ | Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |
+ | --- | --- | ---: | ---: | ---: | ---: | :---: |
+-| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 24 | 0 | 0 | 0 | GREEN |
++| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 29 | 0 | 0 | 0 | GREEN |
+ | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
+ | RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
+ | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index 6b1dc217f..7620e3855 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -809,9 +809,9 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
+ | `core.csv-field` | `purrdf-core` | `csv::arch::x86::find_sse2`, `csv::arch::x86::find_avx2`, `csv::arch::neon::find`, `csv::arch::simd128::find`, `csv::scan::find_portable` | `crates/rdf-core/src/csv/arch.rs:130` | `csv`, `graph_serialize` | — | I | — | rewrite | one run-time stop-set scanner serves the CSV/TSV row splitter (quote, escape, the first byte of each line terminator), the cell parser (delimiter, quote, escape) and the writer's quoting decision (delimiter, quote, escape, CR, LF), which continues from its first stop to double quotes and copies every run between stops whole. The stop bytes come from the dialect at run time, so the class cannot be a compile-time `ByteClass`: each explicit kernel broadcasts up to eight needles, compares a chunk with each, ORs the compares and extracts a lane mask (SSE2 16 bytes; AVX2 32 bytes, selected at run time; NEON 16 bytes with a narrowing-shift mask; simd128 16 bytes), and the portable kernel is the `ByteClass` lane formulation over run-time needles. The portable kernel is the oracle: every kernel the host runs is compared with it over every start alignment 0..64 and length 0..256 and seeded inputs. The SPARQL Results CSV writer is `FieldWriter` over the same scanner. The seven-configuration assembly gate measures every listed path and requires its byte-compare instructions, with floors at half the observed vector counts | baseline scalar; SIMD128 byte compares and bitmask | scan sse2 v34·f0·r0·req✓<br>scan avx2 v17·f0·r0·req✓ | scan sse2 (vex) v17·f0·r0·req✓<br>scan avx2 v17·f0·r0·req✓ | scan avx512 masks v8·f0·r0·req✓<br>scan avx2 masks v8·f0·r0·req✓ | scan neon v19·f0·r0·req✓ | scan neon on sve v19·f0·r0·req✓ | scan portable v0·f0·r0 | scan simd128 v18·f0·r0·req✓ |
+ | `cli.pack-input` | `purrdf-cli` | `ImmutableInput::from_disk_path`, then `verify_pack` | `crates/cli/src/immutable.rs:153`, `crates/rdf-core/src/ir/pack/certify.rs:214` | `pack_input`, `pack_input_alloc`, `pack_restore_alloc` | — | I | acquisition is a sealed `memfd` snapshot or an owned read (system calls); verification re-derives the canonical digest | leave | the hashing inside `verify_pack` is the blake3/sha2 rows' kernels; the rest is decode and compare. `purrdf-cli` is not a wasm32 crate (its acquisition is file and `memfd` based, and it is absent from `make wasm`), so the row is measured in the `purrdf_core::…::verify_pack` it calls | scalar on both builds | v4·f0·r0 | v2·f0·r0 | v2·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `eval.regex-row-alloc` | `purrdf-sparql-eval` | `expr::string_arg_of_term` (per-row `REGEX` argument) | `crates/sparql-eval/src/expr.rs:4420` | `regex_eval`, `expr_vm` | regex_eval | I | each row's text argument is materialized into an owned `String` before `is_match` | leave | the cost is the allocation, not a loop LLVM could widen | scalar on both builds; no scan loop | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+-| `eval.solution-compatible` | `purrdf-sparql-eval` | `solution::compatible`, `bgp::expansion::Expansion::candidate` (inlined `bind_row`) | `crates/sparql-eval/src/solution.rs:1512`, `crates/sparql-eval/src/bgp/expansion.rs:139` | `solution_row`, `exists_decorrelation`, `lateral_service`, `lateral_substitution`, `query_eval`, `relation_attestation_alloc` | solution_row | I | `Option` equality over at most four shared columns | leave | compatibility gathers at most four columns and exits on the first mismatch; the expansion measure includes stop, fuel and merge-dedup bookkeeping around the inlined row binding | expansion counts describe its full owner, not comparison-only vectorization | compatible v0·f0·r0<br>bind_row v7·f0·r0 | compatible v0·f0·r0<br>bind_row v4·f0·r0 | compatible v0·f0·r0<br>bind_row v2·f0·r0 | compatible v0·f0·r0<br>bind_row v3·f0·r0 | compatible v0·f0·r0<br>bind_row v15·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 |
+-| `eval.bgp-cost-planner` | `purrdf-sparql-eval` | `bgp::cost_order_dp_costs_from` | `crates/sparql-eval/src/bgp.rs:1571` | `cost_based_bgp_planner`, `query_eval` | — | FR | f64 plan arithmetic over a handful of patterns, once per query | leave | not a loop over data; the count is bitset and index bookkeeping in the dynamic program | integer lane ops in the bookkeeping under +simd128; the cost arithmetic is scalar on both builds | v26·f0·r0 | v30·f0·r0 | v32·f0·r0 | v17·f0·r0 | v10·f0·r0 | v0·f0·r0 | v15·f0·r0 |
+-| `eval.bgp-join-probe` | `purrdf-sparql-eval` | `bgp::prepare_compiled_bgp` indexed loop | `crates/sparql-eval/src/bgp.rs:861` | `query_eval`, `construct_builder`, `cost_based_bgp_planner`, `exists_decorrelation`, `governed_eval`, `numeric_eval`, `paged_cross_page_bgp`, `path_range`, `prepared_admission`, `prepared_reuse`, `relation_attestation_alloc`, `query_engine_reuse` | bgp-join-probe | I | enum dispatch per candidate quad and a `SmallVec` binding per row | leave | the per-candidate work is a dependent chain of dispatch and binding, not a lane-parallel loop | scalar on both builds | v35·f0·r0 | v24·f0·r0 | v14·f0·r0 | v22·f0·r0 | v85·f0·r0 | v0·f0·r0 | v0·f0·r0 |
++| `eval.solution-compatible` | `purrdf-sparql-eval` | `solution::compatible`, `bgp::bind_row` (out of line) | `crates/sparql-eval/src/solution.rs:1560`, `crates/sparql-eval/src/bgp.rs:3294` | `solution_row`, `exists_decorrelation`, `lateral_service`, `lateral_substitution`, `query_eval`, `relation_attestation_alloc` | solution_row | I | `Option` equality over at most four shared columns | leave | compatibility gathers at most four columns and exits on the first mismatch; the bind measure is the row binder alone, which both scan loops call and the compiler emits out of line: the pre-copy test, the row copy and the slot writes, with no stop, fuel or merge-dedup bookkeeping | bind counts describe the whole binder, row copy included, not comparison-only vectorization | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 |
++| `eval.bgp-cost-planner` | `purrdf-sparql-eval` | `bgp::cost_order_dp_costs_from` | `crates/sparql-eval/src/bgp.rs:2503` | `cost_based_bgp_planner`, `query_eval` | — | FR | f64 plan arithmetic over a handful of patterns, once per query | leave | not a loop over data; the count is bitset and index bookkeeping in the dynamic program | integer lane ops in the bookkeeping under +simd128; the cost arithmetic is scalar on both builds | v26·f0·r0 | v30·f0·r0 | v32·f0·r0 | v17·f0·r0 | v10·f0·r0 | v0·f0·r0 | v15·f0·r0 |
++| `eval.bgp-join-probe` | `purrdf-sparql-eval` | `bgp::prepare_compiled_bgp` indexed loop | `crates/sparql-eval/src/bgp.rs:875` | `query_eval`, `construct_builder`, `cost_based_bgp_planner`, `exists_decorrelation`, `governed_eval`, `numeric_eval`, `paged_cross_page_bgp`, `path_range`, `prepared_admission`, `prepared_reuse`, `relation_attestation_alloc`, `query_engine_reuse` | bgp-join-probe | I | enum dispatch per candidate quad and a `SmallVec` binding per row | leave | the per-candidate work is a dependent chain of dispatch and binding, not a lane-parallel loop | scalar on both builds | v28·f0·r0 | v20·f0·r0 | v12·f0·r0 | v22·f0·r0 | v85·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `eval.aggregate-fold` | `purrdf-sparql-eval` | `NumericFold::step_parsed`, `NumericFold::combine_admitted` (behind `fold_numeric`/`NumericSummary`), `numeric_add`, `BigInt::add_i128`, `BigInt::add_assign` | `crates/sparql-eval/src/modifier.rs` | `query_eval`, `numeric_eval` | sparql-aggregate | FI | admitted exact integer/decimal values and IEEE float/double values, one per row through the promotion tower with poisoning; no slice of doubles exists to fill a lane | leave | SPARQL 1.1 §18.5.1.3 defines `Sum` as the chain `op:numeric-add(S1, Sum(S2..n))` over `ToList`, whose order is free but whose shape is a chain. Regime 2 makes the `xsd:double` bits depend on the target, and regime 3's lane tree gives bits no chain gives: over {−3, −2^53, −1, −0.7} every chain order answers −9007199254740996 and the pairwise tree −9007199254740998. Integer partials may merge directly. Decimal and duration partials merge only when `MagnitudeBound` proves the combined coefficient magnitude fits `i128`, with decimal scales at most 18, and the admitted combination produces a value, including a successful checked duration-month addition. Unproven merges replay their rows through the admitted source-order fold; operational errors propagate. This is a conservative partial-merge proof, not a limit on decimal precision. Float/double operands and subsequent rows are replayed in source order, preserving the chain's bits. `NumericFold` reaches `ops::value_binary_admitted` through `numeric_fold_binary` and `NumericFrame`: checked `i128` integer addition where possible, admitted exact arithmetic otherwise, and admitted conversion followed by IEEE addition for float/double operands. The separately measured `numeric_add`, `BigInt::add_i128` and `BigInt::add_assign` are standalone helpers; their counts do not establish coverage of the admitted arithmetic callees | scalar on both builds | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 |
+ | `datalog.relation-contains` | `purrdf-datalog` | `Relation::contains` (tail probe `Tail::contains`, inlined) | `crates/datalog/src/store.rs:903` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | — | rewrite | the mutable tail retains structure-of-arrays subjects, objects and optional row handles. Existing relation and sealed-batch live counts prove whether every physical tail cell is occupied. An occupied tail uses the original packed key-count kernel; a tail with vacancies also checks each handle. Both paths compare both full-width identities at every position, bitwise-AND the equalities and count live matches without early exit. The counter is u32 because the tail seals at 64 rows; neither key is narrowed. SSE2 pairs both 32-bit halves of each 64-bit key, while AVX2/AVX-512, NEON, SVE and SIMD128 compare full 64-bit lanes. Tail::row, Tail::iter and Tail::take_rows preserve insertion order; the galloping batch probe remains unchanged. The tuple oracle covers lengths0–64, hits and lone hits at every position, one-column near misses, swapped/absent keys and column round trips. Directed controls distinguish equal low halves with different high halves and generic host IDs with different tags or payloads | +simd128: i64x2.eq compares both key columns, v128.and combines their boolean masks and i32x4.add reduces the bounded match count; baseline: scalar full-width comparisons and counted matches without early exit | sse2 v25·f0·r0·req✓ | avx2 v92·f0·r0·req✓ | avx512 masks v57·f0·r0·req✓ | neon v105·f0·r0·req✓ | sve v50·f0·r0·req✓ | scalar v0·f0·r0 | simd128 v18·f0·r0·req✓ |
+ | `datalog.gallop-leapfrog` | `purrdf-datalog` | `gallop_lower_bound` (in `Batch::subject_run`), `cycle::Cursor::seek` | `crates/datalog/src/store.rs:557`, `crates/datalog/src/seminaive/cycle.rs:194` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | exponential then binary search; each probe depends on the previous comparison | leave | loop-carried search | scalar on both builds | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 |
+diff --git scripts/simd-asm-manifest.toml scripts/simd-asm-manifest.toml
+index 16abf9bd9..61214a50d 100644
+--- scripts/simd-asm-manifest.toml
++++ scripts/simd-asm-manifest.toml
+@@ -2838,7 +2838,7 @@ summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (
+ 
+ [[site]]
+ id = "eval.solution-compatible"
+-summary = "`solution::compatible` and BGP expansion's inlined `bind_row`, the solution-row join checks"
++summary = "`solution::compatible` and the BGP scan's out-of-line `bind_row`, the solution-row join checks"
+ 
+   [[site.measure]]
+   label = "compatible"
+@@ -2853,7 +2853,7 @@ summary = "`solution::compatible` and BGP expansion's inlined `bind_row`, the so
+   label = "bind_row"
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+   crate = "purrdf_sparql_eval"
+-  symbol = "<purrdf_sparql_eval::bgp::expansion::Expansion<purrdf_core::ir::term::TermId>>::candidate::<purrdf_core::ir::dataset::RdfDataset>"
++  symbol = "purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>"
+   min_vector_ops = 0
+   max_fma = 0
+   forbid_relaxed = true
