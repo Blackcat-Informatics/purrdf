@@ -100,6 +100,11 @@ pub mod fno;
 // crates — the `purrdf-slice` link-unit linker and the `purrdf-shex` structural
 // cycle checks — not `purrdf-core` internals. Dependency-free and wasm-clean.
 pub mod graph;
+// The queue-refinement blank-node labelling with nested inheriting calls, its
+// statistics record and its old-against-new comparison over a dataset view. An
+// evaluation surface, hidden: not a stable API.
+#[doc(hidden)]
+pub mod label32;
 // The one execution-governance vocabulary: stop causes, governed resource
 // dimensions, tripped-governor reports, and evidence. Named by the demand-paging
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,

@@ -26,17 +26,19 @@ use std::fmt::Write as _;
 
 mod checks;
 mod families;
-mod r31;
+mod literal;
 #[cfg(test)]
 mod tests;
-mod view_lines;
+
+use purrdf_core::label32 as r31;
+use purrdf_core::label32::view as view_lines;
 
 use purrdf_core::{
     CanonHash, CanonicalizationControl, SearchPolicy, SearchWork, try_canonical_sha256_view,
 };
 
 use families::Fold;
-use r31::{Flag, Input, Labelled, Options, Refusal, Selector, literal, optimised};
+use r31::{Flag, Input, Labelled, Options, Refusal, Selector, optimised};
 
 fn fold_of(family: &str, a: u32, b: u32, c: u32) -> Fold {
     match family {
@@ -244,6 +246,21 @@ fn main() {
         }
         "current" | "build" => baseline(command, rest),
         "exp" => experiment(rest),
+        "stats-check" => {
+            // stats-check <relabellings> <file>...: the structural record is the
+            // same in LITERAL and in OPTIMISED under every switch combination
+            // and every relabelling; the group order matches a brute-force count.
+            let relabellings = number(rest, 0);
+            let mut cases = 0u64;
+            for path in &rest[1..] {
+                let text = std::fs::read_to_string(path).expect("a readable file");
+                let input = Input::read(&text).unwrap_or_else(|e| panic!("{}", e.0));
+                let report = checks::structural_check(&input, relabellings);
+                println!("{path} {report}");
+                cases += 1;
+            }
+            println!("stats-check inputs={cases}");
+        }
         "big-vector" => std::fs::write(&rest[1], big_vector(&rest[0])).expect("write the input"),
         "dependence" => println!(
             "{}",
@@ -260,22 +277,50 @@ fn main() {
             print!("{}", done.document);
         }
         "view" => {
-            // The same labelling over the lines a dataset view writes.
+            // view <overlay|flat> <family> <a> <b> <c>: the library's old-against-new
+            // comparison over the fold's in-memory dataset.
             let presentation = match rest[0].as_str() {
                 "overlay" => view_lines::Presentation::Overlay,
                 "flat" => view_lines::Presentation::Flat,
                 other => panic!("unknown presentation {other}"),
             };
-            let fold = fold_of(
-                &rest[1],
-                number(rest, 2) as u32,
-                number(rest, 3) as u32,
-                number(rest, 4) as u32,
+            let fold = if rest[1] == "repro" {
+                families::from_nquads(&std::fs::read_to_string(&rest[2]).expect("a readable file"))
+            } else {
+                fold_of(
+                    &rest[1],
+                    number(rest, 2) as u32,
+                    number(rest, 3) as u32,
+                    number(rest, 4) as u32,
+                )
+            };
+            let report = r31::compare::compare_view(
+                &*fold.dataset(),
+                presentation,
+                4_194_304,
+                Options::DEFAULT,
             );
-            let text = view_lines::lines_from_view(&*fold.dataset(), presentation);
-            let input = Input::read(&text).unwrap_or_else(|e| panic!("{}", e.0));
-            let outcome = optimised::label_input(&input, Options::DEFAULT);
-            println!("{}", result_line(&rest.join(" "), &input, &outcome));
+            let old = match &report.old.outcome {
+                Ok(d) => format!("ok digest={}", d.to_hex()),
+                Err(e) => format!("refused {e:?}").chars().take(60).collect(),
+            };
+            let new = match &report.new {
+                Ok(n) => format!(
+                    "ok sha256={} units={} structural={}",
+                    purrdf_hash::hex::encode(&n.digest),
+                    n.labelled.stats.units(),
+                    r31::structural_json(&n.labelled)
+                ),
+                Err(e) => format!("refused {e}"),
+            };
+            println!(
+                "COMPARE {} lines={} blank_nodes={} erased_sha256={} old: work={} {old} | new: {new}",
+                rest.join(" "),
+                report.lines,
+                report.blank_nodes,
+                purrdf_hash::hex::encode(&report.erased_input),
+                report.old.work
+            );
         }
         other => panic!("unknown command {other}"),
     }
@@ -537,11 +582,13 @@ fn docs(vectors: &str, out: &str, literal_limit: u64, revision: &str, extra: &[S
         )
         .expect("write document");
         entries.push(format!(
-            "    {{\"id\": \"{id}\", \"input\": \"{name}\", \"input_sha256\": \"{}\", \"document\": \"{doc_name}\", \"document_sha256\": \"{}\", \"has_automorphisms\": {}, \"work_units\": {}, \"checked\": \"{checked}\", \"revision\": \"{revision}\"}}",
+            "    {{\"id\": \"{id}\", \"input\": \"{name}\", \"input_sha256\": \"{}\", \"document\": \"{doc_name}\", \"document_sha256\": \"{}\", \"has_automorphisms\": {}, \"work_units\": {}, \"checked\": \"{checked}\", \"revision\": \"{revision}\", \"statistics\": {{\"structural\": {}, \"engine\": {}}}}}",
             sha(&bytes),
             sha(done.document.as_bytes()),
             done.has_automorphisms(),
             done.stats.units(),
+            r31::structural_json(&done),
+            r31::engine_json(&done.stats),
         ));
     }
     let manifest = format!(

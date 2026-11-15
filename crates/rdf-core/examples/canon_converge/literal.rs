@@ -14,9 +14,10 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use super::{
-    Cert, Chosen, Entry, Flag, Input, Labelled, Options, Refusal, Stats, cmp_cert, cmp_invariant,
-    components, document, entry, formed_cost, label, pick_target, start_cost,
+use purrdf_core::label32::{
+    Cert, Chosen, Entry, Flag, Input, Labelled, Options, PathStats, Refusal, Stats, TopRecord,
+    classes, cmp_cert, cmp_invariant, components, document, entry, formed_cost, label, pick_target,
+    start_cost,
 };
 
 /// Ordered cells of one side.
@@ -230,8 +231,15 @@ impl Engine<'_> {
             &self.free,
             &mut self.stats.discovery_steps,
         );
-        self.charge_split(&comps);
+        let split = self.charge_split(&comps);
         self.check()?;
+        let own = PathStats {
+            removed_vertices: s + e.len() as u64,
+            removed_incidences: incidences,
+            split,
+            formed: formed_cost(&e),
+            ..PathStats::default()
+        };
         let mut nested: Vec<Chosen> = Vec::with_capacity(comps.len());
         for (cn, cl) in &comps {
             let restricted = restrict(part, cn, cl);
@@ -251,22 +259,26 @@ impl Engine<'_> {
         });
         Ok(Chosen {
             cert,
+            path: PathStats::of_nest(own, &nested),
             fixed,
             nested,
             size,
         })
     }
 
-    /// The restriction charge for a split into `comps` (8.1).
-    fn charge_split(&mut self, comps: &[(Vec<u32>, Vec<u32>)]) {
-        if comps.len() >= 2 {
-            let sizes: Vec<u64> = comps
-                .iter()
-                .map(|(n, l)| (n.len() + l.len()) as u64)
-                .collect();
-            let largest = *sizes.iter().max().expect("two components");
-            self.stats.restriction += sizes.iter().sum::<u64>() - largest;
+    /// The restriction charge for a split into `comps` (8.1); returns it.
+    fn charge_split(&mut self, comps: &[(Vec<u32>, Vec<u32>)]) -> u64 {
+        if comps.len() < 2 {
+            return 0;
         }
+        let sizes: Vec<u64> = comps
+            .iter()
+            .map(|(n, l)| (n.len() + l.len()) as u64)
+            .collect();
+        let largest = *sizes.iter().max().expect("two components");
+        let charge = sizes.iter().sum::<u64>() - largest;
+        self.stats.restriction += charge;
+        charge
     }
 
     /// A call (6.1).
@@ -274,7 +286,12 @@ impl Engine<'_> {
         self.stats.calls += 1;
         let part = if self.options.has(Flag::Wl2) && part[0].iter().all(|c| c.len() > 1) {
             let mut part = part;
-            part[0] = super::wl2::refine_nodes(self.input, &self.free, &part, &mut self.stats);
+            part[0] = purrdf_core::label32::wl2::refine_nodes(
+                self.input,
+                &self.free,
+                &part,
+                &mut self.stats,
+            );
             let mut queue = all_cells(&part);
             self.refine(&mut part, &mut queue)?;
             part
@@ -285,7 +302,14 @@ impl Engine<'_> {
             self.stats.leaves += 1;
         }
         if part[0].iter().any(|c| c.len() == 1) {
-            return self.fix_and_nest(&part, p, depth);
+            let discrete = part[0].iter().all(|c| c.len() == 1);
+            let mut chosen = self.fix_and_nest(&part, p, depth)?;
+            if discrete {
+                chosen.path.discrete += 1;
+            } else {
+                chosen.path.nested += 1;
+            }
+            return Ok(chosen);
         }
         // Rule 3.
         self.stats.branch_calls += 1;
@@ -302,7 +326,9 @@ impl Engine<'_> {
             self.stats.children += 1;
             let mut child = part.clone();
             let mut queue = individualise(&mut child[0], ti, colour, v);
+            let before = self.stats.visit_elements;
             self.refine(&mut child, &mut queue)?;
+            let child_refine = self.stats.visit_elements - before;
             let invariant: Vec<u32> = if self.options.has(Flag::Invariant) {
                 let mut i: Vec<u32> = child[0].iter().map(|c| c.len() as u32).collect();
                 i.push(0);
@@ -313,7 +339,8 @@ impl Engine<'_> {
                 Vec::new()
             };
             let saved_free = self.free.clone();
-            let result = self.fix_and_nest(&child, p, depth)?;
+            let mut result = self.fix_and_nest(&child, p, depth)?;
+            result.path.refine += child_refine;
             self.free = saved_free;
             let replace = match &best {
                 None => true,
@@ -340,7 +367,9 @@ impl Engine<'_> {
         if ties > 0 {
             self.stats.equal_certificates += 1;
         }
-        Ok(best.expect("a child").1)
+        let mut chosen = best.expect("a child").1;
+        chosen.path = PathStats::of_branch(&chosen.path, target.len() as u64, ties + 1);
+        Ok(chosen)
     }
 }
 
@@ -484,7 +513,8 @@ fn run(input: &Input, options: Options) -> Result<Labelled, Refusal> {
     );
     engine.stats.top_components = comps.len() as u64;
     engine.charge_split(&comps);
-    let mut tops: Vec<Chosen> = Vec::with_capacity(comps.len());
+    let top_split = engine.stats.restriction;
+    let mut tops: Vec<(TopRecord, Chosen)> = Vec::with_capacity(comps.len());
     if options.has(Flag::WholeFold) {
         // Revision 3: one refinement over the whole fold; each top component
         // inherits its restriction.
@@ -493,22 +523,38 @@ fn run(input: &Input, options: Options) -> Result<Labelled, Refusal> {
         let (mut part, mut queue) = fresh_start(input, &all, &lines);
         engine.refine(&mut part, &mut queue)?;
         for (cn, cl) in &comps {
-            tops.push(engine.call(restrict(&part, cn, cl), 0, 0)?);
+            let restricted = restrict(&part, cn, cl);
+            let sizes: Vec<usize> = restricted[0].iter().map(Vec::len).collect();
+            let record = TopRecord::root(input, cn, cl, &sizes);
+            tops.push((record, engine.call(restricted, 0, 0)?));
         }
     } else {
         for (cn, cl) in &comps {
             engine.stats.start += start_cost(input, cl);
             let (mut part, mut queue) = fresh_start(input, cn, cl);
+            let before = engine.stats.visit_elements;
             engine.refine(&mut part, &mut queue)?;
-            tops.push(engine.call(part, 0, 0)?);
+            let sizes: Vec<usize> = part[0].iter().map(Vec::len).collect();
+            let mut record = TopRecord::root(input, cn, cl, &sizes);
+            record.root_refine = engine.stats.visit_elements - before;
+            tops.push((record, engine.call(part, 0, 0)?));
         }
     }
     let mut compared = 0u64;
-    tops.sort_by(|a, b| cmp_cert(&a.cert, &b.cert, &mut compared));
+    tops.sort_by(|a, b| cmp_cert(&a.1.cert, &b.1.cert, &mut compared));
     engine.stats.entries_compared += compared;
-    if tops.windows(2).any(|w| w[0].cert == w[1].cert) {
+    if tops.windows(2).any(|w| w[0].1.cert == w[1].1.cert) {
         engine.stats.equal_certificates += 1;
     }
+    let top_multiplicities = classes(tops.iter().map(|t| &t.1.cert));
+    let records: Vec<TopRecord> = tops
+        .iter()
+        .map(|(r, c)| TopRecord {
+            path: c.path.clone(),
+            ..r.clone()
+        })
+        .collect();
+    let tops: Vec<Chosen> = tops.into_iter().map(|t| t.1).collect();
     engine.check()?;
     let mut positions = vec![0u64; n];
     let mut o = 0u64;
@@ -520,6 +566,9 @@ fn run(input: &Input, options: Options) -> Result<Labelled, Refusal> {
         document: document(input, &positions),
         positions,
         tops: tops.iter().map(|t| Arc::clone(&t.cert)).collect(),
+        records,
+        top_multiplicities,
+        top_split,
         stats: engine.stats,
     })
 }

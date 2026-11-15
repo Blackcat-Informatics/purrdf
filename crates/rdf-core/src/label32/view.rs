@@ -10,11 +10,11 @@
 
 use std::convert::Infallible;
 
-use purrdf_core::{DatasetView, FastMap, TermValue, write_term_value};
+use crate::{DatasetView, FastMap, TermValue, write_term_value};
 
 /// The two spellings of the statement layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Presentation {
+pub enum Presentation {
     /// Reifier and annotation rows through the profile's reserved IRIs.
     Overlay,
     /// The same rows as ordinary quads; equal rows are one row.
@@ -70,7 +70,7 @@ impl<D: DatasetView<ReadError = Infallible>> Reader<'_, D> {
 }
 
 /// The distinct lines of `view` in `presentation`.
-pub(crate) fn lines_from_view<D: DatasetView<ReadError = Infallible>>(
+pub fn lines_from_view<D: DatasetView<ReadError = Infallible>>(
     view: &D,
     presentation: Presentation,
 ) -> String {

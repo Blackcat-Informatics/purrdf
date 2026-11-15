@@ -3,7 +3,8 @@
 
 //! Behaviour checks of the revision 3.1 labelling.
 
-use crate::r31::{Cert, Input, Labelled, Options, literal, optimised};
+use crate::literal;
+use crate::r31::{Cert, Input, Labelled, Options, optimised};
 use crate::{checks, families, fold_text};
 
 fn both(text: &str) -> [Labelled; 2] {
@@ -190,5 +191,29 @@ fn a_work_limit_refuses_instead_of_labelling() {
         };
         assert_eq!(literal::label_input(&input, o).is_ok(), limit > 10);
         assert_eq!(optimised::label_input(&input, o).is_ok(), limit > 10);
+    }
+}
+
+/// The structural statistics record is engine-independent: LITERAL, every
+/// OPTIMISED switch combination and relabellings agree, and the group order
+/// read from it equals a brute-force count of automorphisms.
+#[test]
+fn structural_record_is_engine_independent_and_counts_the_group() {
+    let small = [
+        "_:a <p> _:b .\n_:b <p> _:c .\n_:c <p> _:a .\n_:x <p> _:y .\n_:y <p> _:z .\n_:z <p> _:x .\n".to_owned(),
+        "_:a1 <p> _:b1 .\n_:a1 <p> _:b2 .\n_:a2 <p> _:b1 .\n_:a2 <p> _:b2 .\n".to_owned(),
+        fold_text(&families::cube(3)),
+        fold_text(&families::bipartite(3, true)),
+        fold_text(&families::bipartite(3, false)),
+        fold_text(&families::hubs(3, 1, 2, false)),
+        fold_text(&families::triangles(3)),
+    ];
+    let texts = small
+        .into_iter()
+        .chain((100..140).map(|seed| checks::random_input(seed, 6, 8)));
+    for text in texts {
+        let input = Input::read(&text).expect("reads");
+        let report = checks::structural_check(&input, 3);
+        assert!(report.starts_with("structural-equal"), "{report}");
     }
 }

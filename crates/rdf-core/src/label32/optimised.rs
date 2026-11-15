@@ -27,11 +27,12 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use purrdf_core::FastMap;
+use crate::FastMap;
 
 use super::{
-    Cert, Chosen, Entry, Flag, Input, Labelled, Options, Refusal, Stats, cmp_cert, cmp_entries,
-    cmp_invariant, components, document, entry, formed_cost, pick_target, start_cost,
+    Cert, Chosen, Entry, Flag, Input, Labelled, Options, PathStats, Refusal, Stats, TopRecord,
+    classes, cmp_cert, cmp_entries, cmp_invariant, components, document, entry, formed_cost,
+    pick_target, start_cost,
 };
 
 /// One split or deletion, undone in reverse order.
@@ -124,6 +125,10 @@ struct Nest {
     done: Vec<Chosen>,
     arena_mark: usize,
     depth: u64,
+    /// The fixing's own structural charges (and a child's refinement).
+    own: PathStats,
+    /// 1: a call under rule 1, 2: under rule 2, 0: a child under rule 3.
+    rule: u8,
 }
 
 /// A branching call (rule 3) in progress.
@@ -141,6 +146,12 @@ struct Branch {
     orbits: Uf,
     twins: Uf,
     marks: (usize, usize, usize),
+    /// Per tried child: it currently attains the smallest certificate.
+    attains: Vec<bool>,
+    /// Per child pruned by an automorphism or a twin: the tried child it maps to.
+    pruned_to: Vec<usize>,
+    /// Label elements of the current child's REFINE.
+    child_refine: u64,
 }
 
 #[derive(Debug)]
@@ -187,6 +198,8 @@ struct Engine<'a> {
     buf: Vec<(u32, u32, u128)>,
     /// Target cells of the enclosing branching calls (the `Traces` selector).
     ancestors: Vec<Vec<u32>>,
+    /// The split charge of the last discovery.
+    last_split: u64,
 }
 
 /// A label `[a, b, ...]` as one integer whose order is the list order: element
@@ -261,6 +274,7 @@ impl<'a> Engine<'a> {
             generation: 0,
             buf: Vec::new(),
             ancestors: Vec::new(),
+            last_split: 0,
         };
         for l in 0..m {
             engine.relabel(l).ok_or(Refusal::Width)?;
@@ -645,6 +659,7 @@ impl<'a> Engine<'a> {
             .map(|&u| self.node_lines[u as usize].len())
             .sum();
         self.stats.restriction += (fixed.len() + e_lines.len() + incidences) as u64;
+        self.last_split = 0;
         let total = u64::from(self.parts[pi].live[0] + self.parts[pi].live[1]);
         if total == 0 {
             return Vec::new();
@@ -767,9 +782,11 @@ impl<'a> Engine<'a> {
         if open.is_some() {
             sizes.push(total - sizes.iter().sum::<u64>());
         }
+        self.last_split = 0;
         if sizes.len() >= 2 {
             let largest = *sizes.iter().max().expect("sizes");
-            self.stats.restriction += sizes.iter().sum::<u64>() - largest;
+            self.last_split = sizes.iter().sum::<u64>() - largest;
+            self.stats.restriction += self.last_split;
         }
         // Which component stays in place.
         let keep: Option<usize> = if !self.options.has(Flag::Lazy) {
@@ -838,11 +855,13 @@ impl<'a> Engine<'a> {
         p: u64,
         depth: u64,
         fixed: Vec<u32>,
+        rule: u8,
     ) -> Result<Nest, Refusal> {
         let arena_mark = self.parts.len();
         let (e_lines, e) = self.fix_and_entries(&fixed, p)?;
         let comps = self.remove_and_discover(pi, &fixed, &e_lines);
         self.check()?;
+        let own = self.own_charges(&fixed, &e_lines, &e);
         Ok(Nest {
             p,
             fixed,
@@ -852,7 +871,23 @@ impl<'a> Engine<'a> {
             done: Vec::new(),
             arena_mark,
             depth,
+            own,
+            rule,
         })
+    }
+
+    /// The structural charges of a fixing just made (8.1(c), (d)).
+    fn own_charges(&self, fixed: &[u32], e_lines: &[u32], e: &[Entry]) -> PathStats {
+        PathStats {
+            removed_vertices: (fixed.len() + e_lines.len()) as u64,
+            removed_incidences: fixed
+                .iter()
+                .map(|&u| self.node_lines[u as usize].len() as u64)
+                .sum(),
+            split: self.last_split,
+            formed: formed_cost(e),
+            ..PathStats::default()
+        }
     }
 
     /// The target cell of a partition with no singleton node cell.
@@ -926,7 +961,8 @@ impl<'a> Engine<'a> {
                         self.stats.leaves += 1;
                     }
                     if !fixed.is_empty() {
-                        let nest = self.begin_nest(pi, p, depth, fixed)?;
+                        let nest =
+                            self.begin_nest(pi, p, depth, fixed, if any_big { 2 } else { 1 })?;
                         stack.push(Frame::Nest(Box::new(nest)));
                         continue;
                     }
@@ -952,6 +988,9 @@ impl<'a> Engine<'a> {
                         orbits: Uf::default(),
                         twins,
                         marks: (0, 0, 0),
+                        attains: Vec::new(),
+                        pruned_to: Vec::new(),
+                        child_refine: 0,
                     })));
                 }
                 Frame::Nest(mut nest) => {
@@ -986,11 +1025,18 @@ impl<'a> Engine<'a> {
                         e: nest.e,
                         c: nest.done.iter().map(|n| Arc::clone(&n.cert)).collect(),
                     });
+                    let mut path = PathStats::of_nest(nest.own, &nest.done);
+                    match nest.rule {
+                        1 => path.discrete += 1,
+                        2 => path.nested += 1,
+                        _ => {}
+                    }
                     ret = Some(Chosen {
                         cert,
                         fixed: nest.fixed,
                         nested: nest.done,
                         size,
+                        path,
                     });
                 }
                 Frame::Branch(mut b) => {
@@ -1018,16 +1064,18 @@ impl<'a> Engine<'a> {
                         if self.options.has(Flag::Twins) {
                             let rv = b.twins.find(v);
                             let tried = b.tried.clone();
-                            if tried.iter().any(|&t| b.twins.find(t) == rv) {
+                            if let Some(i) = tried.iter().position(|&t| b.twins.find(t) == rv) {
                                 self.stats.pruned_twin += 1;
+                                b.pruned_to.push(i);
                                 continue;
                             }
                         }
                         if self.options.has(Flag::Orbits) {
                             let rv = b.orbits.find(v);
                             let tried = b.tried.clone();
-                            if tried.iter().any(|&t| b.orbits.find(t) == rv) {
+                            if let Some(i) = tried.iter().position(|&t| b.orbits.find(t) == rv) {
                                 self.stats.pruned_orbit += 1;
+                                b.pruned_to.push(i);
                                 continue;
                             }
                         }
@@ -1036,10 +1084,19 @@ impl<'a> Engine<'a> {
                     }
                     let Some(v) = chosen else {
                         self.ancestors.pop();
-                        ret = Some(b.best.take().expect("a child").1);
+                        let attaining = b.attains.iter().filter(|&&a| a).count()
+                            + b.pruned_to.iter().filter(|&&i| b.attains[i]).count();
+                        let mut chosen = b.best.take().expect("a child").1;
+                        chosen.path = PathStats::of_branch(
+                            &chosen.path,
+                            b.target.len() as u64,
+                            attaining as u64,
+                        );
+                        ret = Some(chosen);
                         continue;
                     };
                     b.tried.push(v);
+                    b.attains.push(false);
                     self.stats.children += 1;
                     b.marks = (
                         self.parts[b.pi].trail.len(),
@@ -1047,7 +1104,9 @@ impl<'a> Engine<'a> {
                         self.parts.len(),
                     );
                     let mut queue = self.individualise(b.pi, b.c, v);
+                    let before = self.stats.visit_elements;
                     self.refine(b.pi, &mut queue)?;
+                    b.child_refine = self.stats.visit_elements - before;
                     if self.options.has(Flag::Invariant) {
                         b.cur_inv = self.invariant(b.pi);
                         self.stats.invariant += b.cur_inv.len() as u64 - 1;
@@ -1059,7 +1118,10 @@ impl<'a> Engine<'a> {
                                     stack.push(Frame::Branch(b));
                                     continue;
                                 }
-                                Ordering::Less => b.best = None,
+                                Ordering::Less => {
+                                    b.best = None;
+                                    b.attains.iter_mut().for_each(|a| *a = false);
+                                }
                                 Ordering::Equal => {}
                             }
                         }
@@ -1126,6 +1188,8 @@ impl<'a> Engine<'a> {
                         stack.push(Frame::Branch(b));
                         continue;
                     }
+                    let mut own = self.own_charges(&fixed, &e_lines, &e);
+                    own.refine = b.child_refine;
                     let nest = Nest {
                         p: b.p,
                         fixed,
@@ -1135,6 +1199,8 @@ impl<'a> Engine<'a> {
                         done: Vec::new(),
                         arena_mark,
                         depth: b.depth,
+                        own,
+                        rule: 0,
                     };
                     stack.push(Frame::Branch(b));
                     stack.push(Frame::Nest(Box::new(nest)));
@@ -1155,8 +1221,10 @@ impl<'a> Engine<'a> {
     /// the two (pairs of nodes at equal final positions within the call).
     fn child_done(&mut self, b: &mut Branch, r: Chosen) -> Vec<(u32, u32)> {
         let inv = std::mem::take(&mut b.cur_inv);
+        let current = b.attains.len() - 1;
         let Some((best_inv, best)) = &b.best else {
             b.best = Some((inv, r));
+            b.attains[current] = true;
             return Vec::new();
         };
         let mut compared = 0u64;
@@ -1168,10 +1236,13 @@ impl<'a> Engine<'a> {
         match order {
             Ordering::Less => {
                 b.best = Some((inv, r));
+                b.attains.iter_mut().for_each(|a| *a = false);
+                b.attains[current] = true;
                 Vec::new()
             }
             Ordering::Greater => Vec::new(),
             Ordering::Equal => {
+                b.attains[current] = true;
                 self.stats.equal_certificates += 1;
                 let mut pa = relative(best);
                 let mut pb = relative(&r);
@@ -1275,7 +1346,7 @@ fn relative(chosen: &Chosen) -> Vec<(u32, u64)> {
 }
 
 /// Label `input` with every permitted shortcut the options enable.
-pub(crate) fn label_input(input: &Input, options: Options) -> Result<Labelled, Refusal> {
+pub fn label_input(input: &Input, options: Options) -> Result<Labelled, Refusal> {
     let mut engine = Engine::new(input, options)?;
     let n = input.nodes();
     let all: Vec<u32> = (0..n as u32).collect();
@@ -1295,8 +1366,10 @@ pub(crate) fn label_input(input: &Input, options: Options) -> Result<Labelled, R
         engine.stats.restriction +=
             sizes.iter().sum::<u64>() - sizes.iter().max().expect("two components");
     }
-    let mut tops: Vec<Chosen> = Vec::with_capacity(comps.len());
+    let top_split = engine.stats.restriction;
+    let mut tops: Vec<(TopRecord, Chosen)> = Vec::with_capacity(comps.len());
     for (cn, cl) in comps {
+        let (cn_copy, cl_copy) = (cn.clone(), cl.clone());
         engine.stats.start += start_cost(input, &cl);
         let mut lines = cl;
         lines.sort_unstable_by_key(|&l| (engine.rank[l as usize], l));
@@ -1314,16 +1387,33 @@ pub(crate) fn label_input(input: &Input, options: Options) -> Result<Labelled, R
                 queue.insert((s, c));
             }
         }
+        let before = engine.stats.visit_elements;
         engine.refine(pi, &mut queue)?;
-        tops.push(engine.run_call(pi, 0)?);
+        let sizes: Vec<usize> = engine.parts[pi]
+            .cells(0)
+            .iter()
+            .map(|c| c.1 as usize)
+            .collect();
+        let mut record = TopRecord::root(input, &cn_copy, &cl_copy, &sizes);
+        record.root_refine = engine.stats.visit_elements - before;
+        tops.push((record, engine.run_call(pi, 0)?));
         engine.parts.clear();
     }
     let mut compared = 0u64;
-    tops.sort_by(|a, b| cmp_cert(&a.cert, &b.cert, &mut compared));
+    tops.sort_by(|a, b| cmp_cert(&a.1.cert, &b.1.cert, &mut compared));
     engine.stats.entries_compared += compared;
-    if tops.windows(2).any(|w| w[0].cert == w[1].cert) {
+    if tops.windows(2).any(|w| w[0].1.cert == w[1].1.cert) {
         engine.stats.equal_certificates += 1;
     }
+    let top_multiplicities = classes(tops.iter().map(|t| &t.1.cert));
+    let records: Vec<TopRecord> = tops
+        .iter()
+        .map(|(r, c)| TopRecord {
+            path: c.path.clone(),
+            ..r.clone()
+        })
+        .collect();
+    let tops: Vec<Chosen> = tops.into_iter().map(|t| t.1).collect();
     engine.check()?;
     let mut positions = vec![0u64; n];
     let mut o = 0u64;
@@ -1335,6 +1425,9 @@ pub(crate) fn label_input(input: &Input, options: Options) -> Result<Labelled, R
         document: document(input, &positions),
         positions,
         tops: tops.iter().map(|t| Arc::clone(&t.cert)).collect(),
+        records,
+        top_multiplicities,
+        top_split,
         stats: engine.stats,
     })
 }

@@ -6,7 +6,8 @@
 
 use std::fmt::Write as _;
 
-use crate::r31::{Flag, Input, Options, literal, optimised};
+use crate::literal;
+use crate::r31::{Flag, Input, Options, optimised};
 
 /// SplitMix64 draws (the workspace's `purrdf_hash::mix`).
 pub(crate) struct Rng(pub(crate) u64);
@@ -220,5 +221,131 @@ pub(crate) fn dependence_search(max_a: u32, max_b: u32) -> String {
     }
     format!(
         "none found: {tried} pairs, A up to {max_a} nodes, B up to {max_b} nodes (directed graphs, one predicate, every edge set, weakly connected); revision 3.1 dependent pairs: {fresh_dependent}"
+    )
+}
+
+/// Every combination of the OPTIMISED switches.
+pub(crate) fn switch_combinations() -> Vec<Options> {
+    let flags = [
+        Flag::Orbits,
+        Flag::Twins,
+        Flag::PruneE,
+        Flag::PruneNestedE,
+        Flag::Lazy,
+        Flag::Incremental,
+    ];
+    (0..1u32 << flags.len())
+        .map(|mask| {
+            flags
+                .iter()
+                .enumerate()
+                .fold(Options::DEFAULT, |o, (i, &f)| o.with(f, mask >> i & 1 == 1))
+        })
+        .collect()
+}
+
+/// The order of the automorphism group by enumeration (inputs of at most
+/// nine nodes), `None` above that.
+pub(crate) fn brute_force_group_order(input: &Input) -> Option<u64> {
+    let n = input.nodes();
+    if n > 9 {
+        return None;
+    }
+    let texts: purrdf_core::FastSet<Vec<u8>> = input
+        .lines
+        .iter()
+        .map(|l| {
+            let mut out = Vec::new();
+            l.spell(&mut out, |u, o| {
+                o.extend_from_slice(format!("_:{u}").as_bytes());
+            });
+            out
+        })
+        .collect();
+    let mut perm: Vec<usize> = (0..n).collect();
+    let mut count = 0u64;
+    // Heap's algorithm, iterative.
+    let mut c = vec![0usize; n];
+    let check = |perm: &[usize]| {
+        let all = input.lines.iter().all(|l| {
+            let mut out = Vec::new();
+            l.spell(&mut out, |u, o| {
+                o.extend_from_slice(format!("_:{}", perm[u as usize]).as_bytes());
+            });
+            texts.contains(&out)
+        });
+        u64::from(all)
+    };
+    count += check(&perm);
+    let mut i = 0;
+    while i < n {
+        if c[i] < i {
+            if i % 2 == 0 {
+                perm.swap(0, i);
+            } else {
+                perm.swap(c[i], i);
+            }
+            count += check(&perm);
+            c[i] += 1;
+            i = 0;
+        } else {
+            c[i] = 0;
+            i += 1;
+        }
+    }
+    Some(count)
+}
+
+/// The structural record under LITERAL, under every OPTIMISED switch
+/// combination and under `relabellings` relabellings is one; the group order
+/// equals the brute-force count where enumerable. Panics with the input on a
+/// difference; returns a report.
+pub(crate) fn structural_check(input: &Input, relabellings: u64) -> String {
+    let limited = Options {
+        limit: 3_000_000,
+        ..Options::DEFAULT
+    };
+    let (literal, by) = match literal::label_input(input, limited) {
+        Ok(done) => (done, "literal"),
+        Err(_) => (
+            optimised::label_input(input, Options::DEFAULT).expect("optimised labels"),
+            "optimised(literal over 3,000,000 units)",
+        ),
+    };
+    let reference = crate::r31::structural_json(&literal);
+    let mut runs = 1u64;
+    let mut skipped = 0u64;
+    for options in switch_combinations() {
+        let options = Options {
+            limit: 20_000_000,
+            ..options
+        };
+        let Ok(done) = optimised::label_input(input, options) else {
+            skipped += 1;
+            continue;
+        };
+        let record = crate::r31::structural_json(&done);
+        assert_eq!(record, reference, "switches {:#x}", options.flags);
+        runs += 1;
+    }
+    for seed in 1..=relabellings {
+        let other = Input::read(&relabelled(input, seed)).expect("reads");
+        let done = optimised::label_input(&other, Options::DEFAULT).expect("labels");
+        assert_eq!(
+            crate::r31::structural_json(&done),
+            reference,
+            "relabelling {seed}"
+        );
+        runs += 1;
+    }
+    let (_, order) = crate::r31::group_order(&literal);
+    let brute = brute_force_group_order(input);
+    if let (Some(b), Some(o)) = (brute, order) {
+        assert_eq!(u128::from(b), o, "group order against enumeration");
+    }
+    format!(
+        "structural-equal reference={by} runs={runs} skipped_over_limit={skipped} group_order={} brute_force={}",
+        order.map_or_else(|| "overflow".to_owned(), |o| o.to_string()),
+        brute.map_or_else(|| "-".to_owned(), |b| b.to_string())
     )
 }

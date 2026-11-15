@@ -3,39 +3,40 @@
 
 //! Revision 3.1 of the canonical blank-node labelling, in two modes.
 //!
-//! A measurement module: nothing ships from it. [`literal`] computes the
-//! definition with no shortcut (every child of every branching call, eager
-//! copies, a full search for components); it is the oracle. [`optimised`]
+//! An evaluation module, hidden from the documentation. The literal oracle
+//! (every child of every branching call, eager copies, a full search for
+//! components) lives in the `canon_converge` example. [`optimised`]
 //! computes the same result with a structure-of-arrays partition, an undo
 //! trail, lazy restriction, incremental component discovery and the pruning the
 //! definition permits. Both read [`Input`], the tokenised counted lines.
 
-pub(crate) mod literal;
-pub(crate) mod optimised;
-pub(crate) mod wl2;
+pub mod compare;
+pub mod optimised;
+pub mod view;
+pub mod wl2;
 
 use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-use purrdf_core::FastMap;
+use crate::FastMap;
 
 /// One counted line holding at least one blank node.
 #[derive(Clone, Debug)]
-pub(crate) struct Line {
+pub struct Line {
     /// The counted text as written (an annotation row of count above one
     /// begins `@a*k`).
-    pub(crate) text: String,
+    pub text: String,
     /// Byte ranges of `text` between blank-node tokens: one more than `occ`.
-    pub(crate) segs: Vec<(u32, u32)>,
+    pub segs: Vec<(u32, u32)>,
     /// The node of each blank occurrence, in order of appearance.
-    pub(crate) occ: Vec<u32>,
-    pub(crate) count: u64,
+    pub occ: Vec<u32>,
+    pub count: u64,
 }
 
 impl Line {
     /// The text with each blank token written by `token`.
-    pub(crate) fn spell(&self, out: &mut Vec<u8>, mut token: impl FnMut(u32, &mut Vec<u8>)) {
+    pub fn spell(&self, out: &mut Vec<u8>, mut token: impl FnMut(u32, &mut Vec<u8>)) {
         let bytes = self.text.as_bytes();
         for (i, &(a, b)) in self.segs.iter().enumerate() {
             out.extend_from_slice(&bytes[a as usize..b as usize]);
@@ -46,7 +47,7 @@ impl Line {
     }
 
     /// The distinct nodes of the line, in order of first appearance.
-    pub(crate) fn nodes(&self) -> Vec<u32> {
+    pub fn nodes(&self) -> Vec<u32> {
         let mut seen: Vec<u32> = Vec::with_capacity(self.occ.len());
         for &u in &self.occ {
             if !seen.contains(&u) {
@@ -59,18 +60,18 @@ impl Line {
 
 /// The lines of a fold.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Input {
+pub struct Input {
     /// Distinct lines with a blank node.
-    pub(crate) lines: Vec<Line>,
+    pub lines: Vec<Line>,
     /// Distinct lines with no blank node (written into the document as they are).
-    pub(crate) ground: Vec<String>,
+    pub ground: Vec<String>,
     /// The input's own label of each node.
-    pub(crate) labels: Vec<String>,
+    pub labels: Vec<String>,
 }
 
 /// A line text the tokeniser cannot read.
 #[derive(Debug)]
-pub(crate) struct BadLine(pub(crate) String);
+pub struct BadLine(pub String);
 
 /// The segments, the blank occurrences and the count of one line.
 type Tokens = (Vec<(u32, u32)>, Vec<u32>, u64);
@@ -163,10 +164,10 @@ fn tokenise(
 
 impl Input {
     /// Read a document of counted line texts, one per line.
-    pub(crate) fn read(text: &str) -> Result<Self, BadLine> {
+    pub fn read(text: &str) -> Result<Self, BadLine> {
         let mut ids: FastMap<String, u32> = FastMap::default();
         let mut input = Self::default();
-        let mut seen: purrdf_core::FastSet<&str> = purrdf_core::FastSet::default();
+        let mut seen: crate::FastSet<&str> = crate::FastSet::default();
         for raw in text.lines() {
             let line = raw.trim_end_matches('\r');
             if line.is_empty() || line.starts_with('#') || !seen.insert(line) {
@@ -187,19 +188,19 @@ impl Input {
         Ok(input)
     }
 
-    pub(crate) fn nodes(&self) -> usize {
+    pub fn nodes(&self) -> usize {
         self.labels.len()
     }
 
     /// The masked text of a line with no fixed node (5.6): every token `_:`.
-    pub(crate) fn plain_masked(&self, l: usize) -> Vec<u8> {
+    pub fn plain_masked(&self, l: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.lines[l].text.len());
         self.lines[l].spell(&mut out, |_, o| o.extend_from_slice(b"_:"));
         out
     }
 
     /// Per node, the lines holding it (each once), ascending.
-    pub(crate) fn node_lines(&self) -> Vec<Vec<u32>> {
+    pub fn node_lines(&self) -> Vec<Vec<u32>> {
         let mut out = vec![Vec::new(); self.nodes()];
         for (l, line) in self.lines.iter().enumerate() {
             for u in line.nodes() {
@@ -212,21 +213,21 @@ impl Input {
 
 /// A certificate entry `[m, text]` (6.3).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Entry {
-    pub(crate) m: u64,
-    pub(crate) text: Box<[u8]>,
+pub struct Entry {
+    pub m: u64,
+    pub text: Box<[u8]>,
 }
 
 /// A certificate `(E, C)` (6.3). The derived order is the order of the text:
 /// `E` as a list (a proper prefix first), then `C` the same way.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub(crate) struct Cert {
-    pub(crate) e: Vec<Entry>,
-    pub(crate) c: Vec<Arc<Self>>,
+pub struct Cert {
+    pub e: Vec<Entry>,
+    pub c: Vec<Arc<Self>>,
 }
 
 /// The cost of a byte string in units: one per 8 bytes, rounded up.
-pub(crate) const fn bytes_cost(len: usize) -> u64 {
+pub const fn bytes_cost(len: usize) -> u64 {
     len.div_ceil(8) as u64
 }
 
@@ -234,7 +235,7 @@ pub(crate) const fn bytes_cost(len: usize) -> u64 {
 /// bytes of text read: none when `m` differs; else up to and including the
 /// first differing byte, the shorter text when one is a prefix, the whole text
 /// when equal.
-pub(crate) fn cmp_entry(a: &Entry, b: &Entry, compared: &mut u64) -> Ordering {
+pub fn cmp_entry(a: &Entry, b: &Entry, compared: &mut u64) -> Ordering {
     *compared += 1;
     if a.m != b.m {
         return a.m.cmp(&b.m);
@@ -251,7 +252,7 @@ pub(crate) fn cmp_entry(a: &Entry, b: &Entry, compared: &mut u64) -> Ordering {
 
 /// Compare two lists of entries, a proper prefix first, charging each entry
 /// comparison; stops at the first difference.
-pub(crate) fn cmp_entries(a: &[Entry], b: &[Entry], compared: &mut u64) -> Ordering {
+pub fn cmp_entries(a: &[Entry], b: &[Entry], compared: &mut u64) -> Ordering {
     for (x, y) in a.iter().zip(b) {
         match cmp_entry(x, y, compared) {
             Ordering::Equal => {}
@@ -265,7 +266,7 @@ pub(crate) fn cmp_entries(a: &[Entry], b: &[Entry], compared: &mut u64) -> Order
 /// the first difference.
 /// Compare two invariants (lists of cell sizes), charging one unit per
 /// element compared.
-pub(crate) fn cmp_invariant(a: &[u32], b: &[u32], units: &mut u64) -> Ordering {
+pub fn cmp_invariant(a: &[u32], b: &[u32], units: &mut u64) -> Ordering {
     for (x, y) in a.iter().zip(b) {
         *units += 1;
         match x.cmp(y) {
@@ -276,7 +277,7 @@ pub(crate) fn cmp_invariant(a: &[u32], b: &[u32], units: &mut u64) -> Ordering {
     a.len().cmp(&b.len())
 }
 
-pub(crate) fn cmp_cert(a: &Cert, b: &Cert, compared: &mut u64) -> Ordering {
+pub fn cmp_cert(a: &Cert, b: &Cert, compared: &mut u64) -> Ordering {
     match cmp_entries(&a.e, &b.e, compared) {
         Ordering::Equal => {}
         o => return o,
@@ -291,13 +292,13 @@ pub(crate) fn cmp_cert(a: &Cert, b: &Cert, compared: &mut u64) -> Ordering {
 }
 
 /// The units of forming entries (8.1(d)): one plus one per 8 bytes each.
-pub(crate) fn formed_cost(e: &[Entry]) -> u64 {
+pub fn formed_cost(e: &[Entry]) -> u64 {
     e.iter().map(|x| 1 + bytes_cost(x.text.len())).sum()
 }
 
 /// The start charge of a top component (8.1(a)): per line one unit plus one
 /// per 8 bytes of its masked text.
-pub(crate) fn start_cost(input: &Input, lines: &[u32]) -> u64 {
+pub fn start_cost(input: &Input, lines: &[u32]) -> u64 {
     lines
         .iter()
         .map(|&l| 1 + bytes_cost(input.plain_masked(l as usize).len()))
@@ -307,17 +308,261 @@ pub(crate) fn start_cost(input: &Input, lines: &[u32]) -> u64 {
 /// The chosen structure of one call: the nodes it fixed, in path-position
 /// order, and its nested calls in certificate order.
 #[derive(Clone, Debug)]
-pub(crate) struct Chosen {
-    pub(crate) cert: Arc<Cert>,
-    pub(crate) fixed: Vec<u32>,
-    pub(crate) nested: Vec<Self>,
-    pub(crate) size: u64,
+pub struct Chosen {
+    pub cert: Arc<Cert>,
+    pub fixed: Vec<u32>,
+    pub nested: Vec<Self>,
+    pub size: u64,
+    /// The structural statistics of this call's result path.
+    pub path: PathStats,
+}
+
+/// Structural statistics of a result path: the call, the chosen child at
+/// every branching call and every nested call under them (never a discarded
+/// child). Lists are in pre-order, nested calls in certificate order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PathStats {
+    pub discrete: u64,
+    pub nested: u64,
+    pub branched: u64,
+    /// Target-cell sizes at the branching calls.
+    pub targets: Vec<u64>,
+    /// At each branching call, the children attaining the smallest certificate.
+    pub attaining: Vec<u64>,
+    /// At each nesting, the size of every class of two or more siblings with
+    /// equal certificates.
+    pub multiplicities: Vec<u64>,
+    pub nest_depth: u64,
+    pub branch_depth: u64,
+    /// Units by part: refinement label elements of the chosen children,
+    /// removed vertices, removed incidences, split charges, entries formed.
+    pub refine: u64,
+    pub removed_vertices: u64,
+    pub removed_incidences: u64,
+    pub split: u64,
+    pub formed: u64,
+}
+
+impl PathStats {
+    fn add(&mut self, o: &Self) {
+        self.discrete += o.discrete;
+        self.nested += o.nested;
+        self.branched += o.branched;
+        self.targets.extend_from_slice(&o.targets);
+        self.attaining.extend_from_slice(&o.attaining);
+        self.multiplicities.extend_from_slice(&o.multiplicities);
+        self.refine += o.refine;
+        self.removed_vertices += o.removed_vertices;
+        self.removed_incidences += o.removed_incidences;
+        self.split += o.split;
+        self.formed += o.formed;
+    }
+
+    /// A fixing with its own charges `own`, then its nested calls (sorted by
+    /// certificate).
+    pub fn of_nest(own: Self, nested: &[Chosen]) -> Self {
+        let mut p = own;
+        p.multiplicities
+            .extend(classes(nested.iter().map(|n| &n.cert)));
+        for n in nested {
+            p.add(&n.path);
+            p.nest_depth = p.nest_depth.max(n.path.nest_depth + 1);
+            p.branch_depth = p.branch_depth.max(n.path.branch_depth);
+        }
+        p
+    }
+
+    /// A branching call: its chosen child's path, this call first.
+    pub fn of_branch(child: &Self, target: u64, attaining: u64) -> Self {
+        let mut p = child.clone();
+        p.branched += 1;
+        p.targets.insert(0, target);
+        p.attaining.insert(0, attaining);
+        p.branch_depth += 1;
+        p
+    }
+}
+
+/// Sizes of the classes of two or more equal values in a sorted sequence.
+pub fn classes<'a>(sorted: impl Iterator<Item = &'a Arc<Cert>>) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut run: Option<(&Arc<Cert>, u64)> = None;
+    for c in sorted {
+        run = match run {
+            Some((prev, k)) if prev == c => Some((prev, k + 1)),
+            Some((_, k)) => {
+                if k >= 2 {
+                    out.push(k);
+                }
+                Some((c, 1))
+            }
+            None => Some((c, 1)),
+        };
+    }
+    if let Some((_, k)) = run
+        && k >= 2
+    {
+        out.push(k);
+    }
+    out
+}
+
+/// The structural record of one top component (a function of the input).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TopRecord {
+    pub nodes: u64,
+    pub lines: u64,
+    /// Blank occurrences over its lines.
+    pub elements: u64,
+    pub root_singletons: u64,
+    pub root_nonsingleton: u64,
+    pub root_largest: u64,
+    pub forest: bool,
+    pub start: u64,
+    pub root_refine: u64,
+    pub path: PathStats,
+}
+
+impl TopRecord {
+    /// The record of a top component after its root REFINE (`node_cells` are
+    /// the sizes of its node cells).
+    pub fn root(input: &Input, nodes: &[u32], lines: &[u32], node_cells: &[usize]) -> Self {
+        let incidences: usize = lines
+            .iter()
+            .map(|&l| input.lines[l as usize].nodes().len())
+            .sum();
+        Self {
+            nodes: nodes.len() as u64,
+            lines: lines.len() as u64,
+            elements: lines
+                .iter()
+                .map(|&l| input.lines[l as usize].occ.len() as u64)
+                .sum(),
+            root_singletons: node_cells.iter().filter(|&&s| s == 1).count() as u64,
+            root_nonsingleton: node_cells.iter().filter(|&&s| s > 1).sum::<usize>() as u64,
+            root_largest: node_cells
+                .iter()
+                .copied()
+                .filter(|&s| s > 1)
+                .max()
+                .unwrap_or(0) as u64,
+            forest: incidences + 1 == nodes.len() + lines.len(),
+            start: start_cost(input, lines),
+            root_refine: 0,
+            path: PathStats::default(),
+        }
+    }
+}
+
+fn json_list(v: &[u64]) -> String {
+    let items: Vec<String> = v.iter().map(u64::to_string).collect();
+    format!("[{}]", items.join(", "))
+}
+
+/// The structural part of a statistics record, as JSON.
+pub fn structural_json(done: &Labelled) -> String {
+    let one = |r: &TopRecord| {
+        let p = &r.path;
+        format!(
+            "{{\"nodes\": {}, \"lines\": {}, \"label_elements\": {}, \"root_singletons\": {}, \"root_nonsingleton_nodes\": {}, \"root_largest_cell\": {}, \"forest\": {}, \"calls_discrete\": {}, \"calls_nested\": {}, \"calls_branched\": {}, \"target_sizes\": {}, \"attaining\": {}, \"multiplicities\": {}, \"max_nest_depth\": {}, \"max_branch_depth\": {}, \"units_start\": {}, \"units_refine\": {}, \"units_removed_vertices\": {}, \"units_removed_incidences\": {}, \"units_split\": {}, \"units_formed\": {}}}",
+            r.nodes,
+            r.lines,
+            r.elements,
+            r.root_singletons,
+            r.root_nonsingleton,
+            r.root_largest,
+            r.forest,
+            p.discrete,
+            p.nested,
+            p.branched,
+            json_list(&p.targets),
+            json_list(&p.attaining),
+            json_list(&p.multiplicities),
+            p.nest_depth,
+            p.branch_depth,
+            r.start,
+            r.root_refine + p.refine,
+            p.removed_vertices,
+            p.removed_incidences,
+            p.split,
+            p.formed,
+        )
+    };
+    let comps: Vec<String> = done.records.iter().map(one).collect();
+    let (factors, order) = group_order(done);
+    let total = |f: &dyn Fn(&TopRecord) -> u64| done.records.iter().map(f).sum::<u64>();
+    format!(
+        "{{\"components\": [{}], \"top_multiplicities\": {}, \"top_split\": {}, \"nodes\": {}, \"lines\": {}, \"label_elements\": {}, \"structural_units\": {}, \"group_order_factors\": [{}], \"group_order\": {}}}",
+        comps.join(", "),
+        json_list(&done.top_multiplicities),
+        done.top_split,
+        total(&|r| r.nodes),
+        total(&|r| r.lines),
+        total(&|r| r.elements),
+        done.top_split
+            + total(&|r| r.start
+                + r.root_refine
+                + r.path.refine
+                + r.path.removed_vertices
+                + r.path.removed_incidences
+                + r.path.split
+                + r.path.formed),
+        factors.join(", "),
+        order.map_or_else(|| "null".to_owned(), |o| format!("\"{o}\"")),
+    )
+}
+
+/// The order of the automorphism group: the attaining counts (above one) and
+/// the factorials of the sibling multiplicities, and their product when it
+/// fits 128 bits.
+pub fn group_order(done: &Labelled) -> (Vec<String>, Option<u128>) {
+    let mut factors = Vec::new();
+    let mut product: Option<u128> = Some(1);
+    let mul = |x: u64, product: &mut Option<u128>| {
+        *product = product.and_then(|p| p.checked_mul(u128::from(x)));
+    };
+    let multiplicities = done
+        .records
+        .iter()
+        .flat_map(|r| r.path.multiplicities.iter())
+        .chain(done.top_multiplicities.iter());
+    for r in &done.records {
+        for &a in &r.path.attaining {
+            if a > 1 {
+                factors.push(format!("\"{a}\""));
+                mul(a, &mut product);
+            }
+        }
+    }
+    for &k in multiplicities {
+        factors.push(format!("\"{k}!\""));
+        for x in 2..=k {
+            mul(x, &mut product);
+        }
+    }
+    (factors, product)
+}
+
+/// The engine part of a statistics record (informative), as JSON.
+pub fn engine_json(s: &Stats) -> String {
+    format!(
+        "{{\"leaves\": {}, \"children\": {}, \"pruned_orbit\": {}, \"pruned_entries\": {}, \"pruned_nested_entries\": {}, \"pruned_twin\": {}, \"comparison_units\": {}, \"total_units\": {}, \"generators\": {}}}",
+        s.leaves,
+        s.children,
+        s.pruned_orbit,
+        s.pruned_e,
+        s.pruned_nested_e,
+        s.pruned_twin,
+        s.entries_compared,
+        s.units(),
+        s.generators
+    )
 }
 
 impl Chosen {
     /// Final positions (6.5) of every node of this call, from offset `o`, by an
     /// explicit pre-order stack.
-    pub(crate) fn assign(&self, o: u64, out: &mut [u64]) {
+    pub fn assign(&self, o: u64, out: &mut [u64]) {
         let mut stack: Vec<(&Self, u64)> = vec![(self, o)];
         while let Some((call, o)) = stack.pop() {
             for (i, &node) in call.fixed.iter().enumerate() {
@@ -334,7 +579,7 @@ impl Chosen {
 
 /// Which non-singleton node cell a branching call targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Selector {
+pub enum Selector {
     /// The text's rule: the first non-singleton cell.
     First,
     /// Experiment: the first of the smallest non-singleton cells.
@@ -350,10 +595,10 @@ pub(crate) enum Selector {
 /// The index of the target among `cells` (members of each node cell, in
 /// colour order); `ancestors` are the target cells of the enclosing branching
 /// calls, innermost last.
-pub(crate) fn pick_target(sel: Selector, cells: &[&[u32]], ancestors: &[Vec<u32>]) -> usize {
+pub fn pick_target(sel: Selector, cells: &[&[u32]], ancestors: &[Vec<u32>]) -> usize {
     if sel == Selector::Traces {
         for anc in ancestors.iter().rev() {
-            let set: purrdf_core::FastSet<u32> = anc.iter().copied().collect();
+            let set: crate::FastSet<u32> = anc.iter().copied().collect();
             let inside = cells.iter().map(|c| {
                 if c.iter().all(|v| set.contains(v)) {
                     c.len()
@@ -375,7 +620,7 @@ pub(crate) fn pick_target(sel: Selector, cells: &[&[u32]], ancestors: &[Vec<u32>
 
 impl Selector {
     /// The index of the target among cells of the given sizes.
-    pub(crate) fn pick(self, sizes: impl Iterator<Item = usize>) -> Option<usize> {
+    pub fn pick(self, sizes: impl Iterator<Item = usize>) -> Option<usize> {
         let mut best: Option<(usize, usize)> = None;
         for (i, s) in sizes.enumerate() {
             if s < 2 {
@@ -397,7 +642,7 @@ impl Selector {
 /// experiments (off by default); the rest are OPTIMISED shortcuts (on by
 /// default, ignored by LITERAL).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Flag {
+pub enum Flag {
     /// Compare the ordered cell sizes of a branching call's children first.
     Invariant = 1,
     /// Revision 3: one refinement over the whole fold (LITERAL only).
@@ -418,15 +663,15 @@ pub(crate) enum Flag {
 
 /// How to run.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Options {
+pub struct Options {
     /// Work units after which the run is refused.
-    pub(crate) limit: u64,
-    pub(crate) selector: Selector,
-    pub(crate) flags: u16,
+    pub limit: u64,
+    pub selector: Selector,
+    pub flags: u16,
 }
 
 impl Options {
-    pub(crate) const DEFAULT: Self = Self {
+    pub const DEFAULT: Self = Self {
         limit: u64::MAX,
         selector: Selector::First,
         flags: Flag::Orbits as u16
@@ -437,12 +682,12 @@ impl Options {
             | Flag::Incremental as u16,
     };
 
-    pub(crate) const fn has(self, flag: Flag) -> bool {
+    pub const fn has(self, flag: Flag) -> bool {
         self.flags & flag as u16 != 0
     }
 
     #[must_use]
-    pub(crate) const fn with(mut self, flag: Flag, on: bool) -> Self {
+    pub const fn with(mut self, flag: Flag, on: bool) -> Self {
         if on {
             self.flags |= flag as u16;
         } else {
@@ -456,61 +701,61 @@ impl Options {
 /// restriction + entries_formed + entries_compared`; everything else is
 /// bookkeeping.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Stats {
-    pub(crate) nodes: u64,
-    pub(crate) lines: u64,
-    pub(crate) top_components: u64,
+pub struct Stats {
+    pub nodes: u64,
+    pub lines: u64,
+    pub top_components: u64,
     /// Experiment: the units of the node invariant (one per element formed,
     /// one per element compared).
-    pub(crate) invariant: u64,
+    pub invariant: u64,
     /// 8.1(a): the start charge of the masked texts of top components.
-    pub(crate) start: u64,
+    pub start: u64,
     /// Incidences visited by REFINE (each incidence of a member of a splitter).
-    pub(crate) visits: u64,
+    pub visits: u64,
     /// The same visits counted by label element (a node repeated `r` times in
     /// a line counts `r`).
-    pub(crate) visit_elements: u64,
-    pub(crate) entries_formed: u64,
-    pub(crate) entries_compared: u64,
+    pub visit_elements: u64,
+    pub entries_formed: u64,
+    pub entries_compared: u64,
     /// 8.1(c): removed vertices, removed incidences and the split charge of
     /// every FIX and of the split into top components.
-    pub(crate) restriction: u64,
+    pub restriction: u64,
     /// Comparisons of two keys when ordering fragments (not units).
-    pub(crate) key_compares: u64,
+    pub key_compares: u64,
     /// Pairs popped from the queue.
-    pub(crate) pops: u64,
-    pub(crate) calls: u64,
-    pub(crate) branch_calls: u64,
+    pub pops: u64,
+    pub calls: u64,
+    pub branch_calls: u64,
     /// Nodes in calls that reached rule 3, and the largest target cell met.
-    pub(crate) branch_nodes: u64,
-    pub(crate) largest_target: u64,
+    pub branch_nodes: u64,
+    pub largest_target: u64,
     /// Children of branching calls whose refinement was run.
-    pub(crate) children: u64,
+    pub children: u64,
     /// Calls that ended as leaves (rule 1).
-    pub(crate) leaves: u64,
-    pub(crate) pruned_orbit: u64,
-    pub(crate) pruned_twin: u64,
-    pub(crate) pruned_e: u64,
-    pub(crate) pruned_nested_e: u64,
-    pub(crate) pruned_invariant: u64,
+    pub leaves: u64,
+    pub pruned_orbit: u64,
+    pub pruned_twin: u64,
+    pub pruned_e: u64,
+    pub pruned_nested_e: u64,
+    pub pruned_invariant: u64,
     /// Two children, or two sibling calls, with equal certificates were met.
-    pub(crate) equal_certificates: u64,
-    pub(crate) generators: u64,
+    pub equal_certificates: u64,
+    pub generators: u64,
     /// Vertices visited by component discovery (not units).
-    pub(crate) discovery_steps: u64,
+    pub discovery_steps: u64,
     /// Vertices copied by restriction (not units).
-    pub(crate) copied: u64,
+    pub copied: u64,
     /// Undo-trail records written (not units).
-    pub(crate) trail: u64,
-    pub(crate) max_depth: u64,
+    pub trail: u64,
+    pub max_depth: u64,
     /// Two-dimensional refinement: pair-colour updates (bookkeeping).
-    pub(crate) wl2_steps: u64,
+    pub wl2_steps: u64,
     /// Two-dimensional refinement: one unit per tuple element formed (14.3).
-    pub(crate) wl2_units: u64,
+    pub wl2_units: u64,
 }
 
 impl Stats {
-    pub(crate) fn units(&self) -> u64 {
+    pub fn units(&self) -> u64 {
         self.start
             + self.invariant
             + self.wl2_units
@@ -523,7 +768,7 @@ impl Stats {
 
 /// Why nothing is labelled (8.3).
 #[derive(Debug)]
-pub(crate) enum Refusal {
+pub enum Refusal {
     /// The engine's own work limit was reached.
     Limit(Box<Stats>),
     /// A count would not fit an unsigned 64-bit integer.
@@ -547,19 +792,25 @@ impl fmt::Display for Refusal {
 
 /// A finished labelling.
 #[derive(Debug)]
-pub(crate) struct Labelled {
+pub struct Labelled {
     /// The final position of every node.
-    pub(crate) positions: Vec<u64>,
-    /// The spelled lines (counted form) followed by the ground lines, sorted
-    /// bytewise, one per row, each ending in a line feed.
-    pub(crate) document: String,
+    pub positions: Vec<u64>,
+    /// The result (7.6): the spelled lines (counted form) holding a blank
+    /// node, sorted bytewise, one per row, each ending in a line feed. Lines
+    /// with no blank node are not in it.
+    pub document: String,
     /// The top certificates in order (for tests and the dependence search).
-    pub(crate) tops: Vec<Arc<Cert>>,
-    pub(crate) stats: Stats,
+    pub tops: Vec<Arc<Cert>>,
+    /// The structural record of each top component, in certificate order.
+    pub records: Vec<TopRecord>,
+    pub top_multiplicities: Vec<u64>,
+    /// The split charge of the whole fold into top components.
+    pub top_split: u64,
+    pub stats: Stats,
 }
 
 impl Labelled {
-    pub(crate) fn has_automorphisms(&self) -> bool {
+    pub fn has_automorphisms(&self) -> bool {
         self.stats.equal_certificates > 0
             || self.stats.pruned_orbit > 0
             || self.stats.pruned_twin > 0
@@ -567,7 +818,7 @@ impl Labelled {
 }
 
 /// The certificate entry of a fully fixed line (6.3), positions read from `pos`.
-pub(crate) fn entry(line: &Line, pos: &[u64]) -> Entry {
+pub fn entry(line: &Line, pos: &[u64]) -> Entry {
     let mut text = Vec::with_capacity(line.text.len() + 4 * line.occ.len());
     let mut m = 0;
     line.spell(&mut text, |u, o| {
@@ -584,7 +835,7 @@ pub(crate) fn entry(line: &Line, pos: &[u64]) -> Entry {
 
 /// The document of a finished labelling: identifiers `c14n<final position>`,
 /// written as blank-node tokens `_:c14n<n>`.
-pub(crate) fn document(input: &Input, positions: &[u64]) -> String {
+pub fn document(input: &Input, positions: &[u64]) -> String {
     let mut rows: Vec<Vec<u8>> = input
         .lines
         .iter()
@@ -596,7 +847,6 @@ pub(crate) fn document(input: &Input, positions: &[u64]) -> String {
             });
             out
         })
-        .chain(input.ground.iter().map(|g| g.as_bytes().to_vec()))
         .collect();
     rows.sort_unstable();
     let mut doc = String::new();
@@ -610,7 +860,7 @@ pub(crate) fn document(input: &Input, positions: &[u64]) -> String {
 /// The connected components of the incidence graph over `nodes` (free nodes,
 /// `free[u]` true) through `lines`, each as (nodes ascending, lines ascending),
 /// in order of their smallest node.
-pub(crate) fn components(
+pub fn components(
     input: &Input,
     node_lines: &[Vec<u32>],
     nodes: &[u32],
@@ -618,7 +868,7 @@ pub(crate) fn components(
     steps: &mut u64,
 ) -> Vec<(Vec<u32>, Vec<u32>)> {
     let mut comp_of: FastMap<u32, usize> = FastMap::default();
-    let mut line_seen: purrdf_core::FastSet<u32> = purrdf_core::FastSet::default();
+    let mut line_seen: crate::FastSet<u32> = crate::FastSet::default();
     let mut out: Vec<(Vec<u32>, Vec<u32>)> = Vec::new();
     let mut sorted = nodes.to_vec();
     sorted.sort_unstable();
@@ -658,7 +908,7 @@ pub(crate) fn components(
 
 /// The label of the incidence of `u` in `line` (4.1): the ascending free
 /// occurrence numbers of `u`, a node being free when `free[node]`.
-pub(crate) fn label(line: &Line, u: u32, free: &[bool]) -> Vec<u64> {
+pub fn label(line: &Line, u: u32, free: &[bool]) -> Vec<u64> {
     let mut out = Vec::with_capacity(1);
     let mut k = 0u64;
     for &w in &line.occ {

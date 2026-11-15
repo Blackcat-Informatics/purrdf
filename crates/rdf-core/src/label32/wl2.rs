@@ -21,7 +21,7 @@ use super::{Input, Stats, label};
 type LineTriple = (u64, Vec<u64>, Vec<u64>);
 
 /// The node cells of `part` refined by two-dimensional refinement.
-pub(crate) fn refine_nodes(
+pub fn refine_nodes(
     input: &Input,
     free: &[bool],
     part: &[Vec<Vec<u32>>; 2],
