@@ -1,0 +1,1678 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 59e773182..652f19f5f 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -39,6 +39,74 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   `StreamWriter`, with the same bytes as before; a regular file is still read
+   twice, once to check its digest before anything is written and once to
+   frame it.
++
++- **Structured inspection of fallible query outcomes:** `FallibleSparqlError`
++  now implements `purrdf_hash::error::StructuredError` whenever its operational
++  error and evidence types do, so a consumer records each outcome (`Query`,
++  `Operational`, `AllocationFailed`, `ControlFailure`, `BudgetExhausted`) with
++  its typed fields and never formats it: the retained diagnostic and the view's
++  own error are nested causes, the governor trip keeps its ceiling and
++  consumption, and the certified partial rows are reached as rows. The values
++  it carries gained the same inspection: `QueryControlFailure`,
++  `PartialAnswers`, `PartialSparqlResult`, `RetainedSparqlResult`,
++  `RetainedPartialSparqlResult`, `NonMonotoneBarrier` and `GovernedEvidence`.
++  `GraphBuildError`, `protocol::ProtocolError` and `protocol::OperationKind`
++  implement it as well; a protocol refusal reports byte offsets as byte counts
++  and parameter and clause names as codes, and its `reason` and `message`
++  fields remain the text their producer wrote. Additive: no signature, variant
++  or payload changed.
++
++- **iri: `Iri::normalize` keeps what a rootless relative reference resolves
++  to.** **Behaviour change**, confined to a reference with no scheme and no
++  authority whose path is not empty and does not begin with `/`. There,
++  `normalize` no longer applies RFC 3986 §5.2.4 `remove_dot_segments`, which is
++  defined for a path already merged with a base and discarded the segments only
++  a base can interpret, and it no longer decodes a segment into a dot segment.
++  For such a reference and any absolute base, resolving the normal form now
++  names the same IRI as resolving the original (equal once both results are
++  normalized). The rules, each with the inputs whose normal form changes:
++
++  | Rule | Reference | Before | Now |
++  | --- | --- | --- | --- |
++  | A `..` with nothing before it stays | `../a`, `./../a` | `a` | `../a` |
++  | | `../a:b` | `./a:b` | `../a:b` |
++  | | `..`, `../`, `./..`, `.././` | `.` | `..` |
++  | A reference that reduces to its directory keeps the path `.` beside a query or fragment | `.?q`, `./?q` | `?q` | `.?q` |
++  | | `./#f` | `#f` | `.#f` |
++  | An empty first segment stays behind its dot segment | `.//x` | `/x` | `.//x` |
++  | | `..//x` | `/x` | `..//x` |
++  | The reference's own first segment is never removed by a `..` | `a/..`, `a/../` | `/` | `a/..` |
++  | | `a/../b` | `/b` | `a/../b` |
++  | | `a/b/../../c` | `/c` | `a/../c` |
++  | A segment that decodes to `.` or `..` stays encoded, as `%2E` or `%2E%2E`, and is an ordinary segment | `%2e` | `.` | `%2E` |
++  | | `%2e%2e`, `.%2E` | `.` | `%2E%2E` |
++  | | `%2e%2e/a` | `a` | `%2E%2E/a` |
++  | | `a/%2e/b` | `a/b` | `a/%2E/b` |
++  | | `a/%2e/../b` | `/b` | `a/b` |
++  | | `x/%2e%2e/../a` | `/a` | `x/a` |
++  | | `x/%2e/..` | `/` | `x/` |
++  | | `%2e%2e/..` | `.` | `%2E%2E/..` |
++  | | `%2e/%2e/..` | `.` | `%2E/` |
++
++  A normal form changes exactly when the reference is of that kind and has a
++  leading `..`; or reduces to its directory beside a query or fragment; or has
++  an empty segment directly after its leading dot segments; or has a `..` that
++  reaches its own first segment; or has a segment that decodes to `.` or `..`
++  without being spelled so. Every other such reference is unchanged: `.`, `./`
++  and `./.` are `.`, `./a` is `a`, `a/./b` is `a/b`, `a/b/../c` is `a/c`,
++  `a/.` is `a/`, `./a:b` is `./a:b`. The first-segment rule exists because a
++  base whose path has no directory part (`urn:x`) resolves `a/../b` to a
++  leading `/`.
++
++  Unchanged, byte for byte: every IRI with a scheme, every reference with an
++  authority and every absolute-path reference (`/a/../b` is `/b`). Not covered
++  by the guarantee: under a scheme, an authority or a leading `/`, a
++  percent-encoded dot segment is still decoded and then removed as a dot
++  segment (`/a/%2e%2e/../b` is `/b`, while the reference itself resolves to
++  `/a/b`). The signature is unchanged. A caller that stored normal forms of
++  rootless relative references holds the old spelling for the inputs described
++  above.
++
+ - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
+   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
+   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
+diff --git crates/iri/README.md crates/iri/README.md
+index aff0c9a8c..8ca7b3864 100644
+--- crates/iri/README.md
++++ crates/iri/README.md
+@@ -29,7 +29,13 @@ CURIE/prefix handling.
+   fragment) exposed without re-encoding.
+ - **Reference resolution** — RFC 3986 §5 strict resolution (`Iri::resolve`).
+ - **Syntax normalization** — RFC 3986 §6.2.2 (`Iri::normalize`): case,
+-  percent-encoding, and dot-segment normalization; idempotent.
++  percent-encoding, and dot-segment normalization; idempotent. A reference
++  with no scheme, no authority and a path that does not begin with `/` keeps
++  the leading dot segments only a base can interpret, and keeps a segment that
++  would decode to `.` or `..` percent-encoded, so it resolves to the same IRI
++  before and after. Under a scheme, an authority or a leading `/`, a
++  percent-encoded dot segment is decoded and removed, which resolution of the
++  undecoded text does not do.
+ - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
+   `PrefixMap`.
+ - **W3C vocabularies** — `vocab`: one module per W3C namespace (`rdf`,
+diff --git crates/iri/src/lib.rs crates/iri/src/lib.rs
+index cbf37b5d2..c098f91b8 100644
+--- crates/iri/src/lib.rs
++++ crates/iri/src/lib.rs
+@@ -26,7 +26,13 @@
+ //!   force and where it came from. [`BaseIri::relativize`] is the inverse, letting a
+ //!   serializer emit `<>` or `<foo>` under a base.
+ //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
+-//!   encoding, and dot-segment normalization. Idempotent.
++//!   encoding, and dot-segment normalization. Idempotent. A reference with no
++//!   scheme, no authority and a path that does not begin with `/` keeps the
++//!   leading dot segments only a base can interpret, and keeps a segment that
++//!   would decode to `.` or `..` percent-encoded, so it resolves to the same
++//!   IRI before and after. Under a scheme, an authority or a leading `/`, a
++//!   percent-encoded dot segment is decoded and removed, which resolution of
++//!   the undecoded text does not do.
+ //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
+ //!   [`PrefixMap`], and the namespace/local-name split
+ //!   [`split_local_name`]/[`local_name`].
+diff --git crates/iri/src/normalize.rs crates/iri/src/normalize.rs
+index de6b29386..a2dc569c2 100644
+--- crates/iri/src/normalize.rs
++++ crates/iri/src/normalize.rs
+@@ -11,20 +11,49 @@
+ //!   upper-cased.
+ //! * §6.2.2.2 **Percent-encoding** — `%XX` triplets that encode an *unreserved*
+ //!   character are decoded to that character.
+-//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to the path.
++//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to a path that
++//!   resolution would treat the same way: any path under a scheme or an
++//!   authority, and an absolute path. The rootless path of a reference with
++//!   neither is not resolved yet, so only the dot segments that mean the same
++//!   against every base collapse (`a/./b`, `a/b/../c`); `../a`, `..` and `.`
++//!   keep the segments a base must interpret.
++//!
++//! The steps interact in one place. §6.2.2.2 decodes `%2E`, and a segment that
++//! decodes to `.` or `..` then reads as a dot segment, which resolution of the
++//! undecoded text does not see. In the unresolved case such a segment therefore
++//! keeps its encoding, as `%2E` or `%2E%2E`, and only a literal `.` or `..` is a
++//! dot segment. Everywhere else it is decoded first and removed as a dot
++//! segment.
++//!
++//! **Guarantee and its scope.** For a reference `r` with no scheme, no authority
++//! and a path that does not begin with `/`, and any absolute base `b`,
++//! `b.resolve(r)` and `b.resolve(r.normalize())` name the same IRI: they are
++//! equal once both are normalized, and byte-equal when `r` holds no
++//! percent-encoded unreserved character and no lower-case hex digit. The
++//! guarantee does not extend to a path under a scheme, an authority or a
++//! leading `/` that holds a percent-encoded dot segment: `/a/%2e%2e/../b`
++//! normalizes to `/b` and resolves to `/a/b`.
+ //!
+ //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
+ 
+ use purrdf_lex::percent;
+ 
+ use crate::parse::{Iri, parse};
+-use crate::resolve::{recomposition_guard, remove_dot_segments};
++use crate::resolve::{collapse_unresolved_dot_segments, recomposition_guard, remove_dot_segments};
+ 
+ impl Iri {
+     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
+     /// parsed/validated; for every IRI `parse` accepts, the result has the same
+     /// scheme and authority presence and is a fixed point of `normalize`.
+     ///
++    /// A reference with no scheme, no authority and a path that does not begin
++    /// with `/` keeps its meaning: resolving the result against an absolute base
++    /// names the IRI the original resolves to. It therefore keeps the leading
++    /// dot segments only a base can interpret, and a segment that would decode
++    /// to `.` or `..` stays percent-encoded (`%2E`, `%2E%2E`). Under a scheme,
++    /// an authority or a leading `/`, a percent-encoded dot segment is decoded
++    /// and removed, which resolution of the undecoded text would not do.
++    ///
+     /// # Examples
+     ///
+     /// ```rust
+@@ -35,6 +64,12 @@ impl Iri {
+     ///
+     /// // Normalization is idempotent.
+     /// assert_eq!(norm.normalize(), norm);
++    ///
++    /// // Interior dot segments of a relative reference collapse; leading ones stay.
++    /// assert_eq!(purrdf_iri::parse("a/./b/../c")?.normalize().as_str(), "a/c");
++    /// assert_eq!(purrdf_iri::parse("../a")?.normalize().as_str(), "../a");
++    /// // There, an encoded dot segment is an ordinary segment and stays encoded.
++    /// assert_eq!(purrdf_iri::parse("a/%2e/../b")?.normalize().as_str(), "a/b");
+     /// # Ok::<(), purrdf_iri::IriError>(())
+     /// ```
+     #[must_use]
+@@ -49,7 +84,18 @@ impl Iri {
+             out.push_str("//");
+             out.push_str(&normalize_authority(auth));
+         }
+-        let path = remove_dot_segments(&percent::normalize(self.path()));
++        let raw = self.path();
++        // A rootless path under no scheme and no authority has not been resolved:
++        // its leading dot segments belong to the base it will meet.
++        let unresolved = self.scheme().is_none()
++            && self.authority().is_none()
++            && !raw.is_empty()
++            && !raw.starts_with('/');
++        let path = if unresolved {
++            collapse_unresolved_dot_segments(&decode_unresolved_segments(raw))
++        } else {
++            remove_dot_segments(&percent::normalize(raw))
++        };
+         out.push_str(recomposition_guard(
+             self.scheme().is_some(),
+             self.authority().is_some(),
+@@ -65,20 +111,39 @@ impl Iri {
+             out.push_str(&percent::normalize(frag));
+         }
+ 
+-        // A reference with no scheme, authority, path, query or fragment has no
+-        // parseable spelling; `.` is its normal form (and `.` normalizes to `.`).
+-        if out.is_empty() {
+-            out.push('.');
+-        }
+-
+         // Re-parse. Every step keeps the text a valid IRI of the same shape: ASCII
+-        // lower-casing, decoding unreserved characters, dot-segment removal, the
+-        // `recomposition_guard` prefixes and the `.` for an empty result. A parse
+-        // failure here is therefore a genuine bug, not user input - hence `expect`.
++        // lower-casing, decoding unreserved characters, dot-segment removal and the
++        // `recomposition_guard` prefixes. The text is never empty: a scheme, an
++        // authority, a rooted path and an unresolved path each leave at least one
++        // character, and an empty path parsed only with a query or fragment. A
++        // parse failure here is therefore a genuine bug, not user input - hence
++        // `expect`.
+         parse(&out).expect("normalized IRI must re-parse")
+     }
+ }
+ 
++/// §6.2.2.2 for an unresolved rootless path, segment by segment (`/` is reserved,
++/// so decoding never moves a segment boundary). Resolution reads a segment such
++/// as `%2e` or `.%2E` as an ordinary one, so a segment that decodes to `.` or `..`
++/// without being spelled that way is written fully encoded instead: decoding it
++/// would turn it into a dot segment and change what the reference resolves to.
++/// `%2E` and `%2E%2E` are fixed points of this step.
++fn decode_unresolved_segments(path: &str) -> String {
++    let mut out = String::with_capacity(path.len());
++    for (index, segment) in path.split('/').enumerate() {
++        if index > 0 {
++            out.push('/');
++        }
++        let decoded = percent::normalize(segment);
++        match decoded.as_ref() {
++            "." if segment != "." => out.push_str("%2E"),
++            ".." if segment != ".." => out.push_str("%2E%2E"),
++            other => out.push_str(other),
++        }
++    }
++    out
++}
++
+ /// Case-normalize the host (lower-case) without disturbing a case-significant
+ /// userinfo, then percent-normalize. Userinfo (before `@`) keeps its case; the
+ /// host + port (after `@`) is lower-cased for the host portion.
+diff --git crates/iri/src/resolve.rs crates/iri/src/resolve.rs
+index 07b2e6961..c4937245d 100644
+--- crates/iri/src/resolve.rs
++++ crates/iri/src/resolve.rs
+@@ -203,9 +203,11 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>)
+ 
+ /// The two RFC-3986 path repairs (§3.3 and §4.2), applied at recomposition (§5.3),
+ /// in one place. The returned
+-/// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
+-/// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
+-/// point. It is empty when no repair is needed.
++/// prefix is applied AFTER dot-segment removal, where the text is rebuilt. A
++/// second normalization drops it again and then re-applies it, so the guarded
++/// form is a fixed point: `remove_dot_segments` strips `/.` and a leading `./`,
++/// and `collapse_unresolved_dot_segments` drops the `.` of a leading `./`. It is
++/// empty when no repair is needed.
+ ///
+ /// * `"/."` (§3.3): with no authority a path may not begin with `//`, or the text
+ ///   would read as `scheme://...` and turn the path into an authority.
+@@ -385,6 +387,77 @@ fn remove_dot_segments_with_memory<S: Admission + ?Sized>(
+     Ok(out)
+ }
+ 
++/// RFC-3986 §6.2.2.3 for a path that has NOT been resolved: the rootless path of a
++/// reference with neither scheme nor authority (`path` is non-empty and does not
++/// begin with `/`).
++///
++/// §5.2.4 is defined on a path already merged with a base (§4.1: dot segments
++/// exist for relative references and are removed by resolution). Applied to such
++/// a reference on its own it discards the segments only a base can interpret, so
++/// this keeps them. The result resolves to the same IRI as `path` against every
++/// absolute base. Only a literal `.` or `..` is a dot segment here, as in
++/// resolution; the caller keeps a segment that merely decodes to one encoded.
++///
++/// * a `.` segment is dropped, and a `..` removes the segment before it;
++/// * a `..` with nothing before it to remove is kept (`../a`), because it names
++///   the base's parent;
++/// * the first segment the reference itself contributes is never removed
++///   (`a/../b` is kept): against a base whose path has no directory part, §5.2.4
++///   turns that pair into a leading `/`, which no shorter spelling reproduces;
++/// * a final `.` or `..` leaves the directory form (`a/.` is `a/`, `.` and `./`
++///   are `.`, `../` is `..`), which is distinct from the empty path that names
++///   the base document itself;
++/// * a result that would begin with `/` keeps a `./` prefix, so that an empty
++///   first segment (`.//x`) does not become an absolute-path reference.
++pub(crate) fn collapse_unresolved_dot_segments(path: &str) -> String {
++    let mut kept: Vec<&str> = Vec::new();
++    // `kept[..floor]` are literal `..` segments (and the retained first segment
++    // before one): nothing below `floor` may be removed.
++    let mut floor = 0;
++    // The reference's first own segment sits at `kept[floor]` and is protected.
++    let mut first_is_protected = false;
++    let mut seen_segment = false;
++    // A final dot segment behaves as that segment followed by an empty one.
++    let directory_end = path
++        .rsplit('/')
++        .next()
++        .filter(|last| matches!(*last, "." | ".."))
++        .map(|_| "");
++    for segment in path.split('/').chain(directory_end) {
++        match segment {
++            "." => {}
++            ".." => {
++                if kept.len() > floor + usize::from(first_is_protected) {
++                    kept.pop();
++                } else {
++                    kept.push("..");
++                    floor = kept.len();
++                    first_is_protected = false;
++                }
++            }
++            other => {
++                if !seen_segment {
++                    seen_segment = true;
++                    first_is_protected = true;
++                }
++                kept.push(other);
++            }
++        }
++    }
++    // `..` and `../` resolve alike; the shorter form is the normal one.
++    if let [.., "..", ""] = kept.as_slice() {
++        kept.pop();
++    }
++    let joined = kept.join("/");
++    if joined.is_empty() {
++        ".".to_owned()
++    } else if joined.starts_with('/') {
++        format!("./{joined}")
++    } else {
++        joined
++    }
++}
++
+ /// Pop the trailing segment (and its preceding '/') from the output buffer — the
+ /// §5.2.4 case-C operation.
+ fn pop_last_segment(out: &mut String) {
+diff --git crates/iri/tests/iri_suite.rs crates/iri/tests/iri_suite.rs
+index f9e85ba45..c633e9f44 100644
+--- crates/iri/tests/iri_suite.rs
++++ crates/iri/tests/iri_suite.rs
+@@ -179,49 +179,218 @@ fn normalize_adds_no_guard_where_none_is_needed() {
+     }
+ }
+ 
+-/// What `normalize` guarantees for any parse-accepted input: it returns, its
+-/// text re-parses, scheme and authority presence are unchanged, and a second
+-/// call is identical.
+-fn assert_contract(input: &str) {
++/// Bases that separate the spellings a relative reference could be confused
++/// with: a deep hierarchical path, one with a query, an authority with an empty
++/// path, an authority-less rooted path, and paths with no directory part.
++const DISTINGUISHING_BASES: [&str; 7] = [
++    "http://h/x/y/z",
++    "http://h/x/y/z?bq",
++    "http://h",
++    "a:/p/q",
++    "urn:x",
++    "urn:x/y",
++    "a:",
++];
++
++/// RFC 3986 §4.1 and §5.2.4: dot segments in a relative reference are
++/// interpreted by resolution against a base, so `normalize` must not remove the
++/// ones only a base can interpret. Asserts the exact normal form, that it is a
++/// fixed point, and that it resolves like the original against each base.
++fn assert_normal_form_keeps_meaning(input: &str, expected: &str) {
+     let original = parse(input).expect("input parses");
+     let n = original.normalize();
+-    let reparsed = parse(n.as_str()).expect("normal form re-parses");
++    assert_eq!(n.as_str(), expected, "{input}");
+     assert_eq!(
+-        reparsed.scheme().is_some(),
+-        original.scheme().is_some(),
+-        "{input}"
++        n.normalize().as_str(),
++        expected,
++        "{input}: not a fixed point"
+     );
+-    assert_eq!(
+-        reparsed.authority().is_some(),
+-        original.authority().is_some(),
+-        "{input}"
+-    );
+-    assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
++    assert_eq!(n.scheme(), None, "{input}: became absolute");
++    assert_eq!(n.authority(), None, "{input}: gained an authority");
++    for base in DISTINGUISHING_BASES {
++        let base = parse(base).expect("base parses");
++        assert_eq!(
++            base.resolve(n.as_str())
++                .expect("normal form resolves")
++                .as_str(),
++            base.resolve(input).expect("input resolves").as_str(),
++            "{input} against {}",
++            base.as_str()
++        );
++    }
+ }
+ 
+-/// A reference whose path reduces to nothing has no empty spelling (`parse`
+-/// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
+-/// otherwise-empty reference, and a query or fragment keeps the empty path.
+-/// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
+-/// reference. The exact normal form of a reference with a leading `..` is
+-/// decided separately, so those inputs assert only the contract, not a string.
++/// Protects the meaning of a reference with leading `..` segments: `../a` names
++/// a sibling of the base's directory and `a` a child of it, so the leading
++/// segments stay, however they were spelled.
+ #[test]
+-fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
+-    for input in [".", "./", "./."] {
++fn normalize_keeps_leading_parent_segments_of_a_relative_reference() {
++    for (input, expected) in [
++        ("../a", "../a"),
++        ("../../a/./b", "../../a/b"),
++        ("./../a", "../a"),
++        ("../a/b/../c", "../a/c"),
++        ("..", ".."),
++        ("../", ".."),
++        ("./..", ".."),
++        (".././", ".."),
++        ("../..", "../.."),
++        ("..?q#f", "..?q#f"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects the difference between the base's directory (`.`) and the base
++/// document itself (the empty path): a reference that reduces to its directory
++/// keeps the path `.`, with or without a query or fragment. An empty path with a
++/// query or fragment is a different reference and is not rewritten.
++#[test]
++fn normalize_keeps_the_directory_reference_apart_from_the_empty_path() {
++    for (input, expected) in [
++        (".", "."),
++        ("./", "."),
++        ("./.", "."),
++        (".?q", ".?q"),
++        ("./?q", ".?q"),
++        ("./#f", ".#f"),
++        ("a/.", "a/"),
++        ("a/b/..", "a/"),
++        ("?q", "?q"),
++        ("#f", "#f"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects a relative-path reference from becoming an absolute-path one: an
++/// empty first segment stays behind `./` or `..`, where dropping the dot segment
++/// would leave a leading `/`.
++#[test]
++fn normalize_keeps_a_relative_reference_with_an_empty_segment_relative() {
++    for (input, expected) in [
++        (".//x", ".//x"),
++        ("..//x", "..//x"),
++        (".//", ".//"),
++        ("./a//b", "a//b"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects resolution against a base whose path has no directory part (`urn:x`):
++/// there RFC 3986 §5.2.4 turns the reference's own first segment followed by
++/// `..` into a leading `/`, so that pair is kept, while every later pair and
++/// every `.` collapses.
++#[test]
++fn normalize_collapses_only_the_dot_segments_every_base_agrees_on() {
++    for (input, expected) in [
++        ("a/./b", "a/b"),
++        ("a/b/../c", "a/c"),
++        ("./a", "a"),
++        ("x", "x"),
++        ("a/b/c/../../d", "a/d"),
++        ("a/../b", "a/../b"),
++        ("a/..", "a/.."),
++        ("a/../", "a/.."),
++        ("a/b/../../c", "a/../c"),
++        ("a/../b/../c", "a/../c"),
++        ("a/../../b", "a/../../b"),
++    ] {
++        assert_normal_form_keeps_meaning(input, expected);
++    }
++}
++
++/// Protects a rootless reference that holds a percent-encoded dot. RFC 3986
++/// §5.2.4 recognises only a literal `.` or `..`, so resolution reads `%2e` as an
++/// ordinary segment; decoding it during normalization would make it a dot
++/// segment and move the reference. Such a segment stays encoded (`%2E`,
++/// `%2E%2E`), may be removed by a later `..` like any segment, and the form is a
++/// fixed point. Resolved results are compared in normal form, because the
++/// original keeps its own hex case.
++#[test]
++fn normalize_keeps_a_percent_encoded_dot_an_ordinary_segment_when_unresolved() {
++    for (input, expected) in [
++        ("%2e", "%2E"),
++        ("%2e%2e", "%2E%2E"),
++        (".%2E", "%2E%2E"),
++        ("%2e.", "%2E%2E"),
++        ("%2e%2e/a", "%2E%2E/a"),
++        ("a/%2e/b", "a/%2E/b"),
++        ("a/%2e/../b", "a/b"),
++        ("x/%2e%2e/../a", "x/a"),
++        ("x/%2e/..", "x/"),
++        ("%2e%2e/..", "%2E%2E/.."),
++        ("%2e/%2e/..", "%2E/"),
++        ("./%2e/%2E%2e/..", "%2E/"),
++        ("../%2e", "../%2E"),
++        ("a/%2E%2E", "a/%2E%2E"),
++        ("%2e?q#f", "%2E?q#f"),
++        // Neighbours: a segment that only contains an encoded dot decodes as
++        // before, and a literal dot segment beside one keeps its meaning.
++        ("x%2e/%2ey", "x./.y"),
++        ("%2e%2e%2e", "..."),
++        ("./%7e/../a", "~/../a"),
++    ] {
+         let n = parse(input).expect("input parses").normalize();
+-        assert_eq!(n.as_str(), ".", "{input}");
+-        assert_eq!(n.normalize().as_str(), ".", "{input}");
++        assert_eq!(n.as_str(), expected, "{input}");
++        assert_eq!(
++            n.normalize().as_str(),
++            expected,
++            "{input}: not a fixed point"
++        );
++        for base in DISTINGUISHING_BASES {
++            let base = parse(base).expect("base parses");
++            assert_eq!(
++                base.resolve(expected)
++                    .expect("normal form resolves")
++                    .normalize()
++                    .as_str(),
++                base.resolve(input)
++                    .expect("input resolves")
++                    .normalize()
++                    .as_str(),
++                "{input} against {}",
++                base.as_str()
++            );
++        }
+     }
+-    for input in ["..", "../", "./..", ".././"] {
+-        assert_contract(input);
++    // The upper-case spelling is already the normal form, so there the resolved
++    // texts are equal byte for byte.
++    let base = parse("http://h/d/e/f").unwrap();
++    assert_eq!(
++        base.resolve("a/%2E/../b").unwrap().as_str(),
++        "http://h/d/e/a/b"
++    );
++    assert_eq!(parse("a/%2E/../b").unwrap().normalize().as_str(), "a/b");
++}
++
++/// Neighbours of the relative-path rule that resolution treats as already
++/// rooted, and so keep full RFC 3986 §5.2.4 removal: an absolute IRI, a
++/// reference with an authority, and an absolute-path reference.
++#[test]
++fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
++    for (input, expected) in [
++        ("http://h/../a", "http://h/a"),
++        ("http://h/a/../b", "http://h/b"),
++        ("a:../b", "a:b"),
++        ("a:b/../c", "a:/c"),
++        ("//h/../a", "//h/a"),
++        ("//h/a/./b", "//h/a/b"),
++        ("/a/../b", "/b"),
++        ("/../a", "/a"),
++        ("/.", "/"),
++        // A percent-encoded dot segment is decoded first here, as before.
++        ("/a/%2e%2e/../b", "/b"),
++        ("http://h/a/%2e/b", "http://h/a/b"),
++        ("//h/a/%2E%2E/b", "//h/b"),
++    ] {
++        assert_eq!(
++            parse(input).unwrap().normalize().as_str(),
++            expected,
++            "{input}"
++        );
+     }
+-    // Neighbours that must keep their current result: an empty path with a query
+-    // or fragment is not rewritten, and non-empty results gain nothing.
+-    assert_eq!(parse("?q").unwrap().normalize().as_str(), "?q");
+-    assert_eq!(parse(".?q").unwrap().normalize().as_str(), "?q");
+-    assert_eq!(parse("./#f").unwrap().normalize().as_str(), "#f");
+-    assert_eq!(parse("x").unwrap().normalize().as_str(), "x");
+-    assert_eq!(parse("./a").unwrap().normalize().as_str(), "a");
+ }
+ 
+ /// RFC 3986 §4.2: the first segment of a scheme-less relative path may not hold
+@@ -240,7 +409,11 @@ fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
+         assert_eq!(n.scheme(), None, "{input}: became absolute");
+         assert_eq!(n.normalize().as_str(), expected, "{input}");
+     }
+-    assert_contract("../a:b"); // exact form of a leading `..` is decided separately
++    // A leading `..` stays, so the colon is not in the first segment and needs no
++    // `./`; a retained first segment that holds one still does.
++    assert_normal_form_keeps_meaning("../a:b", "../a:b");
++    assert_normal_form_keeps_meaning("./a:b/../c", "./a:b/../c");
++    assert_normal_form_keeps_meaning("./a/../b:c", "a/../b:c");
+     // Neighbours: no prefix where the colon is not in the first segment, where
+     // the path is rooted, or where a scheme is present.
+     for (input, expected) in [
+diff --git crates/iri/tests/property.rs crates/iri/tests/property.rs
+index 8ad0d4c62..554c4da8a 100644
+--- crates/iri/tests/property.rs
++++ crates/iri/tests/property.rs
+@@ -4,8 +4,9 @@
+ //! Property tests.
+ //!
+ //! Two families live here. The IRI one asserts that parse is verbatim-faithful,
+-//! that normalization is idempotent, and that resolving a reference against an
+-//! absolute base yields an absolute IRI.
++//! that normalization is idempotent and keeps what a relative reference resolves
++//! to, and that resolving a reference against an absolute base yields an absolute
++//! IRI.
+ //!
+ //! The RFC 5646 language-tag one asserts the invariants the module documents but
+ //! that no finite corpus can pin: the parser is **total** (no input panics it,
+@@ -100,6 +101,96 @@ prop_test! {
+     }
+ }
+ 
++/// Scheme-less, authority-less references built from the segments whose
++/// handling decides what a reference means: `.`, `..`, empty, plain, one holding
++/// a colon, one holding a percent-encoded unreserved character, and the
++/// percent-encoded spellings of `.` and `..` in either hex case and mixed with a
++/// literal dot. Resolution reads those as ordinary segments, so they may appear
++/// in leading, interior and final position. A leading `/` gives the
++/// absolute-path and network-path neighbours, which the property skips when
++/// they hold an encoded dot.
++fn relative_reference() -> impl Strategy<Value = String> {
++    let prefix = prop::sample::select(vec!["", "", "", "./", "../", "%2e/", "%2E%2e/", "/"]);
++    let seg = prop::sample::select(vec![
++        "", ".", "..", "..", "x", "y", "a:b", "%7e", "%3A", "%2e", "%2E", "%2e%2E", ".%2e", "%2E.",
++        "x%2e",
++    ]);
++    let segs = prop::collection::vec(seg, 0..7);
++    let query = prop::option::of(prop::sample::select(vec!["", "q"]));
++    let frag = prop::option::of(prop::sample::select(vec!["", "f"]));
++    (prefix, segs, query, frag).prop_map(|(pre, segs, q, f)| {
++        let mut out = format!("{pre}{}", segs.join("/"));
++        if let Some(q) = q {
++            out.push('?');
++            out.push_str(q);
++        }
++        if let Some(f) = f {
++            out.push('#');
++            out.push_str(f);
++        }
++        out
++    })
++}
++
++/// Absolute bases of every path shape RFC 3986 §5.2.3 merges differently: an
++/// authority with an empty, rooted, dotted or double-slash path, no authority
++/// with a rooted path, and no authority with a rootless path that has, lacks or
++/// only pretends to have a directory part.
++fn absolute_base() -> impl Strategy<Value = &'static str> {
++    prop::sample::select(vec![
++        "http://h",
++        "http://h/",
++        "http://h/x",
++        "http://h/x/y/z?bq",
++        "http://h/x/y/",
++        "http://h/x/../y/./z",
++        "http://h//x//y",
++        "a:/",
++        "a:/p/q",
++        "a:/p/../q/r",
++        "a:",
++        "urn:x",
++        "urn:x/y",
++        "urn:x/y/z",
++        "urn:x/../y",
++        "a:./x",
++        "a:../x/y",
++        "a:.//x",
++    ])
++}
++
++prop_test! {
++    /// Protects the meaning of a relative reference under `normalize` (RFC 3986
++    /// §4.1, §5.2.4, §6.2.2.3): dot segments are interpreted by resolution, so for
++    /// every reference with no scheme and every absolute base, resolving the
++    /// normal form names the same IRI as resolving the original. That includes a
++    /// rootless reference with a percent-encoded dot segment, which resolution
++    /// reads as an ordinary segment. The two results are compared in normal form
++    /// because the reference's case and percent-encoding normalization carry
++    /// into the resolved text. The normal form also stays scheme-less and is a
++    /// fixed point. A reference with an authority or a leading `/` that holds an
++    /// encoded dot is outside the guarantee and is skipped.
++    #[test]
++    fn normalize_preserves_what_a_relative_reference_resolves_to(
++        r in relative_reference(),
++        b in absolute_base(),
++    ) {
++        if let Ok(reference) = parse(&r) {
++            prop_assume!(!reference.has_scheme());
++            let rooted = reference.authority().is_some() || reference.path().starts_with('/');
++            prop_assume!(!(rooted && reference.path().to_ascii_lowercase().contains("%2e")));
++            let base = parse(b).expect("base parses");
++            let n = reference.normalize();
++            prop_assert!(!n.has_scheme());
++            prop_assert_eq!(n.authority().is_some(), reference.authority().is_some());
++            prop_assert_eq!(n.normalize().as_str(), n.as_str());
++            let direct = base.resolve(&r).expect("reference resolves").normalize();
++            let through = base.resolve(n.as_str()).expect("normal form resolves").normalize();
++            prop_assert_eq!(through.as_str(), direct.as_str());
++        }
++    }
++}
++
+ prop_test! {
+     /// The parser never rewrites its input: `as_str()` is byte-identical.
+     #[test]
+diff --git crates/shapes/benches/support/frozen_eval.rs crates/shapes/benches/support/frozen_eval.rs
+index 4c8fff97c..947dfa3c6 100644
+--- crates/shapes/benches/support/frozen_eval.rs
++++ crates/shapes/benches/support/frozen_eval.rs
+@@ -412,9 +412,19 @@ pub(crate) enum Query {
+     Q4,
+     /// NOT EXISTS with FILTER.
+     Q5,
++    /// Two patterns scanned, bound and joined, then only counted. Like every row here
++    /// it runs ungoverned, with no stop signal and no ceiling: the first pattern scans
++    /// into the row sink and the last through the retained cursor. It is not the
++    /// governed run, in which every stage scans into the sink. Many rows are bound and
++    /// one answer row is returned, so the witness count is always 1 and the check on
++    /// this row is agreement between the freeze variants, not a known count.
++    Scan,
+ }
+ 
+ impl Query {
++    /// Every query, in report order.
++    const ALL: [Self; 6] = [Self::Q1, Self::Q2, Self::Q3, Self::Q4, Self::Q5, Self::Scan];
++
+     pub(crate) fn label(self) -> String {
+         match self {
+             Self::Q1 => "q1_not_exists_group_having".into(),
+@@ -422,6 +432,7 @@ impl Query {
+             Self::Q3 => "q3_not_exists_group_subquery".into(),
+             Self::Q4 => "q4_filter".into(),
+             Self::Q5 => "q5_not_exists_filter".into(),
++            Self::Scan => "scan_two_patterns_count".into(),
+         }
+     }
+ 
+@@ -454,6 +465,9 @@ impl Query {
+             Self::Q5 => "SELECT ?x ?s WHERE { ?x ex:score ?s ; ex:status ?st . \
+                  FILTER NOT EXISTS { ?x ex:parent ?p . ?p ex:score ?ps . FILTER(?ps > ?s) } }"
+                 .to_owned(),
++            Self::Scan => {
++                "SELECT (COUNT(*) AS ?n) WHERE { ?x ex:score ?s ; ex:status ?st }".to_owned()
++            }
+         };
+         format!("{}{body}", prologue())
+     }
+@@ -682,10 +696,9 @@ pub(crate) fn rows() -> Vec<Row> {
+         );
+     }
+ 
+-    let reported = [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5];
+     // Cold: a fresh engine plans on a dataset whose identity is sealed. Warm: the
+     // same engine runs the prepared query again.
+-    for query in reported {
++    for query in Query::ALL {
+         for data in [Data::Ordinary, Data::Eager] {
+             for warm in [false, true] {
+                 add(
+@@ -790,7 +803,7 @@ impl Fixtures {
+             );
+             let _ = DatasetView::snapshot_identity(&*dataset);
+             let engine = NativeSparqlEngine::new();
+-            for query in [Query::Q1, Query::Q2, Query::Q3, Query::Q4, Query::Q5] {
++            for query in Query::ALL {
+                 let prepared = engine
+                     .prepare_query(&query.text(&self.layout), None)
+                     .expect("the query prepares");
+diff --git crates/sparql-eval/src/bgp.rs crates/sparql-eval/src/bgp.rs
+index 5395fa29c..d06265c3c 100644
+--- crates/sparql-eval/src/bgp.rs
++++ crates/sparql-eval/src/bgp.rs
+@@ -307,6 +307,17 @@ struct CompiledPattern<I: ViewTermId = TermId> {
+     o: Pos<I>,
+ }
+ 
++impl<I: ViewTermId> CompiledPattern<I> {
++    /// Whether no position is a nested quoted-triple pattern, so binding a candidate
++    /// never has to resolve a term.
++    #[inline]
++    const fn is_flat(&self) -> bool {
++        !matches!(self.s, Pos::Triple(_))
++            && !matches!(self.p, Pos::Triple(_))
++            && !matches!(self.o, Pos::Triple(_))
++    }
++}
++
+ /// Immutable positions and column layout for repeated occurrences of one BGP.
+ /// The input schema stays fixed; binding masks and candidate scans remain local
+ /// to each occurrence. A missing ground term retains the full empty header.
+@@ -3320,6 +3331,22 @@ fn bind_row<D: DatasetView + Sync>(
+     // plain copy of the cells in place. The accounted build below is the same row.
+     if !workspace.is_bounded() && ctx.evidence_input.is_none() && !row.has_evidence_attachment() {
+         let mut out = RetainedRow::resident_copy(cells)?;
++        if cp.is_flat() {
++            // No nested position: the test above settled every constant and every slot
++            // the driving row binds, so each slot is written where it stands and only a
++            // variable repeated inside this pattern can still disagree. The general
++            // loop below does the same writes in the same order through a work list.
++            for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
++                if let Pos::Slot(col) = pos {
++                    let value = SolutionTerm::Existing(id);
++                    match out[*col] {
++                        Some(existing) if existing != value => return Ok(None),
++                        _ => out[*col] = Some(value),
++                    }
++                }
++            }
++            return Ok(Some(RetainedRow::from_resident(out)));
++        }
+         for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+             if !bind_pos_admitted(&mut out, pos, id, dataset, workspace)? {
+                 return Ok(None);
+diff --git crates/sparql-eval/src/bgp/expansion.rs crates/sparql-eval/src/bgp/expansion.rs
+index d7b04e1b9..7298593f9 100644
+--- crates/sparql-eval/src/bgp/expansion.rs
++++ crates/sparql-eval/src/bgp/expansion.rs
+@@ -41,6 +41,13 @@ pub(super) enum ExpansionStep<I: ViewTermId> {
+     Stop,
+ }
+ 
++/// What a candidate is before its row is bound.
++enum Examined {
++    Bind,
++    Skip,
++    Stop,
++}
++
+ #[cfg(test)]
+ thread_local! {
+     /// Virtual statement-layer sources opened on this thread, for tests that pin when
+@@ -161,22 +168,37 @@ impl<I: ViewTermId> Expansion<I> {
+         quad: QuadIds<I>,
+         ctx: &EvalCtx<'_, D>,
+     ) -> Result<ExpansionStep<I>, EvalError> {
++        Ok(match self.examine(&quad, ctx)? {
++            Examined::Stop => ExpansionStep::Stop,
++            Examined::Skip => ExpansionStep::Skip,
++            Examined::Bind => match bind_row(input.row, input.pattern, &quad, ctx)? {
++                Some(row) => ExpansionStep::Row(row),
++                None => ExpansionStep::Skip,
++            },
++        })
++    }
++
++    /// The stop poll, the candidate charge and the merged-scope de-duplication: every
++    /// step of a candidate before its row is bound.
++    #[inline]
++    fn examine<D: DatasetView<Id = I> + Sync>(
++        &mut self,
++        quad: &QuadIds<I>,
++        ctx: &EvalCtx<'_, D>,
++    ) -> Result<Examined, EvalError> {
+         if ctx.stop_check().is_some() {
+             self.stopped = true;
+-            return Ok(ExpansionStep::Stop);
++            return Ok(Examined::Stop);
+         }
+         self.charge.fuel = self.charge.fuel.saturating_add(1);
+         if self.merged {
+             let key = (quad.s, quad.p, quad.o);
+             if self.seen.get(&key).is_some() {
+-                return Ok(ExpansionStep::Skip);
++                return Ok(Examined::Skip);
+             }
+             self.seen.insert_admitted(key, (), &ctx.growth)?;
+         }
+-        Ok(match bind_row(input.row, input.pattern, &quad, ctx)? {
+-            Some(row) => ExpansionStep::Row(row),
+-            None => ExpansionStep::Skip,
+-        })
++        Ok(Examined::Bind)
+     }
+ 
+     pub(super) fn committed(&mut self) {
+@@ -190,14 +212,21 @@ impl<I: ViewTermId> Expansion<I> {
+         ctx: &EvalCtx<'_, D>,
+         sink: &mut crate::parallel::RowSink<'_, RetainedRow<I>>,
+     ) -> std::ops::ControlFlow<()> {
+-        match self.candidate(input, quad, ctx) {
+-            Ok(ExpansionStep::Row(row)) => {
++        // The bound row moves straight into the sink; `candidate` hands the same row
++        // to a caller that keeps it.
++        let bound = match self.examine(&quad, ctx) {
++            Ok(Examined::Bind) => bind_row(input.row, input.pattern, &quad, ctx),
++            Ok(Examined::Skip) => Ok(None),
++            Ok(Examined::Stop) => return std::ops::ControlFlow::Break(()),
++            Err(error) => Err(error),
++        };
++        match bound {
++            Ok(Some(row)) => {
+                 if sink.push(row) {
+                     self.committed();
+                 }
+             }
+-            Ok(ExpansionStep::Skip) => {}
+-            Ok(ExpansionStep::Stop) => return std::ops::ControlFlow::Break(()),
++            Ok(None) => {}
+             Err(error) => {
+                 sink.fail(error);
+                 return std::ops::ControlFlow::Break(());
+diff --git crates/sparql-eval/src/engine/graph_build.rs crates/sparql-eval/src/engine/graph_build.rs
+index 464380c18..a5d33cbf6 100644
+--- crates/sparql-eval/src/engine/graph_build.rs
++++ crates/sparql-eval/src/engine/graph_build.rs
+@@ -67,6 +67,16 @@ impl std::fmt::Display for GraphBuildError {
+ 
+ impl std::error::Error for GraphBuildError {}
+ 
++impl purrdf_hash::error::StructuredError for GraphBuildError {
++    purrdf_hash::error_visit! {
++        Query(diagnostic) => "sparql-graph-build-query" { "cause" => Cause(diagnostic) },
++        Evaluation(error) => "sparql-graph-build-evaluation" { "cause" => Cause(error) },
++        BudgetExhausted { tripped, evidence } => "sparql-graph-build-budget-exhausted" {
++            "tripped" => Record(tripped), "evidence" => Record(evidence),
++        },
++    }
++}
++
+ purrdf_lex::variant_from!(GraphBuildError {
+     Query(RdfDiagnostic),
+ });
+diff --git crates/sparql-eval/src/fallible.rs crates/sparql-eval/src/fallible.rs
+index 44e00bfb9..828b52fc2 100644
+--- crates/sparql-eval/src/fallible.rs
++++ crates/sparql-eval/src/fallible.rs
+@@ -116,6 +116,15 @@ impl std::fmt::Display for QueryControlFailure {
+ 
+ impl std::error::Error for QueryControlFailure {}
+ 
++impl purrdf_hash::error::StructuredError for QueryControlFailure {
++    purrdf_hash::error_visit! {
++        Unpriced(construct) => "sparql-control-unpriced" { "construct" => Text(construct) },
++        LayoutOverflow => "sparql-control-layout-overflow" {},
++        DiagnosticFormatting => "sparql-control-diagnostic-formatting" {},
++        WorkspaceStopped => "sparql-control-workspace-stopped" {},
++    }
++}
++
+ /// A query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView) that did not
+ /// reach a complete result.
+ ///
+@@ -183,6 +192,34 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
+     },
+ }
+ 
++/// The view's root cause and receipt are borrowed as their own structured values,
++/// so a caller-defined operational error is inspected without being formatted.
++impl<OperationalError, Evidence> purrdf_hash::error::StructuredError
++    for FallibleSparqlError<OperationalError, Evidence>
++where
++    OperationalError: purrdf_hash::error::StructuredError,
++    Evidence: purrdf_hash::error::StructuredError,
++{
++    purrdf_hash::error_visit! {
++        Query { diagnostic, evidence } => "sparql-fallible-query" {
++            "cause" => Cause(diagnostic), "evidence" => Record(evidence),
++        },
++        Operational { error, evidence } => "sparql-fallible-operational" {
++            "cause" => Cause(error), "evidence" => Record(evidence),
++        },
++        AllocationFailed { construct, evidence } => "sparql-fallible-allocation-failed" {
++            "construct" => Text(construct), "evidence" => Record(evidence),
++        },
++        ControlFailure { failure, evidence } => "sparql-fallible-control" {
++            "cause" => Cause(failure), "evidence" => Record(evidence),
++        },
++        BudgetExhausted { tripped, partial, evidence } => "sparql-fallible-budget-exhausted" {
++            "tripped" => Record(tripped), "partial" => Record(partial),
++            "evidence" => Record(evidence),
++        },
++    }
++}
++
+ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence> {
+     /// Transform the operation receipt without changing the outcome or root cause.
+     /// Diagnostics, partial payloads and their original allocation owners move
+diff --git crates/sparql-eval/src/governed.rs crates/sparql-eval/src/governed.rs
+index 9b5f27837..24b83b2e6 100644
+--- crates/sparql-eval/src/governed.rs
++++ crates/sparql-eval/src/governed.rs
+@@ -393,6 +393,16 @@ pub enum PartialAnswers<R = PartialSparqlResult> {
+     Unknown(NonMonotoneBarrier),
+ }
+ 
++impl<R: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
++    for PartialAnswers<R>
++{
++    purrdf_hash::error_visit! {
++        Certain(result) => "sparql-partial-certain" { "result" => Record(result) },
++        AtMost(result) => "sparql-partial-at-most" { "result" => Record(result) },
++        Unknown(barrier) => "sparql-partial-unknown" { "barrier" => Record(barrier) },
++    }
++}
++
+ impl<R> PartialAnswers<R> {
+     /// The same certificate over a borrow of the rows.
+     #[must_use]
+@@ -499,6 +509,15 @@ pub struct PartialSparqlResult {
+     positional_prefix: bool,
+ }
+ 
++impl purrdf_hash::error::StructuredError for PartialSparqlResult {
++    purrdf_hash::error_visit! {
++        @record self { result, positional_prefix } => "sparql-partial-result" {
++            "result" => Record(&self.result),
++            "positional_prefix" => Boolean(self.positional_prefix),
++        }
++    }
++}
++
+ impl PartialSparqlResult {
+     /// Pair a materialized partial `result` with the certificate's positional verdict.
+     pub(crate) const fn new(result: SparqlResult, positional_prefix: bool) -> Self {
+@@ -720,6 +739,18 @@ pub struct GovernedEvidence<Evidence> {
+     pub governors: GovernorEvidence,
+ }
+ 
++impl<Evidence: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
++    for GovernedEvidence<Evidence>
++{
++    purrdf_hash::error_visit! {
++        @record self { coordinates, view, governors } => "sparql-governed-evidence" {
++            "coordinates" => Record(&self.coordinates),
++            "view" => Record(&self.view),
++            "governors" => Record(&self.governors),
++        }
++    }
++}
++
+ impl<Evidence> GovernedEvidence<Evidence> {
+     /// Attach the original context capture without replacing its timestamp owner.
+     pub(crate) fn with_coordinates(mut self, coordinates: QueryCoordinates) -> Self {
+diff --git crates/sparql-eval/src/governor/lift.rs crates/sparql-eval/src/governor/lift.rs
+index a22edcaf9..20c21f312 100644
+--- crates/sparql-eval/src/governor/lift.rs
++++ crates/sparql-eval/src/governor/lift.rs
+@@ -138,6 +138,14 @@ pub struct NonMonotoneBarrier {
+     operator: &'static str,
+ }
+ 
++impl purrdf_hash::error::StructuredError for NonMonotoneBarrier {
++    purrdf_hash::error_visit! {
++        @record self { operator } => "sparql-non-monotone-barrier" {
++            "operator" => Code(self.operator),
++        }
++    }
++}
++
+ impl NonMonotoneBarrier {
+     /// The barrier at `node`, labelled by its algebra variant.
+     pub(crate) fn at(node: &GraphPattern) -> Self {
+diff --git crates/sparql-eval/src/protocol.rs crates/sparql-eval/src/protocol.rs
+index 5fd407f90..7729cb751 100644
+--- crates/sparql-eval/src/protocol.rs
++++ crates/sparql-eval/src/protocol.rs
+@@ -94,6 +94,13 @@ impl OperationKind {
+     }
+ }
+ 
++impl purrdf_hash::error::StructuredError for OperationKind {
++    purrdf_hash::error_visit! {
++        Query => "sparql-operation-query" {},
++        Update => "sparql-operation-update" {},
++    }
++}
++
+ /// The shapes a query result takes, which decide the formats it can be sent in
+ /// (Protocol §2.1.5 → the SPARQL 1.1 result formats and the RDF syntaxes).
+ ///
+@@ -344,6 +351,52 @@ impl fmt::Display for ProtocolError {
+ 
+ impl std::error::Error for ProtocolError {}
+ 
++/// Request text stays text and each protocol parameter or clause name stays a
++/// code. The four `reason`/`message` fields hold what their producer rendered;
++/// they are borrowed as that text and never parsed back.
++impl purrdf_hash::error::StructuredError for ProtocolError {
++    purrdf_hash::error_visit! {
++        UnsupportedMethod { method } => "sparql-protocol-unsupported-method" {
++            "method" => Text(method),
++        },
++        MissingContentType => "sparql-protocol-missing-content-type" {},
++        UnsupportedContentType { content_type } => "sparql-protocol-unsupported-content-type" {
++            "content_type" => Text(content_type),
++        },
++        UnsupportedCharset { charset } => "sparql-protocol-unsupported-charset" {
++            "charset" => Text(charset),
++        },
++        NonUtf8Body { valid_up_to } => "sparql-protocol-non-utf8-body" {
++            "valid_up_to" => ByteCount(*valid_up_to as u128),
++        },
++        BodyOnGet => "sparql-protocol-body-on-get" {},
++        MalformedForm { reason } => "sparql-protocol-malformed-form" {
++            "reason" => Text(reason),
++        },
++        MissingOperation => "sparql-protocol-missing-operation" {},
++        AmbiguousOperation { reason } => "sparql-protocol-ambiguous-operation" {
++            "reason" => Text(reason),
++        },
++        QueryViaGetIsNotUpdate => "sparql-protocol-update-via-get" {},
++        DatasetParametersOnUpdate { parameter } => "sparql-protocol-dataset-parameters-on-update" {
++            "parameter" => Code(parameter),
++        },
++        UsingParametersOnQuery { parameter } => "sparql-protocol-using-parameters-on-query" {
++            "parameter" => Code(parameter),
++        },
++        InvalidGraphIri { parameter, value, reason } => "sparql-protocol-invalid-graph-iri" {
++            "parameter" => Code(parameter), "value" => Text(value), "reason" => Text(reason),
++        },
++        UsingConflictsWithClause { parameter, operation, clause } => "sparql-protocol-using-conflicts-with-clause" {
++            "parameter" => Code(parameter), "operation" => Unsigned(*operation as u128),
++            "clause" => Code(clause),
++        },
++        MalformedOperation { kind, message } => "sparql-protocol-malformed-operation" {
++            "kind" => Record(kind), "message" => Text(message),
++        },
++    }
++}
++
+ /// One SPARQL 1.1 Protocol operation, read from an HTTP request by
+ /// [`ProtocolRequest::parse`].
+ #[derive(Clone, Debug, PartialEq, Eq)]
+diff --git crates/sparql-eval/src/retained.rs crates/sparql-eval/src/retained.rs
+index d33bb9b5d..244eec25f 100644
+--- crates/sparql-eval/src/retained.rs
++++ crates/sparql-eval/src/retained.rs
+@@ -241,6 +241,14 @@ pub struct RetainedSparqlResult {
+     payload: Shared<Payload<SparqlResult>>,
+ }
+ 
++impl purrdf_hash::error::StructuredError for RetainedSparqlResult {
++    purrdf_hash::error_visit! {
++        @record self { payload } => "sparql-retained-result" {
++            "result" => Record(&self.payload.value),
++        }
++    }
++}
++
+ impl RetainedSparqlResult {
+     pub(crate) fn new(
+         result: SparqlResult,
+@@ -368,6 +376,15 @@ pub struct RetainedPartialSparqlResult {
+     positional_prefix: bool,
+ }
+ 
++impl purrdf_hash::error::StructuredError for RetainedPartialSparqlResult {
++    purrdf_hash::error_visit! {
++        @record self { result, positional_prefix } => "sparql-retained-partial-result" {
++            "result" => Record(&self.result),
++            "positional_prefix" => Boolean(self.positional_prefix),
++        }
++    }
++}
++
+ impl RetainedPartialSparqlResult {
+     pub(crate) const fn new(result: RetainedSparqlResult, positional_prefix: bool) -> Self {
+         Self {
+diff --git crates/sparql-eval/src/row_path_parity.rs crates/sparql-eval/src/row_path_parity.rs
+index 2e8a26f37..7aade7736 100644
+--- crates/sparql-eval/src/row_path_parity.rs
++++ crates/sparql-eval/src/row_path_parity.rs
+@@ -172,6 +172,93 @@ fn the_direct_row_path_answers_as_the_accounted_row_path_does() {
+     }
+ }
+ 
++/// The answer on the unbounded workspace under a stop signal that never fires and a
++/// cell ceiling nothing reaches: every stage, the last one included, scans into the
++/// row sink instead of the retained cursor.
++fn unbounded_into_the_sink(text: &str, dataset: &Arc<RdfDataset>) -> Rows {
++    let governors = crate::QueryGovernors::UNBOUNDED
++        .with_max_intermediate_cells(1 << 40)
++        .with_stop_signal(Arc::new(crate::CancellationFlag::new()));
++    let mut ctx = EvalCtx::new(dataset.as_ref())
++        .with_governors(Arc::new(crate::governor::GovernorState::new(&governors)));
++    ctx.options.force_sequential = true;
++    assert!(!ctx.growth.is_bounded());
++    assert!(ctx.stop_signal().is_some());
++    run(text, &mut ctx).expect("the governed unbounded run completes")
++}
++
++/// INVARIANT: a candidate binds to the same row whichever scan loop offers it, and
++/// the direct binder of a pattern with no nested position equals the general one,
++/// which the accounted run still uses.
++///
++/// What each case exercises:
++/// - The pinned shapes, and `?s ex:w ?o . ?o ex:w ?o`: constants, slots the driving row
++///   already binds (the index filters those, so the binder only ever sees agreeing
++///   candidates, a repeated variable included) and a nested triple pattern, which
++///   keeps the general binder.
++/// - The four shapes over [`repeat_dataset`]: a variable repeated inside one pattern
++///   that the driving row does NOT bind, so the index offers every quad and the
++///   binder's own comparison is what rejects. Each has one candidate that agrees
++///   with itself and must bind, beside candidates that disagree and must not.
++#[test]
++fn the_sink_scan_binds_as_the_cursor_scan_does() {
++    let bound_repeat = "SELECT ?s ?o WHERE { ?s ex:w ?o . ?o ex:w ?o }";
++    let data = dataset(true);
++    for shape in SHAPES.into_iter().chain([bound_repeat]) {
++        let cursor = unbounded(shape, &data);
++        let sink = unbounded_into_the_sink(shape, &data);
++        assert_eq!(cursor, sink, "{shape}");
++        let limit = smallest_completing_limit(shape, &data);
++        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
++    }
++
++    let data = repeat_dataset();
++    let iri = |name: &str| Some(TermValue::Iri(format!("{EX}{name}")));
++    let cases = [
++        // Subject and object, from the empty driving row.
++        ("SELECT ?s WHERE { ?s ex:w ?s }", vec![iri("n")]),
++        // Two such patterns with no shared variable: whichever is scanned second is
++        // offered a driving row that binds the other variable and not its own.
++        (
++            "SELECT ?x ?y WHERE { ?x ex:w ?x . ?y ex:t ?y }",
++            vec![iri("n"), iri("m")],
++        ),
++        // Subject and predicate.
++        ("SELECT ?x ?o WHERE { ?x ?x ?o }", vec![iri("w"), iri("n")]),
++        // Predicate and object.
++        ("SELECT ?s ?p WHERE { ?s ?p ?p }", vec![iri("e"), iri("t")]),
++    ];
++    for (shape, only_row) in cases {
++        let sink = unbounded_into_the_sink(shape, &data);
++        assert_eq!(sink.1, vec![only_row], "{shape}");
++        assert_eq!(unbounded(shape, &data), sink, "{shape}");
++        let limit = smallest_completing_limit(shape, &data);
++        assert_eq!(bounded(shape, &data, limit), Some(sink), "{shape}");
++    }
++}
++
++/// Six quads over two predicates. For each way a variable can repeat inside one
++/// pattern exactly one quad agrees with itself: `n w n` (subject and object under
++/// `ex:w`), `m t m` (the same under `ex:t`), `w w n` (subject and predicate) and
++/// `e t t` (predicate and object). `e w n` and `k t m` agree with none.
++fn repeat_dataset() -> Arc<RdfDataset> {
++    let mut b = RdfDatasetBuilder::new();
++    let mut id = |name: &str| b.intern_iri(&format!("{EX}{name}")).unwrap();
++    let (w, t) = (id("w"), id("t"));
++    let (n, e, m, k) = (id("n"), id("e"), id("m"), id("k"));
++    for (s, p, o) in [
++        (n, w, n),
++        (e, w, n),
++        (m, t, m),
++        (k, t, m),
++        (w, w, n),
++        (e, t, t),
++    ] {
++        b.push_quad(s, p, o, None).unwrap();
++    }
++    b.freeze().unwrap()
++}
++
+ #[test]
+ fn the_statement_layer_is_skipped_only_when_the_view_certifies_it_empty() {
+     use crate::bgp::VIRTUAL_SOURCES;
+diff --git crates/sparql-eval/src/solution.rs crates/sparql-eval/src/solution.rs
+index 37cdbb52a..96561650a 100644
+--- crates/sparql-eval/src/solution.rs
++++ crates/sparql-eval/src/solution.rs
+@@ -457,7 +457,10 @@ impl VarSchema {
+ /// the common row lives inline with no heap allocation and spills to the heap
+ /// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
+ /// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
+-pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; 4]>;
++pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; INLINE_CELLS]>;
++
++/// The cells a [`Solution`] holds inline, with no heap allocation.
++pub(crate) const INLINE_CELLS: usize = 4;
+ 
+ /// One immutable row whose clone retains its admitted cell owner.
+ #[derive(Clone, Debug)]
+@@ -715,12 +718,19 @@ impl<I: ViewTermId> RetainedRow<I> {
+         }
+     }
+ 
+-    /// A resident copy of `cells` for a workspace that admits nothing: one exact
+-    /// reservation and one copy, the same typed refusal `try_build` gives an allocator
+-    /// that cannot supply the cells.
++    /// A resident copy of `cells` for a workspace that admits nothing: a bound scan
++    /// candidate, and a kept row cloned by [`Self::clone_admitted`]. A row that fits
++    /// the inline capacity is copied in place: nothing is allocated, so there is no
++    /// refusal to report. A wider row takes one exact reservation and one copy, with
++    /// the same typed refusal `try_build` gives an allocator that cannot supply the
++    /// cells.
++    #[inline]
+     pub(crate) fn resident_copy(
+         cells: &[Option<SolutionTerm<I>>],
+     ) -> Result<Solution<I>, crate::EvalError> {
++        if cells.len() <= INLINE_CELLS {
++            return Ok(Solution::from_slice(cells));
++        }
+         let mut row = Solution::new();
+         row.try_reserve_exact(cells.len())
+             .map_err(|_| crate::EvalError::AllocationFailed {
+diff --git crates/sparql-eval/tests/evidence_ledger_query.rs crates/sparql-eval/tests/evidence_ledger_query.rs
+index 77aa18aeb..5f9ed94a2 100644
+--- crates/sparql-eval/tests/evidence_ledger_query.rs
++++ crates/sparql-eval/tests/evidence_ledger_query.rs
+@@ -388,6 +388,17 @@ fn native_ledger_refusal_is_an_operational_error_without_partial_answers() {
+             &QueryOptions::default(),
+         )
+         .expect_err("reporting/operator growth exceeds original grant");
++    // A generic consumer reads the same refusal without matching either enum:
++    // the view's native storage cause and its byte receipt stay typed.
++    let inspected = purrdf_testkit::error_capture::Capture::read(&error);
++    assert_eq!(inspected.code, "sparql-fallible-operational");
++    let cause = inspected.child("cause");
++    assert_eq!(cause.code, "ledger-read-storage");
++    assert_eq!(cause.child("cause").code, "storage-admission-failed");
++    assert!(matches!(
++        inspected.child("evidence").field("value"),
++        purrdf_hash::error::ErrorValue::Unsigned(_)
++    ));
+     assert!(matches!(
+         error,
+         FallibleSparqlError::Operational {
+diff --git crates/sparql-eval/tests/fallible_inspection.rs crates/sparql-eval/tests/fallible_inspection.rs
+new file mode 100644
+index 000000000..9189ada0e
+--- /dev/null
++++ crates/sparql-eval/tests/fallible_inspection.rs
+@@ -0,0 +1,274 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! A generic consumer reads real fallible-query, graph-publication and protocol
++//! refusals field by field, without matching their enums or formatting them.
++
++mod support;
++
++use std::sync::Arc;
++
++use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
++use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlRequest, TrippedGovernor};
++use purrdf_hash::error::ErrorValue;
++use purrdf_sparql_eval::protocol::ProtocolRequest;
++use purrdf_sparql_eval::{
++    FallibleSparqlError, GovernorState, NativeSparqlEngine, QueryGovernors, QueryOptions,
++};
++use purrdf_testkit::error_capture::{CallerRefusal, Capture, Event};
++use support::local_dataset;
++
++#[global_allocator]
++static GLOBAL: CountingAllocator = CountingAllocator;
++
++const ALL_ROWS: &str = "SELECT ?s ?o WHERE { ?s <http://example.org/p> ?o }";
++
++fn edges() -> Arc<RdfDataset> {
++    local_dataset([
++        ("s0", "p", "o0"),
++        ("s1", "p", "o1"),
++        ("s2", "p", "o2"),
++        ("s3", "p", "o3"),
++    ])
++}
++
++fn request(query: &str) -> SparqlRequest<'_> {
++    SparqlRequest {
++        query,
++        base_iri: None,
++        substitutions: &[],
++    }
++}
++
++/// INVARIANT: a query refused over a view that stayed ready reports its
++/// diagnostic as a nested cause with a typed code, beside the view's receipt.
++#[test]
++fn a_refused_query_keeps_its_diagnostic_code_and_view_receipt() {
++    let data = edges();
++    let error = NativeSparqlEngine::new()
++        .query_fallible_view(
++            data.as_ref(),
++            request("SELECT WHERE {"),
++            &QueryOptions::EMPTY,
++        )
++        .expect_err("invalid SPARQL must fail parsing");
++    let capture = Capture::read(&error);
++    assert_eq!(capture.code, "sparql-fallible-query");
++    let retained = capture.child("cause");
++    assert_eq!(retained.code, "sparql-retained-diagnostic");
++    let diagnostic = retained.child("cause");
++    assert_eq!(diagnostic.code, "rdf-diagnostic");
++    assert!(matches!(
++        diagnostic.field("code"),
++        ErrorValue::Code("native-sparql-query-parse")
++    ));
++    assert_eq!(capture.child("evidence").code, "unit");
++}
++
++/// INVARIANT: a governor trip carries the exact ceiling and consumption, the
++/// certified partial rows with their positional verdict, and both receipts;
++/// none of them is flattened into a message.
++#[test]
++fn an_exhausted_budget_keeps_its_trip_certified_rows_and_both_receipts() {
++    let data = edges();
++    let error = NativeSparqlEngine::new()
++        .query_governed_fallible_view(
++            data.as_ref(),
++            request(ALL_ROWS),
++            &QueryOptions::EMPTY,
++            &QueryGovernors::UNBOUNDED.with_max_answers(2),
++        )
++        .expect_err("a trip is not a complete result");
++    let Some(TrippedGovernor::Budget {
++        limit, consumed, ..
++    }) = error.tripped()
++    else {
++        panic!("the answer cap is a budget trip: {error:?}")
++    };
++    let certified = error
++        .partial_answers()
++        .and_then(|partial| partial.result())
++        .expect("the admitted prefix is certified");
++
++    let capture = Capture::read(&error);
++    assert_eq!(capture.code, "sparql-fallible-budget-exhausted");
++    let tripped = capture.child("tripped");
++    assert_eq!(tripped.code, "governor-budget");
++    assert!(matches!(
++        tripped.field("limit"),
++        ErrorValue::Unsigned(value) if value == u128::from(limit)
++    ));
++    assert!(matches!(
++        tripped.field("consumed"),
++        ErrorValue::Unsigned(value) if value == u128::from(consumed)
++    ));
++
++    let partial = capture.child("partial");
++    assert_eq!(partial.code, "sparql-partial-certain");
++    let rows = partial.child("result");
++    assert_eq!(rows.code, "sparql-retained-partial-result");
++    assert!(matches!(
++        rows.field("positional_prefix"),
++        ErrorValue::Boolean(value) if value == certified.is_positional_prefix()
++    ));
++    let retained = rows.child("result");
++    assert_eq!(retained.code, "sparql-retained-result");
++    let solutions = retained.child("result");
++    assert_eq!(solutions.code, "sparql-solutions");
++    assert!(
++        solutions
++            .events
++            .iter()
++            .any(|event| matches!(event, Event::BeginList(Some("rows"), 2))),
++        "the two admitted rows are a list of two, not a count in prose"
++    );
++
++    let evidence = capture.child("evidence");
++    assert_eq!(evidence.code, "sparql-governed-evidence");
++    assert_eq!(
++        evidence.child("coordinates").code,
++        "query-coordinates-started"
++    );
++    assert_eq!(evidence.child("view").code, "unit");
++    let governors = evidence.child("governors");
++    assert_eq!(governors.code, "governor-evidence");
++    assert_eq!(governors.child("tripped").code, "governor-budget");
++}
++
++/// INVARIANT: inspecting an operational failure borrows the view's own error.
++/// A caller-defined cause whose `Display` and `Debug` panic is never formatted,
++/// keeps its full-width field, and inspection allocates nothing.
++#[test]
++fn a_caller_operational_cause_is_borrowed_and_never_formatted() {
++    let error = FallibleSparqlError::Operational {
++        error: CallerRefusal { limit: u128::MAX },
++        evidence: (),
++    };
++    let events = Vec::with_capacity(4);
++    let window = CurrentThreadWindow::open();
++    let capture = Capture::read_with_buffer(&error, events);
++    assert_eq!(window.close().allocations, 0);
++    assert_eq!(capture.code, "sparql-fallible-operational");
++    let cause = capture.child("cause");
++    assert_eq!(cause.code, "caller-refused");
++    assert!(matches!(
++        cause.field("limit"),
++        ErrorValue::Unsigned(u128::MAX)
++    ));
++    assert_eq!(capture.child("evidence").code, "unit");
++    let source = std::error::Error::source(&error).expect("the view error is the source");
++    assert_eq!(
++        source
++            .downcast_ref::<CallerRefusal>()
++            .map(|cause| cause.limit),
++        Some(u128::MAX)
++    );
++}
++
++/// INVARIANT: a graph publication stopped by its operation governor reports the
++/// trip and the operation's accumulated evidence as typed records.
++#[test]
++fn a_stopped_graph_publication_keeps_its_trip_and_operation_evidence() {
++    let engine = NativeSparqlEngine::new();
++    let data = edges();
++    let plan = engine
++        .prepare_query(
++            "CONSTRUCT { ?s <http://example.org/p> ?o } WHERE { ?s <http://example.org/p> ?o }",
++            None,
++        )
++        .expect("plan");
++    let state = Arc::new(GovernorState::new(
++        &QueryGovernors::UNBOUNDED.with_max_answers(0),
++    ));
++    let mut target = RdfDatasetBuilder::new();
++    let error = engine
++        .construct_prepared_in_operation_into_view(
++            data.as_ref(),
++            &plan,
++            &[],
++            &QueryOptions::EMPTY,
++            &state,
++            &mut target,
++        )
++        .expect_err("an answer cap of zero publishes nothing");
++    let capture = Capture::read(&error);
++    assert_eq!(capture.code, "sparql-graph-build-budget-exhausted");
++    let tripped = capture.child("tripped");
++    assert_eq!(tripped.code, "governor-budget");
++    assert!(matches!(tripped.field("limit"), ErrorValue::Unsigned(0)));
++    let evidence = capture.child("evidence");
++    assert_eq!(evidence.code, "governor-evidence");
++    assert_eq!(evidence.child("tripped").code, "governor-budget");
++}
++
++/// INVARIANT: a protocol refusal reports byte offsets as byte counts, parameter
++/// and clause names as codes, the request's own text as text and the operation
++/// index as an integer, each from a request the parser really refused.
++#[test]
++fn protocol_refusals_keep_offsets_parameters_and_operation_positions() {
++    let body = ProtocolRequest::parse(
++        "POST",
++        Some("application/sparql-query"),
++        None,
++        b"ASK { ?s ?p \"\xff\" }",
++    )
++    .expect_err("the body is not UTF-8");
++    let capture = Capture::read(&body);
++    assert_eq!(capture.code, "sparql-protocol-non-utf8-body");
++    assert!(matches!(
++        capture.field("valid_up_to"),
++        ErrorValue::ByteCount(13)
++    ));
++
++    let relative = ProtocolRequest::parse(
++        "GET",
++        None,
++        Some("query=ASK+%7B%7D&default-graph-uri=g1"),
++        b"",
++    )
++    .expect_err("a dataset parameter must be an absolute IRI");
++    let capture = Capture::read(&relative);
++    assert_eq!(capture.code, "sparql-protocol-invalid-graph-iri");
++    assert!(matches!(
++        capture.field("parameter"),
++        ErrorValue::Code("default-graph-uri")
++    ));
++    assert!(matches!(capture.field("value"), ErrorValue::Text("g1")));
++    assert!(matches!(capture.field("reason"), ErrorValue::Text(_)));
++
++    let conflict = ProtocolRequest::parse(
++        "POST",
++        Some("application/x-www-form-urlencoded"),
++        None,
++        b"update=WITH+%3Chttp%3A%2F%2Fexample.org%2Fg2%3E+DELETE+%7B+%3Fs+%3Fp+%3Fo+%7D+\
++          WHERE+%7B+%3Fs+%3Fp+%3Fo+%7D&using-graph-uri=http%3A%2F%2Fexample.org%2Fg1",
++    )
++    .expect("the request itself is well formed")
++    .effective_text()
++    .expect_err("the protocol forbids the combination");
++    let capture = Capture::read(&conflict);
++    assert_eq!(capture.code, "sparql-protocol-using-conflicts-with-clause");
++    assert!(matches!(
++        capture.field("parameter"),
++        ErrorValue::Code("using-graph-uri")
++    ));
++    assert!(matches!(
++        capture.field("operation"),
++        ErrorValue::Unsigned(0)
++    ));
++    assert!(matches!(capture.field("clause"), ErrorValue::Code("WITH")));
++
++    let unparsed = ProtocolRequest::parse(
++        "GET",
++        None,
++        Some("query=SELECT+WHERE&default-graph-uri=http%3A%2F%2Fexample.org%2Fg1"),
++        b"",
++    )
++    .expect("the request itself is well formed")
++    .effective_text()
++    .expect_err("there is no position to write the dataset at");
++    let capture = Capture::read(&unparsed);
++    assert_eq!(capture.code, "sparql-protocol-malformed-operation");
++    assert_eq!(capture.child("kind").code, "sparql-operation-query");
++    assert!(matches!(capture.field("message"), ErrorValue::Text(_)));
++}
+diff --git docs/CONFORMANCE.md docs/CONFORMANCE.md
+index e21d2e535..55d8e2693 100644
+--- docs/CONFORMANCE.md
++++ docs/CONFORMANCE.md
+@@ -44,7 +44,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
+ <!-- BEGIN GENERATED: conformance-matrix -->
+ | Suite | Source | Pass | XFail/Skip | Budget | Fail | Status |
+ | --- | --- | ---: | ---: | ---: | ---: | :---: |
+-| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 24 | 0 | 0 | 0 | GREEN |
++| IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 29 | 0 | 0 | 0 | GREEN |
+ | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
+ | RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
+ | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index 6b1dc217f..7620e3855 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -809,9 +809,9 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
+ | `core.csv-field` | `purrdf-core` | `csv::arch::x86::find_sse2`, `csv::arch::x86::find_avx2`, `csv::arch::neon::find`, `csv::arch::simd128::find`, `csv::scan::find_portable` | `crates/rdf-core/src/csv/arch.rs:130` | `csv`, `graph_serialize` | — | I | — | rewrite | one run-time stop-set scanner serves the CSV/TSV row splitter (quote, escape, the first byte of each line terminator), the cell parser (delimiter, quote, escape) and the writer's quoting decision (delimiter, quote, escape, CR, LF), which continues from its first stop to double quotes and copies every run between stops whole. The stop bytes come from the dialect at run time, so the class cannot be a compile-time `ByteClass`: each explicit kernel broadcasts up to eight needles, compares a chunk with each, ORs the compares and extracts a lane mask (SSE2 16 bytes; AVX2 32 bytes, selected at run time; NEON 16 bytes with a narrowing-shift mask; simd128 16 bytes), and the portable kernel is the `ByteClass` lane formulation over run-time needles. The portable kernel is the oracle: every kernel the host runs is compared with it over every start alignment 0..64 and length 0..256 and seeded inputs. The SPARQL Results CSV writer is `FieldWriter` over the same scanner. The seven-configuration assembly gate measures every listed path and requires its byte-compare instructions, with floors at half the observed vector counts | baseline scalar; SIMD128 byte compares and bitmask | scan sse2 v34·f0·r0·req✓<br>scan avx2 v17·f0·r0·req✓ | scan sse2 (vex) v17·f0·r0·req✓<br>scan avx2 v17·f0·r0·req✓ | scan avx512 masks v8·f0·r0·req✓<br>scan avx2 masks v8·f0·r0·req✓ | scan neon v19·f0·r0·req✓ | scan neon on sve v19·f0·r0·req✓ | scan portable v0·f0·r0 | scan simd128 v18·f0·r0·req✓ |
+ | `cli.pack-input` | `purrdf-cli` | `ImmutableInput::from_disk_path`, then `verify_pack` | `crates/cli/src/immutable.rs:153`, `crates/rdf-core/src/ir/pack/certify.rs:214` | `pack_input`, `pack_input_alloc`, `pack_restore_alloc` | — | I | acquisition is a sealed `memfd` snapshot or an owned read (system calls); verification re-derives the canonical digest | leave | the hashing inside `verify_pack` is the blake3/sha2 rows' kernels; the rest is decode and compare. `purrdf-cli` is not a wasm32 crate (its acquisition is file and `memfd` based, and it is absent from `make wasm`), so the row is measured in the `purrdf_core::…::verify_pack` it calls | scalar on both builds | v4·f0·r0 | v2·f0·r0 | v2·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `eval.regex-row-alloc` | `purrdf-sparql-eval` | `expr::string_arg_of_term` (per-row `REGEX` argument) | `crates/sparql-eval/src/expr.rs:4420` | `regex_eval`, `expr_vm` | regex_eval | I | each row's text argument is materialized into an owned `String` before `is_match` | leave | the cost is the allocation, not a loop LLVM could widen | scalar on both builds; no scan loop | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+-| `eval.solution-compatible` | `purrdf-sparql-eval` | `solution::compatible`, `bgp::expansion::Expansion::candidate` (inlined `bind_row`) | `crates/sparql-eval/src/solution.rs:1512`, `crates/sparql-eval/src/bgp/expansion.rs:139` | `solution_row`, `exists_decorrelation`, `lateral_service`, `lateral_substitution`, `query_eval`, `relation_attestation_alloc` | solution_row | I | `Option` equality over at most four shared columns | leave | compatibility gathers at most four columns and exits on the first mismatch; the expansion measure includes stop, fuel and merge-dedup bookkeeping around the inlined row binding | expansion counts describe its full owner, not comparison-only vectorization | compatible v0·f0·r0<br>bind_row v7·f0·r0 | compatible v0·f0·r0<br>bind_row v4·f0·r0 | compatible v0·f0·r0<br>bind_row v2·f0·r0 | compatible v0·f0·r0<br>bind_row v3·f0·r0 | compatible v0·f0·r0<br>bind_row v15·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 |
+-| `eval.bgp-cost-planner` | `purrdf-sparql-eval` | `bgp::cost_order_dp_costs_from` | `crates/sparql-eval/src/bgp.rs:1571` | `cost_based_bgp_planner`, `query_eval` | — | FR | f64 plan arithmetic over a handful of patterns, once per query | leave | not a loop over data; the count is bitset and index bookkeeping in the dynamic program | integer lane ops in the bookkeeping under +simd128; the cost arithmetic is scalar on both builds | v26·f0·r0 | v30·f0·r0 | v32·f0·r0 | v17·f0·r0 | v10·f0·r0 | v0·f0·r0 | v15·f0·r0 |
+-| `eval.bgp-join-probe` | `purrdf-sparql-eval` | `bgp::prepare_compiled_bgp` indexed loop | `crates/sparql-eval/src/bgp.rs:861` | `query_eval`, `construct_builder`, `cost_based_bgp_planner`, `exists_decorrelation`, `governed_eval`, `numeric_eval`, `paged_cross_page_bgp`, `path_range`, `prepared_admission`, `prepared_reuse`, `relation_attestation_alloc`, `query_engine_reuse` | bgp-join-probe | I | enum dispatch per candidate quad and a `SmallVec` binding per row | leave | the per-candidate work is a dependent chain of dispatch and binding, not a lane-parallel loop | scalar on both builds | v35·f0·r0 | v24·f0·r0 | v14·f0·r0 | v22·f0·r0 | v85·f0·r0 | v0·f0·r0 | v0·f0·r0 |
++| `eval.solution-compatible` | `purrdf-sparql-eval` | `solution::compatible`, `bgp::bind_row` (out of line) | `crates/sparql-eval/src/solution.rs:1560`, `crates/sparql-eval/src/bgp.rs:3294` | `solution_row`, `exists_decorrelation`, `lateral_service`, `lateral_substitution`, `query_eval`, `relation_attestation_alloc` | solution_row | I | `Option` equality over at most four shared columns | leave | compatibility gathers at most four columns and exits on the first mismatch; the bind measure is the row binder alone, which both scan loops call and the compiler emits out of line: the pre-copy test, the row copy and the slot writes, with no stop, fuel or merge-dedup bookkeeping | bind counts describe the whole binder, row copy included, not comparison-only vectorization | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 | compatible v0·f0·r0<br>bind_row v0·f0·r0 |
++| `eval.bgp-cost-planner` | `purrdf-sparql-eval` | `bgp::cost_order_dp_costs_from` | `crates/sparql-eval/src/bgp.rs:2503` | `cost_based_bgp_planner`, `query_eval` | — | FR | f64 plan arithmetic over a handful of patterns, once per query | leave | not a loop over data; the count is bitset and index bookkeeping in the dynamic program | integer lane ops in the bookkeeping under +simd128; the cost arithmetic is scalar on both builds | v26·f0·r0 | v30·f0·r0 | v32·f0·r0 | v17·f0·r0 | v10·f0·r0 | v0·f0·r0 | v15·f0·r0 |
++| `eval.bgp-join-probe` | `purrdf-sparql-eval` | `bgp::prepare_compiled_bgp` indexed loop | `crates/sparql-eval/src/bgp.rs:875` | `query_eval`, `construct_builder`, `cost_based_bgp_planner`, `exists_decorrelation`, `governed_eval`, `numeric_eval`, `paged_cross_page_bgp`, `path_range`, `prepared_admission`, `prepared_reuse`, `relation_attestation_alloc`, `query_engine_reuse` | bgp-join-probe | I | enum dispatch per candidate quad and a `SmallVec` binding per row | leave | the per-candidate work is a dependent chain of dispatch and binding, not a lane-parallel loop | scalar on both builds | v28·f0·r0 | v20·f0·r0 | v12·f0·r0 | v22·f0·r0 | v85·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `eval.aggregate-fold` | `purrdf-sparql-eval` | `NumericFold::step_parsed`, `NumericFold::combine_admitted` (behind `fold_numeric`/`NumericSummary`), `numeric_add`, `BigInt::add_i128`, `BigInt::add_assign` | `crates/sparql-eval/src/modifier.rs` | `query_eval`, `numeric_eval` | sparql-aggregate | FI | admitted exact integer/decimal values and IEEE float/double values, one per row through the promotion tower with poisoning; no slice of doubles exists to fill a lane | leave | SPARQL 1.1 §18.5.1.3 defines `Sum` as the chain `op:numeric-add(S1, Sum(S2..n))` over `ToList`, whose order is free but whose shape is a chain. Regime 2 makes the `xsd:double` bits depend on the target, and regime 3's lane tree gives bits no chain gives: over {−3, −2^53, −1, −0.7} every chain order answers −9007199254740996 and the pairwise tree −9007199254740998. Integer partials may merge directly. Decimal and duration partials merge only when `MagnitudeBound` proves the combined coefficient magnitude fits `i128`, with decimal scales at most 18, and the admitted combination produces a value, including a successful checked duration-month addition. Unproven merges replay their rows through the admitted source-order fold; operational errors propagate. This is a conservative partial-merge proof, not a limit on decimal precision. Float/double operands and subsequent rows are replayed in source order, preserving the chain's bits. `NumericFold` reaches `ops::value_binary_admitted` through `numeric_fold_binary` and `NumericFrame`: checked `i128` integer addition where possible, admitted exact arithmetic otherwise, and admitted conversion followed by IEEE addition for float/double operands. The separately measured `numeric_add`, `BigInt::add_i128` and `BigInt::add_assign` are standalone helpers; their counts do not establish coverage of the admitted arithmetic callees | scalar on both builds | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 | step v0·f0·r0<br>combine v0·f0·r0<br>numeric_add v0·f0·r0<br>add_i128 v0·f0·r0<br>add_assign v0·f0·r0 |
+ | `datalog.relation-contains` | `purrdf-datalog` | `Relation::contains` (tail probe `Tail::contains`, inlined) | `crates/datalog/src/store.rs:903` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | — | rewrite | the mutable tail retains structure-of-arrays subjects, objects and optional row handles. Existing relation and sealed-batch live counts prove whether every physical tail cell is occupied. An occupied tail uses the original packed key-count kernel; a tail with vacancies also checks each handle. Both paths compare both full-width identities at every position, bitwise-AND the equalities and count live matches without early exit. The counter is u32 because the tail seals at 64 rows; neither key is narrowed. SSE2 pairs both 32-bit halves of each 64-bit key, while AVX2/AVX-512, NEON, SVE and SIMD128 compare full 64-bit lanes. Tail::row, Tail::iter and Tail::take_rows preserve insertion order; the galloping batch probe remains unchanged. The tuple oracle covers lengths0–64, hits and lone hits at every position, one-column near misses, swapped/absent keys and column round trips. Directed controls distinguish equal low halves with different high halves and generic host IDs with different tags or payloads | +simd128: i64x2.eq compares both key columns, v128.and combines their boolean masks and i32x4.add reduces the bounded match count; baseline: scalar full-width comparisons and counted matches without early exit | sse2 v25·f0·r0·req✓ | avx2 v92·f0·r0·req✓ | avx512 masks v57·f0·r0·req✓ | neon v105·f0·r0·req✓ | sve v50·f0·r0·req✓ | scalar v0·f0·r0 | simd128 v18·f0·r0·req✓ |
+ | `datalog.gallop-leapfrog` | `purrdf-datalog` | `gallop_lower_bound` (in `Batch::subject_run`), `cycle::Cursor::seek` | `crates/datalog/src/store.rs:557`, `crates/datalog/src/seminaive/cycle.rs:194` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | exponential then binary search; each probe depends on the previous comparison | leave | loop-carried search | scalar on both builds | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 |
+diff --git scripts/simd-asm-manifest.toml scripts/simd-asm-manifest.toml
+index 16abf9bd9..61214a50d 100644
+--- scripts/simd-asm-manifest.toml
++++ scripts/simd-asm-manifest.toml
+@@ -2838,7 +2838,7 @@ summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (
+ 
+ [[site]]
+ id = "eval.solution-compatible"
+-summary = "`solution::compatible` and BGP expansion's inlined `bind_row`, the solution-row join checks"
++summary = "`solution::compatible` and the BGP scan's out-of-line `bind_row`, the solution-row join checks"
+ 
+   [[site.measure]]
+   label = "compatible"
+@@ -2853,7 +2853,7 @@ summary = "`solution::compatible` and BGP expansion's inlined `bind_row`, the so
+   label = "bind_row"
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+   crate = "purrdf_sparql_eval"
+-  symbol = "<purrdf_sparql_eval::bgp::expansion::Expansion<purrdf_core::ir::term::TermId>>::candidate::<purrdf_core::ir::dataset::RdfDataset>"
++  symbol = "purrdf_sparql_eval::bgp::bind_row::<purrdf_core::ir::dataset::RdfDataset>"
+   min_vector_ops = 0
+   max_fma = 0
+   forbid_relaxed = true
