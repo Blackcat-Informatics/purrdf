@@ -912,8 +912,11 @@ const OVERLAY_REQUEST: CanonRequest<'static> =
 
 type Viewed<T> = Result<T, ViewCanonError<Refused, ()>>;
 
-fn quiet() -> CanonicalizationControl<'static> {
-    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+/// A control under the corpus policy with no stop signal.
+macro_rules! quiet {
+    () => {
+        CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+    };
 }
 
 fn identified(dataset: &Arc<RdfDataset>) -> Recording {
@@ -936,14 +939,14 @@ fn fresh_outputs(request: CanonRequest<'_>, view: &Recording) -> Served {
     let hash = request.hash;
     let (document, sha, blake3) = match request.presentation {
         CanonPresentation::Overlay => (
-            try_canonicalize_view(view, hash, &mut quiet()).unwrap(),
-            try_canonical_sha256_view(view, hash, &mut quiet()).unwrap(),
-            try_canonical_blake3_view(view, hash, &mut quiet()).unwrap(),
+            try_canonicalize_view(view, hash, &mut quiet!()).unwrap(),
+            try_canonical_sha256_view(view, hash, &mut quiet!()).unwrap(),
+            try_canonical_blake3_view(view, hash, &mut quiet!()).unwrap(),
         ),
         CanonPresentation::FlatAssertion => (
-            try_canonicalize_flat_view(view, hash, &mut quiet()).unwrap(),
-            try_flat_digest_view(view, hash, &mut quiet()).unwrap(),
-            try_flat_blake3_view(view, hash, &mut quiet()).unwrap(),
+            try_canonicalize_flat_view(view, hash, &mut quiet!()).unwrap(),
+            try_flat_digest_view(view, hash, &mut quiet!()).unwrap(),
+            try_flat_blake3_view(view, hash, &mut quiet!()).unwrap(),
         ),
     };
     let labels = document
@@ -958,9 +961,9 @@ fn reused_outputs(
     view: &Recording,
     prepared: &purrdf_core::PreparedCanon,
 ) -> Viewed<Served> {
-    let document = try_canonicalize_prepared_view(view, request, prepared, &mut quiet())?;
-    let sha = try_digest_prepared_view(view, request, prepared, &mut quiet())?;
-    let blake3 = try_blake3_prepared_view(view, request, prepared, &mut quiet())?;
+    let document = try_canonicalize_prepared_view(view, request, prepared, &mut quiet!())?;
+    let sha = try_digest_prepared_view(view, request, prepared, &mut quiet!())?;
+    let blake3 = try_blake3_prepared_view(view, request, prepared, &mut quiet!())?;
     let labels = document
         .labels()
         .map(|(id, label)| (id, label.to_owned()))
@@ -977,7 +980,7 @@ fn a_prepared_state_serves_the_outputs_of_a_fresh_run_on_every_fixture() {
     for (name, dataset) in fixtures() {
         for request in [FLAT_REQUEST, OVERLAY_REQUEST] {
             let view = identified(&dataset);
-            let prepared = prepare_canon_view(&view, request, &mut quiet()).unwrap();
+            let prepared = prepare_canon_view(&view, request, &mut quiet!()).unwrap();
             let expected = fresh_outputs(request, &view);
             let reused = reused_outputs(request, &view, &prepared).unwrap();
             assert_eq!(
@@ -996,7 +999,7 @@ fn a_prepared_state_serves_the_outputs_of_a_fresh_run_on_every_fixture() {
 #[test]
 fn a_prepared_state_is_refused_for_the_key_component_that_differs_and_served_otherwise() {
     let dataset = reifier();
-    let prepared = prepare_canon_view(&identified(&dataset), FLAT_REQUEST, &mut quiet()).unwrap();
+    let prepared = prepare_canon_view(&identified(&dataset), FLAT_REQUEST, &mut quiet!()).unwrap();
     // A separate dataset holding the same snapshot is served.
     let rebuilt = reifier();
     let sha384 = CanonRequest::new(CanonHash::Sha384, CanonPresentation::FlatAssertion);
@@ -1045,9 +1048,9 @@ fn a_prepared_state_is_refused_for_the_key_component_that_differs_and_served_oth
         ),
     ];
     for (what, request, view, expected) in cases {
-        let document = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet());
-        let digest = try_digest_prepared_view(&view, request, &prepared, &mut quiet());
-        let blake3 = try_blake3_prepared_view(&view, request, &prepared, &mut quiet());
+        let document = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet!());
+        let digest = try_digest_prepared_view(&view, request, &prepared, &mut quiet!());
+        let blake3 = try_blake3_prepared_view(&view, request, &prepared, &mut quiet!());
         assert_eq!(expected, prepared_refusal(document), "document: {what}");
         assert_eq!(expected, prepared_refusal(digest), "digest: {what}");
         assert_eq!(expected, prepared_refusal(blake3), "blake3: {what}");
@@ -1059,7 +1062,7 @@ fn a_prepared_state_is_refused_for_the_key_component_that_differs_and_served_oth
         prepared_refusal(prepare_canon_view(
             &unidentified,
             FLAT_REQUEST,
-            &mut quiet()
+            &mut quiet!()
         ))
     );
 }
@@ -1072,10 +1075,10 @@ fn a_graph_scoped_state_is_refused_for_another_scope_and_matches_the_graph_entry
     let dataset = blank_free();
     let view = identified(&dataset);
     let request = FLAT_REQUEST.in_graph(GRAPH);
-    let prepared = prepare_canon_view(&view, request, &mut quiet()).unwrap();
+    let prepared = prepare_canon_view(&view, request, &mut quiet!()).unwrap();
     let fresh =
-        try_canonicalize_flat_graph_view(&view, GRAPH, CanonHash::Sha256, &mut quiet()).unwrap();
-    let reused = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet()).unwrap();
+        try_canonicalize_flat_graph_view(&view, GRAPH, CanonHash::Sha256, &mut quiet!()).unwrap();
+    let reused = try_canonicalize_prepared_view(&view, request, &prepared, &mut quiet!()).unwrap();
     assert_eq!(reused.nquads(), fresh.nquads());
     assert!(!fresh.nquads().is_empty(), "the graph holds rows");
     for (what, other) in [
@@ -1085,7 +1088,7 @@ fn a_graph_scoped_state_is_refused_for_another_scope_and_matches_the_graph_entry
             FLAT_REQUEST.in_graph("https://example.org/g/2"),
         ),
     ] {
-        let refused = try_canonicalize_prepared_view(&view, other, &prepared, &mut quiet());
+        let refused = try_canonicalize_prepared_view(&view, other, &prepared, &mut quiet!());
         assert_eq!(
             Some(PreparedRefusal::Selection),
             prepared_refusal(refused),
@@ -1093,20 +1096,20 @@ fn a_graph_scoped_state_is_refused_for_another_scope_and_matches_the_graph_entry
         );
     }
     let absent = FLAT_REQUEST.in_graph("https://example.org/g/absent");
-    let empty = prepare_canon_view(&view, absent, &mut quiet()).unwrap();
+    let empty = prepare_canon_view(&view, absent, &mut quiet!()).unwrap();
     assert_eq!(empty.line_count(), 0);
-    let document = try_canonicalize_prepared_view(&view, absent, &empty, &mut quiet()).unwrap();
+    let document = try_canonicalize_prepared_view(&view, absent, &empty, &mut quiet!()).unwrap();
     assert_eq!(document.nquads(), "");
     let fresh_empty = try_canonicalize_flat_graph_view(
         &view,
         "https://example.org/g/absent",
         CanonHash::Sha256,
-        &mut quiet(),
+        &mut quiet!(),
     )
     .unwrap();
     assert_eq!(document.nquads(), fresh_empty.nquads());
     assert_eq!(
-        try_digest_prepared_view(&view, absent, &empty, &mut quiet()).unwrap(),
+        try_digest_prepared_view(&view, absent, &empty, &mut quiet!()).unwrap(),
         ContentDigest::of(b"")
     );
 }
@@ -1118,7 +1121,7 @@ fn a_graph_scoped_state_is_refused_for_another_scope_and_matches_the_graph_entry
 fn a_refused_reuse_does_no_canonical_work() {
     let dataset = reifier();
     let view = identified(&dataset);
-    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet!()).unwrap();
     let polls = Polls::counting();
     let mut control =
         CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
@@ -1136,7 +1139,7 @@ fn a_refused_reuse_does_no_canonical_work() {
     let served = try_digest_prepared_view(&view, FLAT_REQUEST, &prepared, &mut control).unwrap();
     assert_eq!(
         served,
-        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet()).unwrap()
+        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet!()).unwrap()
     );
     let receipt = &control.receipts()[1];
     assert_eq!(receipt.phase, CanonPhase::Output);
@@ -1169,19 +1172,19 @@ fn symmetric() -> Arc<RdfDataset> {
 fn a_reusing_run_charges_no_search_work_and_states_its_configuration() {
     let dataset = symmetric();
     let view = identified(&dataset);
-    let mut fresh = quiet();
+    let mut fresh = quiet!();
     try_flat_digest_view(&view, CanonHash::Sha256, &mut fresh).unwrap();
     assert!(fresh.receipts()[0].work.total() > 0, "the fixture searches");
-    let mut preparing = quiet();
+    let mut preparing = quiet!();
     let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut preparing).unwrap();
     assert_eq!(preparing.receipts()[0].work, fresh.receipts()[0].work);
-    let mut reusing = quiet();
+    let mut reusing = quiet!();
     let digest = try_digest_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
     try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
     try_blake3_prepared_view(&view, FLAT_REQUEST, &prepared, &mut reusing).unwrap();
     assert_eq!(
         digest,
-        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet()).unwrap()
+        try_flat_digest_view(&view, CanonHash::Sha256, &mut quiet!()).unwrap()
     );
     for (receipt, output) in reusing.receipts().iter().zip([
         CanonOutput::Sha256Digest,
@@ -1211,7 +1214,7 @@ fn a_reusing_run_charges_no_search_work_and_states_its_configuration() {
 fn a_stop_on_any_poll_of_a_reusing_run_refuses_and_one_after_the_last_does_not() {
     let dataset = reifier();
     let view = identified(&dataset);
-    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet!()).unwrap();
     type Entry =
         fn(&Recording, &purrdf_core::PreparedCanon, &mut CanonicalizationControl<'_>) -> bool;
     let entries: [(&str, Entry); 3] = [
@@ -1260,7 +1263,7 @@ fn a_stop_on_any_poll_of_a_reusing_run_refuses_and_one_after_the_last_does_not()
 fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
     let dataset = reifier();
     let view = identified(&dataset);
-    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+    let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet!()).unwrap();
     let held = prepared.retained_bytes() as u64;
     assert!(held > 0);
     assert_eq!(view.owned.live(), held, "the account holds the product");
@@ -1272,9 +1275,9 @@ fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
     assert_eq!(view.owned.live(), 0, "the last clone releases it");
 
     let exact = Recording::new(&dataset, u64::MAX, held).identified();
-    prepare_canon_view(&exact, FLAT_REQUEST, &mut quiet()).expect("the exact size is admitted");
+    prepare_canon_view(&exact, FLAT_REQUEST, &mut quiet!()).expect("the exact size is admitted");
     let below = Recording::new(&dataset, u64::MAX, held - 1).identified();
-    let refused = prepare_canon_view(&below, FLAT_REQUEST, &mut quiet());
+    let refused = prepare_canon_view(&below, FLAT_REQUEST, &mut quiet!());
     assert!(
         matches!(
             refused,
@@ -1285,7 +1288,7 @@ fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
         "{refused:?}"
     );
     let without = Recording::without_owned(&dataset).identified();
-    let unavailable = prepare_canon_view(&without, FLAT_REQUEST, &mut quiet());
+    let unavailable = prepare_canon_view(&without, FLAT_REQUEST, &mut quiet!());
     assert!(
         matches!(
             unavailable,
@@ -1353,9 +1356,9 @@ fn the_prepared_state_stays_within_its_stated_bound_in_lines_and_blank_nodes() {
     for (lines, blanks) in [(200, 0), (200, 40), (2000, 300), (2000, 1)] {
         let dataset = quads_with_blanks(lines, blanks);
         let view = identified(&dataset);
-        let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet()).unwrap();
+        let prepared = prepare_canon_view(&view, FLAT_REQUEST, &mut quiet!()).unwrap();
         let document =
-            try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut quiet()).unwrap();
+            try_canonicalize_prepared_view(&view, FLAT_REQUEST, &prepared, &mut quiet!()).unwrap();
         let rows: Vec<&str> = document.nquads().lines().collect();
         assert_eq!(rows.len(), lines);
         assert_eq!(prepared.line_count(), lines);

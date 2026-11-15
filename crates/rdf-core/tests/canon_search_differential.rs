@@ -313,16 +313,13 @@ fn the_label_search_keeps_every_byte_and_label_of_its_earlier_behaviour() {
     );
 }
 
-fn fresh_control() -> CanonicalizationControl<'static> {
-    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
-}
-
 /// A prepared state serves the document, the label table and both digests of
 /// the case it was built from exactly as a run that takes no product does, for
 /// every case of the set, both presentations and both label hashes, and keeps
 /// doing so on a second use.
 #[test]
 fn a_prepared_state_reproduces_every_byte_label_and_digest_of_a_fresh_run() {
+    let fresh_control = || CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
     for (name, ds) in cases() {
         for hash in [CanonHash::Sha256, CanonHash::Sha384] {
             for presentation in [CanonPresentation::Overlay, CanonPresentation::FlatAssertion] {
