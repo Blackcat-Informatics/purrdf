@@ -301,6 +301,70 @@ fn normalize_collapses_only_the_dot_segments_every_base_agrees_on() {
     }
 }
 
+/// Protects a rootless reference that holds a percent-encoded dot. RFC 3986
+/// §5.2.4 recognises only a literal `.` or `..`, so resolution reads `%2e` as an
+/// ordinary segment; decoding it during normalization would make it a dot
+/// segment and move the reference. Such a segment stays encoded (`%2E`,
+/// `%2E%2E`), may be removed by a later `..` like any segment, and the form is a
+/// fixed point. Resolved results are compared in normal form, because the
+/// original keeps its own hex case.
+#[test]
+fn normalize_keeps_a_percent_encoded_dot_an_ordinary_segment_when_unresolved() {
+    for (input, expected) in [
+        ("%2e", "%2E"),
+        ("%2e%2e", "%2E%2E"),
+        (".%2E", "%2E%2E"),
+        ("%2e.", "%2E%2E"),
+        ("%2e%2e/a", "%2E%2E/a"),
+        ("a/%2e/b", "a/%2E/b"),
+        ("a/%2e/../b", "a/b"),
+        ("x/%2e%2e/../a", "x/a"),
+        ("x/%2e/..", "x/"),
+        ("%2e%2e/..", "%2E%2E/.."),
+        ("%2e/%2e/..", "%2E/"),
+        ("./%2e/%2E%2e/..", "%2E/"),
+        ("../%2e", "../%2E"),
+        ("a/%2E%2E", "a/%2E%2E"),
+        ("%2e?q#f", "%2E?q#f"),
+        // Neighbours: a segment that only contains an encoded dot decodes as
+        // before, and a literal dot segment beside one keeps its meaning.
+        ("x%2e/%2ey", "x./.y"),
+        ("%2e%2e%2e", "..."),
+        ("./%7e/../a", "~/../a"),
+    ] {
+        let n = parse(input).expect("input parses").normalize();
+        assert_eq!(n.as_str(), expected, "{input}");
+        assert_eq!(
+            n.normalize().as_str(),
+            expected,
+            "{input}: not a fixed point"
+        );
+        for base in DISTINGUISHING_BASES {
+            let base = parse(base).expect("base parses");
+            assert_eq!(
+                base.resolve(expected)
+                    .expect("normal form resolves")
+                    .normalize()
+                    .as_str(),
+                base.resolve(input)
+                    .expect("input resolves")
+                    .normalize()
+                    .as_str(),
+                "{input} against {}",
+                base.as_str()
+            );
+        }
+    }
+    // The upper-case spelling is already the normal form, so there the resolved
+    // texts are equal byte for byte.
+    let base = parse("http://h/d/e/f").unwrap();
+    assert_eq!(
+        base.resolve("a/%2E/../b").unwrap().as_str(),
+        "http://h/d/e/a/b"
+    );
+    assert_eq!(parse("a/%2E/../b").unwrap().normalize().as_str(), "a/b");
+}
+
 /// Neighbours of the relative-path rule that resolution treats as already
 /// rooted, and so keep full RFC 3986 §5.2.4 removal: an absolute IRI, a
 /// reference with an authority, and an absolute-path reference.
@@ -316,6 +380,10 @@ fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
         ("/a/../b", "/b"),
         ("/../a", "/a"),
         ("/.", "/"),
+        // A percent-encoded dot segment is decoded first here, as before.
+        ("/a/%2e%2e/../b", "/b"),
+        ("http://h/a/%2e/b", "http://h/a/b"),
+        ("//h/a/%2E%2E/b", "//h/b"),
     ] {
         assert_eq!(
             parse(input).unwrap().normalize().as_str(),

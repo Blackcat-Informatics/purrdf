@@ -203,9 +203,11 @@ pub(crate) fn resident_result<T>(result: core::result::Result<T, IriReadError>) 
 
 /// The two RFC-3986 path repairs (§3.3 and §4.2), applied at recomposition (§5.3),
 /// in one place. The returned
-/// prefix is applied AFTER dot-segment removal, where the text is rebuilt, and is
-/// itself stripped again by `remove_dot_segments`, so the guarded form is a fixed
-/// point. It is empty when no repair is needed.
+/// prefix is applied AFTER dot-segment removal, where the text is rebuilt. A
+/// second normalization drops it again and then re-applies it, so the guarded
+/// form is a fixed point: `remove_dot_segments` strips `/.` and a leading `./`,
+/// and `collapse_unresolved_dot_segments` drops the `.` of a leading `./`. It is
+/// empty when no repair is needed.
 ///
 /// * `"/."` (§3.3): with no authority a path may not begin with `//`, or the text
 ///   would read as `scheme://...` and turn the path into an authority.
@@ -393,7 +395,8 @@ fn remove_dot_segments_with_memory<S: Admission + ?Sized>(
 /// exist for relative references and are removed by resolution). Applied to such
 /// a reference on its own it discards the segments only a base can interpret, so
 /// this keeps them. The result resolves to the same IRI as `path` against every
-/// absolute base:
+/// absolute base. Only a literal `.` or `..` is a dot segment here, as in
+/// resolution; the caller keeps a segment that merely decodes to one encoded.
 ///
 /// * a `.` segment is dropped, and a `..` removes the segment before it;
 /// * a `..` with nothing before it to remove is kept (`../a`), because it names
