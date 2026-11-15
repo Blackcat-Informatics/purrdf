@@ -63,7 +63,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   source's owned account, reports its size as `PreparedCanon::retained_bytes`,
   and is released when its last clone is dropped. Preparing costs about one
   canonical run without its spelling, plus the dataset's snapshot identity when
-  that has not been computed yet, so it pays back from the second output on.
+  that has not been computed yet. Computing the identity of a resident dataset
+  reads every term and row and can cost more than a canonical run, so preparing
+  pays back from the second output when the identity is already known and
+  later when it is not.
   Entries that take no state return the same bytes, labels and digests and make
   the same allocations and stop checks as before. This is a Rust API; the C,
   WebAssembly and Python surfaces are unchanged.
