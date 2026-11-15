@@ -3291,10 +3291,6 @@ fn query_id<I: ViewTermId>(pos: &Pos<I>, row: &Solution<I>) -> Option<I> {
 /// quoted-triple position fails to unify, or if a ground constant disagrees (the
 /// virtual reification candidates are NOT pre-filtered by `quads_for_pattern`, so a
 /// `Pos::Bound` mismatch must be rejected here).
-// Out of line by design. The sink scan and the retained cursor both call it, and the
-// emitted-assembly audit measures the row binder under this one symbol; inlined into
-// either caller, its instructions would be counted with that caller's bookkeeping.
-#[inline(never)]
 fn bind_row<D: DatasetView + Sync>(
     row: &RetainedRow<D::Id>,
     cp: &CompiledPattern<D::Id>,
