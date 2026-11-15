@@ -731,13 +731,14 @@ names = []
 
 [[job]]
 id = "json-pointer"
-summary = "RFC 6901 JSON Pointer reference tokens: the ~0/~1 escape, pointer parsing and the array-index token"
+summary = "RFC 6901 JSON Pointer reference tokens: the ~0/~1 escape, pointer parsing, the array-index token and the owned pointer held as unescaped tokens"
 home = "purrdf_lex::json_pointer::escape_token"
 entry_points = [
     "purrdf_lex::json_pointer::push_token",
     "purrdf_lex::json_pointer::unescape_token",
     "purrdf_lex::json_pointer::tokens",
     "purrdf_lex::json_pointer::array_index",
+    "purrdf_lex::json_pointer::JsonPointer",
     "purrdf_iri::json_pointer",
 ]
 spec = "RFC 6901 sections 3 and 4"

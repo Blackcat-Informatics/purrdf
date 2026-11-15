@@ -19,8 +19,8 @@ use super::{
 };
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, is_annotation_keyword, pointer_escape, reference_key,
-    schema_array_keywords, schema_map_keywords, schema_single_keywords,
+    CompiledSchemaCatalog, SchemaPath, definition_path, is_annotation_keyword, pointer_escape,
+    reference_key, schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 
 const LOSS_FROM: &str = "json-schema";
@@ -410,7 +410,7 @@ struct SlotNameSeed {
 #[derive(Debug, Clone)]
 struct PlannedSlot {
     source_name: String,
-    source_path: String,
+    source_path: SchemaPath,
     emitted_name: String,
     emitted_slot_uri: Option<String>,
 }
@@ -696,18 +696,18 @@ struct Renderer<'a> {
     enums: Map<String, Value>,
     types: Map<String, Value>,
     ledger: LossLedger,
-    recorded_losses: BTreeSet<(String, String)>,
+    recorded_losses: BTreeSet<(String, SchemaPath)>,
     used_names: BTreeMap<String, String>,
-    inline_classes: BTreeMap<String, String>,
-    inline_enums: BTreeMap<String, String>,
+    inline_classes: BTreeMap<SchemaPath, String>,
+    inline_enums: BTreeMap<SchemaPath, String>,
     slot_renames: Vec<LinkmlSlotRename>,
     slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
     used_rehome_hints: BTreeSet<String>,
     total_slots: usize,
     /// Every `contains` the audit met, by its JSON Pointer.
-    audited_contains: BTreeSet<String>,
+    audited_contains: BTreeSet<SchemaPath>,
     /// The `contains` a rendered `has_member` states, by its JSON Pointer.
-    stated_contains: BTreeSet<String>,
+    stated_contains: BTreeSet<SchemaPath>,
 }
 
 impl<'a> Renderer<'a> {
@@ -719,7 +719,7 @@ impl<'a> Renderer<'a> {
     ) -> Self {
         let mut used_names = BTreeMap::new();
         for (key, info) in elements {
-            used_names.insert(info.name.clone(), definition_path(key));
+            used_names.insert(info.name.clone(), definition_path(key).to_string());
         }
         for reserved in reserved_element_names() {
             used_names.insert((*reserved).to_owned(), "LinkML imported type".to_owned());
@@ -796,7 +796,7 @@ impl<'a> Renderer<'a> {
         &self,
         name: &str,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Map<String, Value>, LinkmlError> {
         let object = schema
             .as_object()
@@ -866,7 +866,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         name: &str,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Map<String, Value>, LinkmlError> {
         let mut definition = Map::new();
         definition.insert("uri".to_owned(), Value::String(self.element_curie(name)));
@@ -889,9 +889,11 @@ impl<'a> Renderer<'a> {
         if let Some(values) = object.get("enum").and_then(Value::as_array) {
             let mut expressions = Vec::new();
             for (index, value) in values.iter().enumerate() {
-                if let Some(expression) =
-                    self.equality_expression(value, &format!("{path}/enum/{index}"), "enum member")
-                {
+                if let Some(expression) = self.equality_expression(
+                    value,
+                    &path.child("enum").child_index(index),
+                    "enum member",
+                ) {
                     expressions.push(crate::json_model::object(expression));
                 }
             }
@@ -901,7 +903,7 @@ impl<'a> Renderer<'a> {
         }
         if let Some(value) = object.get("const")
             && let Some(expression) =
-                self.equality_expression(value, &format!("{path}/const"), "const value")
+                self.equality_expression(value, &path.child("const"), "const value")
         {
             definition.extend(expression);
         }
@@ -910,15 +912,19 @@ impl<'a> Renderer<'a> {
         Ok(definition)
     }
 
-    fn type_definition_base(&mut self, object: &Object, path: &str) -> Result<String, LinkmlError> {
+    fn type_definition_base(
+        &mut self,
+        object: &Object,
+        path: &SchemaPath,
+    ) -> Result<String, LinkmlError> {
         if let Some(reference) = object.get("$ref") {
-            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &path.child("$ref"))?;
             if target.kind == ElementKind::Type {
                 return Ok(target.name.clone());
             }
             self.record(
                 "keyword-validation-dropped",
-                &format!("{path}/$ref"),
+                &path.child("$ref"),
                 "A LinkML type definition cannot alias a class or enum target; string is retained as its carrier",
             );
             return Ok("string".to_owned());
@@ -941,7 +947,7 @@ impl<'a> Renderer<'a> {
                 if matches!(kind.as_str(), "array" | "object" | "null") {
                     self.record(
                         "keyword-validation-dropped",
-                        &format!("{path}/type"),
+                        &path.child("type"),
                         "A standalone LinkML type cannot retain this JSON container or null carrier; string is used as the deterministic fallback",
                     );
                 }
@@ -967,7 +973,7 @@ impl<'a> Renderer<'a> {
                 } else {
                     self.record(
                         "keyword-validation-dropped",
-                        &format!("{path}/type"),
+                        &path.child("type"),
                         "A named LinkML type has one base carrier and cannot retain a heterogeneous JSON Schema type union",
                     );
                     Ok(ranges.first().copied().unwrap_or("string").to_owned())
@@ -1010,7 +1016,7 @@ impl<'a> Renderer<'a> {
         object: &Object,
         definition: &mut Map<String, Value>,
         base: &str,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         for (source, target) in [
             ("anyOf", "any_of"),
@@ -1025,9 +1031,11 @@ impl<'a> Renderer<'a> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
             let mut expressions = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
-                if let Some(expression) =
-                    self.render_type_expression(branch, base, &format!("{path}/{source}/{index}"))?
-                {
+                if let Some(expression) = self.render_type_expression(
+                    branch,
+                    base,
+                    &path.child(source).child_index(index),
+                )? {
                     expressions.push(crate::json_model::object(expression));
                 }
             }
@@ -1037,7 +1045,7 @@ impl<'a> Renderer<'a> {
         }
         if let Some(negated) = object.get("not")
             && let Some(expression) =
-                self.render_type_expression(negated, base, &format!("{path}/not"))?
+                self.render_type_expression(negated, base, &path.child("not"))?
         {
             definition.insert(
                 "none_of".to_owned(),
@@ -1051,7 +1059,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         schema: &Value,
         base: &str,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Map<String, Value>>, LinkmlError> {
         let Value::Object(object) = schema else {
             self.record(
@@ -1068,7 +1076,7 @@ impl<'a> Renderer<'a> {
             if branch_base != base {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/type"),
+                    &path.child("type"),
                     "A LinkML anonymous-type expression cannot change the named type's base carrier",
                 );
                 return Ok(None);
@@ -1078,7 +1086,7 @@ impl<'a> Renderer<'a> {
         self.apply_scalar_constraints(object, &mut expression, path)?;
         if let Some(value) = object.get("const")
             && let Some(equality) =
-                self.equality_expression(value, &format!("{path}/const"), "const value")
+                self.equality_expression(value, &path.child("const"), "const value")
         {
             expression.extend(equality);
         }
@@ -1098,7 +1106,7 @@ impl<'a> Renderer<'a> {
         &self,
         object: &Object,
         target: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         if let Some(pattern) = object.get("pattern") {
             let pattern = pattern
@@ -1127,7 +1135,7 @@ impl<'a> Renderer<'a> {
     fn equality_expression(
         &mut self,
         value: &Value,
-        path: &str,
+        path: &SchemaPath,
         label: &str,
     ) -> Option<Map<String, Value>> {
         let mut expression = Map::new();
@@ -1168,7 +1176,7 @@ impl<'a> Renderer<'a> {
         name: &str,
         source_key: Option<&str>,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Map<String, Value>, LinkmlError> {
         let mut class = Map::new();
         class.insert(
@@ -1194,13 +1202,13 @@ impl<'a> Renderer<'a> {
         self.copy_element_annotations(object, &mut class, path)?;
 
         if let Some(reference) = object.get("$ref") {
-            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &path.child("$ref"))?;
             if target.kind == ElementKind::Class {
                 class.insert("is_a".to_owned(), Value::String(target.name.clone()));
             } else {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/$ref"),
+                    &path.child("$ref"),
                     "A LinkML class cannot inherit from a JSON Schema alias whose target is not a class",
                 );
             }
@@ -1212,7 +1220,7 @@ impl<'a> Renderer<'a> {
         {
             self.record(
                 "keyword-validation-dropped",
-                &format!("{path}/type"),
+                &path.child("type"),
                 "An object-shaped definition also declares a non-object JSON carrier; LinkML retains the class structure but cannot preserve that carrier intersection",
             );
         }
@@ -1220,8 +1228,8 @@ impl<'a> Renderer<'a> {
         let properties = object_map(object, "properties", path)?;
         let required = required_names(object, properties, path)?;
         if !properties.is_empty() {
-            let source_class = source_key.unwrap_or(path);
-            let slot_plan = self.plan_class_slots(name, source_class, properties, path)?;
+            let source_class = source_key.map_or_else(|| path.to_string(), str::to_owned);
+            let slot_plan = self.plan_class_slots(name, &source_class, properties, path)?;
             let mut attributes = Map::new();
             for planned in slot_plan {
                 let property_schema = properties
@@ -1253,7 +1261,7 @@ impl<'a> Renderer<'a> {
             Some(Value::Bool(false)) => extra_slots(false, None),
             Some(schema @ Value::Object(_)) => {
                 let expression =
-                    self.render_slot_expression(schema, &format!("{path}/additionalProperties"))?;
+                    self.render_slot_expression(schema, &path.child("additionalProperties"))?;
                 extra_slots(true, Some(expression))
             }
             Some(_) => {
@@ -1272,7 +1280,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         object: &Object,
         class: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         for (source, target) in [
             ("anyOf", "any_of"),
@@ -1287,7 +1295,7 @@ impl<'a> Renderer<'a> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
             let mut expressions = Vec::with_capacity(branches.len());
             for (index, branch) in branches.iter().enumerate() {
-                let branch_path = format!("{path}/{source}/{index}");
+                let branch_path = path.child(source).child_index(index);
                 if let Some(expression) = self.render_class_expression(branch, &branch_path)? {
                     expressions.push(crate::json_model::object(expression));
                 }
@@ -1297,8 +1305,7 @@ impl<'a> Renderer<'a> {
             }
         }
         if let Some(negated) = object.get("not")
-            && let Some(expression) =
-                self.render_class_expression(negated, &format!("{path}/not"))?
+            && let Some(expression) = self.render_class_expression(negated, &path.child("not"))?
         {
             class.insert(
                 "none_of".to_owned(),
@@ -1311,7 +1318,7 @@ impl<'a> Renderer<'a> {
     fn render_class_expression(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Map<String, Value>>, LinkmlError> {
         let Value::Object(object) = schema else {
             self.record(
@@ -1323,7 +1330,7 @@ impl<'a> Renderer<'a> {
         };
 
         if let Some(reference) = object.get("$ref") {
-            let (_, target, _) = self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (_, target, _) = self.reference_info(reference, &path.child("$ref"))?;
             if target.kind == ElementKind::Class {
                 let mut expression = Map::new();
                 expression.insert("is_a".to_owned(), Value::String(target.name.clone()));
@@ -1350,7 +1357,7 @@ impl<'a> Renderer<'a> {
             let mut nested = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
                 if let Some(branch) =
-                    self.render_class_expression(branch, &format!("{path}/{source}/{index}"))?
+                    self.render_class_expression(branch, &path.child(source).child_index(index))?
                 {
                     nested.push(crate::json_model::object(branch));
                 }
@@ -1360,7 +1367,7 @@ impl<'a> Renderer<'a> {
             }
         }
         if let Some(negated) = object.get("not")
-            && let Some(negated) = self.render_class_expression(negated, &format!("{path}/not"))?
+            && let Some(negated) = self.render_class_expression(negated, &path.child("not"))?
         {
             expression.insert(
                 "none_of".to_owned(),
@@ -1379,12 +1386,16 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn ensure_inline_class(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {
+    fn ensure_inline_class(
+        &mut self,
+        schema: &Value,
+        path: &SchemaPath,
+    ) -> Result<String, LinkmlError> {
         if let Some(name) = self.inline_classes.get(path) {
             return Ok(name.clone());
         }
         let name = self.allocate_inline_name(path, "Object")?;
-        self.inline_classes.insert(path.to_owned(), name.clone());
+        self.inline_classes.insert(path.clone(), name.clone());
         self.classes
             .insert(name.clone(), crate::json_model::object(Map::new()));
         let rendered = self.render_class(&name, None, schema, path)?;
@@ -1398,13 +1409,13 @@ impl<'a> Renderer<'a> {
         emitted_class: &str,
         source_class: &str,
         properties: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Vec<PlannedSlot>, LinkmlError> {
         self.total_slots = checked_slot_total(self.total_slots, properties.len(), path)?;
 
         let mut classified = Vec::with_capacity(properties.len());
         for source_name in properties.keys() {
-            let source_path = format!("{path}/properties/{}", pointer_escape(source_name));
+            let source_path = path.child("properties").child(source_name);
             let seed = slot_name_seed(self.config, source_name).map_err(|error| {
                 LinkmlError::new(format!(
                     "{source_path} in source class {source_class:?}: {error}"
@@ -1471,7 +1482,7 @@ impl<'a> Renderer<'a> {
                     self.slot_diagnostics.push(LinkmlSlotDiagnostic {
                         source_class: source_class.to_owned(),
                         emitted_class: emitted_class.to_owned(),
-                        source_path: source_path.clone(),
+                        source_path: source_path.to_string(),
                         source_name,
                         old_slot_uri: seed.old_slot_uri,
                         new_slot_name: None,
@@ -1520,7 +1531,7 @@ impl<'a> Renderer<'a> {
                     self.slot_renames.push(LinkmlSlotRename {
                         source_class: source_class.to_owned(),
                         emitted_class: emitted_class.to_owned(),
-                        source_path: source_path.clone(),
+                        source_path: source_path.to_string(),
                         source_name: source_name.clone(),
                         old_slot_uri: seed.old_slot_uri,
                         new_slot_name: emitted_name.clone(),
@@ -1552,7 +1563,7 @@ impl<'a> Renderer<'a> {
         seed: &mut SlotNameSeed,
         used_names: &BTreeMap<String, String>,
         used_identities: &BTreeMap<String, String>,
-        source_path: &str,
+        source_path: &SchemaPath,
     ) -> Result<(String, Option<String>), LinkmlError> {
         for attempt in 0..=MAX_SLOT_COLLISION_ATTEMPTS {
             let candidate = if attempt == 0 {
@@ -1603,7 +1614,7 @@ impl<'a> Renderer<'a> {
         slot_uri.to_owned()
     }
 
-    fn ensure_report_capacity(&self, source_path: &str) -> Result<(), LinkmlError> {
+    fn ensure_report_capacity(&self, source_path: &SchemaPath) -> Result<(), LinkmlError> {
         let current = self
             .slot_renames
             .len()
@@ -1616,21 +1627,25 @@ impl<'a> Renderer<'a> {
         format!("{}:{name}", self.config.default_prefix())
     }
 
-    fn allocate_inline_name(&mut self, path: &str, suffix: &str) -> Result<String, LinkmlError> {
+    fn allocate_inline_name(
+        &mut self,
+        path: &SchemaPath,
+        suffix: &str,
+    ) -> Result<String, LinkmlError> {
         let name = element_name(&format!("Inline {path} {suffix}"));
         if let Some(previous) = self.used_names.get(&name) {
             return Err(LinkmlError::new(format!(
                 "schema locations {previous:?} and {path:?} collide on synthesized LinkML element name {name:?}"
             )));
         }
-        self.used_names.insert(name.clone(), path.to_owned());
+        self.used_names.insert(name.clone(), path.to_string());
         Ok(name)
     }
 
     fn reference_info(
         &self,
         value: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(&'a str, &'a ElementInfo, &'a Value), LinkmlError> {
         let reference = value
             .as_str()
@@ -1654,7 +1669,7 @@ impl<'a> Renderer<'a> {
     fn render_slot_expression(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Map<String, Value>, LinkmlError> {
         // Reference diamonds can require exponentially many anonymous LinkML
         // expressions. Bound that work by the input byte budget, as the catalog
@@ -1684,8 +1699,7 @@ impl<'a> Renderer<'a> {
         let mut slot = Map::new();
         self.copy_element_annotations(object, &mut slot, path)?;
         let mut has_carrier = if let Some(reference) = object.get("$ref") {
-            let (key, target, definition) =
-                self.reference_info(reference, &format!("{path}/$ref"))?;
+            let (key, target, definition) = self.reference_info(reference, &path.child("$ref"))?;
             // TypeDefinition cannot carry mixed ranges, and the 1.11 generator
             // closes a named choice class over its own (empty) attribute set.
             // Reuse the original slot expressions at their reference boundary.
@@ -1761,7 +1775,7 @@ impl<'a> Renderer<'a> {
                 for (index, value) in values.iter().enumerate() {
                     if let Some(expression) = self.equality_expression(
                         value,
-                        &format!("{path}/enum/{index}"),
+                        &path.child("enum").child_index(index),
                         "enum member",
                     ) {
                         expressions.push(crate::json_model::object(expression));
@@ -1776,7 +1790,7 @@ impl<'a> Renderer<'a> {
 
         if let Some(value) = object.get("const")
             && let Some(expression) =
-                self.equality_expression(value, &format!("{path}/const"), "const value")
+                self.equality_expression(value, &path.child("const"), "const value")
         {
             slot.extend(expression);
             has_carrier = true;
@@ -1810,7 +1824,7 @@ impl<'a> Renderer<'a> {
                         branch.remove("oneOf");
                         branch.remove("allOf");
                         branch.remove("not");
-                        let branch_path = format!("{path}/type/{index}");
+                        let branch_path = path.child("type").child_index(index);
                         if kind == "null" {
                             self.record(
                                 "keyword-validation-dropped",
@@ -1826,9 +1840,9 @@ impl<'a> Renderer<'a> {
                     // The array branch states this schema's `contains`.
                     if (0..kinds.len()).any(|index| {
                         self.stated_contains
-                            .contains(&format!("{path}/type/{index}/contains"))
+                            .contains(&path.child("type").child_index(index).child("contains"))
                     }) {
-                        self.stated_contains.insert(format!("{path}/contains"));
+                        self.stated_contains.insert(path.child("contains"));
                     }
                     if !expressions.is_empty() {
                         conjoin_expression(&mut slot, "any_of", expressions);
@@ -1880,13 +1894,13 @@ impl<'a> Renderer<'a> {
         kind: &str,
         object: &Object,
         slot: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         match kind {
             "null" => {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/type"),
+                    &path.child("type"),
                     "Explicit JSON null is not a LinkML scalar range; optionality remains distinct from accepting a null value",
                 );
             }
@@ -1920,7 +1934,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         object: &Object,
         slot: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         let item_schema = if let Some(prefix_items) = object.get("prefixItems") {
             let prefix_items = prefix_items
@@ -1937,9 +1951,9 @@ impl<'a> Renderer<'a> {
             object.get("items").cloned().unwrap_or(Value::Bool(true))
         };
         let item_path = if object.contains_key("prefixItems") {
-            format!("{path}/prefixItems")
+            path.child("prefixItems")
         } else {
-            format!("{path}/items")
+            path.child("items")
         };
         // An array admitting no item (`maxItems: 0`, the empty list's members)
         // has no item for a range to judge: the string carrier is exact there,
@@ -1956,8 +1970,7 @@ impl<'a> Renderer<'a> {
             if key == "has_member" {
                 // A nested array's member condition judges the inner array,
                 // which the flattened slot does not keep.
-                self.stated_contains
-                    .remove(&format!("{item_path}/contains"));
+                self.stated_contains.remove(&item_path.child("contains"));
                 continue;
             }
             if !matches!(
@@ -2005,13 +2018,13 @@ impl<'a> Renderer<'a> {
         if let Some(contained) = object.get("contains")
             && object.get("minContains").and_then(Value::as_u64) != Some(0)
         {
-            let member_path = format!("{path}/contains");
+            let member_path = path.child("contains");
             let member = self.render_slot_expression(contained, &member_path)?;
             let member = self.anonymous_expression(member, &member_path);
             slot.insert("has_member".to_owned(), crate::json_model::object(member));
             self.stated_contains.insert(member_path);
         } else if object.contains_key("contains") {
-            self.stated_contains.insert(format!("{path}/contains"));
+            self.stated_contains.insert(path.child("contains"));
         }
         Ok(())
     }
@@ -2038,7 +2051,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         object: &Object,
         slot: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         for (source, target) in [
             ("anyOf", "any_of"),
@@ -2053,7 +2066,7 @@ impl<'a> Renderer<'a> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
             let mut expressions = Vec::with_capacity(branches.len());
             for (index, branch) in branches.iter().enumerate() {
-                let branch_path = format!("{path}/{source}/{index}");
+                let branch_path = path.child(source).child_index(index);
                 let expression = self.render_slot_expression(branch, &branch_path)?;
                 expressions.push(crate::json_model::object(
                     self.anonymous_expression(expression, &branch_path),
@@ -2062,8 +2075,8 @@ impl<'a> Renderer<'a> {
             conjoin_expression(slot, target, expressions);
         }
         if let Some(negated) = object.get("not") {
-            let expression = self.render_slot_expression(negated, &format!("{path}/not"))?;
-            let expression = self.anonymous_expression(expression, &format!("{path}/not"));
+            let expression = self.render_slot_expression(negated, &path.child("not"))?;
+            let expression = self.anonymous_expression(expression, &path.child("not"));
             conjoin_expression(slot, "none_of", vec![crate::json_model::object(expression)]);
         }
         Ok(())
@@ -2079,13 +2092,13 @@ impl<'a> Renderer<'a> {
     fn anonymous_expression(
         &mut self,
         mut expression: Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Map<String, Value> {
         expression.remove("list_elements_ordered");
         if expression.remove("list_elements_unique") == Some(Value::Bool(true)) {
             self.record(
                 "keyword-validation-dropped",
-                &format!("{path}/uniqueItems"),
+                &path.child("uniqueItems"),
                 "A LinkML 1.11 anonymous slot expression (a branch of any_of, exactly_one_of, \
                  all_of or none_of) has no list_elements_unique field, so a branch array's \
                  uniqueItems is not stated",
@@ -2094,19 +2107,23 @@ impl<'a> Renderer<'a> {
         expression
     }
 
-    fn ensure_inline_enum(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {
+    fn ensure_inline_enum(
+        &mut self,
+        schema: &Value,
+        path: &SchemaPath,
+    ) -> Result<String, LinkmlError> {
         if let Some(name) = self.inline_enums.get(path) {
             return Ok(name.clone());
         }
         let name = self.allocate_inline_name(path, "Enum")?;
-        self.inline_enums.insert(path.to_owned(), name.clone());
+        self.inline_enums.insert(path.clone(), name.clone());
         let rendered = self.render_enum(&name, schema, path)?;
         self.enums
             .insert(name.clone(), crate::json_model::object(rendered));
         Ok(name)
     }
 
-    fn audit_schema(&mut self, schema: &Value, path: &str) -> Result<(), LinkmlError> {
+    fn audit_schema(&mut self, schema: &Value, path: &SchemaPath) -> Result<(), LinkmlError> {
         let Value::Object(object) = schema else {
             return if schema.is_boolean() {
                 Ok(())
@@ -2129,7 +2146,7 @@ impl<'a> Renderer<'a> {
                 .expect("presence checked");
             self.record(
                 "conditional-validation-dropped",
-                &format!("{path}/{keyword}"),
+                &path.child(keyword),
                 "JSON Schema if/then/else dependent validation has no LinkML 1.11 expression",
             );
         }
@@ -2137,7 +2154,7 @@ impl<'a> Renderer<'a> {
         // sits on is rendered as a slot expression; one that no rendered slot
         // states is recorded once rendering is done.
         if object.contains_key("contains") {
-            self.audited_contains.insert(format!("{path}/contains"));
+            self.audited_contains.insert(path.child("contains"));
         }
         // `has_member` asks for one matching member: a `minContains` of 1 is
         // its own reading and one of 0 makes the `contains` vacuous, but LinkML
@@ -2147,14 +2164,14 @@ impl<'a> Renderer<'a> {
         {
             self.record(
                 "array-contains-validation-dropped",
-                &format!("{path}/minContains"),
+                &path.child("minContains"),
                 "A LinkML has_member requires one matching member; LinkML 1.11 has no expression requiring more than one",
             );
         }
         if object.contains_key("maxContains") {
             self.record(
                 "array-contains-validation-dropped",
-                &format!("{path}/maxContains"),
+                &path.child("maxContains"),
                 "A LinkML has_member requires one matching member; LinkML 1.11 has no expression bounding how many members match",
             );
         }
@@ -2162,7 +2179,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "dependency-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "LinkML 1.11 has no cross-property dependency expression",
                 );
             }
@@ -2171,7 +2188,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "exclusive-bound-validation-widened",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "The exclusive JSON Schema bound is retained as LinkML's corresponding inclusive bound",
                 );
             }
@@ -2179,7 +2196,7 @@ impl<'a> Renderer<'a> {
         if let Some(format) = object.get("format") {
             self.record(
                 "format-validation-widened",
-                &format!("{path}/format"),
+                &path.child("format"),
                 &format!(
                     "JSON Schema format {:?} does not have byte-identical validation semantics in LinkML 1.11",
                     format.as_str().expect("validated string")
@@ -2189,7 +2206,7 @@ impl<'a> Renderer<'a> {
         if object.contains_key("multipleOf") {
             self.record(
                 "multiple-of-validation-dropped",
-                &format!("{path}/multipleOf"),
+                &path.child("multipleOf"),
                 "LinkML 1.11 has no numeric divisibility expression",
             );
         }
@@ -2197,7 +2214,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "property-count-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "LinkML class structure cannot constrain the total number of JSON object properties",
                 );
             }
@@ -2206,7 +2223,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "string-length-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "LinkML 1.11 has no code-point string-length expression",
                 );
             }
@@ -2214,7 +2231,7 @@ impl<'a> Renderer<'a> {
         if object.contains_key("prefixItems") {
             self.record(
                 "tuple-array-validation-widened",
-                &format!("{path}/prefixItems"),
+                &path.child("prefixItems"),
                 "Position-specific tuple items are widened to a homogeneous LinkML list whose item expression is the union of tuple branches",
             );
         }
@@ -2222,7 +2239,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "unevaluated-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "LinkML 1.11 does not expose JSON Schema applicator evaluation state",
                 );
             }
@@ -2232,7 +2249,7 @@ impl<'a> Renderer<'a> {
                 if matches!(value, Value::Array(_) | Value::Object(_)) {
                     self.record(
                         "non-scalar-enum-validation-widened",
-                        &format!("{path}/enum/{index}"),
+                        &path.child("enum").child_index(index),
                         "A non-scalar JSON enum member is projected to a LinkML permissible-value identifier rather than its original JSON carrier",
                     );
                 }
@@ -2243,7 +2260,7 @@ impl<'a> Renderer<'a> {
         {
             self.record(
                 "keyword-validation-dropped",
-                &format!("{path}/const"),
+                &path.child("const"),
                 "This JSON const carrier has no LinkML equality expression",
             );
         }
@@ -2252,7 +2269,7 @@ impl<'a> Renderer<'a> {
             if !known_schema_keyword(key) && !is_annotation_keyword(key) {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &path.child(key),
                     &format!(
                         "JSON Schema assertion keyword {key:?} is outside the closed LinkML 1.11 capability table"
                     ),
@@ -2263,36 +2280,40 @@ impl<'a> Renderer<'a> {
         for keyword in schema_map_keywords() {
             if let Some(children) = object.get(keyword).and_then(Value::as_object) {
                 for (key, child) in children {
-                    self.audit_schema(child, &format!("{path}/{keyword}/{}", pointer_escape(key)))?;
+                    self.audit_schema(child, &path.child(keyword).child(key))?;
                 }
             }
         }
         for keyword in schema_array_keywords() {
             if let Some(children) = object.get(keyword).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
-                    self.audit_schema(child, &format!("{path}/{keyword}/{index}"))?;
+                    self.audit_schema(child, &path.child(keyword).child_index(index))?;
                 }
             }
         }
         for keyword in schema_single_keywords() {
             if let Some(child) = object.get(keyword) {
-                self.audit_schema(child, &format!("{path}/{keyword}"))?;
+                self.audit_schema(child, &path.child(keyword))?;
             }
         }
         Ok(())
     }
 
-    fn validate_keyword_values(&self, object: &Object, path: &str) -> Result<(), LinkmlError> {
+    fn validate_keyword_values(
+        &self,
+        object: &Object,
+        path: &SchemaPath,
+    ) -> Result<(), LinkmlError> {
         if let Some(value) = object.get("type") {
             let mut seen = BTreeSet::new();
             match value {
-                Value::String(kind) => validate_json_type(kind, &format!("{path}/type"))?,
+                Value::String(kind) => validate_json_type(kind, &path.child("type"))?,
                 Value::Array(kinds) if !kinds.is_empty() => {
                     for (index, kind) in kinds.iter().enumerate() {
                         let kind = kind.as_str().ok_or_else(|| {
                             LinkmlError::new(format!("{path}/type/{index} must be a string"))
                         })?;
-                        validate_json_type(kind, &format!("{path}/type/{index}"))?;
+                        validate_json_type(kind, &path.child("type").child_index(index))?;
                         if !seen.insert(kind) {
                             return Err(LinkmlError::new(format!(
                                 "{path}/type repeats type {kind:?}"
@@ -2385,11 +2406,8 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &str, note: &str) {
-        if !self
-            .recorded_losses
-            .insert((code.to_owned(), path.to_owned()))
-        {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+        if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
         self.ledger.record(LossEntry {
@@ -2398,7 +2416,7 @@ impl<'a> Renderer<'a> {
             to: LOSS_TO.into(),
             note: note.to_owned().into(),
             location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path),
+                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
             )),
         });
     }
@@ -2407,7 +2425,7 @@ impl<'a> Renderer<'a> {
         &self,
         source: &Object,
         target: &mut Map<String, Value>,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         for key in ["title", "description"] {
             if let Some(value) = source.get(key) {
@@ -2426,7 +2444,7 @@ impl<'a> Renderer<'a> {
 fn checked_slot_total(
     current: usize,
     class_slots: usize,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<usize, LinkmlError> {
     if class_slots > MAX_LINKML_SLOTS_PER_CLASS {
         return Err(LinkmlError::new(format!(
@@ -2444,7 +2462,7 @@ fn checked_slot_total(
     Ok(total)
 }
 
-fn checked_report_rows(current: usize, source_path: &str) -> Result<usize, LinkmlError> {
+fn checked_report_rows(current: usize, source_path: &SchemaPath) -> Result<usize, LinkmlError> {
     let rows = current
         .checked_add(1)
         .ok_or_else(|| LinkmlError::new("LinkML slot-report row count overflow"))?;
@@ -2468,7 +2486,11 @@ fn extra_slots(allowed: bool, range_expression: Option<Map<String, Value>>) -> V
     crate::json_model::object(extra)
 }
 
-fn object_map<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a Object, LinkmlError> {
+fn object_map<'a>(
+    object: &'a Object,
+    key: &str,
+    path: &SchemaPath,
+) -> Result<&'a Object, LinkmlError> {
     match object.get(key) {
         Some(Value::Object(values)) => Ok(values),
         Some(_) => Err(LinkmlError::new(format!("{path}/{key} must be an object"))),
@@ -2482,7 +2504,7 @@ fn object_map<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a Objec
 fn required_names(
     object: &Object,
     properties: &Object,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<BTreeSet<String>, LinkmlError> {
     let mut required = BTreeSet::new();
     let Some(values) = object.get("required") else {
@@ -2535,7 +2557,7 @@ fn string_extension_array<'a>(object: &'a Object, key: &str) -> Option<Vec<&'a s
     values.iter().map(Value::as_str).collect()
 }
 
-fn validate_json_type(kind: &str, path: &str) -> Result<(), LinkmlError> {
+fn validate_json_type(kind: &str, path: &SchemaPath) -> Result<(), LinkmlError> {
     if matches!(
         kind,
         "null" | "boolean" | "object" | "array" | "number" | "string" | "integer"
@@ -3602,22 +3624,37 @@ mod tests {
                 .contains("property name exceeds")
         );
         assert!(
-            checked_slot_total(0, MAX_LINKML_SLOTS_PER_CLASS + 1, "#/$defs/Large")
-                .expect_err("per-class bound")
-                .detail()
-                .contains("per-class limit")
+            checked_slot_total(
+                0,
+                MAX_LINKML_SLOTS_PER_CLASS + 1,
+                &SchemaPath::root().child("$defs").child("Large")
+            )
+            .expect_err("per-class bound")
+            .detail()
+            .contains("per-class limit")
         );
         assert!(
-            checked_slot_total(MAX_LINKML_TOTAL_SLOTS, 1, "#/$defs/Large")
-                .expect_err("total bound")
-                .detail()
-                .contains("document slot count")
+            checked_slot_total(
+                MAX_LINKML_TOTAL_SLOTS,
+                1,
+                &SchemaPath::root().child("$defs").child("Large")
+            )
+            .expect_err("total bound")
+            .detail()
+            .contains("document slot count")
         );
         assert!(
-            checked_report_rows(MAX_LINKML_REPORT_ROWS, "#/$defs/Large/properties/ex:x")
-                .expect_err("report bound")
-                .detail()
-                .contains("slot-report count")
+            checked_report_rows(
+                MAX_LINKML_REPORT_ROWS,
+                &SchemaPath::root()
+                    .child("$defs")
+                    .child("Large")
+                    .child("properties")
+                    .child("ex:x")
+            )
+            .expect_err("report bound")
+            .detail()
+            .contains("slot-report count")
         );
 
         let config = config();
@@ -3640,7 +3677,11 @@ mod tests {
                     &mut seed,
                     &used_names,
                     &BTreeMap::new(),
-                    "#/$defs/Large/properties/ex:a~1b",
+                    &SchemaPath::root()
+                        .child("$defs")
+                        .child("Large")
+                        .child("properties")
+                        .child("ex:a/b"),
                 )
                 .expect_err("collision bound")
                 .detail()

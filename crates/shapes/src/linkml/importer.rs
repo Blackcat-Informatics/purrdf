@@ -3,6 +3,7 @@
 
 //! Native LinkML 1.11 to the shared deterministic schema-import model.
 
+use crate::schema_catalog::{SchemaPath, definition_path};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
@@ -486,7 +487,7 @@ struct NativeImporter {
     locations: BTreeMap<String, String>,
     contract: LossLedger,
     losses: LossLedger,
-    recorded_losses: BTreeSet<(String, String)>,
+    recorded_losses: BTreeSet<(String, SchemaPath)>,
 }
 
 impl NativeImporter {
@@ -497,8 +498,12 @@ impl NativeImporter {
             .expect("LinkmlDocument validates an object root")
             .clone();
         let prefixes = document_prefixes(&root)?;
-        let default_prefix =
-            required_string(&root, "default_prefix", "#/default_prefix")?.to_owned();
+        let default_prefix = required_string(
+            &root,
+            "default_prefix",
+            &SchemaPath::root().child("default_prefix"),
+        )?
+        .to_owned();
         let classes = Section::new(section(&root, "classes")?.clone());
         let enums = Section::new(section(&root, "enums")?.clone());
         let types = Section::new(section(&root, "types")?.clone());
@@ -645,14 +650,14 @@ impl NativeImporter {
     fn audit_root(&mut self) -> Result<(), LinkmlError> {
         for key in ["id", "name"] {
             if self.root.contains_key(key) {
-                self.record(
-                    "schema-identity-dropped",
-                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(key)),
-                );
+                self.record("schema-identity-dropped", &SchemaPath::root().child(key));
             }
         }
         if self.root.contains_key("description") {
-            self.record("annotation-dropped", "#/description");
+            self.record(
+                "annotation-dropped",
+                &SchemaPath::root().child("description"),
+            );
         }
         if let Some(imports) = self.root.get("imports") {
             let values: Vec<String> = match imports {
@@ -674,7 +679,10 @@ impl NativeImporter {
             };
             for (index, import) in values.into_iter().enumerate() {
                 if import != "linkml:types" {
-                    self.record("schema-identity-dropped", &format!("#/imports/{index}"));
+                    self.record(
+                        "schema-identity-dropped",
+                        &SchemaPath::root().child("imports").child_index(index),
+                    );
                 }
             }
         }
@@ -692,11 +700,10 @@ impl NativeImporter {
                     if !matches!(key.as_str(), "prefix_prefix" | "prefix_reference") {
                         self.record(
                             "unknown-keyword-dropped",
-                            &format!(
-                                "#/prefixes/{}/{}",
-                                purrdf_iri::json_pointer::escape_token(&prefix),
-                                purrdf_iri::json_pointer::escape_token(key)
-                            ),
+                            &SchemaPath::root()
+                                .child("prefixes")
+                                .child(&prefix)
+                                .child(key),
                         );
                     }
                 }
@@ -716,10 +723,7 @@ impl NativeImporter {
                     | "types"
                     | "slots"
             ) {
-                self.record(
-                    "unknown-keyword-dropped",
-                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(&key)),
-                );
+                self.record("unknown-keyword-dropped", &SchemaPath::root().child(&key));
             }
         }
         Ok(())
@@ -747,7 +751,7 @@ impl NativeImporter {
         let mut properties = Map::new();
         let mut required = BTreeSet::new();
 
-        let mut local_slots = BTreeMap::<String, (Object, String)>::new();
+        let mut local_slots = BTreeMap::<String, (Object, SchemaPath)>::new();
         if let Some(names) = object.get("slots") {
             let names = names
                 .as_array()
@@ -791,10 +795,7 @@ impl NativeImporter {
                         purrdf_iri::json_pointer::escape_token(slot_name)
                     ))
                 })?;
-                let usage_path = format!(
-                    "{path}/slot_usage/{}",
-                    purrdf_iri::json_pointer::escape_token(slot_name)
-                );
+                let usage_path = path.child("slot_usage").child(slot_name);
                 if let Some((slot, slot_path)) = local_slots.get_mut(slot_name) {
                     for (key, value) in usage {
                         crate::json_model::insert_sorted(slot, key.clone(), value.clone());
@@ -829,13 +830,7 @@ impl NativeImporter {
                 if local_slots
                     .insert(
                         slot_name.clone(),
-                        (
-                            slot.clone(),
-                            format!(
-                                "{path}/attributes/{}",
-                                purrdf_iri::json_pointer::escape_token(slot_name)
-                            ),
-                        ),
+                        (slot.clone(), path.child("attributes").child(slot_name)),
                     )
                     .is_some()
                 {
@@ -865,11 +860,9 @@ impl NativeImporter {
                     "{slot_path} and {previous} resolve to the same slot IRI {property_identity:?}"
                 )));
             }
-            let pivot_path = format!(
-                "{}/properties/{}",
-                definition_path(self.identity(name)?),
-                purrdf_iri::json_pointer::escape_token(&property_identity)
-            );
+            let pivot_path = definition_path(self.identity(name)?)
+                .child("properties")
+                .child(&property_identity);
             self.map_location(&pivot_path, &slot_path);
             self.map_expression_locations(&pivot_path, &slot_path, &slot, &property_schema);
             for (native, schema_keyword) in [
@@ -879,10 +872,7 @@ impl NativeImporter {
                 ("has_member", "contains"),
             ] {
                 if slot.contains_key(native) {
-                    self.map_location(
-                        &format!("{pivot_path}/{schema_keyword}"),
-                        &format!("{slot_path}/{native}"),
-                    );
+                    self.map_location(&pivot_path.child(schema_keyword), &slot_path.child(native));
                 }
             }
             properties.insert(property_identity.clone(), property_schema);
@@ -900,8 +890,8 @@ impl NativeImporter {
                 Value::Array(required.into_iter().map(Value::String).collect()),
             );
             self.map_location(
-                &format!("{}/required", definition_path(self.identity(name)?)),
-                &format!("{path}/attributes"),
+                &definition_path(self.identity(name)?).child("required"),
+                &path.child("attributes"),
             );
         }
 
@@ -909,7 +899,11 @@ impl NativeImporter {
             let extra = extra
                 .as_object()
                 .ok_or_else(|| LinkmlError::new(format!("{path}/extra_slots must be a mapping")))?;
-            let allowed = required_bool(extra, "allowed", &format!("{path}/extra_slots/allowed"))?;
+            let allowed = required_bool(
+                extra,
+                "allowed",
+                &path.child("extra_slots").child("allowed"),
+            )?;
             if let Some(expression) = extra.get("range_expression") {
                 if !allowed {
                     return Err(LinkmlError::new(format!(
@@ -921,7 +915,7 @@ impl NativeImporter {
                         "{path}/extra_slots/range_expression must be a mapping"
                     ))
                 })?;
-                let expression_path = format!("{path}/extra_slots/range_expression");
+                let expression_path = path.child("extra_slots").child("range_expression");
                 schema.insert(
                     "additionalProperties".to_owned(),
                     self.expression_schema(expression, &expression_path, visiting, depth + 1)?,
@@ -934,19 +928,13 @@ impl NativeImporter {
                 if !matches!(key.as_str(), "allowed" | "range_expression") {
                     self.record(
                         "unknown-keyword-dropped",
-                        &format!(
-                            "{path}/extra_slots/{}",
-                            purrdf_iri::json_pointer::escape_token(key)
-                        ),
+                        &path.child("extra_slots").child(key),
                     );
                 }
             }
             self.map_location(
-                &format!(
-                    "{}/additionalProperties",
-                    definition_path(self.identity(name)?)
-                ),
-                &format!("{path}/extra_slots"),
+                &definition_path(self.identity(name)?).child("additionalProperties"),
+                &path.child("extra_slots"),
             );
         }
 
@@ -956,7 +944,7 @@ impl NativeImporter {
                 .as_str()
                 .ok_or_else(|| LinkmlError::new(format!("{path}/is_a must be a string")))?;
             inherited.push(self.class_schema(parent, visiting, depth + 1)?);
-            self.record("schema-identity-dropped", &format!("{path}/is_a"));
+            self.record("schema-identity-dropped", &path.child("is_a"));
         }
         if let Some(mixins) = object.get("mixins") {
             let mixins = mixins
@@ -967,7 +955,10 @@ impl NativeImporter {
                     LinkmlError::new(format!("{path}/mixins/{index} must be a string"))
                 })?;
                 inherited.push(self.class_schema(mixin, visiting, depth + 1)?);
-                self.record("schema-identity-dropped", &format!("{path}/mixins/{index}"));
+                self.record(
+                    "schema-identity-dropped",
+                    &path.child("mixins").child_index(index),
+                );
             }
         }
         let mut target = Object::from_iter(std::mem::take(&mut schema));
@@ -1017,7 +1008,7 @@ impl NativeImporter {
     fn slot_schema(
         &mut self,
         slot: &Object,
-        path: &str,
+        path: &SchemaPath,
         visiting: &mut BTreeSet<String>,
         depth: usize,
     ) -> Result<(Value, bool), LinkmlError> {
@@ -1043,7 +1034,7 @@ impl NativeImporter {
             }
             // `has_member` is JSON Schema's `contains`: some member satisfies it.
             if let Some(member) = slot.get("has_member") {
-                let member_path = format!("{path}/has_member");
+                let member_path = path.child("has_member");
                 let member = member
                     .as_object()
                     .ok_or_else(|| LinkmlError::new(format!("{member_path} must be a mapping")))?;
@@ -1055,7 +1046,7 @@ impl NativeImporter {
             if optional_bool(slot, "list_elements_ordered", path)?.unwrap_or(false) {
                 self.record(
                     "value-term-kind-widened",
-                    &format!("{path}/list_elements_ordered"),
+                    &path.child("list_elements_ordered"),
                 );
             }
             crate::json_model::object(array)
@@ -1069,13 +1060,13 @@ impl NativeImporter {
             }
             // A single value is no JSON array, so no `contains` judges it.
             if slot.contains_key("has_member") {
-                self.record("schema-applicator-dropped", &format!("{path}/has_member"));
+                self.record("schema-applicator-dropped", &path.child("has_member"));
             }
             scalar
         };
         for field in ["inlined", "inlined_as_list"] {
             if optional_bool(slot, field, path)?.is_some() {
-                self.record("value-term-kind-widened", &format!("{path}/{field}"));
+                self.record("value-term-kind-widened", &path.child(field));
             }
         }
         self.audit_slot_fields(slot, path)?;
@@ -1085,7 +1076,7 @@ impl NativeImporter {
     fn expression_schema(
         &mut self,
         expression: &Object,
-        path: &str,
+        path: &SchemaPath,
         visiting: &mut BTreeSet<String>,
         depth: usize,
     ) -> Result<Value, LinkmlError> {
@@ -1099,7 +1090,7 @@ impl NativeImporter {
                 let range = range
                     .as_str()
                     .ok_or_else(|| LinkmlError::new(format!("{path}/range must be a string")))?;
-                self.range_schema(range, visiting, depth + 1, &format!("{path}/range"))?
+                self.range_schema(range, visiting, depth + 1, &path.child("range"))?
             }
             None => crate::json_model::object(Map::new()),
         };
@@ -1118,7 +1109,7 @@ impl NativeImporter {
         range: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Value, LinkmlError> {
         let scalar = match range {
             "string" | "ncname" | "nodeidentifier" | "objectidentifier" | "jsonpath"
@@ -1190,8 +1181,8 @@ impl NativeImporter {
             .and_then(Value::as_object)
             .ok_or_else(|| LinkmlError::new(format!("{path} must be a mapping")))?
             .clone();
-        let base = required_string(&object, "typeof", &format!("{path}/typeof"))?;
-        let mut schema = self.range_schema(base, visiting, depth + 1, &format!("{path}/typeof"))?;
+        let base = required_string(&object, "typeof", &path.child("typeof"))?;
+        let mut schema = self.range_schema(base, visiting, depth + 1, &path.child("typeof"))?;
         let schema_object = schema.as_object_mut().ok_or_else(|| {
             LinkmlError::new(format!("{path}/typeof does not form a scalar schema"))
         })?;
@@ -1248,10 +1239,7 @@ impl NativeImporter {
         }
         let mut members = Vec::new();
         for (text, definition) in values {
-            let member_path = format!(
-                "{path}/permissible_values/{}",
-                purrdf_iri::json_pointer::escape_token(text)
-            );
+            let member_path = path.child("permissible_values").child(text);
             let member = match definition {
                 Value::Null => Value::String(text.clone()),
                 Value::String(description) => {
@@ -1280,21 +1268,9 @@ impl NativeImporter {
                                     purrdf_iri::json_pointer::escape_token(key)
                                 )));
                             }
-                            self.record(
-                                "enum-metadata-dropped",
-                                &format!(
-                                    "{member_path}/{}",
-                                    purrdf_iri::json_pointer::escape_token(key)
-                                ),
-                            );
+                            self.record("enum-metadata-dropped", &member_path.child(key));
                         } else if key != "meaning" {
-                            self.record(
-                                "unknown-keyword-dropped",
-                                &format!(
-                                    "{member_path}/{}",
-                                    purrdf_iri::json_pointer::escape_token(key)
-                                ),
-                            );
+                            self.record("unknown-keyword-dropped", &member_path.child(key));
                         }
                     }
                     value
@@ -1315,15 +1291,9 @@ impl NativeImporter {
                         purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
-                self.record(
-                    "annotation-dropped",
-                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
-                );
+                self.record("annotation-dropped", &path.child(key));
             } else if !matches!(key.as_str(), "enum_uri" | "permissible_values") {
-                self.record(
-                    "unknown-keyword-dropped",
-                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
-                );
+                self.record("unknown-keyword-dropped", &path.child(key));
             }
         }
         Ok(crate::json_model::object(Map::from_iter([(
@@ -1336,7 +1306,7 @@ impl NativeImporter {
         &self,
         source: &Object,
         target: &mut Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), LinkmlError> {
         if let Some(pattern) = source.get("pattern") {
             let pattern = pattern
@@ -1387,7 +1357,7 @@ impl NativeImporter {
     fn apply_compositions(
         &mut self,
         source: &Object,
-        path: &str,
+        path: &SchemaPath,
         visiting: &mut BTreeSet<String>,
         depth: usize,
         target: &mut Object,
@@ -1409,7 +1379,7 @@ impl NativeImporter {
             }
             let mut translated = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
-                let branch_path = format!("{path}/{native}/{index}");
+                let branch_path = path.child(native).child_index(index);
                 let branch = branch
                     .as_object()
                     .ok_or_else(|| LinkmlError::new(format!("{branch_path} must be a mapping")))?;
@@ -1433,7 +1403,7 @@ impl NativeImporter {
             }
             let mut translated = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
-                let branch_path = format!("{path}/none_of/{index}");
+                let branch_path = path.child("none_of").child_index(index);
                 let branch = branch
                     .as_object()
                     .ok_or_else(|| LinkmlError::new(format!("{branch_path} must be a mapping")))?;
@@ -1462,7 +1432,7 @@ impl NativeImporter {
     fn class_expression_schema(
         &mut self,
         expression: &Object,
-        path: &str,
+        path: &SchemaPath,
         visiting: &mut BTreeSet<String>,
         depth: usize,
     ) -> Result<Value, LinkmlError> {
@@ -1470,7 +1440,7 @@ impl NativeImporter {
             let parent = parent
                 .as_str()
                 .ok_or_else(|| LinkmlError::new(format!("{path}/is_a must be a string")))?;
-            self.record("schema-identity-dropped", &format!("{path}/is_a"));
+            self.record("schema-identity-dropped", &path.child("is_a"));
             Some(self.class_schema(parent, visiting, depth + 1)?)
         } else {
             None
@@ -1490,10 +1460,7 @@ impl NativeImporter {
                     )));
                 }
             }
-            self.record(
-                "schema-applicator-dropped",
-                &format!("{path}/slot_conditions"),
-            );
+            self.record("schema-applicator-dropped", &path.child("slot_conditions"));
         }
         self.audit_element_fields(
             expression,
@@ -1528,7 +1495,12 @@ impl NativeImporter {
         }
     }
 
-    fn slot_identity(&self, name: &str, slot: &Object, path: &str) -> Result<String, LinkmlError> {
+    fn slot_identity(
+        &self,
+        name: &str,
+        slot: &Object,
+        path: &SchemaPath,
+    ) -> Result<String, LinkmlError> {
         if name.starts_with('@') {
             if slot.contains_key("slot_uri") {
                 return Err(LinkmlError::new(format!(
@@ -1549,7 +1521,7 @@ impl NativeImporter {
         self.expand_iri(identity, path)
     }
 
-    fn expand_iri(&self, value: &str, path: &str) -> Result<String, LinkmlError> {
+    fn expand_iri(&self, value: &str, path: &SchemaPath) -> Result<String, LinkmlError> {
         if let Some((prefix, local)) = value.split_once(':')
             && let Some(namespace) = self.prefixes.get(prefix)
         {
@@ -1630,7 +1602,7 @@ impl NativeImporter {
         name: &str,
         visiting: &mut BTreeSet<String>,
         depth: usize,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Value>, LinkmlError> {
         let Some(slot) = self
             .classes
@@ -1645,7 +1617,7 @@ impl NativeImporter {
         else {
             return Ok(None);
         };
-        let slot_path = format!("{path}/attributes/@list");
+        let slot_path = path.child("attributes").child("@list");
         if optional_bool(&slot, "required", &slot_path)? != Some(true)
             || optional_bool(&slot, "multivalued", &slot_path)? != Some(true)
         {
@@ -1701,7 +1673,16 @@ impl NativeImporter {
             let id = attributes["@id"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!("#/classes/{name}/attributes/@id must be a mapping"))
             })?;
-            if optional_bool(id, "required", "#/classes/helper/attributes/@id")? == Some(true) {
+            if optional_bool(
+                id,
+                "required",
+                &SchemaPath::root()
+                    .child("classes")
+                    .child("helper")
+                    .child("attributes")
+                    .child("@id"),
+            )? == Some(true)
+            {
                 // An IRI or blank-node reference states its `@id` label pattern.
                 let mut id_schema = crate::json_model::json!({ "type": "string" });
                 if let Some(pattern) = id.get("pattern") {
@@ -1783,7 +1764,15 @@ impl NativeImporter {
                     "#/classes/{name}/attributes/@type must be a mapping"
                 ))
             })?;
-            if optional_bool(value, "required", "#/classes/helper/attributes/@value")? == Some(true)
+            if optional_bool(
+                value,
+                "required",
+                &SchemaPath::root()
+                    .child("classes")
+                    .child("helper")
+                    .child("attributes")
+                    .child("@value"),
+            )? == Some(true)
                 && datatype.get("range").and_then(Value::as_str) == Some("string")
             {
                 return Ok(Some(crate::json_model::json!({
@@ -1828,11 +1817,23 @@ impl NativeImporter {
                     "#/classes/{name}/attributes/@language must be a mapping"
                 ))
             })?;
-            if optional_bool(value, "required", "#/classes/helper/attributes/@value")? == Some(true)
+            if optional_bool(
+                value,
+                "required",
+                &SchemaPath::root()
+                    .child("classes")
+                    .child("helper")
+                    .child("attributes")
+                    .child("@value"),
+            )? == Some(true)
                 && optional_bool(
                     language,
                     "required",
-                    "#/classes/helper/attributes/@language",
+                    &SchemaPath::root()
+                        .child("classes")
+                        .child("helper")
+                        .child("attributes")
+                        .child("@language"),
                 )? == Some(true)
             {
                 // A `sh:languageIn` object states its tag pattern; the object of
@@ -1866,7 +1867,7 @@ impl NativeImporter {
     fn audit_element_fields(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         known: &[&str],
     ) -> Result<(), LinkmlError> {
         for (key, value) in object {
@@ -1877,26 +1878,20 @@ impl NativeImporter {
                         purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
-                self.record(
-                    "annotation-dropped",
-                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
-                );
+                self.record("annotation-dropped", &path.child(key));
             } else if key == "alias" {
                 if !value.is_string() {
                     return Err(LinkmlError::new(format!("{path}/alias must be a string")));
                 }
-                self.record("schema-identity-dropped", &format!("{path}/alias"));
+                self.record("schema-identity-dropped", &path.child("alias"));
             } else if !known.contains(&key.as_str()) {
-                self.record(
-                    "unknown-keyword-dropped",
-                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
-                );
+                self.record("unknown-keyword-dropped", &path.child(key));
             }
         }
         Ok(())
     }
 
-    fn audit_slot_fields(&mut self, object: &Object, path: &str) -> Result<(), LinkmlError> {
+    fn audit_slot_fields(&mut self, object: &Object, path: &SchemaPath) -> Result<(), LinkmlError> {
         let known = [
             "slot_uri",
             "alias",
@@ -1925,7 +1920,11 @@ impl NativeImporter {
         self.audit_element_fields(object, path, &known)
     }
 
-    fn audit_expression_fields(&mut self, object: &Object, path: &str) -> Result<(), LinkmlError> {
+    fn audit_expression_fields(
+        &mut self,
+        object: &Object,
+        path: &SchemaPath,
+    ) -> Result<(), LinkmlError> {
         self.audit_element_fields(
             object,
             path,
@@ -1946,8 +1945,8 @@ impl NativeImporter {
 
     fn map_expression_locations(
         &mut self,
-        pivot_path: &str,
-        native_path: &str,
+        pivot_path: &SchemaPath,
+        native_path: &SchemaPath,
         source: &Object,
         translated: &Value,
     ) {
@@ -1957,16 +1956,13 @@ impl NativeImporter {
             .and_then(Value::as_str)
             == Some("array")
         {
-            format!("{pivot_path}/items")
+            pivot_path.child("items")
         } else {
-            pivot_path.to_owned()
+            pivot_path.clone()
         };
         if source.contains_key("range") {
             for keyword in ["type", "format", "$ref"] {
-                self.map_location(
-                    &format!("{scalar_path}/{keyword}"),
-                    &format!("{native_path}/range"),
-                );
+                self.map_location(&scalar_path.child(keyword), &native_path.child("range"));
             }
         }
         for (native, schema) in [
@@ -1981,19 +1977,13 @@ impl NativeImporter {
             ("none_of", "not"),
         ] {
             if source.contains_key(native) {
-                self.map_location(
-                    &format!("{scalar_path}/{schema}"),
-                    &format!("{native_path}/{native}"),
-                );
+                self.map_location(&scalar_path.child(schema), &native_path.child(native));
             }
         }
     }
 
-    fn record(&mut self, code: &str, path: &str) {
-        if !self
-            .recorded_losses
-            .insert((code.to_owned(), path.to_owned()))
-        {
+    fn record(&mut self, code: &str, path: &SchemaPath) {
+        if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
         let contract = self
@@ -2008,13 +1998,13 @@ impl NativeImporter {
             to: TARGET.to_owned().into(),
             note: contract.note.to_string().into(),
             location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path),
+                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
             )),
         });
     }
 
-    fn map_location(&mut self, pivot: &str, native: &str) {
-        self.locations.insert(pivot.to_owned(), native.to_owned());
+    fn map_location(&mut self, pivot: &SchemaPath, native: &SchemaPath) {
+        self.locations.insert(pivot.to_string(), native.to_string());
     }
 }
 
@@ -2073,7 +2063,7 @@ fn document_prefixes(root: &Object) -> Result<BTreeMap<String, String>, LinkmlEr
         .collect()
 }
 
-fn validate_absolute(value: &str, path: &str) -> Result<String, LinkmlError> {
+fn validate_absolute(value: &str, path: &SchemaPath) -> Result<String, LinkmlError> {
     match purrdf_iri::BaseIri::parse(value) {
         Ok(_) => Ok(value.to_owned()),
         Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(LinkmlError::new(format!(
@@ -2085,14 +2075,18 @@ fn validate_absolute(value: &str, path: &str) -> Result<String, LinkmlError> {
     }
 }
 
-fn required_bool(object: &Object, key: &str, path: &str) -> Result<bool, LinkmlError> {
+fn required_bool(object: &Object, key: &str, path: &SchemaPath) -> Result<bool, LinkmlError> {
     object
         .get(key)
         .and_then(Value::as_bool)
         .ok_or_else(|| LinkmlError::new(format!("{path} must be a boolean")))
 }
 
-fn optional_bool(object: &Object, key: &str, path: &str) -> Result<Option<bool>, LinkmlError> {
+fn optional_bool(
+    object: &Object,
+    key: &str,
+    path: &SchemaPath,
+) -> Result<Option<bool>, LinkmlError> {
     object
         .get(key)
         .map(|value| {
@@ -2103,7 +2097,7 @@ fn optional_bool(object: &Object, key: &str, path: &str) -> Result<Option<bool>,
         .transpose()
 }
 
-fn optional_u64(object: &Object, key: &str, path: &str) -> Result<Option<u64>, LinkmlError> {
+fn optional_u64(object: &Object, key: &str, path: &SchemaPath) -> Result<Option<u64>, LinkmlError> {
     object
         .get(key)
         .map(|value| {
@@ -2114,15 +2108,8 @@ fn optional_u64(object: &Object, key: &str, path: &str) -> Result<Option<u64>, L
         .transpose()
 }
 
-fn element_path(section: &str, name: &str) -> String {
-    format!(
-        "#/{section}/{}",
-        purrdf_iri::json_pointer::escape_token(name)
-    )
-}
-
-fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", purrdf_iri::json_pointer::escape_token(key))
+fn element_path(section: &str, name: &str) -> SchemaPath {
+    SchemaPath::root().child(section).child(name)
 }
 
 /// `subject` with its longest mapped pivot (`subject` itself, or a prefix of

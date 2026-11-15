@@ -179,9 +179,124 @@ pub fn array_index(token: &str) -> Option<usize> {
     }
 }
 
+/// A JSON Pointer held as its reference tokens, unescaped.
+///
+/// A token is kept exactly as the member name or array index it addresses;
+/// the RFC 6901 spelling is produced only by [`Display`](core::fmt::Display),
+/// through [`escape_token`]. A pointer built here therefore never needs to be
+/// parsed to recover its tokens, and a member name holding `/` or `~` stays
+/// one token.
+///
+/// ```rust
+/// use purrdf_lex::json_pointer::JsonPointer;
+///
+/// let pointer = JsonPointer::root().child("$defs").child("a/b").child_index(0);
+/// assert_eq!(pointer.tokens(), ["$defs", "a/b", "0"]);
+/// assert_eq!(pointer.to_string(), "/$defs/a~1b/0");
+/// assert_eq!(JsonPointer::parse("/$defs/a~1b/0"), Some(pointer));
+/// assert_eq!(JsonPointer::root().to_string(), "");
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct JsonPointer {
+    tokens: Vec<String>,
+}
+
+impl JsonPointer {
+    /// The pointer to the whole document: no tokens.
+    #[must_use]
+    pub const fn root() -> Self {
+        Self { tokens: Vec::new() }
+    }
+
+    /// The pointer `pointer` spells, or `None` when it is not a JSON Pointer
+    /// (see [`tokens`]).
+    #[must_use]
+    pub fn parse(pointer: &str) -> Option<Self> {
+        Some(Self {
+            tokens: tokens(pointer)?.into_iter().map(Cow::into_owned).collect(),
+        })
+    }
+
+    /// This pointer extended by the member name `token`, unescaped.
+    #[must_use]
+    pub fn child(&self, token: impl Into<String>) -> Self {
+        let mut tokens = Vec::with_capacity(self.tokens.len() + 1);
+        tokens.extend_from_slice(&self.tokens);
+        tokens.push(token.into());
+        Self { tokens }
+    }
+
+    /// This pointer extended by the array index `index`.
+    #[must_use]
+    pub fn child_index(&self, index: usize) -> Self {
+        self.child(index.to_string())
+    }
+
+    /// Append the member name `token`, unescaped.
+    pub fn push(&mut self, token: impl Into<String>) {
+        self.tokens.push(token.into());
+    }
+
+    /// The reference tokens, unescaped, from the document root.
+    #[must_use]
+    pub fn tokens(&self) -> &[String] {
+        &self.tokens
+    }
+}
+
+/// Pointers order by their RFC 6901 spelling, the order a pointer list
+/// written as text has always had.
+impl Ord for JsonPointer {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.to_string().cmp(&other.to_string())
+    }
+}
+
+impl PartialOrd for JsonPointer {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl core::fmt::Display for JsonPointer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for token in &self.tokens {
+            f.write_str("/")?;
+            f.write_str(&escape_token(token))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{array_index, escape_token, tokens, unescape_token};
+    use super::{JsonPointer, array_index, escape_token, tokens, unescape_token};
+
+    /// A member name holding `/` or `~` stays one token: the spelling escapes
+    /// it, parsing that spelling returns the same tokens, and the pointer
+    /// addresses that member and not a nested path.
+    #[test]
+    fn a_member_name_with_slash_or_tilde_is_one_token() {
+        let document = crate::json::read(r#"{"a/b": {"c~d": 1}, "a": {"b": {"c~d": 2}}}"#)
+            .expect("a JSON object");
+        let pointer = JsonPointer::root().child("a/b").child("c~d");
+        assert_eq!(pointer.to_string(), "/a~1b/c~0d");
+        assert_eq!(
+            JsonPointer::parse(&pointer.to_string()),
+            Some(pointer.clone())
+        );
+        assert_eq!(
+            document
+                .pointer(&pointer.to_string())
+                .and_then(crate::json::Value::as_u64),
+            Some(1)
+        );
+        let plain = JsonPointer::root()
+            .child("$defs")
+            .child("Person")
+            .child_index(3);
+        assert_eq!(plain.to_string(), "/$defs/Person/3");
+    }
 
     #[test]
     fn a_tilde_not_followed_by_zero_or_one_is_refused() {

@@ -8,6 +8,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed JSON Pointers in the schema projections:**
+  `purrdf_lex::json_pointer::JsonPointer` holds a pointer as its unescaped
+  reference tokens and writes the RFC 6901 spelling only on `Display`, through
+  `escape_token`; `child`, `child_index`, `push`, `tokens` and `parse` build and
+  read it. The GraphQL, TypeScript, Pydantic, LinkML and JSON Schema importer
+  projections in `purrdf-shapes` now carry their locations as one, so a property
+  or definition named with `/` or `~` is one token and is reported at the
+  member it names, where its location was previously built by joining
+  unescaped text. Locations of ordinary names are written exactly as before, and
+  no emitted schema, loss entry or golden changes.
+
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the
   group ordinal beside its hash, instead of cloning every key into a second

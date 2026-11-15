@@ -843,7 +843,11 @@ fn validate_document_prefixes(prefixes: &Object) -> Result<(), LinkmlError> {
 
 /// The string member `key` of `object`, or a refusal naming `path` — the one
 /// "required string" reader of every LinkML document surface.
-fn required_string<'a>(object: &'a Object, key: &str, path: &str) -> Result<&'a str, LinkmlError> {
+fn required_string<'a>(
+    object: &'a Object,
+    key: &str,
+    path: &(impl std::fmt::Display + ?Sized),
+) -> Result<&'a str, LinkmlError> {
     object
         .get(key)
         .and_then(Value::as_str)

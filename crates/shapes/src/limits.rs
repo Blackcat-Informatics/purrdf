@@ -21,7 +21,11 @@ pub const MAX_SCHEMA_DEPTH: usize = 128;
 /// # Errors
 ///
 /// Returns the refusal message when `depth` exceeds [`MAX_SCHEMA_DEPTH`].
-pub(crate) fn ensure_depth(depth: usize, path: &str, surface: &str) -> Result<(), String> {
+pub(crate) fn ensure_depth(
+    depth: usize,
+    path: &(impl std::fmt::Display + ?Sized),
+    surface: &str,
+) -> Result<(), String> {
     if depth > MAX_SCHEMA_DEPTH {
         Err(format!(
             "{surface} schema expression at {path} exceeds depth {MAX_SCHEMA_DEPTH}"
