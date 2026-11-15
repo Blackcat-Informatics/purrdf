@@ -590,3 +590,69 @@ pub(crate) fn cfi(n: u32, seed: u64, twisted: bool) -> Fold {
     }
     fold
 }
+
+/// A claim dataset: one named graph holding one blank reifier of one triple
+/// term (whose object is a literal of `literal_len` bytes), the reifier's type
+/// and two IRI-valued annotations, and `spans` blank leaf spans each linked
+/// from the reifier and carrying five statements (a type, an IRI link, two
+/// `xsd:nonNegativeInteger` literals and an IRI kind). The last
+/// `tie_percent` percent of the spans are identical in all four values.
+pub(crate) fn claim(spans: u32, literal_len: usize, tie_percent: u32) -> Arc<RdfDataset> {
+    use purrdf_iri::vocab::rdf::TYPE;
+    use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
+    let mut b = RdfDatasetBuilder::new();
+    let iri = |b: &mut RdfDatasetBuilder, name: &str| {
+        b.intern_iri(&format!("http://example.org/{name}"))
+            .expect("an example IRI interns")
+    };
+    let g = iri(&mut b, "claims/1");
+    let rdf_type = b.intern_iri(TYPE).expect("rdf:type interns");
+    let (s, p) = (iri(&mut b, "subject"), iri(&mut b, "predicate"));
+    let text: String = (0..literal_len)
+        .map(|i| char::from(b'a' + (i % 26) as u8))
+        .collect();
+    let o = b
+        .intern_literal(RdfLiteral::simple(text))
+        .expect("a literal interns");
+    let triple = b.intern_triple(s, p, o).expect("a triple term interns");
+    let r = b
+        .intern_blank("r", BlankScope::DEFAULT)
+        .expect("a blank interns");
+    b.push_reifier_in_graph(r, triple, Some(g))
+        .expect("the reifier pushes");
+    let claim_class = iri(&mut b, "Claim");
+    b.push_quad(r, rdf_type, claim_class, Some(g))
+        .expect("a quad");
+    for (pred, value) in [("source", "doc/a"), ("method", "m/1")] {
+        let (pp, vv) = (iri(&mut b, pred), iri(&mut b, value));
+        b.push_quad(r, pp, vv, Some(g)).expect("a quad");
+    }
+    let tied_from = spans - spans * tie_percent / 100;
+    let (has_span, span_class) = (iri(&mut b, "span"), iri(&mut b, "Span"));
+    let (link, start, end, kind) = (
+        iri(&mut b, "link"),
+        iri(&mut b, "start"),
+        iri(&mut b, "end"),
+        iri(&mut b, "kind"),
+    );
+    for i in 0..spans {
+        let v = if i >= tied_from { 0 } else { i + 1 };
+        let span = b
+            .intern_blank(&format!("s{i}"), BlankScope::DEFAULT)
+            .expect("a blank interns");
+        b.push_quad(r, has_span, span, Some(g)).expect("a quad");
+        b.push_quad(span, rdf_type, span_class, Some(g))
+            .expect("a quad");
+        let doc = iri(&mut b, &format!("doc/{}", v % 7));
+        b.push_quad(span, link, doc, Some(g)).expect("a quad");
+        for (pred, n) in [(start, 10 * v), (end, 10 * v + 5)] {
+            let lit = b
+                .intern_literal(RdfLiteral::typed(n.to_string(), XSD_NON_NEGATIVE_INTEGER))
+                .expect("a literal interns");
+            b.push_quad(span, pred, lit, Some(g)).expect("a quad");
+        }
+        let k = iri(&mut b, &format!("kind/{}", v % 3));
+        b.push_quad(span, kind, k, Some(g)).expect("a quad");
+    }
+    b.freeze().expect("the claim freezes")
+}

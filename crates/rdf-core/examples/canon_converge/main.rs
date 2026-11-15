@@ -24,6 +24,9 @@
 
 use std::fmt::Write as _;
 
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
 mod checks;
 mod families;
 mod literal;
@@ -246,6 +249,7 @@ fn main() {
         }
         "current" | "build" => baseline(command, rest),
         "exp" => experiment(rest),
+        "accept" => accept(rest),
         "stats-check" => {
             // stats-check <relabellings> <file>...: the structural record is the
             // same in LITERAL and in OPTIMISED under every switch combination
@@ -399,6 +403,59 @@ fn experiment(rest: &[String]) {
         median(&mut units),
         median(&mut leaves),
         median(&mut children),
+    );
+}
+
+/// `accept <old|new|build> <spans> <literal-bytes> <tie-percent>`: one claim
+/// dataset, cold, measured by the counting allocator around the chosen
+/// labelling alone (run each cell in its own process under `perf stat`).
+fn accept(rest: &[String]) {
+    use sha2::{Digest, Sha256};
+    let (spans, len, ties) = (
+        number(rest, 1) as u32,
+        number(rest, 2) as usize,
+        number(rest, 3) as u32,
+    );
+    let ds = families::claim(spans, len, ties);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let verdict = match rest[0].as_str() {
+        "build" => "built".to_owned(),
+        "old" => {
+            let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1 << 28), None);
+            let outcome = try_canonical_sha256_view(&*ds, CanonHash::Sha256, &mut control);
+            let work = control.receipts().last().map_or(0, |r| r.work.total());
+            match outcome {
+                Ok(d) => format!("ok work={work} digest={}", d.to_hex()),
+                Err(e) => format!("refused work={work} {e:?}")
+                    .chars()
+                    .take(80)
+                    .collect(),
+            }
+        }
+        "new" => {
+            let text = view_lines::lines_from_view(&*ds, view_lines::Presentation::Overlay);
+            let input = Input::read(&text).unwrap_or_else(|e| panic!("{}", e.0));
+            match optimised::label_input(&input, Options::DEFAULT) {
+                Ok(done) => format!(
+                    "ok units={} sha256={} structural={}",
+                    done.stats.units(),
+                    purrdf_hash::hex::encode(&Sha256::digest(done.document.as_bytes())),
+                    r31::structural_json(&done)
+                ),
+                Err(e) => format!("refused {e}"),
+            }
+        }
+        other => panic!("unknown arm {other}"),
+    };
+    let m = window.close();
+    println!(
+        "ACCEPT {} spans={spans} literal_bytes={len} tie_percent={ties} quads={} allocations={} requested_bytes={} peak_working_bytes={} retained_bytes={} {verdict}",
+        rest[0],
+        ds.quad_count(),
+        m.allocations,
+        m.requested_bytes,
+        m.peak_working_bytes,
+        m.retained_bytes,
     );
 }
 
