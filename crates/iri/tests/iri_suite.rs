@@ -179,49 +179,150 @@ fn normalize_adds_no_guard_where_none_is_needed() {
     }
 }
 
-/// What `normalize` guarantees for any parse-accepted input: it returns, its
-/// text re-parses, scheme and authority presence are unchanged, and a second
-/// call is identical.
-fn assert_contract(input: &str) {
+/// Bases that separate the spellings a relative reference could be confused
+/// with: a deep hierarchical path, one with a query, an authority with an empty
+/// path, an authority-less rooted path, and paths with no directory part.
+const DISTINGUISHING_BASES: [&str; 7] = [
+    "http://h/x/y/z",
+    "http://h/x/y/z?bq",
+    "http://h",
+    "a:/p/q",
+    "urn:x",
+    "urn:x/y",
+    "a:",
+];
+
+/// RFC 3986 §4.1 and §5.2.4: dot segments in a relative reference are
+/// interpreted by resolution against a base, so `normalize` must not remove the
+/// ones only a base can interpret. Asserts the exact normal form, that it is a
+/// fixed point, and that it resolves like the original against each base.
+fn assert_normal_form_keeps_meaning(input: &str, expected: &str) {
     let original = parse(input).expect("input parses");
     let n = original.normalize();
-    let reparsed = parse(n.as_str()).expect("normal form re-parses");
+    assert_eq!(n.as_str(), expected, "{input}");
     assert_eq!(
-        reparsed.scheme().is_some(),
-        original.scheme().is_some(),
-        "{input}"
+        n.normalize().as_str(),
+        expected,
+        "{input}: not a fixed point"
     );
-    assert_eq!(
-        reparsed.authority().is_some(),
-        original.authority().is_some(),
-        "{input}"
-    );
-    assert_eq!(n.normalize().as_str(), n.as_str(), "{input}");
+    assert_eq!(n.scheme(), None, "{input}: became absolute");
+    assert_eq!(n.authority(), None, "{input}: gained an authority");
+    for base in DISTINGUISHING_BASES {
+        let base = parse(base).expect("base parses");
+        assert_eq!(
+            base.resolve(n.as_str())
+                .expect("normal form resolves")
+                .as_str(),
+            base.resolve(input).expect("input resolves").as_str(),
+            "{input} against {}",
+            base.as_str()
+        );
+    }
 }
 
-/// A reference whose path reduces to nothing has no empty spelling (`parse`
-/// refuses ""), so `normalize` must not panic on it: `.` is the normal form of an
-/// otherwise-empty reference, and a query or fragment keeps the empty path.
-/// Protects `Iri::normalize` from panicking on a parse-accepted dot-only
-/// reference. The exact normal form of a reference with a leading `..` is
-/// decided separately, so those inputs assert only the contract, not a string.
+/// Protects the meaning of a reference with leading `..` segments: `../a` names
+/// a sibling of the base's directory and `a` a child of it, so the leading
+/// segments stay, however they were spelled.
 #[test]
-fn normalize_of_a_dot_only_reference_returns_and_is_a_fixed_point() {
-    for input in [".", "./", "./."] {
-        let n = parse(input).expect("input parses").normalize();
-        assert_eq!(n.as_str(), ".", "{input}");
-        assert_eq!(n.normalize().as_str(), ".", "{input}");
+fn normalize_keeps_leading_parent_segments_of_a_relative_reference() {
+    for (input, expected) in [
+        ("../a", "../a"),
+        ("../../a/./b", "../../a/b"),
+        ("./../a", "../a"),
+        ("../a/b/../c", "../a/c"),
+        ("..", ".."),
+        ("../", ".."),
+        ("./..", ".."),
+        (".././", ".."),
+        ("../..", "../.."),
+        ("..?q#f", "..?q#f"),
+    ] {
+        assert_normal_form_keeps_meaning(input, expected);
     }
-    for input in ["..", "../", "./..", ".././"] {
-        assert_contract(input);
+}
+
+/// Protects the difference between the base's directory (`.`) and the base
+/// document itself (the empty path): a reference that reduces to its directory
+/// keeps the path `.`, with or without a query or fragment. An empty path with a
+/// query or fragment is a different reference and is not rewritten.
+#[test]
+fn normalize_keeps_the_directory_reference_apart_from_the_empty_path() {
+    for (input, expected) in [
+        (".", "."),
+        ("./", "."),
+        ("./.", "."),
+        (".?q", ".?q"),
+        ("./?q", ".?q"),
+        ("./#f", ".#f"),
+        ("a/.", "a/"),
+        ("a/b/..", "a/"),
+        ("?q", "?q"),
+        ("#f", "#f"),
+    ] {
+        assert_normal_form_keeps_meaning(input, expected);
     }
-    // Neighbours that must keep their current result: an empty path with a query
-    // or fragment is not rewritten, and non-empty results gain nothing.
-    assert_eq!(parse("?q").unwrap().normalize().as_str(), "?q");
-    assert_eq!(parse(".?q").unwrap().normalize().as_str(), "?q");
-    assert_eq!(parse("./#f").unwrap().normalize().as_str(), "#f");
-    assert_eq!(parse("x").unwrap().normalize().as_str(), "x");
-    assert_eq!(parse("./a").unwrap().normalize().as_str(), "a");
+}
+
+/// Protects a relative-path reference from becoming an absolute-path one: an
+/// empty first segment stays behind `./` or `..`, where dropping the dot segment
+/// would leave a leading `/`.
+#[test]
+fn normalize_keeps_a_relative_reference_with_an_empty_segment_relative() {
+    for (input, expected) in [
+        (".//x", ".//x"),
+        ("..//x", "..//x"),
+        (".//", ".//"),
+        ("./a//b", "a//b"),
+    ] {
+        assert_normal_form_keeps_meaning(input, expected);
+    }
+}
+
+/// Protects resolution against a base whose path has no directory part (`urn:x`):
+/// there RFC 3986 §5.2.4 turns the reference's own first segment followed by
+/// `..` into a leading `/`, so that pair is kept, while every later pair and
+/// every `.` collapses.
+#[test]
+fn normalize_collapses_only_the_dot_segments_every_base_agrees_on() {
+    for (input, expected) in [
+        ("a/./b", "a/b"),
+        ("a/b/../c", "a/c"),
+        ("./a", "a"),
+        ("x", "x"),
+        ("a/b/c/../../d", "a/d"),
+        ("a/../b", "a/../b"),
+        ("a/..", "a/.."),
+        ("a/../", "a/.."),
+        ("a/b/../../c", "a/../c"),
+        ("a/../b/../c", "a/../c"),
+        ("a/../../b", "a/../../b"),
+    ] {
+        assert_normal_form_keeps_meaning(input, expected);
+    }
+}
+
+/// Neighbours of the relative-path rule that resolution treats as already
+/// rooted, and so keep full RFC 3986 §5.2.4 removal: an absolute IRI, a
+/// reference with an authority, and an absolute-path reference.
+#[test]
+fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
+    for (input, expected) in [
+        ("http://h/../a", "http://h/a"),
+        ("http://h/a/../b", "http://h/b"),
+        ("a:../b", "a:b"),
+        ("a:b/../c", "a:/c"),
+        ("//h/../a", "//h/a"),
+        ("//h/a/./b", "//h/a/b"),
+        ("/a/../b", "/b"),
+        ("/../a", "/a"),
+        ("/.", "/"),
+    ] {
+        assert_eq!(
+            parse(input).unwrap().normalize().as_str(),
+            expected,
+            "{input}"
+        );
+    }
 }
 
 /// RFC 3986 §4.2: the first segment of a scheme-less relative path may not hold
@@ -240,7 +341,11 @@ fn normalize_keeps_a_relative_reference_with_a_colon_segment_relative() {
         assert_eq!(n.scheme(), None, "{input}: became absolute");
         assert_eq!(n.normalize().as_str(), expected, "{input}");
     }
-    assert_contract("../a:b"); // exact form of a leading `..` is decided separately
+    // A leading `..` stays, so the colon is not in the first segment and needs no
+    // `./`; a retained first segment that holds one still does.
+    assert_normal_form_keeps_meaning("../a:b", "../a:b");
+    assert_normal_form_keeps_meaning("./a:b/../c", "./a:b/../c");
+    assert_normal_form_keeps_meaning("./a/../b:c", "a/../b:c");
     // Neighbours: no prefix where the colon is not in the first segment, where
     // the path is rooted, or where a scheme is present.
     for (input, expected) in [

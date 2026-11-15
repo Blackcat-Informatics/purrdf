@@ -26,7 +26,9 @@
 //!   force and where it came from. [`BaseIri::relativize`] is the inverse, letting a
 //!   serializer emit `<>` or `<foo>` under a base.
 //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
-//!   encoding, and dot-segment normalization. Idempotent.
+//!   encoding, and dot-segment normalization. Idempotent. A relative reference
+//!   keeps the leading dot segments that only a base can interpret, so it
+//!   resolves to the same IRI before and after.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
 //!   [`PrefixMap`], and the namespace/local-name split
 //!   [`split_local_name`]/[`local_name`].

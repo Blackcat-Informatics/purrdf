@@ -29,7 +29,9 @@ CURIE/prefix handling.
   fragment) exposed without re-encoding.
 - **Reference resolution** — RFC 3986 §5 strict resolution (`Iri::resolve`).
 - **Syntax normalization** — RFC 3986 §6.2.2 (`Iri::normalize`): case,
-  percent-encoding, and dot-segment normalization; idempotent.
+  percent-encoding, and dot-segment normalization; idempotent. A relative
+  reference keeps the leading dot segments that only a base can interpret, so
+  it resolves to the same IRI before and after.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
 - **W3C vocabularies** — `vocab`: one module per W3C namespace (`rdf`,

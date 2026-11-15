@@ -11,19 +11,32 @@
 //!   upper-cased.
 //! * §6.2.2.2 **Percent-encoding** — `%XX` triplets that encode an *unreserved*
 //!   character are decoded to that character.
-//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to the path.
+//! * §6.2.2.3 **Path segment** — `remove_dot_segments` applied to a path that
+//!   resolution would treat the same way: any path under a scheme or an
+//!   authority, and an absolute path. The rootless path of a reference with
+//!   neither is not resolved yet, so only the dot segments that mean the same
+//!   against every base collapse (`a/./b`, `a/b/../c`); `../a`, `..` and `.`
+//!   keep the segments a base must interpret.
+//!
+//! For a relative reference `r` and an absolute base `b`, `b.resolve(r)` and
+//! `b.resolve(r.normalize())` name the same IRI.
 //!
 //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
 
 use purrdf_lex::percent;
 
 use crate::parse::{Iri, parse};
-use crate::resolve::{recomposition_guard, remove_dot_segments};
+use crate::resolve::{collapse_unresolved_dot_segments, recomposition_guard, remove_dot_segments};
 
 impl Iri {
     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
     /// parsed/validated; for every IRI `parse` accepts, the result has the same
     /// scheme and authority presence and is a fixed point of `normalize`.
+    ///
+    /// A relative reference keeps its meaning: resolving the result against an
+    /// absolute base gives the IRI the original resolves to, so a scheme-less
+    /// reference with no authority keeps the leading dot segments only a base
+    /// can interpret.
     ///
     /// # Examples
     ///
@@ -35,6 +48,10 @@ impl Iri {
     ///
     /// // Normalization is idempotent.
     /// assert_eq!(norm.normalize(), norm);
+    ///
+    /// // Interior dot segments of a relative reference collapse; leading ones stay.
+    /// assert_eq!(purrdf_iri::parse("a/./b/../c")?.normalize().as_str(), "a/c");
+    /// assert_eq!(purrdf_iri::parse("../a")?.normalize().as_str(), "../a");
     /// # Ok::<(), purrdf_iri::IriError>(())
     /// ```
     #[must_use]
@@ -49,7 +66,18 @@ impl Iri {
             out.push_str("//");
             out.push_str(&normalize_authority(auth));
         }
-        let path = remove_dot_segments(&percent::normalize(self.path()));
+        let decoded = percent::normalize(self.path());
+        // A rootless path under no scheme and no authority has not been resolved:
+        // its leading dot segments belong to the base it will meet.
+        let unresolved = self.scheme().is_none()
+            && self.authority().is_none()
+            && !decoded.is_empty()
+            && !decoded.starts_with('/');
+        let path = if unresolved {
+            collapse_unresolved_dot_segments(&decoded)
+        } else {
+            remove_dot_segments(&decoded)
+        };
         out.push_str(recomposition_guard(
             self.scheme().is_some(),
             self.authority().is_some(),
@@ -65,16 +93,13 @@ impl Iri {
             out.push_str(&percent::normalize(frag));
         }
 
-        // A reference with no scheme, authority, path, query or fragment has no
-        // parseable spelling; `.` is its normal form (and `.` normalizes to `.`).
-        if out.is_empty() {
-            out.push('.');
-        }
-
         // Re-parse. Every step keeps the text a valid IRI of the same shape: ASCII
-        // lower-casing, decoding unreserved characters, dot-segment removal, the
-        // `recomposition_guard` prefixes and the `.` for an empty result. A parse
-        // failure here is therefore a genuine bug, not user input - hence `expect`.
+        // lower-casing, decoding unreserved characters, dot-segment removal and the
+        // `recomposition_guard` prefixes. The text is never empty: a scheme, an
+        // authority, a rooted path and an unresolved path each leave at least one
+        // character, and an empty path parsed only with a query or fragment. A
+        // parse failure here is therefore a genuine bug, not user input - hence
+        // `expect`.
         parse(&out).expect("normalized IRI must re-parse")
     }
 }

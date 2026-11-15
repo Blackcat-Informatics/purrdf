@@ -4,8 +4,9 @@
 //! Property tests.
 //!
 //! Two families live here. The IRI one asserts that parse is verbatim-faithful,
-//! that normalization is idempotent, and that resolving a reference against an
-//! absolute base yields an absolute IRI.
+//! that normalization is idempotent and keeps what a relative reference resolves
+//! to, and that resolving a reference against an absolute base yields an absolute
+//! IRI.
 //!
 //! The RFC 5646 language-tag one asserts the invariants the module documents but
 //! that no finite corpus can pin: the parser is **total** (no input panics it,
@@ -96,6 +97,85 @@ prop_test! {
             prop_assert_eq!(n1.authority().is_some(), iri.authority().is_some());
             let n2 = n1.normalize();
             prop_assert_eq!(n1.as_str(), n2.as_str());
+        }
+    }
+}
+
+/// Scheme-less, authority-less references built from the segments whose
+/// handling decides what a reference means: `.`, `..`, empty, plain, one holding
+/// a colon and one holding a percent-encoded unreserved character. A
+/// percent-encoded dot is left out on purpose: RFC 3986 §6.2.2.2 decodes it into
+/// a dot segment, which resolution of the undecoded reference does not see.
+fn relative_reference() -> impl Strategy<Value = String> {
+    let prefix = prop::sample::select(vec!["", "", "./", "../", "/"]);
+    let seg = prop::sample::select(vec!["", ".", "..", "..", "x", "y", "a:b", "%7e", "%3A"]);
+    let segs = prop::collection::vec(seg, 0..7);
+    let query = prop::option::of(prop::sample::select(vec!["", "q"]));
+    let frag = prop::option::of(prop::sample::select(vec!["", "f"]));
+    (prefix, segs, query, frag).prop_map(|(pre, segs, q, f)| {
+        let mut out = format!("{pre}{}", segs.join("/"));
+        if let Some(q) = q {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = f {
+            out.push('#');
+            out.push_str(f);
+        }
+        out
+    })
+}
+
+/// Absolute bases of every path shape RFC 3986 §5.2.3 merges differently: an
+/// authority with an empty, rooted, dotted or double-slash path, no authority
+/// with a rooted path, and no authority with a rootless path that has, lacks or
+/// only pretends to have a directory part.
+fn absolute_base() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(vec![
+        "http://h",
+        "http://h/",
+        "http://h/x",
+        "http://h/x/y/z?bq",
+        "http://h/x/y/",
+        "http://h/x/../y/./z",
+        "http://h//x//y",
+        "a:/",
+        "a:/p/q",
+        "a:/p/../q/r",
+        "a:",
+        "urn:x",
+        "urn:x/y",
+        "urn:x/y/z",
+        "urn:x/../y",
+        "a:./x",
+        "a:../x/y",
+        "a:.//x",
+    ])
+}
+
+prop_test! {
+    /// Protects the meaning of a relative reference under `normalize` (RFC 3986
+    /// §4.1, §5.2.4, §6.2.2.3): dot segments are interpreted by resolution, so for
+    /// every reference with no scheme and every absolute base, resolving the
+    /// normal form names the same IRI as resolving the original. The two results
+    /// are compared in normal form because the reference's case and
+    /// percent-encoding normalization carry into the resolved text. The normal
+    /// form also stays scheme-less and is a fixed point.
+    #[test]
+    fn normalize_preserves_what_a_relative_reference_resolves_to(
+        r in relative_reference(),
+        b in absolute_base(),
+    ) {
+        if let Ok(reference) = parse(&r) {
+            prop_assume!(!reference.has_scheme());
+            let base = parse(b).expect("base parses");
+            let n = reference.normalize();
+            prop_assert!(!n.has_scheme());
+            prop_assert_eq!(n.authority().is_some(), reference.authority().is_some());
+            prop_assert_eq!(n.normalize().as_str(), n.as_str());
+            let direct = base.resolve(&r).expect("reference resolves").normalize();
+            let through = base.resolve(n.as_str()).expect("normal form resolves").normalize();
+            prop_assert_eq!(through.as_str(), direct.as_str());
         }
     }
 }

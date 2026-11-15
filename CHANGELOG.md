@@ -8,6 +8,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **iri: `Iri::normalize` keeps what a relative reference resolves to.**
+  **Behaviour change:** for a reference with no scheme and no authority whose
+  path does not begin with `/`, `normalize` no longer applies RFC 3986 §5.2.4
+  `remove_dot_segments`, which is defined for a path already merged with a base
+  and discarded the segments only a base can interpret. Resolving the normal
+  form against any absolute base now names the same IRI as resolving the
+  original. The normal forms that change:
+
+  | Reference | Before | Now |
+  | --- | --- | --- |
+  | `../a`, `./../a` | `a` | `../a` |
+  | `../a:b` | `./a:b` | `../a:b` |
+  | `..`, `../`, `./..` | `.` | `..` |
+  | `.?q`, `./?q` | `?q` | `.?q` |
+  | `./#f` | `#f` | `.#f` |
+  | `.//x` | `/x` | `.//x` |
+  | `..//x` | `/x` | `..//x` |
+  | `a/..`, `a/../` | `/` | `a/..` |
+  | `a/../b` | `/b` | `a/../b` |
+  | `a/b/../../c` | `/c` | `a/../c` |
+
+  A leading `..` stays; a `.` and every later `segment/..` pair still collapse
+  (`a/./b` is `a/b`, `a/b/../c` is `a/c`, `./a` is `a`); a reference that
+  reduces to its directory is `.` and no longer loses its path beside a query
+  or fragment; and the reference's own first segment followed by `..` is kept,
+  because a base whose path has no directory part (`urn:x`) resolves that pair
+  to a leading `/`. Unchanged: every IRI with a scheme, every reference with an
+  authority, every absolute-path reference (`/a/../b` is `/b`), and every
+  scheme-less reference without a leading dot segment or a `..` that reaches
+  its first segment. The signature is unchanged. A caller
+  that stored normal forms of relative references holds the old spelling for
+  the rows above; normal forms of absolute IRIs are byte-identical.
+
 - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.
   A module linked from the umbrella `purrdf` crate, which reaches `purrdf-rdf`
