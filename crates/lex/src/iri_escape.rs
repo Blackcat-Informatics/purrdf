@@ -64,8 +64,11 @@
 //! the grammar and which from the carrier.
 //!
 //! The unqualified functions ([`is_iriref_escape_required`], [`push_escaped`],
-//! [`escape`]) are the [`Carrier::Xml`] set, which every serializer other than the
-//! canonical form uses; the canonical form calls the `_for` forms with
+//! [`escape`]) are the [`Carrier::Xml`] set. Every writer that spells an IRI
+//! through [`crate::term_syntax::write_iri`] uses it: the Turtle, TriG, N-Triples
+//! and N-Quads serializers, the Turtle renderer whose text the XML carriers
+//! embed, and every other term writer. Only the writer of a canonical line
+//! ([`crate::term_syntax::write_canonical_iri`]) calls the `_for` forms with
 //! [`Carrier::Canonical`]. Both carriers share one candidate scan,
 //! [`find_first_candidate`], whose stops are a superset of either set, so a
 //! canonical writer decides the scalar at the `0xC2` lead byte and keeps the C1
@@ -296,7 +299,7 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, carrier: Car
 /// `UCHAR`, and every other scalar rides verbatim. [`push_escaped_for`] is the
 /// form that names the carrier.
 ///
-/// The emission of the Turtle writer and of the XML carriers; one scan with
+/// The emission of every writer other than the canonical line; one scan with
 /// bulk copies of the clean runs.
 ///
 /// ```

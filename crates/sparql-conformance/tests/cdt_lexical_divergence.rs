@@ -517,7 +517,7 @@ fn the_recovery_resolves_datatypes_the_way_the_parser_does() {
 /// published space" a claim about a KNOWN population rather than about
 /// whatever the walk happened to reach. Re-derive this number from a run,
 /// never guess it, and check the other three in the same run.
-const EXPECTED_TOKENIZED_FILES: usize = 4310;
+const EXPECTED_TOKENIZED_FILES: usize = 4319;
 /// Of those, how many the lexer REFUSED. Every one is text-checked for the
 /// SEP-0009 namespace instead of being graded, so this number is the exact size
 /// of the scan's ungraded remainder.
@@ -531,9 +531,9 @@ const EXPECTED_TOKENIZED_FILES: usize = 4310;
 /// dropped by a bare `continue` while every other pin in this file still matched.
 const EXPECTED_LEX_REFUSED: usize = 13;
 /// Composite literals recovered across all of them.
-const EXPECTED_COMPOSITE_LITERALS: usize = 959;
+const EXPECTED_COMPOSITE_LITERALS: usize = 961;
 /// How many of those parse to a value (the rest are the corpus's deliberately
 /// ill-formed vectors).
-const EXPECTED_WELL_FORMED: usize = 949;
+const EXPECTED_WELL_FORMED: usize = 951;
 /// Expected-results files visited by the coverage check.
 const EXPECTED_RESULT_FILES: usize = 600;

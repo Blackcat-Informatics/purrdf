@@ -140,10 +140,6 @@ fn receipt_json(receipt: &SearchReceipt) -> Value {
                     purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID,
                     purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
                 ),
-                CanonPresentation::FlatAssertionCompositeBlanks => (
-                    purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID,
-                    purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION,
-                ),
             };
             Value::object([
                 ("algorithm", Value::from(purrdf_core::CANON_PROFILE_ID)),

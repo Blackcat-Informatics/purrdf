@@ -14,6 +14,7 @@ struct Fields<Id> {
     nquads: String,
     labels: Vec<(Id, String)>,
     presentation: CanonPresentation,
+    composite_option: bool,
 }
 
 /// The result of canonicalizing a dataset or a view of one.
@@ -60,9 +61,49 @@ impl<Id: ViewTermId> Canonicalized<Id> {
     /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`](super::try_canonicalize_flat_view),
     /// [`try_canonicalize_flat_graph_view`](super::try_canonicalize_flat_graph_view) and the empty-selection cases of both
     /// families always report the presentation of the family that produced them.
+    ///
+    /// The named composite option (`try_canonicalize_flat_composite_view`) is the
+    /// flat presentation with one added step and reports
+    /// [`CanonPresentation::FlatAssertion`] here. Read [`Self::presentation_id`] to
+    /// tell its documents from standard flat ones.
     #[must_use]
     pub fn presentation(&self) -> CanonPresentation {
         self.payload.presentation
+    }
+
+    /// The stable identifier of what produced this document, the value a consumer
+    /// pins: [`CANON_PRESENTATION_OVERLAY_ID`](super::CANON_PRESENTATION_OVERLAY_ID),
+    /// [`CANON_PRESENTATION_FLAT_ASSERTION_ID`](super::CANON_PRESENTATION_FLAT_ASSERTION_ID),
+    /// or
+    /// [`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`](super::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID)
+    /// for a document of the named composite option. Unlike
+    /// [`Self::presentation`], it distinguishes that option from the standard flat
+    /// presentation.
+    #[must_use]
+    pub fn presentation_id(&self) -> &'static str {
+        match (self.payload.presentation, self.payload.composite_option) {
+            (CanonPresentation::Overlay, _) => super::CANON_PRESENTATION_OVERLAY_ID,
+            (CanonPresentation::FlatAssertion, false) => {
+                super::CANON_PRESENTATION_FLAT_ASSERTION_ID
+            }
+            (CanonPresentation::FlatAssertion, true) => {
+                super::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID
+            }
+        }
+    }
+
+    /// The version of [`Self::presentation_id`] this document was written under.
+    #[must_use]
+    pub fn presentation_version(&self) -> u32 {
+        match (self.payload.presentation, self.payload.composite_option) {
+            (CanonPresentation::Overlay, _) => super::CANON_PRESENTATION_OVERLAY_VERSION,
+            (CanonPresentation::FlatAssertion, false) => {
+                super::CANON_PRESENTATION_FLAT_ASSERTION_VERSION
+            }
+            (CanonPresentation::FlatAssertion, true) => {
+                super::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION
+            }
+        }
     }
 
     /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
@@ -123,12 +164,14 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> ResultBuilder<Id, E> {
     pub(super) fn new<D: DatasetView<Id = Id, ReadError = E>>(
         view: &D,
         presentation: CanonPresentation,
+        composite_option: bool,
     ) -> Result<Self, CanonError<E>> {
         Ok(Self {
             fields: Fields {
                 nquads: String::new(),
                 labels: Vec::new(),
                 presentation,
+                composite_option,
             },
             grant: SourceGrant::new(view)?,
         })

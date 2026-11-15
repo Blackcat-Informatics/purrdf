@@ -190,7 +190,7 @@ use crate::dataset_view::{
     ViewTermId, checkpointed_drain,
 };
 use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_canonical_iri, write_canonical_literal,
 };
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
@@ -357,10 +357,11 @@ pub const CANON_PRESENTATION_FLAT_ASSERTION_VERSION: u32 = 2;
 /// `cdt:List` or `cdt:Map` lexical form is a blank node of the graph, takes part in
 /// labelling and is written as its canonical label.
 ///
-/// A separate identifier, so a document or digest taken with the relabelling is
-/// never mistaken for a standard flat one. Reached through
-/// [`try_canonicalize_flat_composite_view`] and [`try_flat_composite_digest_view`];
-/// the standard flat entry points never apply it.
+/// A separate identifier, reported by [`Canonicalized::presentation_id`], so a
+/// document taken with the relabelling can be told from a standard flat one.
+/// Reached through [`try_canonicalize_flat_composite_view`] and
+/// [`try_flat_composite_digest_view`]; the standard flat entry points never apply
+/// it.
 pub const CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID: &str =
     "flat-assertion-composite-blanks";
 
@@ -843,13 +844,34 @@ type FlatViewResult<D> = Result<
 /// point emits every statement-layer row as an ORDINARY quad carrying its row's own
 /// real predicate (`rdf:reifies`, or the annotation's own predicate); a row that
 /// already exists as a genuine base quad is emitted exactly once (the id-level dedup
-/// law). What is ADMITTED is unchanged from the overlay — only what is EMITTED
-/// differs — and the flat presentation, which writes no sentinel, refuses no
-/// reserved IRI (see the module documentation), so the refusals below are only the
-/// search and source ones.
+/// law). What is ADMITTED differs from the overlay too: the flat presentation,
+/// which writes no sentinel, refuses no reserved IRI (see the module
+/// documentation), so the refusals below are only the search and source ones.
 ///
-/// [`Canonicalized::nquads`] is isomorphism-invariant, exactly as under the overlay:
-/// two isomorphic views produce byte-equal flat documents. [`Canonicalized::labels`]
+/// # When the document is invariant under blank relabelling, and when it is not
+///
+/// [`Canonicalized::nquads`] is the same bytes for two views that differ only in
+/// the labels of their blank nodes **if no literal of the view is a composite
+/// (`cdt:List` / `cdt:Map`) literal whose lexical form holds a blank-node label**.
+/// For such a literal it is NOT invariant. The standard flat presentation has no
+/// datatype-aware step: the label is text, takes no part in labelling, and is
+/// written exactly as the view stores it, while the same node written as a term
+/// becomes `_:c14nN`. Two datasets that [`datasets_isomorphic`](super::datasets_isomorphic)
+/// calls isomorphic and that differ in such a label therefore have different flat
+/// documents and digests, and the label inside the literal no longer names the
+/// node it named in the source.
+///
+/// The stored spelling of such a label depends on how the data was loaded. A
+/// document parsed on its own keeps the label it wrote. A dataset merged into a
+/// builder that already holds another scope has the label rewritten into that
+/// scope's envelope (`purrdfesc{scope}_{label}`, see [`crate::blank_label`]), and
+/// that text is what the flat document then carries. The same source document can
+/// so give two different standard flat documents. A consumer that mints an
+/// identifier from flat output and may hold such literals must use the overlay
+/// ([`try_canonicalize_view`]) or the named option
+/// ([`try_canonicalize_flat_composite_view`]), both of which relabel.
+///
+/// [`Canonicalized::labels`]
 /// is invariant only UP TO AUTOMORPHISM — where a graph carries a nontrivial
 /// automorphism, the n-degree search's tie-break among otherwise-equivalent
 /// candidates is enumeration-order-dependent, so two isomorphic-but-not-identical
@@ -878,22 +900,25 @@ pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
-    flat_document_view(view, hash, CanonPresentation::FlatAssertion, control)
+    flat_document_view(view, hash, false, control)
 }
 
 /// [`try_canonicalize_flat_view`] with the composite-literal blank relabelling, as
 /// the separately named presentation
 /// [`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`] /
-/// [`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION`]
-/// ([`CanonPresentation::FlatAssertionCompositeBlanks`]).
+/// [`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION`].
 ///
 /// The standard flat presentation has no datatype-aware step: a blank label inside a
 /// `cdt:List` or `cdt:Map` lexical form is text and is written as it is. This entry
 /// point keeps the earlier behaviour for a consumer that needs it: such a label is a
 /// blank node of the graph, takes part in labelling, and is written as its canonical
-/// label. The result reports its own presentation, so its document is never
-/// mistaken for a standard flat one. Refusals, the checkpoint law and
-/// [`Canonicalized::labels`] are those of [`try_canonicalize_flat_view`].
+/// label, so the document is invariant under blank relabelling for every input.
+/// The result names the option through [`Canonicalized::presentation_id`] and
+/// [`Canonicalized::presentation_version`]. [`Canonicalized::presentation`] and the
+/// run's receipt report [`CanonPresentation::FlatAssertion`], the presentation the
+/// option extends, so a consumer that must tell the two apart reads the identifier.
+/// Refusals, the checkpoint law and [`Canonicalized::labels`] are those of
+/// [`try_canonicalize_flat_view`].
 ///
 /// # Errors
 /// Exactly [`try_canonicalize_flat_view`]'s.
@@ -902,24 +927,22 @@ pub fn try_canonicalize_flat_composite_view<D: FallibleDatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
-    flat_document_view(
-        view,
-        hash,
-        CanonPresentation::FlatAssertionCompositeBlanks,
-        control,
-    )
+    flat_document_view(view, hash, true, control)
 }
 
 fn flat_document_view<D: FallibleDatasetView>(
     view: &D,
     hash: CanonHash,
-    presentation: CanonPresentation,
+    composite_option: bool,
     control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
+    let presentation = CanonPresentation::FlatAssertion;
     control.run(
         SearchConfiguration::rdfc(hash, presentation, None, CanonOutput::Document),
         |run| match checkpointed_drain(view, |v| {
-            CanonState::new(v, CanonScope::Dataset, presentation, hash, run).run_fallible()
+            CanonState::new(v, CanonScope::Dataset, presentation, hash, run)
+                .relabelling_composites(composite_option)
+                .run_fallible()
         }) {
             Ok(Ok(canonicalized)) => Ok(canonicalized),
             Ok(Err(refused)) => Err(ViewCanonError::Refused(refused)),
@@ -1019,7 +1042,7 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
-    flat_digest_view(view, hash, CanonPresentation::FlatAssertion, control)
+    flat_digest_view(view, hash, false, control)
 }
 
 /// The SHA-256 [`ContentDigest`] of `view`'s whole-dataset document under the
@@ -1037,24 +1060,21 @@ pub fn try_flat_composite_digest_view<D: FallibleDatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
-    flat_digest_view(
-        view,
-        hash,
-        CanonPresentation::FlatAssertionCompositeBlanks,
-        control,
-    )
+    flat_digest_view(view, hash, true, control)
 }
 
 fn flat_digest_view<D: FallibleDatasetView>(
     view: &D,
     hash: CanonHash,
-    presentation: CanonPresentation,
+    composite_option: bool,
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
+    let presentation = CanonPresentation::FlatAssertion;
     control.run(
         SearchConfiguration::rdfc(hash, presentation, None, CanonOutput::Sha256Digest),
         |run| match checkpointed_drain(view, |view| {
             CanonState::new(view, CanonScope::Dataset, presentation, hash, run)
+                .relabelling_composites(composite_option)
                 .digest_fallible(Sha256::new())
                 .map(ContentDigest::from_raw)
         }) {
@@ -1122,7 +1142,7 @@ fn empty_canonicalized<D: DatasetView>(
     presentation: CanonPresentation,
     stop: Option<&dyn crate::StopSignal>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
-    result::ResultBuilder::new(view, presentation)?.finish(stop)
+    result::ResultBuilder::new(view, presentation, false)?.finish(stop)
 }
 
 /// Relabel every blank node of `ds` to its canonical `c14n{n}` label at
@@ -1567,24 +1587,9 @@ pub enum CanonPresentation {
     /// [`try_canonicalize_flat_graph_view`], [`check_admissible_flat_view`] and
     /// [`try_flat_digest_view`].
     FlatAssertion,
-    /// [`FlatAssertion`](Self::FlatAssertion) with the composite-literal blank
-    /// relabelling the standard flat presentation does not have: a blank label inside
-    /// a `cdt:List` or `cdt:Map` lexical form is a blank node of the graph and is
-    /// written as its canonical label. Named and versioned separately
-    /// ([`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`]) so its documents
-    /// and digests can never be mistaken for standard flat ones. Reached only through
-    /// [`try_canonicalize_flat_composite_view`] and [`try_flat_composite_digest_view`].
-    FlatAssertionCompositeBlanks,
 }
 
 impl CanonPresentation {
-    /// Whether a blank label inside a composite literal's lexical form is a blank
-    /// node of the graph: the overlay and the named flat option say yes; the
-    /// standard flat presentation has no datatype-aware step.
-    const fn relabels_composites(self) -> bool {
-        !matches!(self, Self::FlatAssertion)
-    }
-
     /// Whether the reserved namespace is refused: the overlay writes the sentinels,
     /// so it does; a flat presentation never does.
     const fn refuses_reserved_vocabulary(self) -> bool {
@@ -1700,7 +1705,7 @@ impl<Id: ViewTermId> Component<Id> {
 /// when `composites` is set, into the lexical form of a composite (`cdt:List` /
 /// `cdt:Map`) literal.
 ///
-/// `composites` is [`CanonPresentation::relabels_composites`]: the overlay and the
+/// `composites` is the run's own setting: the overlay and the
 /// named flat option read a composite literal's blank labels as nodes of the graph;
 /// the standard flat presentation reads a lexical form as text and sees none.
 ///
@@ -2015,9 +2020,7 @@ fn base_quad_component<D: DatasetView>(
     }
     match presentation {
         CanonPresentation::Overlay => Some(folded),
-        CanonPresentation::FlatAssertion | CanonPresentation::FlatAssertionCompositeBlanks => {
-            lower_folded_row(ds, graph_probe, folded)
-        }
+        CanonPresentation::FlatAssertion => lower_folded_row(ds, graph_probe, folded),
     }
 }
 
@@ -2228,7 +2231,7 @@ fn emit_reifier_row<D: DatasetView, E>(
             t: q.o,
             g: emitted_g,
         }),
-        CanonPresentation::FlatAssertion | CanonPresentation::FlatAssertionCompositeBlanks => {
+        CanonPresentation::FlatAssertion => {
             if !already_asserted(ds, graph_probe, q.s, q.p, q.o) {
                 f(Component::Quad {
                     s: q.s,
@@ -2263,7 +2266,7 @@ fn emit_annotation_row<D: DatasetView, E>(
             o: q.o,
             g: emitted_g,
         }),
-        CanonPresentation::FlatAssertion | CanonPresentation::FlatAssertionCompositeBlanks => {
+        CanonPresentation::FlatAssertion => {
             if !already_asserted(ds, graph_probe, q.s, q.p, q.o) {
                 f(Component::Quad {
                     s: q.s,
@@ -2425,6 +2428,10 @@ struct CanonState<'a, D: DatasetView> {
     scope: CanonScope<D::Id>,
     /// How this run's statement-layer rows are expressed — see [`CanonPresentation`].
     presentation: CanonPresentation,
+    /// Whether a blank label inside a composite literal's lexical form is a blank
+    /// node of the graph. The overlay always reads one so; the flat presentation
+    /// does only under the named option ([`Self::relabelling_composites`]).
+    composites: bool,
     /// Every blank, in ascending id order (the deterministic reference set).
     blanks: Vec<D::Id>,
     /// First-degree hash (§4.6) of each blank, computed once.
@@ -3146,6 +3153,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             ds,
             scope,
             presentation,
+            composites: matches!(presentation, CanonPresentation::Overlay),
             blanks: Vec::new(),
             first_degree: BTreeMap::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
@@ -3153,6 +3161,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             run,
             stop: run.stop(),
         }
+    }
+
+    /// Select the named composite option when `selected`: a blank label inside a
+    /// composite literal's lexical form takes part in labelling and is written as
+    /// its canonical label.
+    const fn relabelling_composites(mut self, selected: bool) -> Self {
+        self.composites = self.composites || selected;
+        self
     }
 
     fn collect_incidence<S: Admission + ?Sized>(
@@ -3169,15 +3185,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             self.stop,
             &mut |comp| {
                 mentioned.clear();
-                comp.try_for_each_blank(
-                    self.ds,
-                    self.presentation.relabels_composites(),
-                    self.stop,
-                    &mut |b| {
-                        mentioned.push(b);
-                        Ok(())
-                    },
-                )?;
+                comp.try_for_each_blank(self.ds, self.composites, self.stop, &mut |b| {
+                    mentioned.push(b);
+                    Ok(())
+                })?;
                 mentioned.sort_unstable();
                 mentioned.dedup();
                 footprints
@@ -3243,7 +3254,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut canonical = self.issue_labels()?;
         canonical.drop_search_state();
         canonical.run.phase(CanonPhase::Output);
-        let mut result = result::ResultBuilder::new(canonical.ds, canonical.presentation)?;
+        let composite_option =
+            canonical.composites && canonical.presentation == CanonPresentation::FlatAssertion;
+        let mut result =
+            result::ResultBuilder::new(canonical.ds, canonical.presentation, composite_option)?;
         let reservation = canonical
             .ds
             .reserve_workspace(0)
@@ -3878,7 +3892,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
                 TermRef::Literal {
                     lexical, datatype, ..
-                } if self.presentation.relabels_composites() => {
+                } if self.composites => {
                     // A blank embedded in a composite literal is related exactly as a
                     // blank in that slot would be. The position path gets a `.cdt`
                     // segment so the role "inside a composite value" is distinguished
@@ -4122,7 +4136,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             order::REIFIES => RDF_REIFIES,
             _ => SENTINEL_ANNOTATION_GRAPH,
         };
-        memory.append_text(out, |out| write_iri(sentinel, out))?;
+        memory.append_text(out, |out| write_canonical_iri(sentinel, out))?;
         memory.push_char(out, ' ')?;
         Ok(())
     }
@@ -4465,7 +4479,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         match guard.term() {
             TermRef::Iri(iri) => {
                 let before = out.len();
-                memory.append_text(out, |out| write_iri(iri, out))?;
+                memory.append_text(out, |out| write_canonical_iri(iri, out))?;
                 // Every escape lengthens the text, so exactly `<` and `>` around
                 // the unchanged IRI means nothing was escaped.
                 let clean = out.len() - before == iri.len() + 2;
@@ -4481,7 +4495,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 language,
                 direction,
             } => {
-                let rendered = if between.is_some() && self.presentation.relabels_composites() {
+                let rendered = if between.is_some() && self.composites {
                     self.render_composite_lexical(lexical, datatype, render, memory)?
                 } else {
                     Cow::Borrowed(lexical)
@@ -4499,7 +4513,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     unreachable!("literal datatype must be an IRI")
                 };
                 memory.append_text(out, |out| {
-                    write_literal(
+                    write_canonical_literal(
                         &rendered,
                         dt,
                         language,
@@ -4657,7 +4671,7 @@ impl<D: DatasetView> Atoms<D> for TextAtoms<'_, '_, D> {
         iri: &'static str,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        memory.append_text(self.out, |out| write_iri(iri, out))?;
+        memory.append_text(self.out, |out| write_canonical_iri(iri, out))?;
         Ok(())
     }
 
@@ -9004,7 +9018,8 @@ mod tests {
         .issue_labels()
         .unwrap();
         signal.0.store(8, std::sync::atomic::Ordering::Relaxed);
-        let mut sink = result::ResultBuilder::new(&*dataset, CanonPresentation::Overlay).unwrap();
+        let mut sink =
+            result::ResultBuilder::new(&*dataset, CanonPresentation::Overlay, false).unwrap();
         assert!(matches!(
             state.emit_canonical_lines(
                 &mut Memory::new(&mut purrdf_lex::allocation::Resident),

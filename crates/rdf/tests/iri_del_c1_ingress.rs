@@ -14,10 +14,11 @@
 //! Ingresses covered: N-Quads (raw and `UCHAR`-escaped), Turtle (raw and
 //! `UCHAR`-escaped) and the programmatic builder, which records the refusal when
 //! the IRI is interned and reports it when the dataset is frozen, so no frozen
-//! dataset holds such an IRI. The GTS importer interns every IRI through the same
-//! builder call (`RdfDatasetBuilder::intern_iri`).
+//! dataset holds such an IRI, and the GTS import of a graph whose term table holds
+//! such an IRI.
 
-use purrdf_rdf::{RdfDatasetBuilder, parse_dataset};
+use purrdf_gts::model::{Graph, Term, TermKind};
+use purrdf_rdf::{RdfDatasetBuilder, import_gts_graph, parse_dataset};
 
 const REFUSED: [(&str, &str); 4] = [
     ("DEL", "\u{7f}"),
@@ -104,4 +105,37 @@ fn the_programmatic_builder_refuses_del_and_c1_in_an_iri_and_accepts_the_neighbo
         );
     }
     frozen_with("urn:ex:a\u{a0}b").expect("U+00A0 is ucschar and an IRI may hold it");
+}
+
+fn gts_iri(value: &str) -> Term {
+    Term {
+        kind: TermKind::Iri,
+        value: Some(value.to_owned()),
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+        triple: None,
+    }
+}
+
+fn gts_graph_with_object(object: &str) -> Graph {
+    let mut graph = Graph::default();
+    graph.terms.push(gts_iri("urn:ex:s"));
+    graph.terms.push(gts_iri("urn:ex:p"));
+    graph.terms.push(gts_iri(object));
+    graph.quads.push((0, 1, 2, None));
+    graph
+}
+
+#[test]
+fn gts_import_refuses_del_and_c1_in_an_iri_and_accepts_the_neighbour() {
+    for (name, c) in REFUSED {
+        assert!(
+            import_gts_graph(gts_graph_with_object(&format!("urn:ex:a{c}b"))).is_err(),
+            "the GTS import admitted {name} in an IRI"
+        );
+    }
+    import_gts_graph(gts_graph_with_object("urn:ex:a\u{a0}b"))
+        .expect("U+00A0 is ucschar and an IRI may hold it");
 }

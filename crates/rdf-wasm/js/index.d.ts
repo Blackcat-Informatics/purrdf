@@ -855,6 +855,12 @@ export class Dataset implements Iterable<Quad> {
    * `purrdf-rdfc12` profile (RDFC-1.0 labelling over the RDF 1.2 abstract
    * syntax; never labelled RDFC-1.0).
    *
+   * Two datasets that differ only in blank-node labels give the same string,
+   * except where a composite (`cdt:List` / `cdt:Map`) literal holds a
+   * blank-node label: that label is text here and is written as stored, so
+   * the string can differ between two datasets `isomorphic()` calls equal,
+   * and with how the data was loaded.
+   *
    * Throws when canonicalization refuses the dataset: the n-degree call
    * budget exhausted by a pathologically symmetric blank graph. The flat
    * presentation refuses no reserved `urn:purrdf:rdfc:` IRI. The refusal

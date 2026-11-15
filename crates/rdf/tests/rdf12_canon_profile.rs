@@ -755,8 +755,8 @@ fn the_profile_identity_is_readable_from_the_api() {
             )
         )
         .expect("empty dataset canonicalizes")
-        .presentation(),
-        CanonPresentation::FlatAssertionCompositeBlanks
+        .presentation_id(),
+        CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID
     );
 }
 

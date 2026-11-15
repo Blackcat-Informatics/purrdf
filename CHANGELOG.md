@@ -12,32 +12,45 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   canonical form of RDF 1.2 N-Quads (section 3), and the flat presentation no longer
   applies the overlay's reservation. `CANON_PROFILE_VERSION` is `4`, the overlay
   presentation `2` and the flat presentation `2`, so a consumer that asserts them at
-  build time stops compiling until it reads this entry. Digests move only for these
-  inputs, and every other input keeps its version 3 bytes: a literal holding U+FFFE
-  or U+FFFF (now `\uFFFE` and `\uFFFF`, as N-Quads 1.2 section 3 requires for a
-  character outside the XML 1.1 `Char` production; both presentations); a language
-  tag or base direction that reaches canonicalization with a capital (now lower case;
-  a term table that folds tags when it interns them, as PurRDF's does, never produced
-  one, so only a source view that keeps the written case is affected); a composite
-  (`cdt:List` / `cdt:Map`) literal with a blank-node label in its lexical form under
-  the flat presentation (the label is text and is written as it is, where it was
-  written as a canonical label); and an input carrying a `urn:purrdf:rdfc:` IRI
-  outside the two fold shapes under the flat presentation, which version 3 refused
-  and version 4 canonicalizes. The overlay presentation keeps the reservation and the
-  refusal exactly as they were. The earlier composite relabelling is kept as the
-  separately identified presentation `flat-assertion-composite-blanks`
-  (`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`), reached through
-  `try_canonicalize_flat_composite_view` and `try_flat_composite_digest_view`;
-  `CanonPresentation` gains the variant `FlatAssertionCompositeBlanks`, so an
-  exhaustive `match` over it needs one more arm. The IRI escape set of the canonical
-  form is exactly what the `IRIREF` production excludes (`purrdf_lex::iri_escape` now
-  has a `Carrier`; the unqualified functions keep the XML-transport set); no input can
-  observe the difference, because an IRI holding DEL or a C1 control is refused at
-  every ingress, which tests now pin. `purrdf-lex`'s `literal_escape::Carrier::Canonical`
-  escapes the two noncharacters, so a consumer that streams its own canonical lines
-  through it follows with no change. `convert --canonical` no longer describes its
-  output as RDFC-1.0. The conformance corpus gains version 4 cases and its digest
-  moves; every version 3 case and expected document is unchanged.
+  build time stops compiling until it reads this entry. Only canonical lines change,
+  and the digests taken over them (document, graph and flat digests, and the pipeline
+  bundle digests that hash them); every serializer, the SPARQL serializer, composite
+  literal rendering and every other identity keep their bytes. Canonical bytes move
+  only for these inputs, and every other input keeps its version 3 bytes: a literal
+  holding U+FFFE or U+FFFF (now `\uFFFE` and `\uFFFF`, as N-Quads 1.2 section 3
+  requires for a character outside the XML 1.1 `Char` production; both
+  presentations); a language tag or base direction that reaches canonicalization with
+  a capital (now lower case; a dataset built through `RdfDatasetBuilder` folds a tag
+  when it interns the literal and never held one, so only a source view that keeps
+  the written case is affected); a composite (`cdt:List` / `cdt:Map`) literal with a
+  blank-node label in its lexical form under the flat presentation (the label is text
+  and is written as stored, where it was written as a canonical label); and an input
+  carrying a `urn:purrdf:rdfc:` IRI outside the two fold shapes under the flat
+  presentation, which version 3 refused and version 4 canonicalizes. The overlay
+  presentation keeps the reservation and the refusal exactly as they were.
+  **Standard flat output is no longer invariant under blank relabelling for a dataset
+  with a composite literal that holds a blank-node label:** two datasets that
+  `datasets_isomorphic` calls equal can have different flat documents, and the stored
+  label depends on how the data was loaded (a merge rewrites it into the scope
+  envelope `purrdfesc{n}_…`). A consumer that mints identifiers from flat output and
+  may hold such literals uses the overlay, or the earlier relabelling, which is kept
+  as the separately identified presentation `flat-assertion-composite-blanks`
+  (`CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`), reached through the new
+  `try_canonicalize_flat_composite_view` and `try_flat_composite_digest_view` and
+  reported by the new `Canonicalized::presentation_id` and
+  `Canonicalized::presentation_version`; it reproduces version 3 flat bytes only for
+  an input the other changes do not touch. The additions are additive: no public enum
+  gains a variant. The IRI escape set of a canonical line is exactly what the `IRIREF`
+  production excludes (`purrdf_lex::iri_escape` gains a `Carrier` and `_for` functions;
+  the unqualified functions and `term_syntax::write_iri` keep the XML-transport set);
+  no input can observe the difference, because an IRI holding DEL or a C1 control is
+  refused at every ingress, which tests now pin. `purrdf-lex` gains
+  `term_syntax::write_canonical_iri`, `term_syntax::write_canonical_literal` and
+  `literal_escape::write_canonical_line` for a consumer that streams its own canonical
+  lines; `term_syntax::write_literal` and `literal_escape::Carrier::Canonical` are
+  unchanged. `convert --canonical` no longer describes its output as RDFC-1.0. The
+  conformance corpus gains version 4 cases and its digest moves; every version 3 case
+  and expected document is unchanged.
 
 - **No host imports below the browser binding:** `purrdf-sparql-eval` no longer
   depends on `wasm-bindgen` and imports nothing on `wasm32-unknown-unknown`.

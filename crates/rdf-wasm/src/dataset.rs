@@ -749,12 +749,15 @@ impl Dataset {
         self.serialize_with_options(format, &options, base.as_deref())
     }
 
-    /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
-    /// (SHA-256).
+    /// `canonicalize()` → the dataset as canonical N-Quads in the flat assertion
+    /// presentation of the `purrdf-rdfc12` profile (RDFC-1.0 labelling, SHA-256).
     ///
-    /// The deterministic identity string for the graph: two datasets denote the same
-    /// RDF graph (under blank-node relabeling) iff their canonical forms are
-    /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
+    /// A deterministic string for the dataset. Two datasets that differ only in
+    /// blank-node labels have byte-identical strings, with one exception: a
+    /// composite (`cdt:List` / `cdt:Map`) literal that holds a blank-node label.
+    /// That label is text here and is written as stored, so two such datasets that
+    /// [`isomorphic`](Self::isomorphic) calls the same graph can have different
+    /// strings, and the stored label can differ with how the data was loaded.
     ///
     /// This surface reads caller-supplied (untrusted) documents, so a refusal
     /// (n-degree search budget exhaustion) comes back as a
@@ -791,10 +794,13 @@ impl Dataset {
     /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
     /// under blank-node relabeling.
     ///
-    /// The formal RDF graph-identity check, backed by full RDFC-1.0 canonicalization:
-    /// an exact oracle with no false positives or false negatives. Equivalent to
-    /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
-    /// materializing them for obviously-different inputs.
+    /// The formal RDF graph-identity check, backed by full canonicalization under
+    /// the overlay presentation: an exact oracle with no false positives or false
+    /// negatives. It is NOT the same as comparing the two
+    /// [`canonicalize`](Self::canonicalize) strings. `canonicalize` writes the flat
+    /// presentation, which treats a blank-node label inside a composite literal as
+    /// text and refuses no reserved `urn:purrdf:rdfc:` IRI; this check relabels
+    /// such a label and throws on such an IRI outside a fold shape.
     #[wasm_bindgen(js_name = isomorphic)]
     #[expect(
         clippy::needless_pass_by_value,

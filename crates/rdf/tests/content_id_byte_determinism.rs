@@ -482,6 +482,164 @@ fn composite_literal_blank_labels_are_text_under_flat_and_nodes_under_the_named_
     }
 }
 
+/// Standard flat bytes of a composite literal holding a blank label follow the
+/// label's STORED spelling, which depends on how the data was loaded: a document
+/// parsed on its own keeps the label it wrote, and the same dataset merged into a
+/// builder has it rewritten into the merge scope's envelope. The overlay and the
+/// named composite option relabel, so both give one document for the two loads.
+#[test]
+fn standard_flat_bytes_of_a_composite_blank_label_depend_on_the_load_path() {
+    let text = concat!(
+        "_:x <http://example.org/q> <http://example.org/o> .\n",
+        "<http://example.org/s> <http://example.org/p> ",
+        "\"[_:x, 42]\"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List> .\n",
+    );
+    let direct = parse_dataset(text.as_bytes(), "application/n-triples", None).expect("parses");
+    let mut builder = RdfDatasetBuilder::new();
+    builder.push_dataset(&direct).expect("merges");
+    let merged = builder.freeze().expect("valid dataset");
+    let control =
+        || purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    let hash = CanonHash::Sha256;
+    let flat = |ds: &RdfDataset| {
+        try_canonicalize_flat_view(ds, hash, &mut control())
+            .expect("flat")
+            .nquads()
+            .to_owned()
+    };
+    let (flat_direct, flat_merged) = (flat(&direct), flat(&merged));
+    assert!(flat_direct.contains("\"[_:x, 42]\""), "{flat_direct}");
+    assert!(flat_merged.contains("\"[_:purrdfesc"), "{flat_merged}");
+    assert_ne!(flat_direct, flat_merged);
+    let option = |ds: &RdfDataset| {
+        purrdf_rdf::try_canonicalize_flat_composite_view(ds, hash, &mut control())
+            .expect("option")
+            .nquads()
+            .to_owned()
+    };
+    assert_eq!(option(&direct), option(&merged));
+    assert!(option(&direct).contains("\"[_:c14n0, 42]\""));
+    let overlay = |ds: &RdfDataset| {
+        try_canonicalize_view(ds, hash, &mut control())
+            .expect("overlay")
+            .nquads()
+            .to_owned()
+    };
+    assert_eq!(overlay(&direct), overlay(&merged));
+}
+
+/// A reifier row declared in the graph named by the annotation sentinel is
+/// written with that graph name, and the written line reads back as the same
+/// reifier row, so the flat document of this shape re-canonicalizes to itself.
+#[test]
+fn a_reifier_row_in_the_annotation_sentinel_graph_reads_back_to_the_same_flat_document() {
+    const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri(&ex("s")).unwrap();
+    let p = b.intern_iri(&ex("p")).unwrap();
+    let o = b.intern_iri(&ex("o")).unwrap();
+    let r = b.intern_iri(&ex("r")).unwrap();
+    let t = b.intern_triple(s, p, o).unwrap();
+    let sentinel_graph = b
+        .intern_iri(&format!("{RESERVED_NAMESPACE}annotation"))
+        .unwrap();
+    b.push_reifier_in_graph(r, t, Some(sentinel_graph)).unwrap();
+    let ds = b.freeze().expect("valid dataset");
+    let control =
+        || purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    let first = try_canonicalize_flat_view(&*ds, CanonHash::Sha256, &mut control())
+        .expect("flat")
+        .nquads()
+        .to_owned();
+    let row = format!(
+        "<{}> <{REIFIES}> <<( <{}> <{}> <{}> )>>",
+        ex("r"),
+        ex("s"),
+        ex("p"),
+        ex("o")
+    );
+    assert_eq!(first, format!("{row} <{RESERVED_NAMESPACE}annotation> .\n"));
+    let reparsed = parse_dataset(first.as_bytes(), "application/n-quads", None).expect("parses");
+    let second = try_canonicalize_flat_view(&*reparsed, CanonHash::Sha256, &mut control())
+        .expect("flat")
+        .nquads()
+        .to_owned();
+    assert_eq!(second, first);
+}
+
+/// Profile version 4, N-Quads 1.2 section 3 (a character outside the XML 1.1
+/// `Char` production is a `UCHAR`): a literal holding U+FFFE or U+FFFF is written
+/// with the escape in the canonical document of each presentation and under
+/// every digest entry, and the escaped line parses back to the same literal.
+/// Version 3 wrote both scalars raw, and this test fails there.
+#[test]
+fn the_two_noncharacters_are_uchar_in_every_canonical_entry_and_parse_back() {
+    for (scalar, escaped) in [('\u{fffe}', "\\uFFFE"), ('\u{ffff}', "\\uFFFF")] {
+        let lexical = format!("a{scalar}b");
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&ex("s")).unwrap();
+        let p = b.intern_iri(&ex("p")).unwrap();
+        let g = b.intern_iri(&ex("g")).unwrap();
+        let o = b
+            .intern_literal(RdfLiteral::simple(lexical.clone()))
+            .unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        b.push_quad(s, p, o, Some(g)).unwrap();
+        let ds = b.freeze().expect("valid dataset");
+
+        let line = format!("<{}> <{}> \"a{escaped}b\"", ex("s"), ex("p"));
+        let expected = format!("{line} .\n{line} <{}> .\n", ex("g"));
+        let control =
+            || purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        let hash = CanonHash::Sha256;
+        let sha = purrdf_rdf::ContentDigest::of(expected.as_bytes());
+        let blake = *purrdf_hash::blake3::hash(expected.as_bytes()).as_bytes();
+
+        let overlay = try_canonicalize_view(&*ds, hash, &mut control()).expect("overlay");
+        assert_eq!(overlay.nquads(), expected);
+        let flat = try_canonicalize_flat_view(&*ds, hash, &mut control()).expect("flat");
+        assert_eq!(flat.nquads(), expected);
+        assert_eq!(
+            purrdf_rdf::try_canonical_sha256_view(&*ds, hash, &mut control()).unwrap(),
+            sha
+        );
+        assert_eq!(
+            purrdf_rdf::try_flat_digest_view(&*ds, hash, &mut control()).unwrap(),
+            sha
+        );
+        let (document, both) =
+            purrdf_rdf::try_canonicalize_sha256_view(&*ds, hash, &mut control()).unwrap();
+        assert_eq!((document.nquads(), both), (expected.as_str(), sha));
+        assert_eq!(
+            purrdf_rdf::try_canonical_blake3_view(&*ds, hash, &mut control()).unwrap(),
+            blake
+        );
+        assert_eq!(
+            purrdf_rdf::try_flat_blake3_view(&*ds, hash, &mut control()).unwrap(),
+            blake
+        );
+        assert_eq!(
+            purrdf_rdf::try_graph_digest_view(&*ds, &ex("g"), &mut control()).unwrap(),
+            purrdf_rdf::ContentDigest::of(format!("{line} .\n").as_bytes())
+        );
+
+        // The escaped line is N-Quads: it parses back to the literal it was written from.
+        let reparsed = parse_dataset(expected.as_bytes(), "application/n-quads", None)
+            .expect("the canonical document parses");
+        let quads = flat_rdf_quads_from_dataset(&reparsed);
+        assert_eq!(quads.len(), 2);
+        for quad in &quads {
+            assert!(
+                matches!(&quad.object, purrdf_rdf::RdfTerm::Literal(literal)
+                    if literal.lexical_form == lexical && literal.language.is_none()),
+                "{quad:?}"
+            );
+        }
+        let again = try_canonicalize_flat_view(&*reparsed, hash, &mut control()).expect("flat");
+        assert_eq!(again.nquads(), expected);
+    }
+}
+
 /// A row spelled BOTH as a reifier-declaration side-table entry AND, separately,
 /// as its own ordinary base quad — the flat presentation's id-level dedup law —
 /// exercised in the default graph and, independently, in a named graph.

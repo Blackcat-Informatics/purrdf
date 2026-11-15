@@ -445,6 +445,44 @@ fn unusual_tags_keep_today_s_bytes() {
     }
 }
 
+impl FallibleDatasetView for Table {
+    type Error = TableFault;
+    type Evidence = ();
+
+    fn operation_status(&self) -> crate::ViewOperationStatus<TableFault, ()> {
+        crate::ViewOperationStatus::Ready { evidence: () }
+    }
+}
+
+/// Profile version 4, N-Quads 1.2 section 3 ("Alphabetic characters in LANG_DIR
+/// MUST use only the lowercase letters"): a tag a view holds with capitals is
+/// written in lower case in the canonical line, by the document and by every
+/// digest entry of both presentations. A dataset from the builder folds its tags
+/// when it interns them, so only a view like this one can hold such a tag; version
+/// 3 wrote it as held, and this test fails there.
+#[test]
+fn a_tag_a_view_holds_with_capitals_is_lower_case_in_every_canonical_entry() {
+    let mut t = TableBuilder::new();
+    let (s, p) = (t.iri(S), t.iri(P));
+    let upper = t.tagged("x", "EN-GB");
+    t.quad(s, p, upper, None);
+    let view = t.build();
+    let expected = "<http://example.org/s> <http://example.org/p> \"x\"@en-gb .\n";
+    // The overlay document and its SHA-256, combined and BLAKE3 entries.
+    assert_eq!(check(&view), expected);
+    // The flat document and its digest entries.
+    check_flat(&view);
+    let flat = try_canonicalize_flat_view(&view, CanonHash::Sha256, &mut control())
+        .expect("flat document");
+    assert_eq!(flat.nquads(), expected);
+    // The neighbour already in lower case is written as it is.
+    let mut t = TableBuilder::new();
+    let (s, p) = (t.iri(S), t.iri(P));
+    let lower = t.tagged("x", "en-gb");
+    t.quad(s, p, lower, None);
+    assert_eq!(check(&t.build()), expected);
+}
+
 // ---------------------------------------------------------------------------
 // IRIs whose rendering is, or is not, their text between angle brackets.
 

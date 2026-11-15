@@ -77,10 +77,16 @@ its source:
 | A language tag and a base direction in ASCII lower case; the datatype of a language-tagged literal is not written; `xsd:string` is not written | N-Quads 1.2 §3: "Alphabetic characters in LANG_DIR MUST use only the lowercase letters ([a–z])"; RDF 1.2 Concepts §3.4 (language tags compare case-insensitively; base direction is `ltr` or `rtl` in lower case) |
 | An IRI is written between angle brackets with `\u00XX` for exactly the scalars the `IRIREF` production excludes: U+0000 to U+0020, `<`, `>`, `"`, `{`, `}`, `|`, `^`, the grave accent and `\`. DEL and the C1 controls are written raw | N-Quads 1.2 §5.3 grammar, production `IRIREF`. The canonical form of section 3 says nothing about escaping in an IRI, so this is the grammar's own requirement and nothing wider; a carrier that needs more (XML text) escapes more as its own choice |
 | A triple term is `<<( s p o )>>` with one space after each of its tokens | N-Triples 1.2 §3 (white space only after subject, predicate, object and the opening token) |
-| Blank nodes are `_:c14nN`; their source labels never appear | RDFC-1.0 §4.4; RDF 1.2 Concepts §3.5 (blank node identifiers are not part of the abstract data model) |
+| A blank node written as a term is `_:c14nN`; its source label never appears as a term. A blank-node label inside the lexical form of a composite literal is relabelled the same way by the overlay and by the named composite option, and is written as stored text by the standard flat presentation (§3.3) | RDFC-1.0 §4.4; RDF 1.2 Concepts §3.5 (blank node identifiers are not part of the abstract data model) |
 
 First-degree and n-degree hashing write terms through the same spelling as the
 document, so a label issued from a hash and a line of the document agree on it.
+
+These rules are the spelling of a **canonical line** and of nothing else. The
+Turtle, TriG, N-Triples and N-Quads serializers, the SPARQL serializer, composite
+literal rendering and every other writer keep the spelling they had: they write a
+language tag as it is held, U+FFFE and U+FFFF as their own carrier requires, and an
+IRI with DEL and the C1 controls escaped.
 
 ## 3. The RDF 1.2 overlay
 
@@ -266,9 +272,11 @@ predicate over a non-triple object) is the line it is written as, and differs fr
 `r rdf:reifies "x"`, from `r <urn:purrdf:rdfc:annotation> "x"` and from a reifier
 row. The corpus of §8 pins these pairs.
 
-The flat document is not idempotent for one shape: a quad whose own graph is the
-annotation sentinel and which is not itself a fold shape reads back, on re-parse,
-as an annotation row. The overlay's idempotence (§3.1) is unchanged.
+A reifier row declared in the graph `urn:purrdf:rdfc:annotation` is written as
+`r rdf:reifies <<( s p o )>> <urn:purrdf:rdfc:annotation> .`, and that line read back
+gives the same document: the reader takes it as the reifier row it is. This profile
+states no idempotence law for the flat presentation beyond the cases its tests
+execute. The overlay's idempotence (§3.1) is unchanged.
 
 #### No datatype-aware step (version 2)
 
@@ -279,6 +287,28 @@ differ only in such a label are different datasets under it. This matches the
 RDFC-1.0 position that only the blank nodes of the dataset's quads are labelled
 (RDFC-1.0 §4.4, §4.6 and §4.8 read quads, never a literal's text).
 
+**Consequences a consumer must know before minting an identifier from standard
+flat output:**
+
+* For a dataset with **no** composite literal that holds a blank-node label, the
+  standard flat document is invariant under blank relabelling: two datasets that
+  differ only in blank labels have the same bytes.
+* For a dataset **with** such a literal it is not. PurRDF's model treats that label
+  as a blank node of the graph (`purrdf_core::datasets_isomorphic` and the overlay
+  do), so two datasets PurRDF calls isomorphic can have different standard flat
+  documents and digests. In the document, the node written as a term is `_:c14nN`
+  and the same node inside the literal keeps its stored label, so the document no
+  longer says they are one node.
+* The stored label depends on how the data was loaded. A document parsed on its own
+  keeps the label it wrote (`_:x`). The same data merged into a dataset
+  (`RdfDatasetBuilder::push_dataset`, several sources of one command) has the label
+  rewritten into the merge scope's envelope (`_:purrdfesc1_x`), and that text is what
+  the standard flat document carries. One source document can so give two different
+  standard flat documents.
+
+A consumer that may hold such literals and needs relabelling-invariant bytes uses the
+overlay presentation or the named option below.
+
 The earlier relabelling is kept ONLY as a separately named presentation,
 `flat-assertion-composite-blanks` (`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_ID`,
 version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_COMPOSITE_BLANKS_VERSION` → `1`),
@@ -286,10 +316,15 @@ reached through `try_canonicalize_flat_composite_view` and
 `try_flat_composite_digest_view` and through nothing else. It is the standard flat
 presentation with one added step: a blank label inside a composite lexical form is a
 blank node of the graph, takes part in labelling and is written as its canonical
-label. It is its own presentation identifier rather than a request parameter of the
-standard one so that a receipt, a `Canonicalized::presentation()` value and every
-pin name it, and its documents and digests cannot be mistaken for standard flat
-ones. The overlay presentation keeps the relabelling it has always had.
+label, so its document is invariant under blank relabelling for every input. It has
+its own identifier, which `Canonicalized::presentation_id()` and
+`Canonicalized::presentation_version()` report. `Canonicalized::presentation()` and
+the run's receipt report the flat presentation it extends
+(`CanonPresentation::FlatAssertion`), so a consumer that must tell the two apart
+reads the identifier. It reproduces version 3 flat bytes only for an input that the
+other version 4 changes do not touch (no U+FFFE or U+FFFF in a literal, no reserved
+IRI outside a fold shape). The overlay presentation keeps the relabelling it has
+always had.
 
 **The flat presentation is a second canonicalization-oracle spelling of the RDF 1.2
 statement layer, never an RDF 1.1 fallback mode.** Choosing it does not drop to
@@ -314,8 +349,11 @@ are isomorphism-invariant only **up to automorphism**. Where a graph carries a
 nontrivial automorphism, the n-degree search's tie-break among otherwise-equivalent
 candidates is enumeration-order-dependent, so two isomorphic-but-not-identical
 inputs may assign automorphic blanks different — but structurally equivalent —
-labels. `Canonicalized::nquads` itself remains fully isomorphism-invariant under
-either presentation: two isomorphic views produce byte-equal canonical documents.
+labels. `Canonicalized::nquads` is invariant under blank relabelling under the
+overlay presentation and under the named composite option: two views that differ
+only in blank labels produce byte-equal documents. Under the standard flat
+presentation that holds only for views with no composite literal that holds a
+blank-node label (see "No datatype-aware step" above).
 
 ## 4. Reserved vocabulary
 
@@ -585,6 +623,13 @@ version 3 bytes:
 The escape set of an IRI (§2.1) is the production's exclusions exactly; no input can
 observe the difference from version 3, because an IRI holding DEL or a C1 control is
 refused at every ingress.
+
+Nothing but canonical lines moves. The spelling rules of §2.1 are applied by the
+canonical line writer alone, so no serializer output, no SPARQL text, no composite
+literal a query mints and no identity computed outside this profile changes. The
+digests built from canonical lines move with them, for the inputs listed above and
+no others: the document, graph and flat digests and the pipeline bundle digests
+that hash them.
 
 Version 2 moved **no** bytes: every input version 1 admitted canonicalizes to
 exactly the bytes version 1 produced. What changed is the refusal rule, and a
