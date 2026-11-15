@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1281-4-0-2-shacl-and-sparql-evaluation-on-a",
+  "branch": "paudley/1281-4-0-2-shacl-and-sparql-evaluation-on-a",
+  "base_ref": "origin/main",
+  "head": "da14ae9f3c58e159e9388b5d31807fc7e90f3dc5",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1281-4-0-2-shacl-and-sparql-evaluation-on-a/.stage/4-0-2-shacl-and-sparql-evaluation-on-a/sync/20261115T111205-174d57e46acf42698ae3504c9ae9607d",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "4d216df4487a4705d285aef590f066fc2defd374",
+  "merge_bases": [
+    "da14ae9f3c58e159e9388b5d31807fc7e90f3dc5"
+  ],
+  "commit": "4d216df4487a4705d285aef590f066fc2defd374"
+}
