@@ -175,7 +175,7 @@ this root either (its `GUARDED_ROOTS` covers `vectors/shacl` and
 reasoning its own comment states for `vectors/*.gts`). The manifests are
 therefore maintained by hand upstream and carried here as-is; the only
 guarantee this repository makes over them is the review-time rule that
-nothing under `vectors/` is hand-edited locally (AGENTS.md/CLAUDE.md), not a
+nothing under `vectors/` is hand-edited locally (AGENTS.md), not a
 machine-verified freeze gate.
 
 ## Usage

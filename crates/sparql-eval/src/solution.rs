@@ -715,6 +715,21 @@ impl<I: ViewTermId> RetainedRow<I> {
         }
     }
 
+    /// A resident copy of `cells` for a workspace that admits nothing: one exact
+    /// reservation and one copy, the same typed refusal `try_build` gives an allocator
+    /// that cannot supply the cells.
+    pub(crate) fn resident_copy(
+        cells: &[Option<SolutionTerm<I>>],
+    ) -> Result<Solution<I>, crate::EvalError> {
+        let mut row = Solution::new();
+        row.try_reserve_exact(cells.len())
+            .map_err(|_| crate::EvalError::AllocationFailed {
+                construct: "solution row cells",
+            })?;
+        row.extend_from_slice(cells);
+        Ok(row)
+    }
+
     /// Worker transport moves cells and evidence together, never detaching ids.
     /// Finish a uniquely owned row before its evidence attachment or publication.
     pub(crate) fn set_unpublished_cell_unique(
@@ -771,6 +786,10 @@ impl<I: ViewTermId> RetainedRow<I> {
     ) -> Result<Self, crate::EvalError> {
         match &self.storage {
             RowStorage::Owned(_) => Ok(self.clone()),
+            // No grant to admit: the copy is the row's own cells.
+            RowStorage::Resident(cells) if !workspace.is_bounded() => {
+                Ok(Self::from_resident(Self::resident_copy(cells)?))
+            }
             RowStorage::Resident(cells) => {
                 Self::from_cells(cells.len(), cells.iter().copied(), workspace)
             }
@@ -790,6 +809,25 @@ impl<I: ViewTermId> RetainedRow<I> {
         cells: impl Iterator<Item = Result<Option<SolutionTerm<I>>, crate::EvalError>>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, crate::EvalError> {
+        if !workspace.is_bounded() {
+            // No grant to admit: push the cells into one exact reservation. The width
+            // refusals are the ones the builder below raises.
+            let mut row = Solution::new();
+            row.try_reserve_exact(width)
+                .map_err(|_| crate::EvalError::AllocationFailed {
+                    construct: "solution row cells",
+                })?;
+            for cell in cells {
+                if row.len() == width {
+                    return Err(crate::EvalError::WorkspaceBoundOverflow);
+                }
+                row.push(cell?);
+            }
+            if row.len() != width {
+                return Err(crate::EvalError::WorkspaceBoundOverflow);
+            }
+            return Ok(Self::from_resident(row));
+        }
         Self::try_build(width, workspace, |row| {
             let mut count = 0;
             for cell in cells {

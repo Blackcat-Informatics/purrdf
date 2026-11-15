@@ -84,11 +84,6 @@ rayon = { workspace = true }
 # so the wasm build (make wasm) never pulls it.
 getrandom = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Browser wall clock + entropy for NOW()/RAND() on wasm. The two host globals
-# are imported directly through the already-required binding crate.
-wasm-bindgen = { workspace = true }
-
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `prepared_reuse_counters`
 # example. Path-only and unpublished, so it is stripped from the packaged
@@ -134,6 +129,12 @@ harness = false
 [[test]]
 # The numeric surface's pinned transcript, natively and on wasm32 (make wasm-test).
 name = "numeric_wasm_determinism"
+harness = false
+
+[[test]]
+# The installed host source at the public query boundary, and on wasm32 the typed
+# refusal a request gets when there is none.
+name = "host_source"
 harness = false
 
 [[test]]

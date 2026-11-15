@@ -2234,7 +2234,7 @@ fn raw_literals(literals: &[u8], writer: &mut BitWriter<&mut Vec<u8>>) {
 }
 
 fn rle_literals(literals: &[u8], writer: &mut BitWriter<&mut Vec<u8>>) {
-    debug_assert!(!literals.is_empty());
+    debug_assert_ne!(literals, []);
     debug_assert!(all_bytes_identical(literals));
     write_uncompressed_literals_header(1, literals.len(), writer);
     writer.append_bytes(&literals[..1]);

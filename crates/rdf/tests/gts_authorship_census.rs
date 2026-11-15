@@ -74,7 +74,7 @@ const AUTHORSHIP_SITES: [(&str, &str); 9] = [
     // The single-shot snapshot-bundle authoring helper.
     ("crates/gts/src/writer.rs", "snapshot_from_graph"),
     // The `dist` snapshot-bundle emitter, driven by a `MediumPlan`.
-    ("crates/rdf/src/gts_compose.rs", "emit_gts"),
+    ("crates/rdf/src/gts_compose.rs", "emit_held"),
     // The frozen dict-vector fixtures (`vectors/30`–`33`).
     ("crates/rdf/src/gts_dict_vectors.rs", "claim_corpus"),
     ("crates/rdf/src/gts_dict_vectors.rs", "multi_dict_pack"),

@@ -619,8 +619,8 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 
 [packages.wasm-bindgen]
 category = "binding"
-reason = "JavaScript bindings for purrdf-wasm, SPARQL host clock and entropy, and the testkit wasm runner"
-distinct = "the JavaScript boundary for purrdf-wasm, the SPARQL host clock and entropy, and the testkit wasm runner; PurRDF has no JavaScript FFI of its own"
+reason = "JavaScript bindings for purrdf-wasm, including the host clock and entropy it installs, and the testkit wasm runner"
+distinct = "the JavaScript boundary for purrdf-wasm and the testkit wasm runner; PurRDF has no JavaScript FFI of its own"
 metrics = { direct = true, exclusive_closure = 6, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.wasm-bindgen-macro]

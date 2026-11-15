@@ -42,12 +42,6 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/block-buffer-0.12.1/LICENSE-APACHE
 Notice: dependencies/block-buffer-0.12.1/LICENSE-MIT
 
-bumpalo-3.20.3: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/bumpalo-3.20.3/LICENSE-APACHE
-Notice: dependencies/bumpalo-3.20.3/LICENSE-MIT
-
 cfg-if-1.0.5: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
@@ -234,18 +228,6 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/polyval-0.7.3/LICENSE-APACHE
 Notice: dependencies/polyval-0.7.3/LICENSE-MIT
 
-proc-macro2-1.0.107: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/proc-macro2-1.0.107/LICENSE-APACHE
-Notice: dependencies/proc-macro2-1.0.107/LICENSE-MIT
-
-quote-1.0.47: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/quote-1.0.47/LICENSE-APACHE
-Notice: dependencies/quote-1.0.47/LICENSE-MIT
-
 r-efi-6.0.0: MIT OR Apache-2.0 OR LGPL-2.1-or-later
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
@@ -299,12 +281,6 @@ Notice: dependencies/regex-syntax-0.8.11/LICENSE-APACHE
 Notice: dependencies/regex-syntax-0.8.11/LICENSE-MIT
 Notice: dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE
 
-rustversion-1.0.23: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/rustversion-1.0.23/LICENSE-APACHE
-Notice: dependencies/rustversion-1.0.23/LICENSE-MIT
-
 sha2-0.11.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
@@ -332,12 +308,6 @@ Evidence: crates/zstd/UPSTREAM-SHA256.json
 Notice: third-party/structured-zstd-native/0-LICENSE
 Notice: third-party/structured-zstd-native/1-NOTICE
 
-syn-3.0.9: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/syn-3.0.9/LICENSE-APACHE
-Notice: dependencies/syn-3.0.9/LICENSE-MIT
-
 toml-test: MIT
 Scope: source-only frozen TOML 1.1 grammar and typed-value conformance data; no parser implementation
 Source: https://github.com/toml-lang/toml-test/tree/ff49d109861c1ad25af53f687f2aef19ab650600
@@ -358,13 +328,6 @@ Evidence: crates/iri/unicode/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/unicode/0-Unicode-3.0.txt
 
-unicode-ident-1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/unicode-ident-1.0.27/LICENSE-APACHE
-Notice: dependencies/unicode-ident-1.0.27/LICENSE-MIT
-Notice: dependencies/unicode-ident-1.0.27/LICENSE-UNICODE
-
 universal-hash-0.6.1: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
@@ -378,30 +341,6 @@ Evidence: docs/provenance/visual-hashing.md
 Notice: third-party/visual-hashing-native/0-LICENSE-MIT
 Notice: third-party/visual-hashing-native/1-LICENSE-APACHE
 Notice: third-party/visual-hashing-native/2-LICENSE-MULAN
-
-wasm-bindgen-0.2.130: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-0.2.130/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-0.2.130/LICENSE-MIT
-
-wasm-bindgen-macro-0.2.130: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-0.2.130/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-0.2.130/LICENSE-MIT
-
-wasm-bindgen-macro-support-0.2.130: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-MIT
-
-wasm-bindgen-shared-0.2.130: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-shared-0.2.130/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-shared-0.2.130/LICENSE-MIT
 
 whatwg-html-references: BSD-3-Clause
 Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant

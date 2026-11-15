@@ -141,7 +141,10 @@ use clap::Parser as _;
 use purrdf_rdf::{JsonLdContextLimits, JsonLdSerializeOptions};
 
 use crate::cli::{
-    Cli, CliRdfFormat, Command, PackCommand, ReportTarget, ShaclCommand, ShapesCommand,
+    Cli, CliRdfFormat, Command, ConsistencyArgs, ConvertArgs, DescribeArgs, DocumentCompactArgs,
+    DocumentExpandArgs, DocumentFlattenArgs, DocumentFrameArgs, FingerprintArgs, GeoArgs, GlobArgs,
+    GlobSetArgs, LiftArgs, NodeExprArgs, PackCommand, ProjectArgs, QueryArgs, ReasonArgs,
+    ReportTarget, RulesArgs, ShaclCommand, ShapesCommand, ShexArgs, UpdateArgs, ValidateArgs,
 };
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
@@ -199,16 +202,16 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
-                | Command::DocumentExpand { .. }
-                | Command::DocumentCompact { .. }
-                | Command::DocumentFlatten { .. }
-                | Command::DocumentFrame { .. }
+                | Command::DocumentExpand(DocumentExpandArgs { .. })
+                | Command::DocumentCompact(DocumentCompactArgs { .. })
+                | Command::DocumentFlatten(DocumentFlattenArgs { .. })
+                | Command::DocumentFrame(DocumentFrameArgs { .. })
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
-                | Command::Glob { .. }
-                | Command::GlobSet { .. }
-                | Command::Geo { .. }
-                | Command::Lift { .. }
+                | Command::Glob(GlobArgs { .. })
+                | Command::GlobSet(GlobSetArgs { .. })
+                | Command::Geo(GeoArgs { .. })
+                | Command::Lift(LiftArgs { .. })
         )
     {
         return Err(CliError::Usage("the selected command performs no canonicalization; remove --canonical-search and --canonicalization-receipts".to_owned()));
@@ -225,7 +228,9 @@ fn dispatch_with_request(
     if cli.geo_profile.is_some()
         && !matches!(
             &cli.cmd,
-            Command::Geo { .. } | Command::Query { .. } | Command::Update { .. }
+            Command::Geo(GeoArgs { .. })
+                | Command::Query(QueryArgs { .. })
+                | Command::Update(UpdateArgs { .. })
         )
     {
         return Err(CliError::Usage(
@@ -266,31 +271,31 @@ fn dispatch_with_request(
         })
         .transpose()?;
     match &cli.cmd {
-        Command::DocumentExpand {
+        Command::DocumentExpand(DocumentExpandArgs {
             request,
             input,
             output,
-        }
-        | Command::DocumentCompact {
+        })
+        | Command::DocumentCompact(DocumentCompactArgs {
             request,
             input,
             output,
-        }
-        | Command::DocumentFlatten {
+        })
+        | Command::DocumentFlatten(DocumentFlattenArgs {
             request,
             input,
             output,
-        } => {
+        }) => {
             let (operation, command) = match &cli.cmd {
-                Command::DocumentExpand { .. } => (
+                Command::DocumentExpand(DocumentExpandArgs { .. }) => (
                     purrdf_validate::document::Operation::Expand,
                     "document-expand",
                 ),
-                Command::DocumentCompact { .. } => (
+                Command::DocumentCompact(DocumentCompactArgs { .. }) => (
                     purrdf_validate::document::Operation::Compact,
                     "document-compact",
                 ),
-                Command::DocumentFlatten { .. } => (
+                Command::DocumentFlatten(DocumentFlattenArgs { .. }) => (
                     purrdf_validate::document::Operation::Flatten,
                     "document-flatten",
                 ),
@@ -304,12 +309,12 @@ fn dispatch_with_request(
             )?;
             document_expansion::run(operation, request, input, None, output, canonical)
         }
-        Command::DocumentFrame {
+        Command::DocumentFrame(DocumentFrameArgs {
             request,
             input,
             frame,
             output,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -344,12 +349,12 @@ fn dispatch_with_request(
             word_id::run(command)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Fingerprint {
+        Command::Fingerprint(FingerprintArgs {
             digest,
             symbols,
             max_bytes,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -369,13 +374,13 @@ fn dispatch_with_request(
             glob_rdf::run(args)?;
             Ok(CliOutcome::Complete)
         }
-        Command::GlobSet {
+        Command::GlobSet(GlobSetArgs {
             value,
             patterns,
             mode,
             surface,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -385,13 +390,13 @@ fn dispatch_with_request(
             glob::run_set(patterns, value, *mode, *surface, *max_work)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Glob {
+        Command::Glob(GlobArgs {
             pattern,
             value,
             mode,
             surface,
             max_work,
-        } => {
+        }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -401,7 +406,7 @@ fn dispatch_with_request(
             glob::run(pattern, value, *mode, *surface, *max_work)?;
             Ok(CliOutcome::Complete)
         }
-        Command::Geo { input, output } => {
+        Command::Geo(GeoArgs { input, output }) => {
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
@@ -430,7 +435,7 @@ fn dispatch_with_request(
                 ))
             }
         }
-        Command::Convert {
+        Command::Convert(ConvertArgs {
             yamlld_input_options,
             from,
             inputs,
@@ -448,7 +453,7 @@ fn dispatch_with_request(
             canonical: canonical_output,
             input,
             output,
-        } => convert::run(
+        }) => convert::run(
             &convert::ConvertOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 from: *from,
@@ -475,7 +480,7 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::Query {
+        Command::Query(QueryArgs {
             yamlld_input_options,
             data,
             base,
@@ -506,7 +511,7 @@ fn dispatch_with_request(
             now,
             entropy_seed,
             query,
-        } => query::run(
+        }) => query::run(
             &query::QueryOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 geo: selected_geo,
@@ -550,7 +555,7 @@ fn dispatch_with_request(
             &ReportTarget::decode(report.as_ref()),
             canonical,
         ),
-        Command::Update {
+        Command::Update(UpdateArgs {
             yamlld_input_options,
             now,
             entropy_seed,
@@ -573,7 +578,7 @@ fn dispatch_with_request(
             division,
             update,
             graph_existence,
-        } => update::run(
+        }) => update::run(
             &update::UpdateOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 now: now.as_deref(),
@@ -606,7 +611,7 @@ fn dispatch_with_request(
             &ledger_target,
             canonical,
         ),
-        Command::Reason {
+        Command::Reason(ReasonArgs {
             yamlld_input_options,
             regime,
             rules,
@@ -621,7 +626,7 @@ fn dispatch_with_request(
             base,
             input,
             output,
-        } => reason::run(
+        }) => reason::run(
             *regime,
             yamlld_input_options.as_deref(),
             rules.as_deref(),
@@ -682,7 +687,7 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::Consistency {
+        Command::Consistency(ConsistencyArgs {
             yamlld_input_options,
             proof,
             check_proof,
@@ -693,7 +698,7 @@ fn dispatch_with_request(
             from,
             base,
             input,
-        } => consistency::run(
+        }) => consistency::run(
             &consistency::ConsistencyOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 input,
@@ -710,7 +715,7 @@ fn dispatch_with_request(
             jsonld_options.as_ref(),
             canonical,
         ),
-        Command::Validate {
+        Command::Validate(ValidateArgs {
             yamlld_input_options,
             shapes_yamlld_input_options,
             shapes,
@@ -745,7 +750,7 @@ fn dispatch_with_request(
             shacl_profile,
             input,
             output,
-        } => validate::run(
+        }) => validate::run(
             &validate::ValidateOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
@@ -793,7 +798,7 @@ fn dispatch_with_request(
             &ledger_target,
             canonical,
         ),
-        Command::Shex {
+        Command::Shex(ShexArgs {
             schema,
             schema_from,
             imports,
@@ -805,7 +810,7 @@ fn dispatch_with_request(
             matcher_maximum_states,
             map,
             output,
-        } => shex::run(
+        }) => shex::run(
             &shex::ShexOptions {
                 schema,
                 schema_from: *schema_from,
@@ -824,7 +829,7 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::Describe {
+        Command::Describe(DescribeArgs {
             yamlld_input_options,
             iris,
             from,
@@ -832,7 +837,7 @@ fn dispatch_with_request(
             base,
             input,
             output,
-        } => describe::run(
+        }) => describe::run(
             &describe::DescribeOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 iris,
@@ -847,7 +852,7 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::Project {
+        Command::Project(ProjectArgs {
             yamlld_input_options,
             profile,
             config,
@@ -856,7 +861,7 @@ fn dispatch_with_request(
             base,
             input,
             output,
-        } => projection::run_project(
+        }) => projection::run_project(
             *profile,
             yamlld_input_options.as_deref(),
             config,
@@ -870,14 +875,14 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::Lift {
+        Command::Lift(LiftArgs {
             profile,
             config,
             to,
             base,
             input,
             output,
-        } => projection::run_lift(
+        }) => projection::run_lift(
             *profile,
             config,
             *to,
@@ -924,7 +929,7 @@ fn dispatch_with_request(
             ShaclCommand::Diff { a, b } => shacl::diff(a, b, canonical),
         }
         .map(|()| CliOutcome::Complete),
-        Command::Rules {
+        Command::Rules(RulesArgs {
             now,
             entropy_seed,
             shapes,
@@ -949,7 +954,7 @@ fn dispatch_with_request(
             base,
             input,
             output,
-        } => shapes_tools::run_rules(
+        }) => shapes_tools::run_rules(
             &shapes_tools::RulesOptions {
                 now: now.as_deref(),
                 entropy_seed: entropy_seed.as_deref(),
@@ -981,7 +986,7 @@ fn dispatch_with_request(
             canonical,
         )
         .map(|()| CliOutcome::Complete),
-        Command::NodeExpr {
+        Command::NodeExpr(NodeExprArgs {
             shapes,
             shapes_from,
             shapes_base,
@@ -1002,7 +1007,7 @@ fn dispatch_with_request(
             base,
             input,
             output,
-        } => shapes_tools::run_node_expr(
+        }) => shapes_tools::run_node_expr(
             &shapes_tools::NodeExprOptions {
                 shapes,
                 shapes_from: *shapes_from,

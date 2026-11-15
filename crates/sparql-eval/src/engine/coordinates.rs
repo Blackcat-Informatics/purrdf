@@ -425,7 +425,7 @@ pub(crate) fn now(
     workspace: &WorkspaceCapability,
 ) -> Result<XsdValue, EvalError> {
     let Some(supplied) = supplied else {
-        return Ok(XsdValue::DateTime(crate::clock::wall_clock_now()));
+        return Ok(XsdValue::DateTime(crate::clock::wall_clock_now()?));
     };
     if supplied.owned_heap_bytes() == 0 {
         return Ok(XsdValue::DateTime(supplied.clone()));

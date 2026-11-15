@@ -464,7 +464,7 @@ fn every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_bac
 }
 
 // ---------------------------------------------------------------------------------------------
-// OVER-REFUSAL — "a refusal is a claim too, prove it" (`CLAUDE.md`).
+// OVER-REFUSAL — "a refusal is a claim too, prove it" (`AGENTS.md`).
 //
 // Everything above tightens validation, which is exactly where over-refusal appears: a lane that
 // refuses whatever it is given passes every test above and is useless. So a binary that BEHAVES

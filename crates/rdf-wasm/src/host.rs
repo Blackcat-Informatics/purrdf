@@ -4,10 +4,15 @@
 //! The one home of this crate's JavaScript host imports.
 //!
 //! `Reflect.get` is declared here once and read by the option reader, the asynchronous
-//! job's option decoding and the test-flag reader. The host clock (`Date.now`) is not
-//! declared here: its one import is `purrdf_sparql_eval::wasm_host`, which this crate
-//! reaches through the evaluator it already depends on. A second declaration of either
-//! import fails `scripts/check-shared-helpers.py`.
+//! job's option decoding and the test-flag reader. The host clock (`Date.now`) and the
+//! host random draw (`Math.random`) are declared here once too: the asynchronous job
+//! clock reads the first, and `JsHostSource` is the source this crate installs in the
+//! evaluator, which imports nothing itself. A second declaration of `Date.now` or
+//! `Reflect.get` fails `scripts/check-shared-helpers.py`.
+//!
+//! Each call looks up the current global `Date.now` or `Math.random`. The wasm
+//! test runner temporarily replaces those globals inside its host seal, so a
+//! prohibited clock or entropy read must still trap after module startup.
 
 use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
 use wasm_bindgen::prelude::*;
@@ -70,6 +75,47 @@ extern "C" {
         value: &JsValue,
     ) -> Result<bool, JsValue>;
 }
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn date_now_import() -> f64;
+
+    #[wasm_bindgen(js_namespace = Math, js_name = random)]
+    fn math_random_import() -> f64;
+}
+
+/// Unix epoch milliseconds from the browser or Node host.
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn date_now() -> f64 {
+    date_now_import()
+}
+
+/// The JavaScript host's clock and entropy, as the evaluator's host source.
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug)]
+pub(crate) struct JsHostSource;
+
+#[cfg(target_arch = "wasm32")]
+impl purrdf_sparql_eval::host_source::HostSource for JsHostSource {
+    fn unix_millis(&self) -> f64 {
+        date_now()
+    }
+
+    fn entropy_seed(&self) -> u64 {
+        // Compose 64 bits from two host Math.random() draws in [0,1).
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let draw = || (math_random_import() * f64::from(u32::MAX)) as u64;
+        (draw() << 32) | draw()
+    }
+}
+
+/// The one source this module installs, when it starts.
+#[cfg(target_arch = "wasm32")]
+pub(crate) static JS_HOST_SOURCE: JsHostSource = JsHostSource;
 
 #[wasm_bindgen(raw_module = "./purrdf_bytes.mjs")]
 extern "C" {

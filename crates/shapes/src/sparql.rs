@@ -3053,7 +3053,7 @@ mod tests {
     // always existed (`components::substitute_message_templates`) — it was only
     // ever reached from the CUSTOM COMPONENT path, never from `sh:sparql`.
     //
-    // Per CLAUDE.md's refusal rule these tests pin BOTH directions: the
+    // Per AGENTS.md's refusal rule these tests pin BOTH directions: the
     // placeholders that must now resolve, and the neighbouring ones that must
     // still be left alone rather than blanked or refused.
 

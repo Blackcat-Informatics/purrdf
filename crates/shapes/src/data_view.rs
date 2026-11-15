@@ -1119,6 +1119,11 @@ impl DatasetView for ShaclDatasetView {
             Source::Delta(dense) => u64::try_from(dense.len()).expect("resident mapping fits u64"),
         }
     }
+    /// A native source holding no reifier and no annotation leaves this view with none
+    /// whatever its projection or graph selection, which only ever remove rows.
+    fn statement_layer_is_empty(&self) -> bool {
+        matches!(&self.source, Source::Native(source) if source.statement_layer_is_empty())
+    }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.raw_reifiers().take(if self.statements_projected {
             0
@@ -1214,5 +1219,79 @@ impl ShaclRead for ShaclDatasetView {
             o: TermBox::new(crate::term::term_id_to_native(self, o).to_term_value()),
         })
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod statement_layer_tests {
+    use super::*;
+    use purrdf_core::RdfDatasetBuilder;
+
+    fn source(reified: bool, annotated: bool) -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s").unwrap();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        b.push_quad(s, p, o, None).unwrap();
+        let reifier = b.intern_iri("http://example.org/r").unwrap();
+        if reified {
+            let statement = b.intern_triple(s, p, o).unwrap();
+            b.push_reifier(reifier, statement).unwrap();
+        }
+        if annotated {
+            b.push_annotation(reifier, p, o).unwrap();
+        }
+        b.freeze().unwrap()
+    }
+
+    /// The certificate is forwarded from a native source and withheld when that source
+    /// holds a reifier or an annotation, so a probe of the statement layer is skipped only where it
+    /// would find nothing.
+    #[test]
+    fn a_native_view_forwards_the_empty_statement_layer_certificate() {
+        use purrdf_core::DatasetView;
+        assert!(ShaclDatasetView::native(source(false, false)).statement_layer_is_empty());
+        // Either table alone is a statement layer: the certificate needs both empty.
+        assert!(!ShaclDatasetView::native(source(true, false)).statement_layer_is_empty());
+        assert!(!ShaclDatasetView::native(source(false, true)).statement_layer_is_empty());
+    }
+
+    /// Only a native, unrestricted-by-composition source certifies an empty layer: a
+    /// projected or graph-selected view over a source holding a reifier does not, and
+    /// a composite or mutation-snapshot source keeps the default (`false`) even when it
+    /// holds no statement.
+    #[test]
+    fn restricted_and_layered_views_do_not_certify_an_empty_statement_layer() {
+        use purrdf_core::DatasetView;
+        use purrdf_rdf::ir::{CompositeDatasetView, MutableDataset, ViewLimits};
+        let with_reifier = source(true, false);
+        let graph = with_reifier
+            .term_id_by_value(&TermValue::iri("http://example.org/s"))
+            .expect("lookup succeeds")
+            .expect("the subject is interned");
+        assert!(!ShaclDatasetView::project(Arc::clone(&with_reifier)).statement_layer_is_empty());
+        assert!(
+            !ShaclDatasetView::named_graph(Arc::clone(&with_reifier), graph)
+                .statement_layer_is_empty()
+        );
+        let plain = source(false, false);
+        let composite = Arc::new(
+            CompositeDatasetView::new(vec![Arc::clone(&plain)], ViewLimits::default()).unwrap(),
+        );
+        let delta = Arc::new(
+            MutableDataset::new(Arc::clone(&plain))
+                .snapshot_view()
+                .unwrap(),
+        );
+        assert!(
+            !ShaclDatasetView::composite(composite, false, ViewLimits::default())
+                .unwrap()
+                .statement_layer_is_empty()
+        );
+        assert!(
+            !ShaclDatasetView::delta(delta, false, ViewLimits::default())
+                .unwrap()
+                .statement_layer_is_empty()
+        );
     }
 }

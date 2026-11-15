@@ -3321,9 +3321,10 @@ impl NativeSparqlEngine {
         let mut ctx = EvalCtx::new_admitted(dataset, &capability, || {
             Ok((
                 coordinates::now(options.now, &capability)?,
-                options
-                    .entropy_seed
-                    .unwrap_or_else(crate::clock::entropy_seed),
+                match options.entropy_seed {
+                    Some(seed) => seed,
+                    None => crate::clock::entropy_seed()?,
+                },
             ))
         })?
         .with_eval_options(self.eval_options);

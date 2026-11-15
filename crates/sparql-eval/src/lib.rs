@@ -89,6 +89,8 @@ mod cdt_fn;
 mod cdt_unfold;
 mod clock;
 mod composite_value;
+#[cfg(test)]
+mod constant_operand_parse;
 mod construct;
 mod contain;
 pub mod convert;
@@ -108,6 +110,9 @@ mod fallible;
 pub mod geo;
 mod governed;
 pub mod governor;
+// The host clock and entropy, read through a source the embedder installs. This
+// crate declares no host import of its own.
+pub mod host_source;
 pub mod interned;
 mod join_plan;
 /// Nearest-neighbour retrieval over a PURREMB embedding space, reachable from SPARQL
@@ -151,7 +156,6 @@ pub use retained::{
 pub mod protocol;
 pub mod remote;
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
 #[doc(hidden)]
 pub mod wasm_host;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
@@ -161,6 +165,8 @@ mod row_checkpoint;
 #[cfg(test)]
 mod row_checkpoint_gate;
 mod row_ingest;
+#[cfg(test)]
+mod row_path_parity;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a
 // host attaches to individual endpoints, and the two resolvers built on it.

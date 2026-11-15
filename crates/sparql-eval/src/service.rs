@@ -769,10 +769,33 @@ impl ServiceResolver for InProcessServiceResolver {
         request: ServiceRequest<'_>,
         workspace: crate::WorkspaceCapability,
     ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        self.evaluate(request, &workspace, None)
+    }
+
+    /// The forwarded query evaluates under the calling execution's time and a seed
+    /// derived from its random state, so it reads no host clock or entropy.
+    fn resolve_coordinated(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+        coordinates: crate::remote::ServiceCoordinates<'_>,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        self.evaluate(request, &workspace, Some(coordinates))
+    }
+}
+
+impl InProcessServiceResolver {
+    /// Authorize and evaluate `request` against its endpoint's dataset.
+    fn evaluate(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: &crate::WorkspaceCapability,
+        coordinates: Option<crate::remote::ServiceCoordinates<'_>>,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
         if let Some(trip) = request.stop_trip() {
-            return Err(crate::remote::invocation_error(trip, &workspace)?);
+            return Err(crate::remote::invocation_error(trip, workspace)?);
         }
-        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
         let result = {
             let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
             if let Some(catalog) = &self.catalog {
@@ -795,11 +818,11 @@ impl ServiceResolver for InProcessServiceResolver {
                 AdmittedRemoteError::message(
                     purrdf_core::SilencedKind::Transport,
                     format_args!("no in-memory endpoint <{}>", request.endpoint),
-                    &workspace,
+                    workspace,
                 )?,
             ));
         };
-        crate::remote::evaluate_in_memory_admitted(dataset, request, self, &workspace)
+        crate::remote::evaluate_in_memory_admitted(dataset, request, self, workspace, coordinates)
     }
 }
 
@@ -867,6 +890,28 @@ impl ServiceResolver for ServiceRouter<'_> {
         request: ServiceRequest<'_>,
         workspace: crate::WorkspaceCapability,
     ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        self.route(request, workspace, None)
+    }
+
+    /// The routed resolver receives the calling execution's coordinates.
+    fn resolve_coordinated(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+        coordinates: crate::remote::ServiceCoordinates<'_>,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        self.route(request, workspace, Some(coordinates))
+    }
+}
+
+impl ServiceRouter<'_> {
+    /// Dispatch `request` to its route, or to the fallback.
+    fn route(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+        coordinates: Option<crate::remote::ServiceCoordinates<'_>>,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
         if let Some(trip) = request.stop_trip() {
             return Err(crate::remote::invocation_error(trip, &workspace)?);
         }
@@ -884,7 +929,10 @@ impl ServiceResolver for ServiceRouter<'_> {
                 )))
             });
         };
-        resolver.resolve_admitted(request, workspace)
+        match coordinates {
+            Some(coordinates) => resolver.resolve_coordinated(request, workspace, coordinates),
+            None => resolver.resolve_admitted(request, workspace),
+        }
     }
 }
 

@@ -1273,7 +1273,8 @@ impl From<&EvalError> for FailureCode {
             | EvalError::Config(_)
             | EvalError::CompositeBound(_)
             | EvalError::RelationIncomplete { .. }
-            | EvalError::FloatEnvironment(_) => Self::Evaluation,
+            | EvalError::FloatEnvironment(_)
+            | EvalError::HostSourceMissing(_) => Self::Evaluation,
         }
     }
 }

@@ -760,7 +760,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
     /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
     /// scratch values are ephemeral and stay on the borrowed-view path.
-    pub(crate) xsd_parse_cache: crate::parsed_value::ParsedCache<D::Id>,
+    pub(crate) xsd_parse_cache:
+        crate::parsed_value::ParsedCache<crate::parsed_value::ParseKey<D::Id>>,
+    /// Parses of the constant operands a program interned into the scratch table
+    /// (unbounded evaluation only), so a constant is parsed once per query rather
+    /// than once per row. Fresh in every fork, like `xsd_parse_cache`.
+    pub(crate) constant_parses: crate::parsed_value::ConstantParses,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -1374,12 +1379,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// A fresh context over `dataset`, scoped to the default graph.
+    ///
+    /// # Panics
+    ///
+    /// On a build with no operating system (`wasm32-unknown-unknown`) and no installed
+    /// [`crate::host_source`]: the context's time and seed have nowhere to come from,
+    /// and this signature has no error to return. [`Self::try_new`] returns that
+    /// refusal as a value.
     pub fn new(dataset: &'d D) -> Self {
-        Self::at(
+        Self::try_new(dataset).unwrap_or_else(|missing| panic!("{missing}"))
+    }
+
+    /// A fresh context over `dataset`, scoped to the default graph, or the refusal
+    /// when this build has no host clock or entropy to sample.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::HostSourceMissing`] on a build with no operating system and no
+    /// installed [`crate::host_source`].
+    pub fn try_new(dataset: &'d D) -> Result<Self, EvalError> {
+        Ok(Self::at(
             dataset,
-            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
-            crate::clock::entropy_seed(),
-        )
+            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()?),
+            crate::clock::entropy_seed()?,
+        ))
     }
 
     /// A fresh context over `dataset` whose `NOW()` is `now` and whose
@@ -1477,6 +1500,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: None,
             bgp_order_cache: None,
             constructed: crate::workspace::ConstructedCells::default(),
@@ -3025,6 +3049,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: crate::workspace::ConstructedCells::default(),
@@ -3396,6 +3421,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+            constant_parses: crate::parsed_value::ConstantParses::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
             constructed: crate::workspace::ConstructedCells::default(),
@@ -11210,6 +11236,33 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Result<MaterializedSolutions, EvalError> {
     let names = seq.schema.vars();
+    if !ctx.growth.is_bounded() {
+        // Nothing is admitted, so nothing is retained or sized for admission: the same
+        // fallible reservations and copies, without the accounting arithmetic.
+        let mut variables = crate::workspace::vector(names.len(), "materialized solution names")?;
+        for name in names {
+            variables.push(crate::workspace::string(
+                name.as_str(),
+                "materialized solution name",
+            )?);
+        }
+        let mut rows = crate::workspace::vector(seq.rows.len(), "materialized solution bag")?;
+        for row in &seq.rows {
+            let mut out = crate::workspace::vector(row.len(), "materialized solution row")?;
+            for cell in row {
+                out.push(
+                    cell.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
+                        .transpose()
+                        .map_err(EvalError::source_read)?,
+                );
+            }
+            rows.push(out);
+        }
+        return ctx
+            .dataset
+            .checked_read(|_| (variables, rows))
+            .map_err(|error| ctx.workspace.source_error(error));
+    }
     let names_bytes = names
         .len()
         .checked_mul(size_of::<String>())

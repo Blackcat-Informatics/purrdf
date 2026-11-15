@@ -666,6 +666,16 @@ pub enum EvalError {
         /// The construct the budget stopped at.
         construct: &'static str,
     },
+
+    /// The request left its query time or its entropy seed to the host, and this
+    /// build has no source to read it from: no operating system (`wasm32-unknown-unknown`)
+    /// and no installed [`crate::host_source`]. Never raised where either exists.
+    ///
+    /// Its own variant because nothing about the request or the data is wrong, and
+    /// because the only other answer would be a time or a seed nobody sampled. The
+    /// same request answers once it supplies the named input, or once the embedder
+    /// installs a source.
+    HostSourceMissing(crate::host_source::HostSourceMissing),
 }
 
 impl purrdf_hash::error::StructuredError for EvalError {
@@ -716,6 +726,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
         FloatEnvironment(error) => "sparql-eval-float-environment" { "cause" => Cause(error) },
         StackExhausted { construct } => "sparql-eval-stack-exhausted" { "construct" => Text(construct) },
         HostStackExhausted { construct } => "sparql-eval-host-stack-exhausted" { "construct" => Text(construct) },
+        HostSourceMissing(missing) => "sparql-eval-host-source-missing" { "input" => Code(missing.input().name()) },
     }
 }
 
@@ -866,6 +877,7 @@ impl EvalError {
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
             Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
+            Self::HostSourceMissing(_) => Some(Self::HOST_SOURCE_MISSING_CODE),
         }
     }
 
@@ -1004,6 +1016,12 @@ impl EvalError {
     /// native caller can size ([`Self::STACK_EXHAUSTED_CODE`]): no lane answers it.
     pub const HOST_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-host-stack-exhausted";
 
+    /// The stable, machine-readable diagnostic code [`Self::HostSourceMissing`] maps to
+    /// at the `SparqlEngine` boundary — the string a host compares against to tell "this
+    /// request left its time or its seed to a host this build cannot read" from every
+    /// other evaluation failure.
+    pub const HOST_SOURCE_MISSING_CODE: &'static str = "native-sparql-host-source-missing";
+
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
     /// own reason.
     pub(crate) fn relation_incomplete_admitted(
@@ -1132,6 +1150,7 @@ impl core::fmt::Display for EvalError {
                 crate::stack::height::WASM_HOST_STACK_BUDGET,
                 crate::stack::height::WASM_GRAPH_PATTERN_DEPTH
             ),
+            Self::HostSourceMissing(missing) => core::fmt::Display::fmt(missing, f),
         }
     }
 }
@@ -1158,7 +1177,10 @@ impl std::error::Error for EvalError {
     }
 }
 
-purrdf_lex::variant_from!(EvalError { Parse(ParseError) });
+purrdf_lex::variant_from!(EvalError {
+    Parse(ParseError),
+    HostSourceMissing(crate::host_source::HostSourceMissing),
+});
 
 #[cfg(test)]
 mod tests {

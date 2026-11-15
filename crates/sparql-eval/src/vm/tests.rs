@@ -602,7 +602,7 @@ fn run_walker(
 /// require the same runs.
 fn assert_same(expr: &Expression, context: &str) {
     let ds = dataset();
-    let now = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now());
+    let now = purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now().unwrap());
     for ebv in [false, true] {
         let walked = run_walker(expr, ebv, &ds, &now);
         let run = run_vm(expr, ebv, &ds, &now);

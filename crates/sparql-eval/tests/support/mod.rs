@@ -65,6 +65,19 @@ use purrdf_core::{
 use purrdf_sparql_algebra::{GraphPattern, Query};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
 
+/// The query time [`supplied`] carries.
+static SUPPLIED_NOW: std::sync::LazyLock<purrdf_xsd::temporal::DateTime> =
+    std::sync::LazyLock::new(|| purrdf_xsd::datetime_from_unix_seconds(0));
+
+/// Options that supply the query time and the entropy seed, so a request reads no
+/// host clock or entropy: the evaluator imports neither, and a `wasm32` test binary
+/// installs no host source.
+pub fn supplied() -> QueryOptions<'static, 'static> {
+    QueryOptions::new()
+        .with_now(&SUPPLIED_NOW)
+        .with_entropy_seed(0)
+}
+
 /// A frozen dataset holding nothing.
 pub fn empty_dataset() -> Arc<RdfDataset> {
     RdfDatasetBuilder::new().freeze().expect("an empty dataset")

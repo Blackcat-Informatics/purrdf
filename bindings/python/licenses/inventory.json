@@ -61,18 +61,6 @@
       "source_checksum": "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
     },
     {
-      "id": "bumpalo-3.20.3",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/bumpalo-3.20.3/LICENSE-APACHE",
-        "dependencies/bumpalo-3.20.3/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/fitzgen/bumpalo",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
-    },
-    {
       "id": "cfg-if-1.0.5",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -752,18 +740,6 @@
       "source_checksum": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
     },
     {
-      "id": "rustversion-1.0.23",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/rustversion-1.0.23/LICENSE-APACHE",
-        "dependencies/rustversion-1.0.23/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/dtolnay/rustversion",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-    },
-    {
       "id": "sha2-0.11.1",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -1138,54 +1114,6 @@
       "source": "https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/"
     },
     {
-      "id": "wasm-bindgen-0.2.130",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/wasm-bindgen-0.2.130/LICENSE-APACHE",
-        "dependencies/wasm-bindgen-0.2.130/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/wasm-bindgen/wasm-bindgen",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
-    },
-    {
-      "id": "wasm-bindgen-macro-0.2.130",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/wasm-bindgen-macro-0.2.130/LICENSE-APACHE",
-        "dependencies/wasm-bindgen-macro-0.2.130/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
-    },
-    {
-      "id": "wasm-bindgen-macro-support-0.2.130",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-APACHE",
-        "dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
-    },
-    {
-      "id": "wasm-bindgen-shared-0.2.130",
-      "license": "MIT OR Apache-2.0",
-      "notices": [
-        "dependencies/wasm-bindgen-shared-0.2.130/LICENSE-APACHE",
-        "dependencies/wasm-bindgen-shared-0.2.130/LICENSE-MIT"
-      ],
-      "repository": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
-    },
-    {
       "id": "whatwg-html-references",
       "license": "BSD-3-Clause",
       "notices": [
@@ -1262,7 +1190,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "6cc05d54eaa98ad1c42a7587c66811b1930f653ed260e329b562edd9368d4548",
+    "NOTICE.txt": "8a8bd597da85932973c1c29cf4bdc44b1b6b08f76919c50a996829e6e5c3df0c",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.4/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1273,8 +1201,6 @@
     "dependencies/aho-corasick-1.1.5/LICENSE-MIT": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
     "dependencies/block-buffer-0.12.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/block-buffer-0.12.1/LICENSE-MIT": "98181e7249d0c01737645ec982499ce99a0f07eb8f7d625b8840d799d10dbc01",
-    "dependencies/bumpalo-3.20.3/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/bumpalo-3.20.3/LICENSE-MIT": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee",
     "dependencies/cfg-if-1.0.5/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "dependencies/cfg-if-1.0.5/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
     "dependencies/cipher-0.5.2/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1351,8 +1277,6 @@
     "dependencies/regex-syntax-0.8.11/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "dependencies/regex-syntax-0.8.11/LICENSE-MIT": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
     "dependencies/regex-syntax-0.8.11/src/unicode_tables/LICENSE-UNICODE": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
-    "dependencies/rustversion-1.0.23/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
-    "dependencies/rustversion-1.0.23/LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
     "dependencies/sha2-0.11.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/sha2-0.11.1/LICENSE-MIT": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25",
     "dependencies/syn-3.0.9/LICENSE-APACHE": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
@@ -1366,14 +1290,6 @@
     "dependencies/unicode-ident-1.0.27/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
     "dependencies/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e",
-    "dependencies/wasm-bindgen-0.2.130/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/wasm-bindgen-0.2.130/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
-    "dependencies/wasm-bindgen-macro-0.2.130/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/wasm-bindgen-macro-0.2.130/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
-    "dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
-    "dependencies/wasm-bindgen-shared-0.2.130/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/wasm-bindgen-shared-0.2.130/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
     "dependencies/windows-link-0.2.1/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
     "dependencies/windows-link-0.2.1/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
     "dependencies/windows-sys-0.61.2/license-apache-2.0": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",

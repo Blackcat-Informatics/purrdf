@@ -202,15 +202,13 @@ impl StopSignal for CancellationFlag {
     }
 }
 
-/// The host clock read, in milliseconds since a fixed origin, written per target exactly
-/// as [`crate::clock::wall_clock_now`] is.
+/// The operating system's monotonic clock, in milliseconds since a fixed origin.
 ///
-/// Native: [`std::time::Instant`], which is monotonic, so the rewind branch in
-/// [`WallDeadline::poll`] is unreachable through this reader on native targets. The
-/// origin is a process-wide first-read instant; only differences of the returned value
-/// are ever meaningful.
+/// [`std::time::Instant`] is monotonic, so the rewind branch in [`WallDeadline::poll`]
+/// is unreachable through this reader. The origin is a process-wide first-read
+/// instant; only differences of the returned value are ever meaningful.
 #[cfg(not(target_arch = "wasm32"))]
-fn host_millis() -> f64 {
+fn monotonic_millis() -> f64 {
     static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
     ORIGIN
         .get_or_init(std::time::Instant::now)
@@ -219,21 +217,18 @@ fn host_millis() -> f64 {
         * 1000.0
 }
 
-/// The host clock read, in milliseconds since a fixed origin, written per target exactly
-/// as [`crate::clock::wall_clock_now`] is.
-///
-/// wasm32: the host's `Date.now()`, milliseconds since the Unix epoch. This is a **wall**
-/// clock, not a monotonic one — see [`WallDeadline`] for why that is load-bearing.
-#[cfg(target_arch = "wasm32")]
-fn host_millis() -> f64 {
-    crate::wasm_host::date_now()
-}
-
 /// Where a [`WallDeadline`] reads the time from.
 #[derive(Debug)]
 enum DeadlineClock {
-    /// The host clock, through this crate's single target-split reader.
-    Host,
+    /// The installed [`crate::host_source`]'s wall clock, milliseconds since the Unix
+    /// epoch. This is a **wall** clock, not a monotonic one — see [`WallDeadline`] for
+    /// why that is load-bearing. A source is installed once and never replaced, so the
+    /// clock a deadline starts on is the clock every later poll reads.
+    Installed(&'static dyn crate::host_source::HostSource),
+    /// The operating system's monotonic clock, on a native build with no source
+    /// installed.
+    #[cfg(not(target_arch = "wasm32"))]
+    Monotonic,
     /// A test-scripted millisecond source. A real host clock cannot be made to step
     /// backwards on demand, so the rewind rule is only checkable against a source the
     /// test controls.
@@ -242,10 +237,30 @@ enum DeadlineClock {
 }
 
 impl DeadlineClock {
+    /// The clock a new deadline reads: the installed source, or the operating system's
+    /// on a native build with none. A build with neither has no clock to offer.
+    fn host() -> Result<Self, crate::host_source::HostSourceMissing> {
+        if let Some(source) = crate::host_source::installed() {
+            return Ok(Self::Installed(source));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Ok(Self::Monotonic)
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err(crate::host_source::HostSourceMissing::new(
+                crate::host_source::HostInput::Clock,
+            ))
+        }
+    }
+
     /// Read the current millisecond count.
     fn now_millis(&self) -> f64 {
         match self {
-            Self::Host => host_millis(),
+            Self::Installed(source) => source.unix_millis(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Monotonic => monotonic_millis(),
             #[cfg(test)]
             Self::Scripted(clock) => clock.now_millis(),
         }
@@ -297,9 +312,26 @@ impl WallDeadline {
     ///
     /// A zero budget is valid and expires on the first poll, matching the inclusive,
     /// zero-is-valid reading every other ceiling in this module uses.
+    ///
+    /// # Panics
+    ///
+    /// On a build with no operating-system clock (`wasm32-unknown-unknown`) and no
+    /// installed [`crate::host_source`]: there is no clock to start the deadline on,
+    /// and this signature has no error to return. [`Self::try_after`] returns that
+    /// refusal as a value.
     #[must_use]
     pub fn after(budget: Duration) -> Self {
-        Self::from_clock(DeadlineClock::Host, budget)
+        Self::try_after(budget).unwrap_or_else(|missing| panic!("{missing}"))
+    }
+
+    /// A deadline `budget` from now, or the refusal when this build has no clock.
+    ///
+    /// # Errors
+    ///
+    /// [`HostSourceMissing`](crate::host_source::HostSourceMissing) on a build with no
+    /// operating-system clock and no installed [`crate::host_source`].
+    pub fn try_after(budget: Duration) -> Result<Self, crate::host_source::HostSourceMissing> {
+        Ok(Self::from_clock(DeadlineClock::host()?, budget))
     }
 
     /// Whether this deadline has already latched, without consulting the clock.

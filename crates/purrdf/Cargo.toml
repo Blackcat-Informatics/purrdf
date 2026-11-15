@@ -113,6 +113,12 @@ purrdf-testkit = { workspace = true }
 name = "reasoning_inspection"
 harness = false
 
+[[example]]
+# The library crates linked as a bare WebAssembly module, for `make wasm-imports`
+# to read its import section. A cdylib so the wasm32 build emits a module.
+name = "host_import_probe"
+crate-type = ["cdylib"]
+
 [[bench]]
 name = "multimodal_on_demand_read"
 harness = false

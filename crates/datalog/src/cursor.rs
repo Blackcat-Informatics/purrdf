@@ -1013,7 +1013,7 @@ mod tests {
         }
 
         assert_eq!(count, 201);
-        assert!(cursor.position.frontier.is_empty());
+        assert_eq!(cursor.position.frontier.as_slice(), &[]);
         assert!(
             cursor
                 .position

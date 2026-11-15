@@ -353,9 +353,14 @@ impl RdfDataset {
             .fetch_add(rows as u64, Ordering::Relaxed);
     }
 
-    /// Rows read by the native statistic scans of this dataset so far: the
-    /// length of the scanned relation, added once per scan. A statistic already
-    /// answered is not scanned again, so repeated planning leaves this unchanged.
+    /// A monotonic work indication for the predicate and predicate-object
+    /// statistics of this dataset: the length of the relation a statistic scan
+    /// reads, added once per scan, plus the lengths of the index runs a statistic
+    /// reads. A statistic already answered is not computed again, so repeated
+    /// planning leaves it unchanged. It does not count the `stream_rows`,
+    /// `predicate_object_kind` and `visit_distinct` scans, and a clone of the
+    /// dataset starts at zero. Compare two readings of one dataset; it is not a
+    /// total of rows read.
     #[must_use]
     pub fn statistics_rows_scanned(&self) -> u64 {
         self.native_statistics.scanned.load(Ordering::Relaxed)
@@ -667,6 +672,9 @@ mod tests {
         let graphs: Vec<TermId> = (0..2)
             .map(|i| b.intern_iri(&format!("http://example.org/g{i}")).unwrap())
             .collect();
+        // Interned but never asserted: an absent predicate and an absent graph.
+        b.intern_iri("http://example.org/absent").unwrap();
+        b.intern_iri("http://example.org/gAbsent").unwrap();
         let nodes: Vec<TermId> = (0..80)
             .map(|i| b.intern_iri(&format!("http://example.org/n{i}")).unwrap())
             .collect();
@@ -687,7 +695,8 @@ mod tests {
     /// `freeze_with_memory` freeze builds eagerly, for every predicate, graph
     /// restriction and object, both by scanning (no permutation built yet) and by
     /// reading index runs (permutations built by a query's cardinality estimates):
-    /// the planner must be told the same either way.
+    /// the planner must be told the same either way. A predicate no quad uses and a
+    /// graph no quad is in answer identically, and answer nothing.
     #[test]
     fn on_demand_statistics_equal_eager_statistics() {
         let (ordinary, objects, predicates) = builder();
@@ -737,6 +746,41 @@ mod tests {
                 saw_wide,
                 "the fixture has a predicate with more than 64 objects"
             );
+            let absent_predicate = ordinary
+                .term_id_by_iri("http://example.org/absent")
+                .unwrap();
+            let absent_graph = GraphMatch::Named(
+                ordinary
+                    .term_id_by_iri("http://example.org/gAbsent")
+                    .unwrap(),
+            );
+            let stream = StatisticsStream::Asserted;
+            let cases = graphs
+                .into_iter()
+                .map(|graph| (absent_predicate, graph))
+                .chain(
+                    predicates
+                        .iter()
+                        .map(|&predicate| (predicate, absent_graph)),
+                );
+            for (predicate, graph) in cases {
+                let on_demand = SnapshotStatistics::predicate(&*ordinary, predicate, graph, stream);
+                assert_eq!(
+                    on_demand,
+                    SnapshotStatistics::predicate(&eager, predicate, graph, stream),
+                    "absent predicate or graph must answer as the eager build does"
+                );
+                for &object in &objects {
+                    assert_eq!(
+                        SnapshotStatistics::predicate_object(
+                            &*ordinary, predicate, object, graph, stream
+                        ),
+                        SnapshotStatistics::predicate_object(
+                            &eager, predicate, object, graph, stream
+                        ),
+                    );
+                }
+            }
         };
         compare();
         let scanned = ordinary.statistics_rows_scanned();

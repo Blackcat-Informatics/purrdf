@@ -88,8 +88,9 @@
 //! `purrdf_sparql_eval::governor::WallDeadline`. Two things once asserted here about such
 //! a budget are false, and are corrected rather than left standing:
 //!
-//! * It does **not** break wasm. The reader is target-split — [`std::time::Instant`]
-//!   natively, the host's `Date.now()` on `wasm32-unknown-unknown` — and the wasm half is
+//! * It does **not** break wasm. The reader is split — [`std::time::Instant`]
+//!   natively, the installed host source on `wasm32-unknown-unknown`, which the browser
+//!   binding fills with the host's `Date.now()` — and the wasm half is
 //!   demonstrated by an executed Node round-trip against a real module rather than by a
 //!   green cross-compile, because a build that links is no evidence that a clock reads.
 //! * It does not break reproducibility, because **wall time never claims it**. Determinism

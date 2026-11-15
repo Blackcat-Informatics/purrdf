@@ -912,6 +912,10 @@ Its mapped sites identify the shared canonical CBOR and hashing code exercised;
 the probe makes no SIMD throughput claim. Input construction and output verification
 remain outside its measured allocation window.
 
+`gts_emit_alloc` reports allocation count, requested bytes and peak working bytes of snapshot
+emission through the builder. Its mapped sites identify the shared canonical CBOR and hashing
+code exercised; the probe makes no SIMD throughput claim and measures no time.
+
 `freeze` times complete ordinary freeze and validated materialization, including
 bounded statistics scratch. Its shared fixed-hasher mapping covers the small
 vocabulary lookups. Fixture construction, validation for the materialization
@@ -976,6 +980,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/rdf/benches/flat_view_canon_alloc.rs` | core.canon-escape |
 | `crates/rdf/benches/gts_ingest.rs` | gts.cbor-writer, blake3.hash-many-dispatch, lex.find-byte2-line-split |
 | `crates/rdf/benches/gts_import_alloc.rs` | gts.cbor-writer, blake3.hash-many-dispatch, blake3.single-block |
+| `crates/rdf/benches/gts_emit_alloc.rs` | gts.cbor-writer, blake3.hash-many-dispatch |
 | `crates/rdf/benches/gts_selected_blobs.rs` | gts.cbor-writer, blake3.hash-many-dispatch |
 | `crates/rdf/benches/jsonld_alloc.rs` | json.parser-string |
 | `crates/rdf/benches/native_codecs.rs` | lex.find-byte2-line-split, rdf.escape-scan, rdf.sort-canonical, sparql.lexer-trivia |

@@ -31,6 +31,7 @@ mod rules;
 mod source;
 mod structure;
 mod toml;
+mod wasm_imports;
 mod wasm_package;
 
 use std::path::PathBuf;
@@ -45,6 +46,7 @@ Usage: helper-census [--root DIR] [--ledger FILE] <mode>
        helper-census --glossary-gate [--root DIR] [--po FILE]
                      [--glossary FILE] [--self-test] [--inventory FILE]
        helper-census --wasm-package-hosts
+       helper-census --wasm-imports FILE
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
                      --target (index | worktree | rev:REV)
@@ -67,6 +69,9 @@ Modes:
                      and feature predicates in Rust cfg invocations
   --python-binding-tests
                      refuse Rust tests that the PyO3 extension never runs
+  --wasm-imports FILE
+                     fail when the WebAssembly module FILE imports anything,
+                     naming each import
   --non-rust-ratchet fail when TARGET adds a non-Rust file without a
                      `Why not Rust:` explanation, or grows a legacy one under
                      a ratcheted root, compared with BASE (see AGENTS.md)
@@ -206,6 +211,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let specialized = if args.iter().any(|arg| arg == "--wasm-package-hosts") {
         Some(("wasm-package", wasm_package::run(&args)))
+    } else if args.iter().any(|arg| arg == "--wasm-imports") {
+        Some(("wasm-imports", wasm_imports::run(&args)))
     } else if args.iter().any(|arg| arg == "--glossary-gate") {
         Some(("glossary", glossary::run(args)))
     } else {
