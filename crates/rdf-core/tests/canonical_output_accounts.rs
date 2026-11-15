@@ -922,10 +922,10 @@ fn identified(dataset: &Arc<RdfDataset>) -> Recording {
 
 /// The refusal a prepared-state call returned, if it was that kind.
 fn prepared_refusal<T>(result: Viewed<T>) -> Option<PreparedRefusal> {
-    match result {
-        Err(ViewCanonError::Refused(CanonError::Prepared(cause))) => Some(cause),
+    result.err().and_then(|error| match error {
+        ViewCanonError::Refused(CanonError::Prepared(cause)) => Some(cause),
         _ => None,
-    }
+    })
 }
 
 /// The three outputs a prepared state serves, for one request: document text,
@@ -1052,6 +1052,16 @@ fn a_prepared_state_is_refused_for_the_key_component_that_differs_and_served_oth
         assert_eq!(expected, prepared_refusal(digest), "digest: {what}");
         assert_eq!(expected, prepared_refusal(blake3), "blake3: {what}");
     }
+    // Preparing needs the identity too; the identified view above was prepared.
+    let unidentified = Recording::new(&dataset, u64::MAX, u64::MAX);
+    assert_eq!(
+        Some(PreparedRefusal::SnapshotUnavailable),
+        prepared_refusal(prepare_canon_view(
+            &unidentified,
+            FLAT_REQUEST,
+            &mut quiet()
+        ))
+    );
 }
 
 /// A state prepared for one named graph is served for that graph and refused for the
@@ -1274,7 +1284,7 @@ fn the_prepared_state_is_charged_to_the_owned_account_and_released_with_it() {
         ),
         "{refused:?}"
     );
-    let without = Recording::without_owned(&dataset);
+    let without = Recording::without_owned(&dataset).identified();
     let unavailable = prepare_canon_view(&without, FLAT_REQUEST, &mut quiet());
     assert!(
         matches!(
@@ -1317,6 +1327,21 @@ fn quads_with_blanks(lines: usize, blanks: usize) -> Arc<RdfDataset> {
     b.freeze().unwrap()
 }
 
+/// The space-separated tokens of one canonical line, a quoted literal as one.
+fn tokens(row: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = row;
+    while !rest.is_empty() {
+        let end = rest.strip_prefix('"').map_or_else(
+            || rest.find(' ').unwrap_or(rest.len()),
+            |quoted| quoted.find('"').unwrap() + 2,
+        );
+        found.push(&rest[..end]);
+        rest = rest[end..].trim_start();
+    }
+    found
+}
+
 /// The stated bound holds: with `W` rank words, `S` distinct symbols, `B` blank
 /// nodes and `T` label bytes the product holds at most `4W + 12S + (id + 4)B + T` plus a
 /// fixed header, and for quad data without graphs or triple terms at most `68` bytes per
@@ -1338,20 +1363,6 @@ fn the_prepared_state_stays_within_its_stated_bound_in_lines_and_blank_nodes() {
         // Words: one per space-separated token, the `.` terminator included. Symbols:
         // the distinct tokens other than the terminator. Literals here hold a space,
         // so tokens are counted with the literal as one.
-        let tokens = |row: &str| {
-            let mut found = Vec::new();
-            let mut rest = row;
-            while !rest.is_empty() {
-                let end = if rest.starts_with('"') {
-                    rest[1..].find('"').map(|at| at + 2).unwrap()
-                } else {
-                    rest.find(' ').unwrap_or(rest.len())
-                };
-                found.push(&rest[..end]);
-                rest = rest[end..].trim_start();
-            }
-            found
-        };
         let mut words = 0usize;
         let mut symbols = std::collections::BTreeSet::new();
         for row in &rows {

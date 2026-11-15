@@ -17,8 +17,9 @@
 //! * `PURRDF_CANON_ALLOC_PRE_OUTPUT_LARGE=1` also measures the pre-output peak
 //!   at that added size (routine sizes always measure it).
 //! * `PURRDF_CANON_ALLOC_CALLS=<shape>:<n>` skips the rows and runs only `n`
-//!   calls over a sorted fixture of `PURRDF_CANON_ALLOC_CALL_LINES` lines (default
-//!   32,768; the `collision` fixture ignores it), so an external instruction
+//!   calls over a fixture of `PURRDF_CANON_ALLOC_CALL_LINES` lines (default
+//!   32,768), sorted unless `PURRDF_CANON_ALLOC_CALL_ORDER=unsorted` (the
+//!   `collision` fixture ignores both), so an external instruction
 //!   counter can compare `n` calls with none. `<shape>` is `blank_free`, `reifier`
 //!   or `collision`, optionally followed by `_digest` (flat SHA-256 digest),
 //!   `_prepared` (flat document against a state prepared once, before the calls)
@@ -472,9 +473,14 @@ fn calls(spec: &str) {
         .into_iter()
         .find_map(|suffix| shape.strip_suffix(suffix).map(|name| (name, suffix)))
         .unwrap_or((shape, ""));
+    let order = match std::env::var("PURRDF_CANON_ALLOC_CALL_ORDER").as_deref() {
+        Ok("unsorted") => load::Order::Unsorted,
+        Ok("sorted") | Err(_) => load::Order::Sorted,
+        Ok(other) => panic!("unknown order {other}"),
+    };
     let ds: Arc<RdfDataset> = match fixture {
-        "reifier" => load::reifier(lines, 1, load::Order::Sorted).dataset,
-        "blank_free" => load::blank_free(lines, 1, load::Order::Sorted).dataset,
+        "reifier" => load::reifier(lines, 1, order).dataset,
+        "blank_free" => load::blank_free(lines, 1, order).dataset,
         "collision" => Arc::new(collision()),
         other => panic!("unknown shape {other}"),
     };

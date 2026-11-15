@@ -47,6 +47,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   input. A source that spells a term with a different length when it is read
   again is refused with the new `CanonError::SourceInconsistent`.
 
+- **Prepared canonical state:** `prepare_canon_view` runs the label search and
+  the line ordering of a view once and keeps both as a `PreparedCanon`.
+  `try_canonicalize_prepared_view`, `try_digest_prepared_view` and
+  `try_blake3_prepared_view` then give the document, labels and digests of the
+  matching entry that takes no state, byte for byte, without repeating the
+  search, the symbol discovery or the ranking; each line is spelled from the
+  view again. A state is bound to the view's snapshot identity and to its
+  `CanonRequest` (label hash, presentation, and whole dataset or one named
+  graph). Used with any other, it is refused before any work with the new
+  `CanonError::Prepared`, whose `PreparedRefusal` names the component that
+  differs; a view that carries no snapshot identity cannot be prepared. The
+  state is admitted to the source's owned account, reports its size as
+  `PreparedCanon::retained_bytes`, and is released when its last clone is
+  dropped. Entries that take no state are unchanged. This is a Rust API; the C,
+  WebAssembly and Python surfaces are unchanged.
+
 ## [4.0.2] - 2026-11-10
 
 - **Native dataset freezing:** Ordinary freeze prepares query statistics and
