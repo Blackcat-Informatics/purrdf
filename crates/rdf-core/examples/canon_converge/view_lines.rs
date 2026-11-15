@@ -5,15 +5,12 @@
 //!
 //! Constants are spelled by the workspace's term writer, the spelling the
 //! canonical document already uses. A blank node, at any depth inside a triple
-//! term and in a graph position, writes [`MARK`] and adds its number to the
-//! line's tuple in reading order. The statement layer is read through the
+//! term and in a graph position, is written `_:b<number>`. The statement layer is read through the
 //! view's own side-table accessors in either presentation.
 
 use std::convert::Infallible;
 
 use purrdf_core::{DatasetView, FastMap, TermValue, write_term_value};
-
-use crate::colour::{MARK, RawLine};
 
 /// The two spellings of the statement layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +39,8 @@ impl<D: DatasetView<ReadError = Infallible>> Reader<'_, D> {
                     .blanks
                     .entry((label.clone(), scope.ordinal()))
                     .or_insert(next);
-                text.push(MARK);
+                text.push_str("_:b");
+                text.push_str(&id.to_string());
                 tuple.push(id);
             }
             TermValue::Triple { s, p, o } => {
@@ -75,21 +73,13 @@ impl<D: DatasetView<ReadError = Infallible>> Reader<'_, D> {
 pub(crate) fn lines_from_view<D: DatasetView<ReadError = Infallible>>(
     view: &D,
     presentation: Presentation,
-) -> Vec<RawLine> {
+) -> String {
     let mut r = Reader {
         view,
         blanks: FastMap::default(),
     };
-    let mut out: Vec<RawLine> = Vec::new();
-    let mut push = |text: String, tuple: Vec<u32>| {
-        if !tuple.is_empty() {
-            out.push(RawLine {
-                text,
-                tuple,
-                count: 1,
-            });
-        }
-    };
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |text: String, _tuple: Vec<u32>| out.push(text);
     for q in view.quads() {
         let (mut t, mut u) = (String::new(), Vec::new());
         r.spell(q.s, &mut t, &mut u);
@@ -133,5 +123,7 @@ pub(crate) fn lines_from_view<D: DatasetView<ReadError = Infallible>>(
     // The document is a set of lines: a row spelled twice is one row.
     out.sort_unstable();
     out.dedup();
-    out
+    let mut doc = out.join("\n");
+    doc.push('\n');
+    doc
 }

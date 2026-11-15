@@ -284,3 +284,309 @@ pub(crate) fn from_nquads(text: &str) -> Fold {
     }
     fold
 }
+
+/// A seeded xorshift-multiply generator for the random families.
+struct Draw(u64);
+
+impl Draw {
+    fn new(seed: u64) -> Self {
+        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) % n
+    }
+
+    fn shuffle<T>(&mut self, v: &mut [T]) {
+        for i in (1..v.len()).rev() {
+            v.swap(i, self.below(i as u64 + 1) as usize);
+        }
+    }
+}
+
+/// An undirected simple graph on `n` blank nodes, each edge written both ways
+/// with one predicate.
+fn graph(n: u32, edges: impl IntoIterator<Item = (u32, u32)>) -> Fold {
+    let mut fold = Fold::default();
+    for _ in 0..n {
+        fold.blank();
+    }
+    for (a, b) in edges {
+        fold.undirected(a, b);
+    }
+    fold
+}
+
+/// `k` disjoint directed triangles.
+pub(crate) fn triangles(k: u32) -> Fold {
+    let mut fold = Fold::default();
+    for _ in 0..k {
+        let (a, b, c) = (fold.blank(), fold.blank(), fold.blank());
+        fold.edge(a, "p", b);
+        fold.edge(b, "p", c);
+        fold.edge(c, "p", a);
+    }
+    fold
+}
+
+/// A directed cycle of `n` blank nodes.
+pub(crate) fn cycle(n: u32) -> Fold {
+    let mut fold = Fold::default();
+    for _ in 0..n {
+        fold.blank();
+    }
+    for i in 0..n {
+        fold.edge(i, "p", (i + 1) % n);
+    }
+    fold
+}
+
+/// The Paley graph of a prime `q` congruent to 1 modulo 4.
+pub(crate) fn paley(q: u32) -> Fold {
+    let squares: Vec<bool> = {
+        let mut s = vec![false; q as usize];
+        for x in 1..q {
+            s[((x * x) % q) as usize] = true;
+        }
+        s
+    };
+    graph(
+        q,
+        (0..q)
+            .flat_map(|a| (a + 1..q).map(move |b| (a, b)))
+            .filter(|&(a, b)| squares[(b - a) as usize]),
+    )
+}
+
+/// A Latin square of order `n` from the Jacobson-Matthews Markov chain started
+/// at the cyclic square: `10 n^3` moves from `seed`, then moves until the
+/// square is proper.
+fn latin_square(n: usize, seed: u64) -> Vec<Vec<usize>> {
+    let mut draw = Draw::new(seed);
+    let at = |r: usize, c: usize, s: usize| (r * n + c) * n + s;
+    let mut m = vec![0i8; n * n * n];
+    for r in 0..n {
+        for c in 0..n {
+            m[at(r, c, (r + c) % n)] = 1;
+        }
+    }
+    // The cell holding -1 when improper.
+    let mut bad: Option<(usize, usize, usize)> = None;
+    let steps = 10 * n * n * n;
+    let mut step = 0;
+    while step < steps || bad.is_some() {
+        step += 1;
+        let pick = |draw: &mut Draw, list: Vec<usize>| list[draw.below(list.len() as u64) as usize];
+        let (r, c, s) = if let Some(cell) = bad {
+            cell
+        } else {
+            loop {
+                let (r, c, s) = (
+                    draw.below(n as u64) as usize,
+                    draw.below(n as u64) as usize,
+                    draw.below(n as u64) as usize,
+                );
+                if m[at(r, c, s)] == 0 {
+                    break (r, c, s);
+                }
+            }
+        };
+        let r2 = pick(&mut draw, (0..n).filter(|&x| m[at(x, c, s)] == 1).collect());
+        let c2 = pick(&mut draw, (0..n).filter(|&x| m[at(r, x, s)] == 1).collect());
+        let s2 = pick(&mut draw, (0..n).filter(|&x| m[at(r, c, x)] == 1).collect());
+        m[at(r, c, s)] += 1;
+        m[at(r, c2, s2)] += 1;
+        m[at(r2, c, s2)] += 1;
+        m[at(r2, c2, s)] += 1;
+        m[at(r, c, s2)] -= 1;
+        m[at(r, c2, s)] -= 1;
+        m[at(r2, c, s)] -= 1;
+        m[at(r2, c2, s2)] -= 1;
+        bad = (m[at(r2, c2, s2)] < 0).then_some((r2, c2, s2));
+    }
+    (0..n)
+        .map(|r| {
+            (0..n)
+                .map(|c| {
+                    (0..n)
+                        .find(|&s| m[at(r, c, s)] == 1)
+                        .expect("a proper square")
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The Latin-square graph of a Jacobson-Matthews Latin square of order `n`: the
+/// `n * n` cells, joined when they share a row, a column or a symbol.
+pub(crate) fn latin(n: u32, seed: u64) -> Fold {
+    let sq = latin_square(n as usize, seed);
+    let n = n as usize;
+    let edges: Vec<(u32, u32)> = (0..n * n)
+        .flat_map(|a| (a + 1..n * n).map(move |b| (a, b)))
+        .filter(|&(a, b)| a / n == b / n || a % n == b % n || sq[a / n][a % n] == sq[b / n][b % n])
+        .map(|(a, b)| (a as u32, b as u32))
+        .collect();
+    graph((n * n) as u32, edges)
+}
+
+/// A seeded Steiner triple system on `v` points (hill-climbing: add a triple
+/// on two uncovered pairs of a live point, displacing the block that covered
+/// the third pair).
+fn steiner(v: usize, seed: u64) -> Vec<[usize; 3]> {
+    const NONE: usize = usize::MAX;
+    let mut draw = Draw::new(seed);
+    let mut third = vec![vec![NONE; v]; v];
+    let target = v * (v - 1) / 6;
+    let mut blocks = 0;
+    while blocks < target {
+        let live: Vec<usize> = (0..v)
+            .filter(|&x| (0..v).any(|y| y != x && third[x][y] == NONE))
+            .collect();
+        let x = live[draw.below(live.len() as u64) as usize];
+        let partners: Vec<usize> = (0..v).filter(|&y| y != x && third[x][y] == NONE).collect();
+        if partners.len() < 2 {
+            continue;
+        }
+        let y = partners[draw.below(partners.len() as u64) as usize];
+        let z = loop {
+            let z = partners[draw.below(partners.len() as u64) as usize];
+            if z != y {
+                break z;
+            }
+        };
+        let w = third[y][z];
+        if w == NONE {
+            blocks += 1;
+        } else {
+            for (a, b) in [(w, y), (w, z), (y, z)] {
+                third[a][b] = NONE;
+                third[b][a] = NONE;
+            }
+        }
+        for (a, b, c) in [(x, y, z), (y, z, x), (x, z, y)] {
+            third[a][b] = c;
+            third[b][a] = c;
+        }
+    }
+    let mut out = Vec::with_capacity(target);
+    for (a, row) in third.iter().enumerate() {
+        for (b, &c) in row.iter().enumerate().skip(a + 1) {
+            if c != NONE && c > b {
+                out.push([a, b, c]);
+            }
+        }
+    }
+    out
+}
+
+/// The block graph of a seeded Steiner triple system on `v` points: blocks
+/// joined when they share a point.
+pub(crate) fn sts(v: u32, seed: u64) -> Fold {
+    let blocks = steiner(v as usize, seed);
+    let k = blocks.len();
+    let edges: Vec<(u32, u32)> = (0..k)
+        .flat_map(|a| (a + 1..k).map(move |b| (a, b)))
+        .filter(|&(a, b)| blocks[a].iter().any(|p| blocks[b].contains(p)))
+        .map(|(a, b)| (a as u32, b as u32))
+        .collect();
+    graph(k as u32, edges)
+}
+
+/// The edges of a seeded random cubic simple graph on `n` (even) nodes.
+fn cubic_edges(n: u32, seed: u64) -> Vec<(u32, u32)> {
+    let mut draw = Draw::new(seed);
+    loop {
+        let mut points: Vec<u32> = (0..3 * n).map(|i| i / 3).collect();
+        draw.shuffle(&mut points);
+        let mut edges: Vec<(u32, u32)> = points
+            .chunks(2)
+            .map(|p| (p[0].min(p[1]), p[0].max(p[1])))
+            .collect();
+        edges.sort_unstable();
+        let simple = edges.iter().all(|e| e.0 != e.1) && edges.windows(2).all(|w| w[0] != w[1]);
+        if simple {
+            return edges;
+        }
+    }
+}
+
+/// A seeded random cubic graph on `n` blank nodes.
+pub(crate) fn cubic(n: u32, seed: u64) -> Fold {
+    graph(n, cubic_edges(n, seed))
+}
+
+/// The Cai-Furer-Immerman graph over a cubic base: `K4` (4), the cube (8), the
+/// Petersen graph (10), otherwise a seeded random cubic graph on `n` nodes.
+/// Each base vertex has four middle nodes (even subsets of its three edges) and
+/// two end nodes per edge; ends of one edge are joined across, crossed on the
+/// first edge when `twisted`.
+pub(crate) fn cfi(n: u32, seed: u64, twisted: bool) -> Fold {
+    let base: Vec<(u32, u32)> = match n {
+        4 => vec![(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)],
+        8 => (0..8u32)
+            .flat_map(|a| (0..3).map(move |b| (a, a ^ (1 << b))))
+            .filter(|&(a, b)| a < b)
+            .collect(),
+        10 => vec![
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (0, 4),
+            (0, 5),
+            (1, 6),
+            (2, 7),
+            (3, 8),
+            (4, 9),
+            (5, 7),
+            (7, 9),
+            (6, 9),
+            (6, 8),
+            (5, 8),
+        ],
+        _ => cubic_edges(n, seed),
+    };
+    // incident edges per vertex, in order
+    let mut inc: Vec<Vec<usize>> = vec![Vec::new(); n as usize];
+    for (e, &(a, b)) in base.iter().enumerate() {
+        inc[a as usize].push(e);
+        inc[b as usize].push(e);
+    }
+    let mut fold = Fold::default();
+    // end node (vertex, local edge index, bit)
+    let mut end = vec![[[0u32; 2]; 3]; n as usize];
+    for ends in &mut end {
+        for slot in ends.iter_mut() {
+            *slot = [fold.blank(), fold.blank()];
+        }
+        for subset in 0..8u32 {
+            if subset.count_ones() % 2 != 0 {
+                continue;
+            }
+            let m = fold.blank();
+            for (j, slot) in ends.iter().enumerate() {
+                let bit = (subset >> j) & 1;
+                fold.undirected(m, slot[bit as usize]);
+            }
+        }
+    }
+    for (e, &(a, b)) in base.iter().enumerate() {
+        let ja = inc[a as usize]
+            .iter()
+            .position(|&x| x == e)
+            .expect("incident");
+        let jb = inc[b as usize]
+            .iter()
+            .position(|&x| x == e)
+            .expect("incident");
+        for bit in 0..2 {
+            let other = if twisted && e == 0 { 1 - bit } else { bit };
+            fold.undirected(end[a as usize][ja][bit], end[b as usize][jb][other]);
+        }
+    }
+    fold
+}
