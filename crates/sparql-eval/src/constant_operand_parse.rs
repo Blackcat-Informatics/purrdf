@@ -88,8 +88,8 @@ fn constant_operand_memo_keeps_the_answer() {
     assert_eq!(parses, 3);
 }
 
-/// **A boolean that differs from the constant it is compared with is read as the interned
-/// boolean it is, not parsed per row.** In `(?v > 5.5e0) = true` both operands are the same
+/// **A boolean that differs from the constant it is compared with is a constant operand
+/// too: parsed once, then served from the parse memo.** In `(?v > 5.5e0) = true` both operands are the same
 /// interned term, so the equality answers at the sameTerm check before any parse and the
 /// case only holds the answer. In `(?v > 5.5e0) = false` the two terms differ, so the
 /// comparison's own boolean reaches the operand reader, and its parse count must not

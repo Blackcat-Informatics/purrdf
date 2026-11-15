@@ -273,7 +273,7 @@ const HOST_TOTALS: [[u64; 4]; 8] = [
 /// The stop polls a host-governed run of each query makes.
 const HOST_POLLS: [u64; 8] = [23, 23, 28, 44, 292, 20, 41, 36];
 
-/// **A host-governed run is charged, polled and stopped as it always was.** Under a
+/// **A host-governed run is charged, polled and stopped at its pinned values.** Under a
 /// host's ceilings GROUP BY takes its sequential route, so each query must consume the
 /// pinned fuel, scratch, cells and rows, make the pinned number of stop polls, complete
 /// at its own scratch and refuse one byte below, stop when the signal fires on a poll it
@@ -650,4 +650,32 @@ fn each_resident_fast_path_engages_on_its_shape_and_not_on_an_accounted_workspac
             "{text}: accounted"
         );
     }
+}
+
+/// **A row loop leaves the `EXISTS` requests of its first row to the suspending route.**
+/// A body that folds to no solutions is the one site that could be answered in place on a
+/// first row, so it shows the rule exactly: a loop over one row is answered in place
+/// never, and a loop over twelve rows on every row but its first.
+#[test]
+fn a_row_loop_asks_in_place_only_after_its_first_row() {
+    let dataset = dataset();
+    let [one_row, ..] = engaged(
+        &dataset,
+        "SELECT ?s WHERE { ex:s0 ex:score ?s \
+         FILTER NOT EXISTS { SELECT * WHERE { ex:s0 ex:status ?o } LIMIT 0 } }",
+        false,
+        false,
+    );
+    assert_eq!(one_row, 0, "a loop over one row is never answered in place");
+    let [twelve_rows, ..] = engaged(
+        &dataset,
+        "SELECT ?x ?s WHERE { ?x ex:score ?s \
+         FILTER NOT EXISTS { SELECT * WHERE { ?x ex:status ?o } LIMIT 0 } }",
+        false,
+        false,
+    );
+    assert_eq!(
+        twelve_rows, 11,
+        "every row after the first is answered in place"
+    );
 }
