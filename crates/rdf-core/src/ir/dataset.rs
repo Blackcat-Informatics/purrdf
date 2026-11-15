@@ -479,6 +479,26 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
     }
 }
 
+/// The first index at or after `start` whose element fails `holds`, given that
+/// `holds` is true for a prefix of `items[start..]` and false after it — the same
+/// answer as `items.partition_point(holds)` when everything before `start` holds.
+///
+/// It doubles a step from `start` until the predicate fails, then bisects the last
+/// step, so a run of `n` elements costs `O(log n)` comparisons however large
+/// `items` is. The run an index probe finds is one row in the common case.
+fn run_end<T>(items: &[T], start: usize, holds: impl Fn(&T) -> bool) -> usize {
+    let rest = &items[start..];
+    // `rest[..known]` holds; `rest[known..bound]` is where the first failure lies.
+    let mut known = 0;
+    let mut step = 1;
+    while step <= rest.len() && holds(&rest[step - 1]) {
+        known = step;
+        step = step.saturating_mul(2);
+    }
+    let bound = step.min(rest.len());
+    start + known + rest[known..bound].partition_point(holds)
+}
+
 /// The one fallible dense-ordinal sort used by resident carrier permutations.
 pub(super) fn build_ordinal_permutation<T, S, E: From<purrdf_lex::allocation::StorageError>>(
     rows: &[T],
@@ -1641,15 +1661,17 @@ impl RdfDataset {
             *slot = key_of(axis);
         }
 
-        // Binary-search the contiguous run whose `prefix` leading keys equal `target`.
+        // Binary-search the start of the contiguous run whose `prefix` leading keys
+        // equal `target`, then walk out to its end: a run is usually short against
+        // the table, so its end is found by galloping from its start.
         match plan.perm {
             QuadPermutation::Spog => {
                 let lo = self
                     .quads
                     .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_lt());
-                let hi = self
-                    .quads
-                    .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_le());
+                let hi = run_end(&self.quads, lo, |q| {
+                    compare_prefix(axes, q, &target, prefix).is_le()
+                });
                 (plan.perm, lo, hi)
             }
             _ => {
@@ -1657,7 +1679,7 @@ impl RdfDataset {
                 let lo = arr.partition_point(|&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_lt()
                 });
-                let hi = arr.partition_point(|&ord| {
+                let hi = run_end(arr, lo, |&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_le()
                 });
                 (plan.perm, lo, hi)
@@ -2879,6 +2901,26 @@ const _: fn() = || {
 
 #[cfg(test)]
 mod tests {
+    /// An index run's end found by galloping is the end the binary search finds,
+    /// from every start at or before the run and for every run length, including a
+    /// run that ends the table and one that is empty.
+    #[test]
+    fn a_run_end_found_by_galloping_is_the_one_binary_search_finds() {
+        for len in 0..40usize {
+            for run in 0..=len {
+                // `len` rows; the first `run` rows hold, the rest do not.
+                let items: Vec<usize> = (0..len).collect();
+                for start in 0..=run {
+                    assert_eq!(
+                        run_end(&items, start, |&item| item < run),
+                        items.partition_point(|&item| item < run),
+                        "table of {len}, run ending at {run}, starting at {start}"
+                    );
+                }
+            }
+        }
+    }
+
     use super::*;
     use crate::RdfLiteral;
     use crate::TermBox;
