@@ -2231,6 +2231,9 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
         // charges nothing, so the value, the scratch charge and the typed read and
         // allocation refusals are those of the frame route, in the same order.
         let resident = !ctx.growth.is_bounded() && !ctx.may_have_evidence();
+        // A group smaller than the first geometric step takes exactly its member count
+        // in a workspace that admits nothing; its survivors cannot exceed it.
+        let exact = !ctx.growth.is_bounded() && indices.len() < 4;
         loop {
             let direct = if resident && self.active.is_none() {
                 indices
@@ -2292,7 +2295,11 @@ impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
                 }
                 let _ = seen.insert_admitted(term, (), &ctx.growth)?;
             }
-            self.survivors.reserve_next()?;
+            if exact {
+                self.survivors.reserve_exact(indices.len())?;
+            } else {
+                self.survivors.reserve_next()?;
+            }
             let value = if resident {
                 resident_aggregate_value(ctx.dataset, &ctx.scratch, term, |error| {
                     ctx.workspace.source_error(error)
@@ -3090,14 +3097,15 @@ impl<'e, I: ViewTermId> GroupSequence<'e, I> {
         }
         while self.group < self.groups.len() {
             if self.row.is_none() {
+                // The key cells, then one unbound cell per aggregate, each written once.
                 let key = &self.groups[self.group].1;
-                self.row = Some(RetainedRow::try_build(
-                    self.out_schema.len(),
+                let width = self.out_schema.len();
+                self.row = Some(RetainedRow::from_cells(
+                    width,
+                    key.iter()
+                        .copied()
+                        .chain(std::iter::repeat_n(None, width - self.var_count)),
                     &ctx.growth,
-                    |row| {
-                        row[..self.var_count].copy_from_slice(key);
-                        Ok(())
-                    },
                 )?);
                 self.aggregate = 0;
             }
@@ -3283,6 +3291,8 @@ fn materialized_groups<D: DatasetView + Sync>(
             u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )?;
         crate::shapes::bucket::partition(seq, &key_cols, &ctx.growth)?
+    } else if !ctx.growth.is_bounded() {
+        resident_groups(seq, &key_cols, &ctx.growth)?
     } else {
         let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
         let mut groups = AdmittedVec::new(&ctx.growth);
@@ -3319,6 +3329,47 @@ fn materialized_groups<D: DatasetView + Sync>(
         ))?;
     }
 
+    Ok(groups)
+}
+
+/// Group the rows of a workspace that admits nothing. Each key is hashed once and
+/// probed once, and the index holds a group's ordinal beside its hash instead of a
+/// second copy of the key, so a growing table never reads a row again. Groups keep
+/// first-seen order and members input order, as the admitted index gives them.
+fn resident_groups<I: ViewTermId>(
+    seq: &SolutionSeq<I>,
+    key_cols: &[Option<usize>],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<MaterializedGroups<I>, EvalError> {
+    let mut index = purrdf_core::hash::table::HashTable::<(u64, usize)>::new();
+    let mut groups: MaterializedGroups<I> = AdmittedVec::new(workspace);
+    for (idx, row) in seq.rows.iter().enumerate() {
+        let key = RetainedRow::from_cells(
+            key_cols.len(),
+            key_cols.iter().map(|c| c.and_then(|c| row[c])),
+            workspace,
+        )?;
+        let hash = purrdf_hash::fixed::hash_one(&key);
+        let found = index
+            .find(hash, |&(stored, ordinal)| {
+                stored == hash && groups[ordinal].1 == key
+            })
+            .map(|&(_, ordinal)| ordinal);
+        if let Some(ordinal) = found {
+            groups.as_mut_slice()[ordinal].2.push(idx)?;
+        } else {
+            let ordinal = groups.len();
+            let mut members = AdmittedVec::new(workspace);
+            members.push(idx)?;
+            index.try_reserve(1, |&(stored, _)| stored).map_err(|_| {
+                EvalError::AllocationFailed {
+                    construct: "admitted native table",
+                }
+            })?;
+            index.insert_unique(hash, (hash, ordinal), |&(stored, _)| stored);
+            groups.push((ordinal, key, members))?;
+        }
+    }
     Ok(groups)
 }
 
@@ -4630,6 +4681,12 @@ impl AggregateSurvivors {
             self.grants.reserve_next()?;
         }
         Ok(())
+    }
+
+    /// Reserve exactly `members` value slots; a no-op once they exist. Only for a
+    /// workspace that admits nothing, where no grant slot is reserved either.
+    fn reserve_exact(&mut self, members: usize) -> Result<(), EvalError> {
+        self.values.reserve_total(members)
     }
 
     fn push(&mut self, value: crate::WorkspaceTerm) -> Result<(), EvalError> {

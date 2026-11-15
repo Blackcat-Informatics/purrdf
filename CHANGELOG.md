@@ -8,6 +8,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
+  live-memory reservation now hashes each group key once and keeps only the
+  group ordinal beside its hash, instead of cloning every key into a second
+  table; each group's output row is written once, a group of fewer than four
+  members sizes its aggregate survivor list exactly, and interning an aggregate
+  result no longer clones the query workspace. Results, charges, refusals and
+  bounded-workspace reservations are unchanged. On the reporter-shaped
+  measurement the grouped query with 18,100 groups drops from 145.3 to 136.1
+  million instructions and from 23.1 to 16.6 MB requested; a few-group
+  `COUNT` is unchanged, since its cost is per row and not per group.
+
 - **Streaming GTS writer:** `purrdf_gts::writer::StreamWriter` frames a GTS
   log into a caller's sink one frame at a time, byte-identical to `Writer` for
   the same calls, so a consumer that writes a long log no longer holds it in
