@@ -479,10 +479,9 @@ def test_malformed_input_raises_value_error() -> None:
 
 # `<urn:purrdf:rdfc:reifies>` as a predicate whose OBJECT is a plain IRI (not a
 # quoted triple term) is not one of the two exact shapes the canonicalization
-# overlay itself lowers (see `crates/rdf-core/src/ir/canon.rs`), so a closure
-# carrying it is refused rather than silently canonicalized — accepting it would let
-# a structurally different graph canonicalize to the exact bytes a genuine reifier
-# binding would.
+# overlay itself lowers (see `crates/rdf-core/src/ir/canon.rs`). The closure is
+# written in the flat assertion presentation, which writes no overlay sentinel and
+# applies no reservation, so the IRI is written as an ordinary IRI.
 _RESERVED_PREDICATE_PLAIN_OBJECT = (
     "<https://example.org/r> <urn:purrdf:rdfc:reifies> <https://example.org/o> .\n"
 )
@@ -496,21 +495,16 @@ _NEIGHBOURING_ORDINARY_PREDICATE = (
 )
 
 
-def test_a_reserved_vocabulary_closure_raises_value_error_naming_it() -> None:
-    """The materialized closure is caller-supplied content too: refuse as a value.
-
-    `materialize_nt` routes the closure through `purrdf_validate::regime`'s typed,
-    non-panicking canonicalization entry point rather than the panicking wrapper —
-    before that migration this surface aborted the process instead of raising.
-    """
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
-        entail.materialize_nt(
-            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
-        ).value
+def test_a_reserved_vocabulary_closure_is_written_as_an_ordinary_iri() -> None:
+    """The flat assertion presentation applies no reservation to the closure."""
+    closed_nquads, _report = entail.materialize_nt(
+        _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
+    ).value
+    assert "<urn:purrdf:rdfc:reifies>" in closed_nquads, closed_nquads
 
 
 def test_an_ordinary_closure_neighbouring_the_reserved_iri_still_materializes() -> None:
-    """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
+    """The neighbouring IRI is written as it is, as the reserved one is."""
     closed_nquads, _report = entail.materialize_nt(
         _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
     ).value

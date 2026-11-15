@@ -916,7 +916,8 @@ pub(crate) struct ConvertArgs {
     /// other is a premise triple. The IRI half must be ABSOLUTE.
     #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
     pub imports: Vec<String>,
-    /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
+    /// Emit the `purrdf-rdfc12` flat assertion canonical N-Quads (not RDFC-1.0;
+    /// see docs/RDF12-CANON-PROFILE.md) instead of `--to`. Canonical output is
     /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
     /// ignored) when named beside `--canonical`, since it would otherwise be
     /// accepted and never read. Combine with `--entailment` to canonicalize the

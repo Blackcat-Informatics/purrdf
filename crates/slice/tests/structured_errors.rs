@@ -129,23 +129,33 @@ fn iri_and_rdf_producers_keep_original_causes_and_context() {
     ));
 }
 
-fn flat_canonicalization_returns_the_native_reserved_vocabulary_refusal() {
-    let rejected = format!("{}foreign", purrdf_core::RESERVED_NAMESPACE);
-    let text = format!("<{rejected}> <urn:p> <urn:o> .");
+fn flat_canonicalization_returns_the_native_search_refusal_and_admits_reserved_iris() {
+    let text = "_:a <urn:p> _:b . _:b <urn:p> _:a .";
     let dataset =
-        purrdf_slice::rdf_query::Dataset::parse_turtle(text.as_bytes(), None, "reserved").unwrap();
+        purrdf_slice::rdf_query::Dataset::parse_turtle(text.as_bytes(), None, "cycle").unwrap();
     let error = dataset
         .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::SearchPolicy::Finite(0),
             None,
         ))
         .unwrap_err();
     drop(dataset);
-    drop(text);
     let captured = Capture::read(&error);
-    assert_eq!(captured.code, "canonical-reserved");
-    assert!(
-        matches!(captured.child("cause").field("iri"), ErrorValue::Iri(value) if value == rejected)
+    assert_eq!(captured.code, "canonical-budget");
+    // The flat presentation applies no reservation: a reserved IRI is written as it is.
+    let reserved = format!("{}foreign", purrdf_core::RESERVED_NAMESPACE);
+    let text = format!("<{reserved}> <urn:p> <urn:o> .");
+    let dataset =
+        purrdf_slice::rdf_query::Dataset::parse_turtle(text.as_bytes(), None, "reserved").unwrap();
+    assert_eq!(
+        dataset
+            .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
+            .nquads(),
+        format!("<{reserved}> <urn:p> <urn:o> .\n")
     );
     let accepted = purrdf_slice::rdf_query::Dataset::parse_turtle(
         b"<urn:s> <urn:p> <urn:o> .",
@@ -188,7 +198,7 @@ purrdf_testkit::harness_main!(
     native_io_ownership_conversion_never_renders_the_original_cause,
     artifact_json_retains_the_original_invalid_member_after_input_disposal,
     iri_and_rdf_producers_keep_original_causes_and_context,
-    flat_canonicalization_returns_the_native_reserved_vocabulary_refusal,
+    flat_canonicalization_returns_the_native_search_refusal_and_admits_reserved_iris,
     #[cfg(not(target_arch = "wasm32"))]
     missing_retrieval_path_keeps_the_original_native_path_and_io_kind,
 );

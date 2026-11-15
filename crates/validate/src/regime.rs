@@ -313,8 +313,7 @@ impl RegimeClosure {
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
 ///   `purrdf-entail` error).
-/// * A materialized closure carrying a reserved-vocabulary IRI, or one that
-///   exhausts the RDFC-1.0 n-degree search budget — the document is wholly
+/// * A materialized closure that exhausts the n-degree search budget — the document is wholly
 ///   caller-supplied, so this refusal comes back as an `Err` (via
 ///   [`purrdf_core::try_canonicalize_flat_view`]) rather than panicking.
 ///
@@ -627,7 +626,7 @@ pub fn materialize_to_nquads_string_with(
     // The materialized closure is wholly caller-supplied (the document parsed above),
     // so it goes through the typed, non-panicking canonicalization entry point rather
     // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting closure must come back as an `Err`
+    // budget-exhausting closure must come back as an `Err`
     // value across the wasm/Python/C-ABI boundary, not abort the process.
     let nquads = caller_flat_nquads(
         closure.as_ref(),
@@ -641,8 +640,8 @@ pub fn materialize_to_nquads_string_with(
 }
 
 /// Canonicalize `dataset` — content the CALLER supplied or that was derived from
-/// content the caller supplied — as flat N-Quads, refusing a reserved-vocabulary
-/// or search-budget-exhausting result as a value rather than the panic
+/// content the caller supplied — as flat N-Quads, refusing a
+/// search-budget-exhausting result as a value rather than the panic
 /// [`purrdf_rdf::canonical_flat_nquads`] raises for the same refusal.
 ///
 /// `context` opens the diagnostic (e.g. `"extract-module"`, or
@@ -6327,13 +6326,11 @@ mod tests {
         assert!(error.to_string().contains("rif"), "{error}");
     }
 
-    /// The document is wholly caller-supplied, so a closure carrying a
-    /// reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`]) must come back
-    /// as an `Err` VALUE rather than aborting the process — the gap this module's
-    /// migration off the panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper
-    /// closes.
+    /// The closure is written in the flat assertion presentation, which applies no
+    /// reservation: an IRI of [`purrdf_core::RESERVED_NAMESPACE`] outside a fold
+    /// shape is written as it is.
     #[test]
-    fn a_reserved_vocabulary_closure_is_refused_as_a_value_not_a_panic() {
+    fn a_reserved_vocabulary_closure_is_written_as_an_ordinary_iri() {
         let mut control =
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
@@ -6341,19 +6338,17 @@ mod tests {
             "<http://example.org/s> <http://example.org/p> <{}bad> .\n",
             purrdf_core::RESERVED_NAMESPACE
         );
-        let error = materialize_to_nquads_string("simple", &document, "", &mut control).expect_err(
-            "a document carrying a reserved-vocabulary IRI must refuse canonicalization \
-             as a value, not panic",
-        );
+        let closed = materialize_to_nquads_string("simple", &document, "", &mut control)
+            .expect("the flat presentation refuses no reserved IRI");
         assert!(
-            error.to_string().contains("refused canonicalization"),
-            "{error}"
+            closed
+                .nquads()
+                .contains(&format!("<{}bad>", purrdf_core::RESERVED_NAMESPACE))
         );
     }
 
-    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
-    /// reserved prefix) in the exact same shape still materializes — the refusal
-    /// above is not an over-refusal of ordinary documents.
+    /// The neighbour of the case above: an ORDINARY object IRI (no reserved
+    /// prefix) in the exact same shape materializes too.
     #[test]
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_materializes() {
         let mut control =
@@ -7561,31 +7556,26 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         }
     }
 
-    /// The ontology document is wholly caller-supplied, so an extracted module
-    /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
-    /// `Err` VALUE — through [`ReasonerSession::extract_module`]'s
-    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
-    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    /// An extracted module is written in the flat assertion presentation, which
+    /// applies no reservation: a module carrying an IRI of the reserved namespace
+    /// is written with that IRI as it is.
     #[test]
-    fn extract_module_refuses_a_reserved_vocabulary_module_as_a_value() {
+    fn extract_module_writes_a_reserved_vocabulary_module() {
         let mut control =
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
-        let error = extract_module_to_string(
+        let extracted = extract_module_to_string(
             TAXONOMY_RESERVED,
             "<http://example.org/A>\n",
             "bot",
             &mut control,
         )
-        .expect_err("a module carrying a reserved-vocabulary IRI must refuse, not panic");
-        assert!(
-            error.to_string().contains("refused canonicalization"),
-            "{error}"
-        );
+        .expect("the flat presentation refuses no reserved IRI");
+        assert!(extracted.answer().contains("<urn:purrdf:rdfc:B>"));
     }
 
-    /// The valid neighbour of the refusal above: the ORDINARY [`TAXONOMY`] (no
-    /// reserved IRI), same seed and method, still extracts successfully.
+    /// The neighbour of the case above: the ORDINARY [`TAXONOMY`] (no reserved
+    /// IRI), same seed and method, extracts too.
     #[test]
     fn extract_module_still_admits_the_ordinary_taxonomy() {
         let mut control =
@@ -7598,7 +7588,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     }
 
     /// `proofs = true` pays for an EXTRA producer-independent identity beyond the one
-    /// [`extract_module_refuses_a_reserved_vocabulary_module_as_a_value`] exercises: the
+    /// [`extract_module_writes_a_reserved_vocabulary_module`] exercises: the
     /// ontology's own identity and the extracted module's, both bound into the recorded
     /// proof term by `purrdf_entail::reasoner::module::extract_module_with_proofs`. Before
     /// this migrated off the panicking `purrdf_entail::ontology_identity` onto

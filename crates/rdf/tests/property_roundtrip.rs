@@ -601,12 +601,9 @@ prop_test! {
     /// content-equivalent spellings.
     ///
     /// A sentinel-spelled quad whose object is NOT a triple term is not a fold
-    /// candidate at all (still reserved vocabulary, refused under both spellings'
-    /// generation — see `the_fold_is_shape_exact_and_its_near_misses_still_refuse`
-    /// in `purrdf-core`), so it is not this property's concern: the swapped dataset
-    /// is trivially always admissible (the swap removes every reserved-namespace
-    /// IRI), but the ORIGINAL is admissible only when every sentinel occurrence is
-    /// in the fold's exact shape — exactly the condition this property gates on.
+    /// candidate at all: the flat presentation writes it as the ordinary line it is,
+    /// which is different content from its `rdf:reifies` spelling. The property
+    /// therefore gates on every sentinel occurrence being in the fold's exact shape.
     #[test]
     fn flat_canon_of_a_sentinel_spelled_reifier_matches_its_real_predicate_spelling(
         (source0, source1) in arb_diff_sources(),
@@ -614,6 +611,12 @@ prop_test! {
         sha384 in any::<bool>(),
     ) {
         let sources: [&[RdfQuad]; 2] = [&source0, &source1];
+        let outside_the_fold_shape = |q: &RdfQuad| {
+            q.predicate == SENTINEL_REIFIES && !matches!(q.object, RdfTerm::Triple(_))
+        };
+        if sources.iter().any(|quads| quads.iter().any(outside_the_fold_shape)) {
+            return Ok(());
+        }
         let built = if fold {
             dataset_from_quad_sources(&sources)
         } else {
@@ -667,10 +670,8 @@ prop_test! {
                  to its real-predicate spelling"
             ),
             Err(_) => {
-                // A sentinel occurrence that is NOT the fold's exact shape (a
-                // non-triple-term object) is a genuine, unrelated refusal — the
-                // original and the swapped dataset are not equivalent content in
-                // that case, so there is nothing to compare.
+                // The flat presentation refuses no vocabulary, so this is an
+                // unrelated search-budget refusal: nothing to compare.
                 return Ok(());
             }
         }

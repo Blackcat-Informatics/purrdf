@@ -23,10 +23,10 @@ use purrdf_core::ContentIdScheme;
 use purrdf_rdf::gts_compose::SnapshotBuilder;
 use purrdf_rdf::{
     BlankScope, CanonError, CanonHash, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, TermId, TermPosition, ViewCanonError, blank_count_view,
-    canonical_flat_nquads, check_admissible_flat_view, flat_dataset_from_quads,
-    flat_rdf_quads_from_dataset, parse_dataset, try_canonicalize_flat_graph_view,
-    try_canonicalize_flat_view, try_canonicalize_view, try_canonicalize_with,
+    RdfLiteral, RdfTextDirection, TermId, TermPosition, blank_count_view, canonical_flat_nquads,
+    check_admissible_flat_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
+    parse_dataset, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
+    try_canonicalize_view, try_canonicalize_with,
 };
 
 #[path = "support/blank_identity.rs"]
@@ -451,10 +451,12 @@ fn differential_reifier_and_annotation_case_under_both_hash_algorithms() {
 }
 
 /// `cdt:List` AND `cdt:Map` composite literals, each with an embedded
-/// `BLANK_NODE_LABEL` token — a blank node denoted from INSIDE a literal's
-/// lexical form rather than a term position.
+/// `BLANK_NODE_LABEL` token. The standard flat presentation has no datatype-aware
+/// step and writes the lexical form as it is; the named composite option reads
+/// the label as a blank node of the graph and agrees with the flatten-and-canonicalize
+/// route, which relabels it.
 #[test]
-fn differential_composite_literals_with_embedded_blank_labels() {
+fn composite_literal_blank_labels_are_text_under_flat_and_nodes_under_the_named_option() {
     let text = concat!(
         "<http://example.org/s> <http://example.org/p1> ",
         "\"[_:b, 1, _:b]\"^^<http://w3id.org/awslabs/neptune/SPARQL-CDTs/List> .\n",
@@ -463,10 +465,21 @@ fn differential_composite_literals_with_embedded_blank_labels() {
     );
     let ds = parse_dataset(text.as_bytes(), "application/n-triples", None)
         .expect("the composite literal fixtures parse");
-    assert_flat_differential(
-        &ds,
-        "cdt:List/cdt:Map composite literals with embedded blank labels",
-    );
+    for hash in [CanonHash::Sha256, CanonHash::Sha384] {
+        let control =
+            || purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        let flat = try_canonicalize_flat_view(&*ds, hash, &mut control())
+            .expect("the standard flat presentation admits a composite literal");
+        assert_eq!(flat.nquads(), text, "{hash:?}: the lexical form is text");
+        let option = purrdf_rdf::try_canonicalize_flat_composite_view(&*ds, hash, &mut control())
+            .expect("the named composite option admits a composite literal");
+        assert_eq!(
+            option.nquads(),
+            reference_flat_canon(&ds, hash).nquads(),
+            "{hash:?}: the named option diverged from the flatten-and-canonicalize route"
+        );
+        assert_ne!(option.nquads(), flat.nquads(), "{hash:?}");
+    }
 }
 
 /// A row spelled BOTH as a reifier-declaration side-table entry AND, separately,
@@ -872,17 +885,16 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
     );
 }
 
-/// (c) A valid neighbour: an IRI adjacent to, but OUTSIDE, the reserved
-/// namespace is ADMITTED with that IRI present verbatim — and the reserved
-/// namespace itself is refused TYPED as `Refused(ReservedVocabulary…)`.
+/// (c) The flat presentation applies no reservation. An IRI adjacent to, but
+/// OUTSIDE, the reserved namespace is written verbatim, and so is the reserved
+/// predicate over a plain IRI object, which the overlay still refuses TYPED as
+/// `ReservedVocabulary` naming the position.
 ///
-/// Paired the OTHER way too, per the over-refusal rule: the SAME reserved predicate
-/// over a plain IRI object stays refused, but over a TRIPLE-TERM object — the exact
-/// shape the overlay's own lowering emits — it is now ADMITTED and lowers to
-/// `rdf:reifies` rather than being refused. Both neighbours are checked so this test
-/// cannot pass by having simply widened the refusal into an admission of everything.
+/// The fold is unchanged: the SAME reserved predicate over a TRIPLE-TERM object,
+/// the exact shape the overlay's own lowering emits, lowers to `rdf:reifies`
+/// rather than being written as the sentinel.
 #[test]
-fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused() {
+fn a_reserved_iri_outside_a_fold_shape_is_written_by_flat_and_refused_by_the_overlay() {
     // Valid neighbour: `urn:purrdf:other:…`, NOT inside `urn:purrdf:rdfc:`.
     let mut b = RdfDatasetBuilder::new();
     let s = b.intern_iri(&ex("s")).unwrap();
@@ -904,27 +916,37 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     );
     assert!(check_admissible_flat_view(&*admitted_ds).is_ok());
 
-    // The reserved namespace itself: refused, TYPED, naming the offending
-    // position.
+    // The reserved namespace itself: an ordinary IRI under flat; refused, TYPED,
+    // naming the offending position, under the overlay.
     let mut b = RdfDatasetBuilder::new();
     let s = b.intern_iri(&ex("s")).unwrap();
     let reserved = format!("{RESERVED_NAMESPACE}reifies");
     let p = b.intern_iri(&reserved).unwrap();
     let o = b.intern_iri(&ex("o")).unwrap();
     b.push_quad(s, p, o, None).unwrap();
-    let inadmissible_ds = b.freeze().expect("valid dataset");
-    match try_canonicalize_flat_view(
-        &*inadmissible_ds,
+    let reserved_ds = b.freeze().expect("valid dataset");
+    let written = try_canonicalize_flat_view(
+        &*reserved_ds,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the flat presentation refuses no reserved IRI");
+    assert_eq!(
+        written.nquads(),
+        format!("<{}> <{reserved}> <{}> .\n", ex("s"), ex("o"))
+    );
+    assert!(check_admissible_flat_view(&*reserved_ds).is_ok());
+    match try_canonicalize_with(
+        &reserved_ds,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     ) {
-        Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(violation))) => {
+        Err(CanonError::ReservedVocabulary(violation)) => {
             assert_eq!(violation.iri(), reserved.as_str());
             assert_eq!(violation.position(), TermPosition::Predicate);
         }
         other => panic!("expected a typed ReservedVocabulary refusal; got {other:?}"),
     }
-    assert!(check_admissible_flat_view(&*inadmissible_ds).is_err());
 
     // The neighbour in the OTHER direction: the identical reserved predicate, but
     // over a TRIPLE-TERM object instead of a plain IRI — the exact shape the

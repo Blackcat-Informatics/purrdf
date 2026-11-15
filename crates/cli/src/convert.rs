@@ -48,7 +48,8 @@
 //! * `--entailment REGIME` materializes the regime's closure over the view (through
 //!   the same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
 //!   here), and its reasoning report is surfaced under `--report`.
-//! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
+//! * `--canonical` emits the `purrdf-rdfc12` flat assertion canonical N-Quads document
+//!   (never labelled RDFC-1.0: see `docs/RDF12-CANON-PROFILE.md`)
 //!   ([`purrdf_rdf::try_canonicalize_flat_view`]) rather than the `--to` format.
 //!   Canonical output is always N-Quads, so `--canonical` lets you OMIT `--to` — and
 //!   refuses it by name (see [`run`]) rather than silently ignoring a `--to` naming a
@@ -130,7 +131,7 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) imports: &'a [String],
     /// Per-IRI YAML-LD controls for premise RDF imports.
     pub(crate) import_yamlld_input_options: &'a [String],
-    /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
+    /// Whether `--canonical` was set (emit `purrdf-rdfc12` flat canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
@@ -344,7 +345,7 @@ fn refuse_inapplicable_combinations(
     // could mistake for a format that was honored.
     if options.canonical && options.to.is_some() {
         return Err(CliError::Usage(
-            "--canonical emits RDFC-1.0 canonical N-Quads unconditionally, so a --to \
+            "--canonical emits purrdf-rdfc12 canonical N-Quads unconditionally, so a --to \
              naming a different target format would be accepted and never read: drop \
              one of the two"
                 .to_owned(),
@@ -389,7 +390,7 @@ fn run_with_transforms(
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
-        // `--canonical` writes RDFC-1.0 canonical N-Quads unconditionally, so the egress
+        // `--canonical` writes purrdf-rdfc12 canonical N-Quads unconditionally, so the egress
         // leg is N-Quads whatever else was named — and N-Quads can express no base.
         refuse_unconsumable_base(
             sources,
@@ -470,10 +471,10 @@ fn run_with_transforms(
         }
     };
 
-    // Then canonicalize: RDFC-1.0 canonical N-Quads always override `--to`. The typed
+    // Then canonicalize: purrdf-rdfc12 canonical N-Quads always override `--to`. The typed
     // view-canon entry point, not the trusted-caller wrapper: `--canonical` reads
-    // arbitrary caller-supplied documents, so a refusal (reserved vocabulary, or
-    // n-degree search budget exhaustion) must come back as a value this CLI reports,
+    // arbitrary caller-supplied documents, so a refusal (n-degree search
+    // budget exhaustion) must come back as a value this CLI reports,
     // never as a process abort.
     if options.canonical {
         let nquads =
@@ -487,7 +488,7 @@ fn run_with_transforms(
             },
             };
         sink::write_out_with_request(output, nquads.nquads().as_bytes(), canonical)?;
-        // The RDFC-1.0 canonical N-Quads document flattens the RDF 1.2 statement
+        // The purrdf-rdfc12 canonical N-Quads document flattens the RDF 1.2 statement
         // overlay into plain triples; it is a lossless re-rendering, so the only
         // entries are whatever reading the sources already dropped.
         return ledger::surface(ledger_target, &read_ledger);

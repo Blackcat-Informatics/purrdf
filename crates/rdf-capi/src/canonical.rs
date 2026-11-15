@@ -189,7 +189,7 @@ mod tests {
         let mut error = null_mut();
         unsafe {
             let source = std::ffi::CString::new(
-                "<urn:purrdf:rdfc:private> <http://example.org/p> <http://example.org/o> .",
+                "_:a <http://example.org/p> _:b .\n_:b <http://example.org/p> _:a .",
             )
             .unwrap();
             let status = purrdf_entail_materialize_to_nquads(
@@ -206,7 +206,7 @@ mod tests {
                 null(),
                 &raw mut document.0,
                 &raw mut report.0,
-                c"unlimited".as_ptr(),
+                c"0".as_ptr(),
                 null(),
                 &raw mut evidence.0,
                 &raw mut error,
@@ -216,11 +216,11 @@ mod tests {
             let native = CStr::from_ptr(purrdf_error_native_cause_json(error))
                 .to_str()
                 .unwrap();
-            assert!(native.contains("urn:purrdf:rdfc:private"), "{native}");
+            assert!(!native.is_empty(), "{native}");
             let error_ref = error.as_ref().expect("native canonical refusal");
             assert!(matches!(
                 native_canonical_cause(error_ref),
-                Some(purrdf_core::CanonError::ReservedVocabulary(_))
+                Some(purrdf_core::CanonError::BudgetExceeded(_))
             ));
             purrdf_error_free(error);
             error = null_mut();

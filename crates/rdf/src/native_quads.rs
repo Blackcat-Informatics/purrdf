@@ -278,8 +278,8 @@ pub fn canonical_flat_nquads(
 /// re-freeze through [`flat_dataset_from_quads`]/[`flat_rdf_quads_from_dataset`]).
 ///
 /// # Errors
-/// Returns the original canonicalization refusal, including reserved vocabulary
-/// and search-budget exhaustion.
+/// Returns the original canonicalization refusal, such as search-budget exhaustion.
+/// The flat presentation refuses no reserved vocabulary.
 pub fn canonical_flat_nquads_with(
     dataset: &RdfDataset,
     hash: crate::CanonHash,
@@ -623,19 +623,12 @@ ex:g {
         b.freeze().expect("valid")
     }
 
-    /// Both public presentations return the same original refusal for this input.
+    /// The overlay presentation refuses the reserved IRI and the flat presentation,
+    /// which writes no sentinel, writes it as an ordinary IRI. The same input is the
+    /// refused case and its admitted neighbour.
     #[test]
-    fn canonical_flat_nquads_with_returns_the_original_refusal() {
+    fn the_flat_presentation_admits_what_the_overlay_refuses() {
         let ds = reserved_vocabulary_dataset();
-        let flat = canonical_flat_nquads_with(
-            &ds,
-            crate::CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
-        )
-        .unwrap_err();
         let overlay = crate::try_canonicalize_with(
             &ds,
             crate::CanonHash::Sha256,
@@ -645,34 +638,24 @@ ex:g {
             ),
         )
         .unwrap_err();
-        assert!(matches!(&flat, crate::CanonError::ReservedVocabulary(_)));
-        assert_eq!(flat, overlay);
-    }
-
-    /// The direct flat-view entry point retains the same reserved-vocabulary
-    /// refusal as the public N-Quads wrapper. Host surfaces share this typed path.
-    #[test]
-    fn try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value() {
-        let ds = reserved_vocabulary_dataset();
-        match purrdf_core::try_canonicalize_flat_view(
-            &*ds,
+        assert!(matches!(&overlay, crate::CanonError::ReservedVocabulary(_)));
+        let flat = canonical_flat_nquads_with(
+            &ds,
             crate::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
-        ) {
-            Err(purrdf_core::ViewCanonError::Refused(
-                purrdf_core::CanonError::ReservedVocabulary(_),
-            )) => {}
-            other => panic!("expected a typed reserved-vocabulary refusal; got {other:?}"),
-        }
+        )
+        .expect("the flat presentation refuses no reserved IRI");
+        assert_eq!(
+            flat.nquads(),
+            "<https://example.org/s> <https://example.org/p> <urn:purrdf:rdfc:> .\n"
+        );
     }
 
-    /// Neighbouring-valid check: an ORDINARY dataset carrying no reserved vocabulary
-    /// still canonicalizes successfully through the same typed
-    /// [`purrdf_core::try_canonicalize_flat_view`] path the refusal test above
-    /// exercises — the tightened refusal above does not widen to reject valid input.
+    /// An ORDINARY dataset canonicalizes through the typed
+    /// [`purrdf_core::try_canonicalize_flat_view`] path.
     #[test]
     fn try_canonicalize_flat_view_admits_an_ordinary_dataset() {
         let quads = vec![RdfQuad::new(

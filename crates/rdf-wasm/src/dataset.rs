@@ -756,8 +756,8 @@ impl Dataset {
     /// RDF graph (under blank-node relabeling) iff their canonical forms are
     /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
     ///
-    /// This surface reads caller-supplied (untrusted) documents, so a refusal —
-    /// reserved vocabulary, or n-degree search budget exhaustion — comes back as a
+    /// This surface reads caller-supplied (untrusted) documents, so a refusal
+    /// (n-degree search budget exhaustion) comes back as a
     /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]

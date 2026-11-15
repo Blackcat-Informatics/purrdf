@@ -216,8 +216,8 @@ fn entail_with<E: From<ShapesError>>(
 ///
 /// Both inputs are wholly caller-supplied, so this function calls the typed,
 /// non-panicking [`purrdf_core::try_canonicalize_flat_view`] rather than the
-/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a reserved-vocabulary
-/// or search-budget refusal comes back as an `Err` value across the
+/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a search-budget
+/// refusal comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
 ///
 /// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]): an
@@ -230,8 +230,7 @@ fn entail_with<E: From<ShapesError>>(
 /// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
 /// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
 /// term-generating round limit or another evaluation limit); or a diagnostic naming the
-/// refusal if the materialized dataset carries a reserved-vocabulary IRI or
-/// exhausts the RDFC-1.0 n-degree search budget.
+/// refusal if the materialized dataset exhausts the n-degree search budget.
 ///
 /// # Examples
 ///
@@ -315,7 +314,7 @@ fn canonical_ntriples(
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting document must come back as an `Err`
+    // budget-exhausting document must come back as an `Err`
     // value, not abort the process.
     match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
     {
@@ -526,37 +525,24 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         );
     }
 
-    /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
-    /// wasm/Python/C-ABI boundary as-is), so a materialized dataset carrying a
-    /// reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`]) must come
-    /// back as an `Err` VALUE rather than aborting the process — the gap this
-    /// function's migration off the panicking [`purrdf_rdf::canonical_flat_nquads`]
-    /// wrapper closes.
+    /// The result is written in the flat assertion presentation, which applies no
+    /// reservation: a materialized dataset carrying an IRI of
+    /// [`purrdf_core::RESERVED_NAMESPACE`] outside a fold shape is written with that
+    /// IRI as it is.
     #[test]
-    fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
+    fn entail_writes_a_reserved_vocabulary_iri_as_an_ordinary_iri() {
         let mut control =
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control).expect_err(
-            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
-             as a value, not panic",
-        );
-        assert!(
-            matches!(
-                &error,
-                ShapesError::Canonical(purrdf_core::CanonError::ReservedVocabulary(refusal))
-                    if refusal.iri() == "urn:purrdf:rdfc:bad"
-                        && refusal.position() == purrdf_core::TermPosition::Object
-            ),
-            "{error}"
-        );
+        let nt_owner = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
+            .expect("the flat presentation refuses no reserved IRI");
+        assert!(nt_owner.nquads().contains("<urn:purrdf:rdfc:bad>"));
     }
 
-    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
-    /// reserved prefix) in the exact same shape still entails successfully — the
-    /// refusal above is not an over-refusal of ordinary documents.
+    /// The neighbour of the case above: an ORDINARY object IRI (no reserved
+    /// prefix) in the exact same shape entails too.
     #[test]
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
         let mut control =

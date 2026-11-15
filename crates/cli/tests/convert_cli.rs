@@ -2366,56 +2366,59 @@ fn canonical_without_to_emits_canonical_nquads() {
     );
 }
 
-/// `--canonical` on a dataset carrying the canonicalizer's OWN reserved vocabulary
-/// (`urn:purrdf:rdfc:...`) is a REFUSED conversion, reported as an ordinary runtime
-/// error (exit 1, a diagnostic on stderr) — not a process abort. This is the CLI's
-/// untrusted-input contract for `--canonical`: `try_canonicalize_flat_view`'s refusal
-/// comes back as a value the CLI maps into [`CliError::Runtime`], never a panic that
-/// would take the whole process down over a caller-supplied document.
+/// `--canonical` writes the flat assertion presentation, which writes no sentinel and so
+/// applies no reservation: a dataset carrying an IRI of the overlay's reserved namespace
+/// (`urn:purrdf:rdfc:...`) outside a fold shape is canonicalized, and the IRI is written
+/// as it is. The neighbouring ordinary dataset converts as before, so the admission is
+/// the reserved IRI's and not a loosening of the command.
 #[test]
-fn canonical_refuses_reserved_vocabulary_without_aborting() {
+fn canonical_admits_reserved_vocabulary_under_the_flat_presentation() {
     let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
     let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
 
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
-    const RESERVED_VOCAB_NQUADS: &str = concat!(
+    const RESERVED_LINE: &str = concat!(
         "<http://example.org/s> <http://example.org/p> ",
         "<urn:purrdf:rdfc:sentinel> .\n",
     );
-    let seed = write_file(dir, "reserved.nq", RESERVED_VOCAB_NQUADS);
-    let out = path(dir, "out.canon");
-    let o = run(&[
-        "convert",
-        "--from",
-        "nquads",
-        "--canonical",
-        &seed,
-        &out,
-        "--canonical-search",
-        "unlimited",
-        "--canonicalization-receipts",
-        canonical_receipt_1
-            .to_str()
-            .expect("UTF-8 canonical receipt path"),
-    ]);
-    assert_eq!(
-        o.status.code(),
-        Some(1),
-        "a reserved-vocabulary dataset must be refused as an ordinary runtime failure, \
-         not abort the process: {}",
-        stderr(&o)
+    const ORDINARY_LINE: &str = concat!(
+        "<http://example.org/s> <http://example.org/p> ",
+        "<http://example.org/o> .\n",
     );
-    assert!(
-        !stderr(&o).is_empty(),
-        "the refusal must carry a diagnostic on stderr"
-    );
-    assert!(
-        stderr(&o).contains("urn:purrdf:rdfc:sentinel"),
-        "the diagnostic must NAME the offending reserved IRI, not just fail — a \
-         regression to a bare error would still exit 1: {}",
-        stderr(&o)
-    );
+    for (name, line) in [
+        ("reserved.nq", RESERVED_LINE),
+        ("ordinary.nq", ORDINARY_LINE),
+    ] {
+        let seed = write_file(dir, name, line);
+        let out = path(dir, &format!("{name}.canon"));
+        let o = run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--canonical",
+            &seed,
+            &out,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ]);
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "{name} must canonicalize under the flat presentation: {}",
+            stderr(&o)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&out).expect("canonical output"),
+            line,
+            "{name}: the IRI is written as it is"
+        );
+        std::fs::remove_file(&canonical_receipt_1).ok();
+    }
 }
 
 // ── Relative IRI references and the document base ───────────────────────────────

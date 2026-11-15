@@ -406,30 +406,24 @@ test("entailMaterialize rejects a malformed document (never a silent empty closu
   assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"));
 });
 
-// ── A reserved-vocabulary closure is refused as a value, never a process abort ──
+// ── A reserved-vocabulary closure is written as an ordinary IRI ──
 //
-// The materialized closure is wholly caller-supplied (the document parsed above), so
-// `entailMaterialize` routes it through the typed, non-panicking canonicalization
-// entry point — a reserved-vocabulary IRI (`urn:purrdf:rdfc:`, the canonicalization
-// overlay's OWN namespace; see crates/rdf-core/src/ir/canon.rs) comes back as a
-// thrown `JsError` rather than aborting the wasm process. Only the exact sentinel
-// shape the overlay itself lowers — `<urn:purrdf:rdfc:reifies>` as a predicate whose
-// object is a TRIPLE TERM — is admitted; a plain-IRI object in the same predicate
-// position is not that shape and is refused.
+// The closure is written in the flat assertion presentation, which writes no overlay
+// sentinel and so applies no reservation: a reserved-vocabulary IRI
+// (`urn:purrdf:rdfc:`, the canonicalization overlay's OWN namespace; see
+// crates/rdf-core/src/ir/canon.rs) outside the two fold shapes is an ordinary IRI
+// there and is written as it is.
 const RESERVED_PREDICATE_PLAIN_OBJECT =
   "<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n";
 
 // The valid neighbour: an ORDINARY predicate adjacent to the reserved namespace (a
-// DIFFERENT `urn:purrdf:` sub-namespace) in the exact same shape still materializes —
-// the refusal above is not an over-refusal of ordinary documents.
+// DIFFERENT `urn:purrdf:` sub-namespace) in the exact same shape materializes too.
 const NEIGHBOURING_ORDINARY_PREDICATE =
   "<http://example.org/r> <urn:purrdf:other:annotation> <http://example.org/o> .\n";
 
-test("entailMaterialize throws on a reserved-vocabulary closure, naming it", () => {
-  assert.throws(
-    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited"),
-    /urn:purrdf:rdfc:reifies/,
-  );
+test("entailMaterialize writes a reserved-vocabulary closure as an ordinary IRI", () => {
+  const closed = entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited");
+  assert.ok(closed.nquads.includes("<urn:purrdf:rdfc:reifies>"), closed.nquads);
 });
 
 test("entailMaterialize still closes an ordinary document neighbouring the reserved one", () => {

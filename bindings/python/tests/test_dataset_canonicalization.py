@@ -17,9 +17,10 @@ from purrdf import RdfDataset, RdfFormat
 
 # `<urn:purrdf:rdfc:reifies>` as a predicate whose OBJECT is a plain IRI (not a
 # quoted triple term) is not one of the two exact shapes the canonicalization
-# overlay itself lowers, so it is refused rather than silently accepted — accepting
-# it would let a structurally different graph canonicalize to the exact bytes a
-# genuine reifier binding would.
+# overlay itself lowers. `RdfDataset.to_nquads` writes the flat assertion
+# presentation, which writes no overlay sentinel and so applies no reservation: the
+# IRI is an ordinary IRI there and is written as it is. `Dataset.canonicalize` uses
+# the overlay presentation and still refuses it.
 RESERVED_PREDICATE_PLAIN_OBJECT = (
     "<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n"
 )
@@ -33,16 +34,14 @@ NEIGHBOURING_ORDINARY_PREDICATE = (
 )
 
 
-def test_to_nquads_raises_value_error_naming_the_reserved_iri() -> None:
+def test_to_nquads_writes_the_reserved_iri_as_an_ordinary_iri() -> None:
     dataset = RdfDataset(RESERVED_PREDICATE_PLAIN_OBJECT, RdfFormat.N_TRIPLES)
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies") as failure:
-        dataset.to_nquads(canonical_search="1000000").value
-    del dataset
-    assert failure.value.native_cause.json == failure.value.native_cause_json
+    out = dataset.to_nquads(canonical_search="1000000").value
+    assert "<urn:purrdf:rdfc:reifies>" in out, out
 
 
 def test_to_nquads_still_serializes_an_ordinary_neighbouring_iri() -> None:
-    """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
+    """The neighbouring IRI is written as it is, as the reserved one is."""
     dataset = RdfDataset(NEIGHBOURING_ORDINARY_PREDICATE, RdfFormat.N_TRIPLES)
     out = dataset.to_nquads(canonical_search="1000000").value
     assert "urn:purrdf:other:annotation" in out, out
