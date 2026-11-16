@@ -33,6 +33,7 @@ use crate::hash::table::HashTable;
 use crate::backend::DatasetHandle;
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
 use crate::dataset_view::{GraphMatch, ProbePattern};
+use crate::gallop::run_end;
 // Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
 // `builder.rs` keeps resolving; the single definition lives in `crate::hash`.
 pub(crate) use crate::hash::FastHasher;
@@ -1606,9 +1607,10 @@ impl RdfDataset {
     /// The contiguous `[lo, hi)` candidate run for this row's `(s, p, o, g)` values under
     /// a precomputed [`QuadProbePlan`] — the **value-dependent** half of
     /// [`Self::pattern_candidate_run`]. Builds the `target` key for the plan's `prefix`
-    /// leading (therefore bound) axes from the row's values, then binary-searches the
-    /// run. For SPOG the bounds index the freeze-sorted `quads` table directly;
-    /// otherwise the permutation's ordinal array.
+    /// leading (therefore bound) axes from the row's values, then finds the start of the
+    /// run by binary search and its end by galloping from there. For SPOG the bounds
+    /// index the freeze-sorted `quads` table directly; otherwise the permutation's
+    /// ordinal array.
     fn candidate_run(
         &self,
         plan: &QuadProbePlan,
@@ -1638,15 +1640,17 @@ impl RdfDataset {
             *slot = key_of(axis);
         }
 
-        // Binary-search the contiguous run whose `prefix` leading keys equal `target`.
+        // Binary-search the start of the contiguous run whose `prefix` leading keys
+        // equal `target`, then walk out to its end: a run is usually short against
+        // the table, so its end is found by galloping from its start.
         match plan.perm {
             QuadPermutation::Spog => {
                 let lo = self
                     .quads
                     .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_lt());
-                let hi = self
-                    .quads
-                    .partition_point(|q| compare_prefix(axes, q, &target, prefix).is_le());
+                let hi = run_end(&self.quads, lo, |q| {
+                    compare_prefix(axes, q, &target, prefix).is_le()
+                });
                 (plan.perm, lo, hi)
             }
             _ => {
@@ -1654,7 +1658,7 @@ impl RdfDataset {
                 let lo = arr.partition_point(|&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_lt()
                 });
-                let hi = arr.partition_point(|&ord| {
+                let hi = run_end(arr, lo, |&ord| {
                     compare_prefix(axes, &self.quads[ord as usize], &target, prefix).is_le()
                 });
                 (plan.perm, lo, hi)

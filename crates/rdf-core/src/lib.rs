@@ -95,6 +95,8 @@ pub mod distance;
 // PyO3-free; the `purrdf-slice` FnO emitter builds a `FnoCatalog` from the slice
 // framework and serializes it here, replacing rdflib `emit_fno`/`_emit_fnom`.
 pub mod fno;
+// The one galloping search for the end of a run in sorted data.
+pub mod gallop;
 // The workspace's ONE strongly-connected-components implementation (iterative
 // Tarjan over an index adjacency list). `pub` because its consumers are other
 // crates — the `purrdf-slice` link-unit linker and the `purrdf-shex` structural

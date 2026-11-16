@@ -35,7 +35,7 @@ use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, finish_text, is_annotation_keyword,
+    CompiledSchemaCatalog, SchemaPath, definition_path, finish_text, is_annotation_keyword,
     known_schema_keyword, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
@@ -486,7 +486,7 @@ struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
     definitions: &'a Object,
     ledger: LossLedger,
-    recorded_losses: BTreeSet<(String, String)>,
+    recorded_losses: BTreeSet<(String, SchemaPath)>,
     /// Whether a declaration uses the `JsonDistinct` helper.
     uses_distinct: bool,
 }
@@ -542,7 +542,7 @@ impl<'a> Renderer<'a> {
     fn render_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
@@ -584,7 +584,7 @@ impl<'a> Renderer<'a> {
                         }
                         variants.push(Self::render_literal(
                             value,
-                            &format!("{path}/enum/{index}"),
+                            &path.child("enum").child_index(index),
                             depth + 1,
                         )?);
                     }
@@ -592,7 +592,7 @@ impl<'a> Renderer<'a> {
                 }
                 if let Some(value) = object.get("const") {
                     conjuncts.push(if admitted(value) {
-                        Self::render_literal(value, &format!("{path}/const"), depth + 1)?
+                        Self::render_literal(value, &path.child("const"), depth + 1)?
                     } else {
                         "never".to_owned()
                     });
@@ -602,7 +602,7 @@ impl<'a> Renderer<'a> {
                     for (index, branch) in branches.iter().enumerate() {
                         expressions.push(self.render_schema(
                             branch,
-                            &format!("{path}/allOf/{index}"),
+                            &path.child("allOf").child_index(index),
                             depth + 1,
                         )?);
                     }
@@ -614,7 +614,7 @@ impl<'a> Renderer<'a> {
                         for (index, branch) in branches.iter().enumerate() {
                             expressions.push(self.render_schema(
                                 branch,
-                                &format!("{path}/{keyword}/{index}"),
+                                &path.child(keyword).child_index(index),
                                 depth + 1,
                             )?);
                         }
@@ -632,7 +632,7 @@ impl<'a> Renderer<'a> {
     fn render_carrier_relation(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<Option<String>, TypeScriptError> {
         let explicit_type = object.contains_key("type");
@@ -667,7 +667,7 @@ impl<'a> Renderer<'a> {
     fn render_object(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
@@ -684,7 +684,7 @@ impl<'a> Renderer<'a> {
 
         let mut field_types = BTreeMap::new();
         for (property, schema) in properties {
-            let property_path = format!("{path}/properties/{}", pointer_escape(property));
+            let property_path = path.child("properties").child(property);
             field_types.insert(
                 property.clone(),
                 self.render_schema(schema, &property_path, depth + 1)?,
@@ -719,7 +719,7 @@ impl<'a> Renderer<'a> {
         for (pattern, schema) in pattern_properties {
             index_types.push(self.render_schema(
                 schema,
-                &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
+                &path.child("patternProperties").child(pattern),
                 depth + 1,
             )?);
         }
@@ -728,7 +728,7 @@ impl<'a> Renderer<'a> {
             Some(Value::Bool(false)) => {}
             Some(schema @ Value::Object(_)) => index_types.push(self.render_schema(
                 schema,
-                &format!("{path}/additionalProperties"),
+                &path.child("additionalProperties"),
                 depth + 1,
             )?),
             Some(_) => unreachable!("schema catalog validates additionalProperties schemas"),
@@ -754,14 +754,14 @@ impl<'a> Renderer<'a> {
         &mut self,
         object: &Object,
         patterns: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         let mut variants = Vec::new();
         for (pattern, schema) in patterns {
             variants.push(self.render_schema(
                 schema,
-                &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
+                &path.child("patternProperties").child(pattern),
                 depth + 1,
             )?);
         }
@@ -770,7 +770,7 @@ impl<'a> Renderer<'a> {
             Some(Value::Bool(false)) => {}
             Some(schema @ Value::Object(_)) => variants.push(self.render_schema(
                 schema,
-                &format!("{path}/additionalProperties"),
+                &path.child("additionalProperties"),
                 depth + 1,
             )?),
             Some(_) => unreachable!("schema catalog validates additionalProperties schemas"),
@@ -785,7 +785,7 @@ impl<'a> Renderer<'a> {
     fn render_array(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<String, TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
@@ -795,7 +795,7 @@ impl<'a> Renderer<'a> {
             for (index, item) in items.iter().enumerate() {
                 prefix.push(self.render_schema(
                     item,
-                    &format!("{path}/prefixItems/{index}"),
+                    &path.child("prefixItems").child_index(index),
                     depth + 1,
                 )?);
             }
@@ -804,7 +804,7 @@ impl<'a> Renderer<'a> {
             None | Some(Value::Bool(true)) => "JsonValue".to_owned(),
             Some(Value::Bool(false)) => "never".to_owned(),
             Some(schema @ Value::Object(_)) => {
-                self.render_schema(schema, &format!("{path}/items"), depth + 1)?
+                self.render_schema(schema, &path.child("items"), depth + 1)?
             }
             Some(_) => unreachable!("schema catalog validates items schemas"),
         };
@@ -846,7 +846,7 @@ impl<'a> Renderer<'a> {
     fn distinct_bounds(
         &self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<DistinctBounds>, TypeScriptError> {
         if object.get("uniqueItems") != Some(&Value::Bool(true)) {
             return Ok(None);
@@ -884,7 +884,11 @@ impl<'a> Renderer<'a> {
         Ok((!intersected || shape.total < DISTINCT_SPREAD_LIMIT).then_some(bounds))
     }
 
-    fn render_literal(value: &Value, path: &str, depth: usize) -> Result<String, TypeScriptError> {
+    fn render_literal(
+        value: &Value,
+        path: &SchemaPath,
+        depth: usize,
+    ) -> Result<String, TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
         match value {
             Value::Null => Ok("null".to_owned()),
@@ -896,7 +900,7 @@ impl<'a> Renderer<'a> {
                 for (index, value) in values.iter().enumerate() {
                     items.push(Self::render_literal(
                         value,
-                        &format!("{path}/{index}"),
+                        &path.child_index(index),
                         depth + 1,
                     )?);
                 }
@@ -906,11 +910,7 @@ impl<'a> Renderer<'a> {
                 let mut output = String::from("{\n");
                 let field_indent = indentation(depth + 1);
                 for (key, value) in object {
-                    let value = Self::render_literal(
-                        value,
-                        &format!("{path}/{}", pointer_escape(key)),
-                        depth + 1,
-                    )?;
+                    let value = Self::render_literal(value, &path.child(key), depth + 1)?;
                     writeln!(
                         output,
                         "{field_indent}readonly {}: {value};",
@@ -928,7 +928,7 @@ impl<'a> Renderer<'a> {
     fn audit_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
@@ -948,7 +948,7 @@ impl<'a> Renderer<'a> {
         if has_integer && !has_number {
             self.record(
                 "integer-validation-widened",
-                &format!("{path}/type"),
+                &path.child("type"),
                 "TypeScript number cannot enforce the JSON integer subset",
             );
         }
@@ -963,7 +963,7 @@ impl<'a> Renderer<'a> {
             {
                 self.record(
                     "additional-properties-validation-widened",
-                    &format!("{path}/additionalProperties"),
+                    &path.child("additionalProperties"),
                     "TypeScript structural compatibility cannot close an object with named fields",
                 );
             } else if matches!(object.get("additionalProperties"), Some(Value::Object(_)))
@@ -971,7 +971,7 @@ impl<'a> Renderer<'a> {
             {
                 self.record(
                     "additional-properties-validation-widened",
-                    &format!("{path}/additionalProperties"),
+                    &path.child("additionalProperties"),
                     "a TypeScript string index signature also constrains named fields",
                 );
             }
@@ -979,7 +979,7 @@ impl<'a> Renderer<'a> {
                 for pattern in patterns.keys() {
                     self.record(
                         "pattern-properties-validation-dropped",
-                        &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
+                        &path.child("patternProperties").child(pattern),
                         "TypeScript cannot select arbitrary string keys with a JSON Schema regex",
                     );
                 }
@@ -988,7 +988,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "property-count-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "TypeScript cannot count runtime object properties",
                     );
                 }
@@ -996,7 +996,7 @@ impl<'a> Renderer<'a> {
             if object.contains_key("propertyNames") {
                 self.record(
                     "property-name-validation-dropped",
-                    &format!("{path}/propertyNames"),
+                    &path.child("propertyNames"),
                     "TypeScript cannot apply a schema to every runtime property name",
                 );
             }
@@ -1004,7 +1004,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "dependency-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "TypeScript cannot enforce a general cross-property dependency",
                     );
                 }
@@ -1016,7 +1016,7 @@ impl<'a> Renderer<'a> {
                     if object.contains_key(keyword) {
                         self.record(
                             "array-contains-validation-dropped",
-                            &format!("{path}/{keyword}"),
+                            &path.child(keyword),
                             "TypeScript cannot quantify elements matching an array predicate",
                         );
                     }
@@ -1027,7 +1027,7 @@ impl<'a> Renderer<'a> {
             {
                 self.record(
                     "unique-items-validation-dropped",
-                    &format!("{path}/uniqueItems"),
+                    &path.child("uniqueItems"),
                     "a TypeScript tuple type constrains each position independently, so it \
                      states pairwise-distinct elements only by enumerating the distinct \
                      sequences of a finite scalar item domain, which these items are not or \
@@ -1040,7 +1040,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "numeric-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "TypeScript number types do not express runtime numeric predicates",
                     );
                 }
@@ -1059,7 +1059,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "string-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "TypeScript string types do not express this runtime string predicate",
                     );
                 }
@@ -1068,14 +1068,14 @@ impl<'a> Renderer<'a> {
         if object.contains_key("oneOf") {
             self.record(
                 "one-of-validation-widened",
-                &format!("{path}/oneOf"),
+                &path.child("oneOf"),
                 "TypeScript unions cannot enforce exactly-one matching branch",
             );
         }
         if object.contains_key("not") {
             self.record(
                 "negation-validation-dropped",
-                &format!("{path}/not"),
+                &path.child("not"),
                 "TypeScript has no general JSON value-set complement",
             );
         }
@@ -1086,7 +1086,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "conditional-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "TypeScript cannot apply a schema branch conditionally to runtime content",
                     );
                 }
@@ -1096,23 +1096,23 @@ impl<'a> Renderer<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "unevaluated-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "TypeScript does not expose JSON Schema applicator evaluation state",
                 );
             }
         }
         if let Some(value) = object.get("const") {
-            self.audit_literal(value, &format!("{path}/const"), depth + 1)?;
+            self.audit_literal(value, &path.child("const"), depth + 1)?;
         }
         if let Some(values) = object.get("enum").and_then(Value::as_array) {
             for (index, value) in values.iter().enumerate() {
-                self.audit_literal(value, &format!("{path}/enum/{index}"), depth + 1)?;
+                self.audit_literal(value, &path.child("enum").child_index(index), depth + 1)?;
             }
         }
         if object.contains_key("additionalItems") {
             self.record(
                 "keyword-validation-dropped",
-                &format!("{path}/additionalItems"),
+                &path.child("additionalItems"),
                 "additionalItems is outside the closed draft 2020-12 TypeScript capability table",
             );
         }
@@ -1120,7 +1120,7 @@ impl<'a> Renderer<'a> {
             if !known_schema_keyword(key) && !is_annotation_keyword(key) {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &path.child(key),
                     &format!(
                         "JSON Schema assertion keyword {key:?} is outside the closed TypeScript \
                          7.0 capability table"
@@ -1135,18 +1135,14 @@ impl<'a> Renderer<'a> {
             }
             if let Some(children) = object.get(keyword).and_then(Value::as_object) {
                 for (key, child) in children {
-                    self.audit_schema(
-                        child,
-                        &format!("{path}/{keyword}/{}", pointer_escape(key)),
-                        depth + 1,
-                    )?;
+                    self.audit_schema(child, &path.child(keyword).child(key), depth + 1)?;
                 }
             }
         }
         for keyword in schema_array_keywords() {
             if let Some(children) = object.get(keyword).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
-                    self.audit_schema(child, &format!("{path}/{keyword}/{index}"), depth + 1)?;
+                    self.audit_schema(child, &path.child(keyword).child_index(index), depth + 1)?;
                 }
             }
         }
@@ -1155,7 +1151,7 @@ impl<'a> Renderer<'a> {
                 continue;
             }
             if let Some(child) = object.get(keyword) {
-                self.audit_schema(child, &format!("{path}/{keyword}"), depth + 1)?;
+                self.audit_schema(child, &path.child(keyword), depth + 1)?;
             }
         }
         Ok(())
@@ -1164,7 +1160,7 @@ impl<'a> Renderer<'a> {
     fn audit_literal(
         &mut self,
         value: &Value,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), TypeScriptError> {
         limits::ensure_depth(depth, path, "TypeScript").map_err(TypeScriptError::new)?;
@@ -1178,7 +1174,7 @@ impl<'a> Renderer<'a> {
             }
             Value::Array(values) => {
                 for (index, value) in values.iter().enumerate() {
-                    self.audit_literal(value, &format!("{path}/{index}"), depth + 1)?;
+                    self.audit_literal(value, &path.child_index(index), depth + 1)?;
                 }
             }
             Value::Object(object) => {
@@ -1188,11 +1184,7 @@ impl<'a> Renderer<'a> {
                     "TypeScript object literal types cannot close structural compatibility",
                 );
                 for (key, value) in object {
-                    self.audit_literal(
-                        value,
-                        &format!("{path}/{}", pointer_escape(key)),
-                        depth + 1,
-                    )?;
+                    self.audit_literal(value, &path.child(key), depth + 1)?;
                 }
             }
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
@@ -1200,11 +1192,8 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &str, note: &str) {
-        if !self
-            .recorded_losses
-            .insert((code.to_owned(), path.to_owned()))
-        {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+        if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
         self.ledger.record(LossEntry {
@@ -1213,7 +1202,7 @@ impl<'a> Renderer<'a> {
             to: TYPESCRIPT_DIALECT.into(),
             note: note.to_owned().into(),
             location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path),
+                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
             )),
         });
     }
@@ -1249,7 +1238,7 @@ fn definition_names(definitions: &Object) -> Result<BTreeMap<String, String>, Ty
     Ok(names)
 }
 
-fn validate_keyword_values(object: &Object, path: &str) -> Result<(), TypeScriptError> {
+fn validate_keyword_values(object: &Object, path: &SchemaPath) -> Result<(), TypeScriptError> {
     let _ = declared_kinds(object, path)?;
     if let Some(value) = object.get("enum") {
         let values = value
@@ -1367,12 +1356,12 @@ fn validate_keyword_values(object: &Object, path: &str) -> Result<(), TypeScript
 
 fn declared_kinds(
     object: &Object,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<(BTreeSet<JsonKind>, bool, bool), TypeScriptError> {
     let mut kinds = BTreeSet::new();
     let mut has_integer = false;
     let mut has_number = false;
-    let values: Vec<(&str, String)> = match object.get("type") {
+    let values: Vec<(&str, SchemaPath)> = match object.get("type") {
         None => {
             kinds.extend([
                 JsonKind::Null,
@@ -1384,14 +1373,14 @@ fn declared_kinds(
             ]);
             return Ok((kinds, false, true));
         }
-        Some(Value::String(kind)) => vec![(kind, format!("{path}/type"))],
+        Some(Value::String(kind)) => vec![(kind, path.child("type"))],
         Some(Value::Array(values)) if !values.is_empty() => values
             .iter()
             .enumerate()
             .map(|(index, value)| {
                 value
                     .as_str()
-                    .map(|kind| (kind, format!("{path}/type/{index}")))
+                    .map(|kind| (kind, path.child("type").child_index(index)))
                     .ok_or_else(|| {
                         TypeScriptError::new(format!("{path}/type/{index} must be a string"))
                     })
@@ -1449,7 +1438,7 @@ fn declared_kinds(
     Ok((kinds, has_integer, has_number))
 }
 
-fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, TypeScriptError> {
+fn required_names(object: &Object, path: &SchemaPath) -> Result<BTreeSet<String>, TypeScriptError> {
     let Some(value) = object.get("required") else {
         return Ok(BTreeSet::new());
     };
@@ -1470,14 +1459,22 @@ fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, TypeS
     Ok(required)
 }
 
-fn array_bound(object: &Object, keyword: &str, path: &str) -> Result<Option<u64>, TypeScriptError> {
+fn array_bound(
+    object: &Object,
+    keyword: &str,
+    path: &SchemaPath,
+) -> Result<Option<u64>, TypeScriptError> {
     object
         .contains_key(keyword)
         .then(|| nonnegative_bound(object, keyword, path))
         .transpose()
 }
 
-fn nonnegative_bound(object: &Object, keyword: &str, path: &str) -> Result<u64, TypeScriptError> {
+fn nonnegative_bound(
+    object: &Object,
+    keyword: &str,
+    path: &SchemaPath,
+) -> Result<u64, TypeScriptError> {
     let value = object
         .get(keyword)
         .expect("nonnegative_bound is called only for a present keyword");
