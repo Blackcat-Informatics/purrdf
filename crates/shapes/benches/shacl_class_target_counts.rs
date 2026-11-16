@@ -12,8 +12,7 @@
 //! child builds the fixture, runs one warm validation, enables the counter,
 //! validates once and disables it. Fixture build, parsing and the warm run are
 //! outside the counted window; worker threads are included. The workload is
-//! `support/class_targets.rs`, shared with the `shacl_focus_class_targets` group
-//! of `validate.rs`. `PURRDF_CLASS_TARGET_SAMPLES` sets the samples per row (3 by
+//! `support/class_targets.rs`. `PURRDF_CLASS_TARGET_SAMPLES` sets the samples per row (3 by
 //! default). Output lines are `count <subjects> samples=<n,...>`.
 
 #[cfg(target_os = "linux")]

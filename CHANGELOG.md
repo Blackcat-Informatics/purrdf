@@ -14,12 +14,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   constraint, property edges run under the caller's own result sink, the
   quad-membership probe plan is built only when a probe needs it, and the
   `xsd:string` family datatype check reads the lexical form without copying it.
-  The end of a matching run in a sorted dataset index is found by a galloping
-  search instead of a second full binary search. Reports, diagnostics and
-  refusals are unchanged. Measured before and after this change on
-  reporter-shaped workloads, validating class-targeted and cross-product shapes
-  retires 30 to 37 percent fewer instructions, and scan-targeted shapes about
-  11 percent fewer.
+  The end of a matching run in a sorted dataset index, and the Datalog
+  subject-run lookup, now share one galloping search, the new public function
+  `purrdf_core::gallop::run_end`: the first index at or after a start whose
+  element fails a predicate that holds on a prefix (a lower bound is
+  `|x| x < key`). Reports, diagnostics and refusals are unchanged. On 183
+  closed class-targeted shapes over 18,100 and 181,000 conforming subjects,
+  validation retires about 32 percent fewer instructions (0.680 and 0.675 of
+  the previous count).
 
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the

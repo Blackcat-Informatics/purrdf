@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The ONE class-targeted validation workload both bench targets read.
+//! The class-targeted validation workload of `shacl_class_target_counts`.
 //!
 //! Many `sh:targetClass` node shapes, each closed and carrying two property
 //! shapes, over subjects spread evenly across the classes. Every subject
