@@ -105,6 +105,10 @@ pub mod graph;
 // evaluation surface, hidden: not a stable API.
 #[doc(hidden)]
 pub mod label32;
+// The canonical labelling of the blank nodes of a set of typed lines,
+// `(nested-refinement-labelling, 1)`: typed lines in, a typed canonical map,
+// canonical line sequence with its digest, and structural record out.
+pub mod canonical_labelling;
 // The one execution-governance vocabulary: stop causes, governed resource
 // dimensions, tripped-governor reports, and evidence. Named by the demand-paging
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,

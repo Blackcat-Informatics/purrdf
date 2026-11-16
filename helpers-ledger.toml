@@ -904,6 +904,14 @@ criterion = "a"
 anchor = "purrdf_datalog::resolve_fol::frame"
 reason = "The tabling call-pattern key is text: a decimal length and a colon before each field, rendered into a String whose frozen spellings the canonical-key tests hold, so its notation cannot become a binary frame."
 
+[[job.variant]]
+symbol = "purrdf_core::canonical_labelling::lines::push_bytes"
+file = "crates/rdf-core/src/canonical_labelling/lines.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_core::canonical_labelling::lines::push_bytes"
+reason = "The canonical labelling's line encoding writes bytes(b) behind a big-endian u64 length, as its definition requires so that integers compare numerically bytewise; the encoding enters every certificate, component identity and line digest, so the little-endian workspace frame would change published values."
+
 [[job]]
 id = "le-bytes"
 summary = "Fixed-width little-endian integers read from and written into byte buffers at an offset, bounds-checked"

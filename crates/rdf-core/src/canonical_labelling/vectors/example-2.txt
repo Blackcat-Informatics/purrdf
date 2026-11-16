@@ -1,0 +1,162 @@
+top component 0 (offset 0): nodes a b c
+  start line cells, encodings with every leaf free, in colour order:
+    4004010000000000000001700420
+  refinement of the fresh start:
+    start N=[a,b,c] L=[L1,L2,L3] Q=(0,0)(1,0)
+    pop(0,0) N=[a,b,c] L=[L1,L2,L3] Q=(1,0)
+    pop(1,0) N=[a,b,c] L=[L1,L2,L3] Q=-
+  call structure:
+    call: rule 3, p 0, target cell a b c, attaining 3, one twin class false
+      child a:
+          indiv(a) N=[a][b,c] L=[L1,L2,L3] Q=(0,0)
+          pop(0,0) N=[a][b,c] L=[L2][L1][L3] Q=(1,1)(1,2)
+          pop(1,1) N=[a][c][b] L=[L2][L1][L3] Q=(0,2)(1,2)
+          pop(0,2) N=[a][c][b] L=[L2][L1][L3] Q=(1,2)
+          pop(1,2) N=[a][c][b] L=[L2][L1][L3] Q=-
+        certificate 000000000000000300000000000000030000000000000001400500000000000000010100000000000000017005000000
+                    000000000020000000000000000240050000000000000000010000000000000001700500000000000000022000000000
+                    000000024005000000000000000201000000000000000170050000000000000001200000000000000000
+        rule 1, p 0, s 3, fixes a 0, c 1, b 2; units REFINE 8, FIX 12, ENTRIES 15
+          entry m 1: 400500000000000000010100000000000000017005000000000000000020
+          entry m 2: 400500000000000000000100000000000000017005000000000000000220
+          entry m 2: 400500000000000000020100000000000000017005000000000000000120
+      child b:
+          indiv(b) N=[b][a,c] L=[L1,L2,L3] Q=(0,0)
+          pop(0,0) N=[b][a,c] L=[L3][L2][L1] Q=(1,1)(1,2)
+          pop(1,1) N=[b][a][c] L=[L3][L2][L1] Q=(0,2)(1,2)
+          pop(0,2) N=[b][a][c] L=[L3][L2][L1] Q=(1,2)
+          pop(1,2) N=[b][a][c] L=[L3][L2][L1] Q=-
+        certificate equal to that of child a; fixes b 0, a 1, c 2
+      child c:
+          indiv(c) N=[c][a,b] L=[L1,L2,L3] Q=(0,0)
+          pop(0,0) N=[c][a,b] L=[L1][L3][L2] Q=(1,1)(1,2)
+          pop(1,1) N=[c][b][a] L=[L1][L3][L2] Q=(0,2)(1,2)
+          pop(0,2) N=[c][b][a] L=[L1][L3][L2] Q=(1,2)
+          pop(1,2) N=[c][b][a] L=[L1][L3][L2] Q=-
+        certificate equal to that of child a; fixes c 0, b 1, a 2
+  certificate 000000000000000300000000000000030000000000000001400500000000000000010100000000000000017005000000
+              000000000020000000000000000240050000000000000000010000000000000001700500000000000000022000000000
+              000000024005000000000000000201000000000000000170050000000000000001200000000000000000
+  identity    0642fe795c2b0f0ac68c93348399d176cbd6666baf179e35f5da142aaa8dc857
+  copy index  0
+  allowance   S 9, O 6, M 6, V 6, W 18, A 156
+  twin units  9
+  record:
+    blank_nodes 3
+    lines 3
+    label_elements 6
+    incidences 6
+    line_bytes 42
+    singled_out 0
+    unsettled 3
+    largest_cell present(3)
+    forest false
+    calls [0, 0, 1]
+    chosen_children [1, 0]
+    target_sizes [3]
+    attaining [3]
+    nestings []
+    nesting_depth 0
+    branching_depth 1
+    units [9, 20, 12, 15]
+    allowance 156
+    group_order [(attain, 3, 1)]
+top component 1 (offset 3): nodes x y z
+  start line cells, encodings with every leaf free, in colour order:
+    4004010000000000000001700420
+  refinement of the fresh start:
+    start N=[x,y,z] L=[L4,L5,L6] Q=(0,0)(1,0)
+    pop(0,0) N=[x,y,z] L=[L4,L5,L6] Q=(1,0)
+    pop(1,0) N=[x,y,z] L=[L4,L5,L6] Q=-
+  call structure:
+    call: rule 3, p 0, target cell x y z, attaining 3, one twin class false
+      child x:
+          indiv(x) N=[x][y,z] L=[L4,L5,L6] Q=(0,0)
+          pop(0,0) N=[x][y,z] L=[L5][L4][L6] Q=(1,1)(1,2)
+          pop(1,1) N=[x][z][y] L=[L5][L4][L6] Q=(0,2)(1,2)
+          pop(0,2) N=[x][z][y] L=[L5][L4][L6] Q=(1,2)
+          pop(1,2) N=[x][z][y] L=[L5][L4][L6] Q=-
+        certificate 000000000000000300000000000000030000000000000001400500000000000000010100000000000000017005000000
+                    000000000020000000000000000240050000000000000000010000000000000001700500000000000000022000000000
+                    000000024005000000000000000201000000000000000170050000000000000001200000000000000000
+        rule 1, p 0, s 3, fixes x 0, z 1, y 2; units REFINE 8, FIX 12, ENTRIES 15
+          entry m 1: 400500000000000000010100000000000000017005000000000000000020
+          entry m 2: 400500000000000000000100000000000000017005000000000000000220
+          entry m 2: 400500000000000000020100000000000000017005000000000000000120
+      child y:
+          indiv(y) N=[y][x,z] L=[L4,L5,L6] Q=(0,0)
+          pop(0,0) N=[y][x,z] L=[L6][L5][L4] Q=(1,1)(1,2)
+          pop(1,1) N=[y][x][z] L=[L6][L5][L4] Q=(0,2)(1,2)
+          pop(0,2) N=[y][x][z] L=[L6][L5][L4] Q=(1,2)
+          pop(1,2) N=[y][x][z] L=[L6][L5][L4] Q=-
+        certificate equal to that of child x; fixes y 0, x 1, z 2
+      child z:
+          indiv(z) N=[z][x,y] L=[L4,L5,L6] Q=(0,0)
+          pop(0,0) N=[z][x,y] L=[L4][L6][L5] Q=(1,1)(1,2)
+          pop(1,1) N=[z][y][x] L=[L4][L6][L5] Q=(0,2)(1,2)
+          pop(0,2) N=[z][y][x] L=[L4][L6][L5] Q=(1,2)
+          pop(1,2) N=[z][y][x] L=[L4][L6][L5] Q=-
+        certificate equal to that of child x; fixes z 0, y 1, x 2
+  certificate 000000000000000300000000000000030000000000000001400500000000000000010100000000000000017005000000
+              000000000020000000000000000240050000000000000000010000000000000001700500000000000000022000000000
+              000000024005000000000000000201000000000000000170050000000000000001200000000000000000
+  identity    0642fe795c2b0f0ac68c93348399d176cbd6666baf179e35f5da142aaa8dc857
+  copy index  1
+  allowance   S 9, O 6, M 6, V 6, W 18, A 156
+  twin units  9
+  record:
+    blank_nodes 3
+    lines 3
+    label_elements 6
+    incidences 6
+    line_bytes 42
+    singled_out 0
+    unsettled 3
+    largest_cell present(3)
+    forest false
+    calls [0, 0, 1]
+    chosen_children [1, 0]
+    target_sizes [3]
+    attaining [3]
+    nestings []
+    nesting_depth 0
+    branching_depth 1
+    units [9, 20, 12, 15]
+    allowance 156
+    group_order [(attain, 3, 1)]
+positions and stable identities (top component, local position, copy index):
+  a  position 0  (0, 0, 0)
+  c  position 1  (0, 1, 0)
+  b  position 2  (0, 2, 0)
+  x  position 3  (1, 0, 1)
+  z  position 4  (1, 1, 1)
+  y  position 5  (1, 2, 1)
+canonical line sequence:
+  0  400500000000000000000100000000000000017005000000000000000220
+  1  400500000000000000010100000000000000017005000000000000000020
+  2  400500000000000000020100000000000000017005000000000000000120
+  3  400500000000000000030100000000000000017005000000000000000520
+  4  400500000000000000040100000000000000017005000000000000000320
+  5  400500000000000000050100000000000000017005000000000000000420
+digest aad8fba9f3f9b55f69d2d2d7bdbc48f43f5164eaec2b947ce5870077c50501fd
+record of the whole input:
+  top_components 2
+  size_histogram [(1, 2)]
+  single_node_components 0
+  blank_nodes 6
+  label_elements 12
+  incidences 12
+  singled_out 0
+  unsettled 6
+  blank_bearing_lines 6
+  blank_bearing_bytes 84
+  calls [0, 0, 2]
+  chosen_children [2, 0]
+  units [18, 40, 30, 30]
+  allowance 318
+  top_multiplicities [2]
+  group_order [(attain, 3, 2), (sym, 2, 1)]
+  broken_by [(0, 3, 3, 3), (0, 3, 3, 3)]
+  guaranteed false
+diagnostic [((0, 3, 3, 3), a, a), ((0, 3, 3, 3), x, x)]
+units over the reference tree: START 18, REFINE 72, FIX 78, ENTRIES 90; comparison units 60
