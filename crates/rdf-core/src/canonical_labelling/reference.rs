@@ -610,10 +610,10 @@ impl<'a> Engine<'a> {
             .collect();
         holding.sort_unstable();
         holding.dedup();
-        // TWIN CHARGE (decided for revision 3.5, replacing 3.4's "a test that
-        // fails stops at the first line whose image is missing"): every test,
-        // passing or failing, is charged the start charge of every line that
-        // holds `u` or `w`, so twin units are a function of the input.
+        // TWIN UNITS (7.10, 8.1(f)): a test, passing or failing, is charged
+        // the start charge of every line that holds `u` or `w`; the outcome
+        // and the order of the lines play no part. The figure depends on the
+        // pairs tested, hence on the source order: an engine figure only.
         let charge: u64 = holding.iter().map(|&l| self.start_charge[l]).sum();
         self.twin_units += charge;
         self.limited += charge;

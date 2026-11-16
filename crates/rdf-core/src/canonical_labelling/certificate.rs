@@ -14,7 +14,9 @@ pub enum EntryToken {
     Tag(u8),
     /// The annotation count.
     Count(u64),
-    /// A constant leaf, by its encoding.
+    /// The number of terms of a record.
+    Length(u64),
+    /// A constant leaf or a record's payload, by its encoding.
     Constant(Box<[u8]>),
     /// A blank leaf fixed at a path position.
     Fixed(u64),
@@ -132,6 +134,7 @@ fn rebuild_into(
             tokens.push(match token {
                 EntryToken::Tag(tag) => Tok::Tag(*tag),
                 EntryToken::Count(count) => Tok::Count(*count),
+                EntryToken::Length(n) => Tok::Len(*n),
                 EntryToken::Constant(encoding) => Tok::Const(interner.constant(encoding)),
                 EntryToken::Fixed(q) => {
                     if *q >= bound {
@@ -176,6 +179,10 @@ pub(crate) fn entry_of(set: &LineSet, line: usize, positions: &[u64]) -> Entry {
             Tok::Count(count) => {
                 encoding.extend_from_slice(&count.to_be_bytes());
                 tokens.push(EntryToken::Count(count));
+            }
+            Tok::Len(n) => {
+                encoding.extend_from_slice(&n.to_be_bytes());
+                tokens.push(EntryToken::Length(n));
             }
             Tok::Const(c) => {
                 let bytes = &set.consts[c];

@@ -132,6 +132,43 @@ fn every_kind() -> Vec<Line> {
     ]
 }
 
+/// `record("payload", [terms])` in the examples' notation.
+fn record(payload: &str, terms: &[Term]) -> Line {
+    Line::Record {
+        payload: payload.as_bytes().into(),
+        terms: terms.to_vec(),
+    }
+}
+
+/// The directed 4-cycle of 12.8 to 12.10, with the records on the nodes named.
+fn cycle_with_records(on: &[&str]) -> Vec<Line> {
+    let mut lines = quads(&[
+        ("a", "<p>", "b"),
+        ("b", "<p>", "c"),
+        ("c", "<p>", "d"),
+        ("d", "<p>", "a"),
+    ]);
+    lines.extend(on.iter().map(|&n| record("m", &[term(n)])));
+    lines
+}
+
+fn empty_records() -> Vec<Line> {
+    let mut lines = quads(&[("a", "<p>", "b"), ("b", "<p>", "a")]);
+    lines.push(record("n", &[]));
+    lines.push(record("", &[term("a")]));
+    lines
+}
+
+fn record_only_nodes() -> Vec<Line> {
+    vec![
+        quad("a", "<p>", "b"),
+        record(
+            "t",
+            &[term("x"), Term::triple(term("y"), term("<p>"), term("x"))],
+        ),
+    ]
+}
+
 /// Each block of section 12: its file, its input, and whether it is printed
 /// in full or abbreviated (identities, map, lines and digest only).
 fn blocks() -> Vec<(&'static str, &'static str, Vec<Line>, bool)> {
@@ -198,6 +235,36 @@ fn blocks() -> Vec<(&'static str, &'static str, Vec<Line>, bool)> {
             "example-7",
             include_str!("vectors/example-7.txt"),
             every_kind(),
+            true,
+        ),
+        (
+            "example-8",
+            include_str!("vectors/example-8.txt"),
+            cycle_with_records(&["a"]),
+            true,
+        ),
+        (
+            "example-9",
+            include_str!("vectors/example-9.txt"),
+            cycle_with_records(&["a", "b"]),
+            true,
+        ),
+        (
+            "example-10",
+            include_str!("vectors/example-10.txt"),
+            cycle_with_records(&["a", "c"]),
+            true,
+        ),
+        (
+            "example-11",
+            include_str!("vectors/example-11.txt"),
+            empty_records(),
+            true,
+        ),
+        (
+            "example-12",
+            include_str!("vectors/example-12.txt"),
+            record_only_nodes(),
             true,
         ),
     ]
@@ -1037,8 +1104,14 @@ fn relabel(lines: &[Line], seed: u64) -> Vec<Line> {
         let k = sources.binary_search(&source).expect("node");
         Term::Blank((pi[k] as u64).to_be_bytes().into())
     };
-    let r = |t: &Term| rename_term(t, &rename);
-    let renamed: Vec<Line> = lines
+    let renamed = rename_lines(lines, &rename);
+    tau.into_iter().map(|i| renamed[i].clone()).collect()
+}
+
+/// `lines` with every blank leaf, at any depth, renamed by `rename`.
+fn rename_lines(lines: &[Line], rename: &dyn Fn(&[u8]) -> Term) -> Vec<Line> {
+    let r = |t: &Term| rename_term(t, rename);
+    lines
         .iter()
         .map(|line| match line {
             Line::Quad {
@@ -1075,9 +1148,95 @@ fn relabel(lines: &[Line], seed: u64) -> Vec<Line> {
                 graph: graph.as_ref().map(r),
             },
             Line::EmptyGraph(g) => Line::EmptyGraph(r(g)),
+            Line::Record { payload, terms } => Line::Record {
+                payload: payload.clone(),
+                terms: terms.iter().map(r).collect(),
+            },
         })
-        .collect();
-    tau.into_iter().map(|i| renamed[i].clone()).collect()
+        .collect()
+}
+
+/// Lemma I (7.9): an input whose blank nodes are renamed `u64(pos(b))`, a
+/// naming increasing in the source order, is labelled by the identity map,
+/// whatever its line order: the node named `u64(i)` takes the position `i`
+/// and the identity of the node of position `i`, and the canonical line
+/// sequence, digest, certificates and record are those of the input.
+#[test]
+fn an_input_renamed_by_its_positions_is_labelled_by_the_identity() {
+    for lines in corpus() {
+        let (set, first) = label(&lines);
+        let rename = |source: &[u8]| {
+            let node = (0..set.blank_nodes())
+                .find(|&b| set.source(b) == source)
+                .expect("node");
+            Term::Blank(first.placements[node].position.to_be_bytes().into())
+        };
+        let mut renamed = rename_lines(&lines, &rename);
+        renamed.reverse();
+        let (again_set, again) = label(&renamed);
+        let mut by_position = vec![None; set.blank_nodes()];
+        for (node, placement) in first.placements.iter().enumerate() {
+            by_position[usize::try_from(placement.position).expect("small")] = Some(node);
+        }
+        for (node, placement) in again.placements.iter().enumerate() {
+            let i = u64::from_be_bytes(again_set.source(node).try_into().expect("u64 name"));
+            assert_eq!(placement.position, i);
+            let original = by_position[usize::try_from(i).expect("small")].expect("position");
+            assert_eq!(placement.identity, first.placements[original].identity);
+        }
+        assert_eq!(again.lines, first.lines);
+        assert_eq!(again.digest, first.digest);
+        assert_eq!(again.record, first.record);
+        let certificates = |l: &Labelled| -> Vec<_> {
+            l.components.iter().map(|c| c.certificate.clone()).collect()
+        };
+        assert_eq!(certificates(&again), certificates(&first));
+    }
+}
+
+/// Twin units are determined by the input as given, not by its isomorphism
+/// class: which pairs the search-free run tests depends on the source order.
+/// Two namings of one directed 4-cycle test adjacent nodes (three lines hold
+/// them: 9 units) or opposite ones (four lines: 12 units), while the record,
+/// the canonical line sequence and the digest, which hold no twin unit, are
+/// equal.
+#[test]
+fn twin_units_follow_the_source_order_and_nothing_else_does() {
+    let adjacent = quads(&[
+        ("a", "<p>", "b"),
+        ("b", "<p>", "c"),
+        ("c", "<p>", "d"),
+        ("d", "<p>", "a"),
+    ]);
+    let opposite = quads(&[
+        ("a", "<p>", "c"),
+        ("c", "<p>", "b"),
+        ("b", "<p>", "d"),
+        ("d", "<p>", "a"),
+    ]);
+    let ((_, first), (_, second)) = (label(&adjacent), label(&opposite));
+    assert_eq!((first.twin_units, second.twin_units), (9, 12));
+    assert_eq!(first.record, second.record);
+    assert_eq!(first.lines, second.lines);
+    assert_eq!(first.digest, second.digest);
+}
+
+/// The empty input (3.3) is well formed and labelled: no component, an empty
+/// canonical line sequence with the digest of `u64(0)`, zero in every number
+/// of the record, the empty list in every list, and `guaranteed`.
+#[test]
+fn the_empty_input_is_labelled() {
+    let (_, l) = label(&[]);
+    assert!(l.lines.is_empty() && l.components.is_empty() && l.placements.is_empty());
+    assert_eq!(
+        hex::encode(&l.digest),
+        "bf4b40a613c1cc97ababeccefc1c1c810dde52818d8928603f2180376f06fb5e"
+    );
+    let empty = super::Record {
+        guaranteed: true,
+        ..super::Record::default()
+    };
+    assert_eq!(l.record, empty);
 }
 
 /// Property 1 (test `relabel`): twenty relabellings with line reorderings
@@ -1169,6 +1328,38 @@ fn ill_formed_inputs_get_their_typed_refusal_and_neighbours_pass() {
         refusal(&[quad("a", "<p>", "c"), quad("a", "<p>", "c")]),
         repeated
     );
+    // A record is compared whole, the order of its list included; the kind
+    // is part of the line.
+    let (a, b) = (term("a"), term("b"));
+    assert_eq!(
+        refusal(&[
+            record("m", std::slice::from_ref(&a)),
+            record("m", std::slice::from_ref(&a))
+        ]),
+        repeated
+    );
+    assert_eq!(
+        refusal(&[
+            record("m", &[a.clone(), b.clone()]),
+            record("m", &[b, a.clone()])
+        ]),
+        None
+    );
+    assert_eq!(
+        refusal(&[record("m", std::slice::from_ref(&a)), record("", &[a])]),
+        None
+    );
+    let same_fields = [
+        quad("a", "<p>", "c"),
+        Line::Annotation {
+            count: 1,
+            reifier: term("a"),
+            predicate: term("<p>"),
+            object: term("c"),
+            graph: None,
+        },
+    ];
+    assert_eq!(refusal(&same_fields), None);
     // The smallest code wins: slot (0) before repeated (2).
     assert_eq!(
         refusal(&[annotation(1), annotation(2), quad("a", "b", "c")]),

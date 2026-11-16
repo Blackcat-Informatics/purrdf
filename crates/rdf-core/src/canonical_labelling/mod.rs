@@ -307,7 +307,9 @@ pub enum Refusal {
         source: Box<[u8]>,
         /// Engine-specific: its node count.
         nodes: u64,
-        /// Engine-specific: the limited units spent.
+        /// Engine-specific: the limited units spent; determined by the engine
+        /// and the input as given, source identifiers included, and NOT a
+        /// property of the dataset.
         units: u64,
     },
 }
@@ -341,6 +343,9 @@ pub struct Component {
     /// The certificate of its top call.
     pub certificate: Certificate,
     /// Engine figure: the twin units the search-free run spent on it.
+    /// NOT a property of the dataset and NOT part of the structural record: an
+    /// engine figure determined by the input as given, source identifiers
+    /// included, which differs between relabellings of one dataset.
     pub twin_units: u64,
     /// `W` of its allowance: over its lines, distinct nodes times start charge.
     pub w: u64,
@@ -361,11 +366,21 @@ pub struct Labelled {
     pub record: Record,
     /// The diagnostic part: failures with their sources, ascending.
     pub diagnostic: Vec<FailureDiagnostic>,
-    /// Engine figures: units over the calls the engine explored.
+    /// Engine figure: units over the calls the engine explored.
+    /// NOT a property of the dataset and NOT part of the structural record: an
+    /// engine figure determined by the input as given, source identifiers
+    /// included, which differs between relabellings of one dataset.
     pub explored: Units,
-    /// Engine figures: twin units of the search-free run.
+    /// Engine figure: twin units of the search-free run (8.1(f)).
+    /// NOT a property of the dataset and NOT part of the structural record: an
+    /// engine figure determined by the input as given, source identifiers
+    /// included, which differs between relabellings of one dataset.
     pub twin_units: u64,
-    /// Engine figures: comparison units (8.1(e)) of the explored calls.
+    /// Engine figure: comparison units (8.1(e)) of the explored calls under
+    /// the reference method of the worked examples.
+    /// NOT a property of the dataset and NOT part of the structural record: an
+    /// engine figure determined by the input as given, source identifiers
+    /// included, which differs between relabellings of one dataset.
     pub comparison_units: u64,
 }
 

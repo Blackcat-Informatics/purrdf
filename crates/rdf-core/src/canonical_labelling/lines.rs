@@ -106,7 +106,7 @@ impl Term {
     }
 }
 
-/// A line: one of the four kinds. A graph slot of `None` is the default graph.
+/// A line: one of the five kinds. A graph slot of `None` is the default graph.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Line {
     /// One statement.
@@ -144,6 +144,15 @@ pub enum Line {
     },
     /// The named graph of this name is in the dataset and is empty.
     EmptyGraph(Term),
+    /// A caller's record: an opaque payload, compared whole and never read,
+    /// and an ordered list of terms whose blank leaves are occurrences like
+    /// any other. It denotes nothing in RDF: no graph slot, no part in W5.
+    Record {
+        /// The payload; may be empty.
+        payload: Box<[u8]>,
+        /// The terms, in order; may be empty.
+        terms: Vec<Term>,
+    },
 }
 
 /// The kind tags of the definition's closed list of lines.
@@ -157,6 +166,8 @@ pub enum Kind {
     Annotation = 0x42,
     /// `empty-graph`.
     EmptyGraph = 0x43,
+    /// `record`.
+    Record = 0x44,
 }
 
 /// The variant of a term held by an `empty-graph` line and carried by another
@@ -228,6 +239,9 @@ pub(crate) enum Tok {
     Tag(u8),
     /// The annotation count.
     Count(u64),
+    /// The number of terms of a record. Not the annotation count: W3, which
+    /// ignores the count, compares it like any field.
+    Len(u64),
     /// An interned constant leaf, by index into the constant table.
     Const(usize),
     /// A blank leaf, by node index.
@@ -298,7 +312,7 @@ impl LineSet {
             .iter()
             .map(|t| match t {
                 Tok::Tag(_) => 1,
-                Tok::Count(_) => 8,
+                Tok::Count(_) | Tok::Len(_) => 8,
                 Tok::Const(c) => self.consts[*c].len() as u64,
                 Tok::Blank(_) => 1,
             })
@@ -316,7 +330,7 @@ pub(crate) fn encode_tokens(
     for token in tokens {
         match *token {
             Tok::Tag(tag) => out.push(tag),
-            Tok::Count(count) => out.extend_from_slice(&count.to_be_bytes()),
+            Tok::Count(n) | Tok::Len(n) => out.extend_from_slice(&n.to_be_bytes()),
             Tok::Const(c) => out.extend_from_slice(&consts[c]),
             Tok::Blank(b) => match leaf(b) {
                 Leaf::Free => out.push(TAG_FREE),
@@ -492,6 +506,19 @@ impl Interner {
                 out.push(Tok::Tag(Kind::EmptyGraph as u8));
                 self.term(term, &mut out);
             }
+            Line::Record { payload, terms } => {
+                out.push(Tok::Tag(Kind::Record as u8));
+                // The payload is one constant whose encoding is
+                // `bytes(payload)`; only the tokens of a record's payload
+                // slot ever hold it, so it is never compared with a leaf.
+                let mut encoding = Vec::with_capacity(8 + payload.len());
+                push_bytes(&mut encoding, payload);
+                out.push(Tok::Const(self.constant(&encoding)));
+                out.push(Tok::Len(terms.len() as u64));
+                for term in terms {
+                    self.term(term, &mut out);
+                }
+            }
         }
         out
     }
@@ -522,7 +549,8 @@ pub(crate) fn admit<'a>(lines: impl IntoIterator<Item = &'a Line>) -> Admission 
         let slots_ok = match line {
             Line::Quad { predicate, .. } | Line::Annotation { predicate, .. } => iri(predicate),
             Line::ReifierBinding { triple, .. } => matches!(triple, Term::Triple(_)),
-            Line::EmptyGraph(_) => true,
+            // Every term of a record's list admits every variant.
+            Line::EmptyGraph(_) | Line::Record { .. } => true,
         };
         if !slots_ok {
             note(InputReason::Slot);
@@ -551,7 +579,12 @@ pub(crate) fn admit<'a>(lines: impl IntoIterator<Item = &'a Line>) -> Admission 
                 carried.push(graph_tokens(g, &mut interner));
             }
             Line::EmptyGraph(g) => empties.push(graph_tokens(g, &mut interner)),
-            _ => {}
+            // No graph slot, or the default graph; a record denotes nothing
+            // and takes no part in W5.
+            Line::Quad { graph: None, .. }
+            | Line::ReifierBinding { graph: None, .. }
+            | Line::Annotation { graph: None, .. }
+            | Line::Record { .. } => {}
         }
         interner.set.lines.push(tokens.into_boxed_slice());
     }
