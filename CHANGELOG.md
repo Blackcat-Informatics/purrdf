@@ -23,9 +23,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   dataset view with its records into lines, and `write_label` spells a
   position as a decimal blank-node label. `compare_view` runs the present
   form and the labelling over one view under a caller's control, returning the
-  view's own read error, a refusal, or a stop as distinct typed outcomes; it
-  is hidden until it has an admitted form. The earlier hidden evaluation
-  module and its example are removed.
+  view's own read error, a refusal, or a stop as distinct typed outcomes, and
+  `compare_view_with_memory` does the same with the labelling's working state
+  admitted once, before the engine starts, through the caller's allocation
+  admission. The engine stops a child of a branching call as soon as its
+  certificate is known to be greater than the best so far, and skips a child
+  that a checked automorphism of the call maps onto an explored child. The
+  earlier hidden evaluation module and its example are removed.
 
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the

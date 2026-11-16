@@ -32,7 +32,7 @@ fn term(name: &str) -> Term {
     }
 }
 
-fn quad(s: &str, p: &str, o: &str) -> Line {
+pub(super) fn quad(s: &str, p: &str, o: &str) -> Line {
     Line::Quad {
         subject: term(s),
         predicate: term(p),
@@ -171,7 +171,7 @@ fn record_only_nodes() -> Vec<Line> {
 
 /// Each block of section 12: its file, its input, and whether it is printed
 /// in full or abbreviated (identities, map, lines and digest only).
-fn blocks() -> Vec<(&'static str, &'static str, Vec<Line>, bool)> {
+pub(super) fn blocks() -> Vec<(&'static str, &'static str, Vec<Line>, bool)> {
     let mut five_b = leaves();
     five_b.push(quad("<s>", "<p>", "xm"));
     let roles_g1 = ["a1", "a2", "b1", "b2"];
@@ -698,7 +698,7 @@ fn group_order(group: &[Factor]) -> u64 {
 }
 
 /// `quad(x, <p>, y)` and `quad(y, <p>, x)` for every edge `{x, y}`.
-fn both_directions(edges: &[(String, String)]) -> Vec<Line> {
+pub(super) fn both_directions(edges: &[(String, String)]) -> Vec<Line> {
     let mut lines = Vec::new();
     for (x, y) in edges {
         lines.push(quad(x, "<p>", y));
@@ -732,7 +732,7 @@ fn twisted_bipartite() -> Vec<Line> {
     lines
 }
 
-fn hub(triangle: bool) -> Vec<Line> {
+pub(super) fn hub(triangle: bool) -> Vec<Line> {
     let mut lines = quads(&[("h", "<p>", "a"), ("h", "<p>", "b"), ("h", "<p>", "c")]);
     if triangle {
         lines.extend(quads(&[
@@ -783,7 +783,7 @@ fn cube_both_directions() -> Vec<Line> {
     both_directions(&edges)
 }
 
-fn quadratic_residue_13(prefix: &str) -> Vec<Line> {
+pub(super) fn quadratic_residue_13(prefix: &str) -> Vec<Line> {
     let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
     let mut edges = Vec::new();
     for u in 0..13 {
@@ -825,7 +825,7 @@ fn nested_instance() -> Vec<Line> {
     lines
 }
 
-fn failure_record(p: u64, tied: u64, nodes: u64, lines: u64) -> FailureRecord {
+pub(super) fn failure_record(p: u64, tied: u64, nodes: u64, lines: u64) -> FailureRecord {
     FailureRecord {
         path_position: p,
         tied_cell: tied,
@@ -1027,7 +1027,7 @@ fn a_limit_refusal_names_the_first_failure_of_every_component() {
 }
 
 /// Every input of the shared corpus this module runs.
-fn corpus() -> Vec<Vec<Line>> {
+pub(super) fn corpus() -> Vec<Vec<Line>> {
     let mut out: Vec<Vec<Line>> = blocks().into_iter().map(|(_, _, lines, _)| lines).collect();
     out.extend([
         complete_bipartite_one_direction(3),
@@ -1093,7 +1093,7 @@ fn rename_term(term: &Term, rename: &dyn Fn(&[u8]) -> Term) -> Term {
 /// The lines with the node numbered `k` (ascending source identifier)
 /// renamed `u64(pi[k])`, and the line at place `i` the input's line
 /// `tau[i]`, both permutations drawn from `S(seed)`.
-fn relabel(lines: &[Line], seed: u64) -> Vec<Line> {
+pub(super) fn relabel(lines: &[Line], seed: u64) -> Vec<Line> {
     let set = admit(lines).expect("well formed");
     let mut sources: Vec<&[u8]> = (0..set.blank_nodes()).map(|b| set.source(b)).collect();
     sources.sort_unstable();

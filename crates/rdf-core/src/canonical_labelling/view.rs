@@ -36,8 +36,10 @@ use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
     Tok, iri_encoding, literal_encoding,
 };
-use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, reference};
+use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::governor::is_stopped;
+use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
+
 use crate::{
     CanonError, CanonHash, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
     StopSignal, TermLookupError, TermValue, try_canonical_sha256_view,
@@ -95,6 +97,9 @@ pub enum ViewError<E> {
     /// not a refusal of the definition: the input was neither accepted nor
     /// refused.
     Stopped,
+    /// The caller's admission refused the working state of the labelling
+    /// ([`compare_view_with_memory`]); nothing was labelled.
+    Storage(StorageError),
 }
 
 impl<E: fmt::Display> fmt::Display for ViewError<E> {
@@ -110,6 +115,9 @@ impl<E: fmt::Display> fmt::Display for ViewError<E> {
                 )
             }
             Self::Stopped => f.write_str("the labelling was stopped by the caller"),
+            Self::Storage(error) => {
+                write!(f, "the labelling's working state was not admitted: {error}")
+            }
         }
     }
 }
@@ -118,6 +126,7 @@ impl<E: std::error::Error + 'static> std::error::Error for ViewError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Read(error) => Some(error),
+            Self::Storage(error) => Some(error),
             Self::ForeignId | Self::Refused(_) | Self::Stopped => None,
         }
     }
@@ -371,6 +380,10 @@ pub struct Comparison<E> {
     pub lines: LineSet,
     /// The labelling of `lines`.
     pub labelled: Labelled,
+    /// The bytes admitted through the caller's [`Memory`] for this comparison
+    /// by [`compare_view_with_memory`], to be released when the comparison is
+    /// dropped; zero from [`compare_view`].
+    pub admitted_bytes: usize,
 }
 
 /// Run the present canonical form under `present` and the labelling over the
@@ -394,13 +407,13 @@ pub struct Comparison<E> {
 /// a dataset read back from those decimal labels as names is not promised the
 /// identity map of the definition's Lemma I, because `10` precedes `2` bytewise.
 ///
-/// The entry has no admitted form yet, so it is hidden.
+/// The labelling does not meter its storage; use [`compare_view_with_memory`]
+/// where the caller admits the working state of a computation.
 ///
 /// # Errors
 /// [`ViewError::Read`] with the view's own error; [`ViewError::ForeignId`];
 /// [`ViewError::Refused`] with the typed refusal; [`ViewError::Stopped`] when
 /// the stop signal of `present` is set. Only `Ok` is a completed result.
-#[doc(hidden)]
 pub fn compare_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
@@ -412,13 +425,86 @@ pub fn compare_view<D: DatasetView>(
     let lines = lowered(view, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
-    match reference::label_traced(&lines, limit.get(), false, false, stop) {
-        Ok((labelled, _)) => Ok(Comparison {
+    let labelled = label_lines(&lines, limit, stop)?;
+    Ok(Comparison {
+        present: outcome,
+        lines,
+        labelled,
+        admitted_bytes: 0,
+    })
+}
+
+/// Label admitted lines with the optimised engine.
+fn label_lines<E>(
+    lines: &LineSet,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Labelled, ViewError<E>> {
+    optimised::label_set(
+        lines,
+        limit.get(),
+        false,
+        optimised::Options::PRODUCTION,
+        stop,
+    )
+    .map_err(|halt| match halt {
+        super::Halt::Refused(refusal) => ViewError::Refused(refusal),
+        super::Halt::Stopped => ViewError::Stopped,
+    })
+}
+
+/// [`compare_view`] with the working state of the labelling admitted once,
+/// before the engine starts, through the caller's `memory`.
+///
+/// The grant covers the lowered lines and an upper bound of the arrays the
+/// engine builds for the components and their first calls, proportional to the
+/// incidences, the constant leaf occurrences and the vertices (7.12 of the
+/// definition). A refusal of the admission is [`ViewError::Storage`] and
+/// nothing is labelled. On success the grant stays with the returned
+/// [`Comparison`], whose `admitted_bytes` states it: release that many bytes
+/// when the comparison is dropped. On any other error the grant is returned
+/// before the error is. Lowering the rows, the present canonical form and the
+/// certificates and nested instances held while a search runs are not metered:
+/// the admission is the bound of the up-front working state, and the engine
+/// holds nothing else of that order before it starts.
+///
+/// # Errors
+/// As [`compare_view`], and [`ViewError::Storage`] when the admission refuses
+/// or the sum of the bytes passes the word.
+pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+    view: &D,
+    records: &[Record<'_>],
+    present: &mut CanonicalizationControl<'_>,
+    limit: Limit,
+    memory: &mut Memory<'_, S>,
+) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
+    let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
+    let stop = present.stop_signal();
+    let lines = lowered(view, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    let bytes = lines
+        .footprint_bytes()
+        .zip(optimised::working_bytes(&lines))
+        .and_then(|(held, working)| held.checked_add(working))
+        .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
+    memory.add_bytes(bytes).map_err(ViewError::Storage)?;
+    match label_lines(&lines, limit, stop) {
+        Ok(labelled) => Ok(Comparison {
             present: outcome,
             lines,
             labelled,
+            admitted_bytes: bytes,
         }),
-        Err(super::Halt::Refused(refusal)) => Err(ViewError::Refused(refusal)),
-        Err(super::Halt::Stopped) => Err(ViewError::Stopped),
+        Err(error) => {
+            // A refusal of the refund cannot replace the error that ended the
+            // run: the grant stays outstanding with the caller's account.
+            let _ = memory.release_bytes(bytes);
+            Err(error)
+        }
     }
 }

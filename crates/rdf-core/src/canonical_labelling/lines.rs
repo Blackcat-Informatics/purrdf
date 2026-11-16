@@ -306,6 +306,22 @@ impl LineSet {
         encode_tokens(&self.consts, &self.lines[line], leaf, out);
     }
 
+    /// The bytes the set holds on the heap: constants, source identifiers and
+    /// tokens, `None` when the sum passes the word.
+    pub(crate) fn footprint_bytes(&self) -> Option<usize> {
+        let mut total = 0usize;
+        for bytes in self.consts.iter().chain(&self.nodes) {
+            total = total.checked_add(bytes.len())?;
+        }
+        for line in &self.lines {
+            total = total.checked_add(line.len().checked_mul(size_of::<Tok>())?)?;
+        }
+        total
+            .checked_add(self.consts.len().checked_mul(size_of::<Box<[u8]>>())?)?
+            .checked_add(self.nodes.len().checked_mul(size_of::<Box<[u8]>>())?)?
+            .checked_add(self.lines.len().checked_mul(size_of::<Box<[Tok]>>())?)
+    }
+
     /// The length of the encoding of line `line` with every leaf free.
     pub(crate) fn free_len(&self, line: usize) -> u64 {
         self.lines[line]

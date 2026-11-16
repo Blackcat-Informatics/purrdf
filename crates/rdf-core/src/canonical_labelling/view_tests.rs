@@ -8,12 +8,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use purrdf_lex::allocation::{Ceiling, Memory, Resident, StorageError};
 use purrdf_testkit::error_capture::CallerRefusal;
 
 use super::reference;
 use super::{
     InputReason, Labelled, Limit, Line, LineSet, Record, Refusal, Term, ViewError, admit,
-    compare_view, label, lines_of_view, write_label,
+    compare_view, compare_view_with_memory, label, lines_of_view, write_label,
 };
 use crate::{
     BlankScope, CanonicalizationControl, DatasetView, GraphMatch, QuadIds, RdfDataset,
@@ -445,4 +446,77 @@ fn a_position_is_spelled_as_a_decimal_blank_node_label() {
     assert_eq!(spell(7), "_:7");
     assert_eq!(spell(10), "_:10");
     assert_eq!(spell(u64::MAX), "_:18446744073709551615");
+}
+
+/// 7.12: the working state of the labelling is admitted once, through the
+/// caller's account, before the engine starts. At the exact bound the
+/// comparison completes with the result of the unadmitted entry and holds
+/// precisely the bytes it admitted; one byte under, the admission refuses with
+/// the typed storage outcome and nothing is labelled.
+#[test]
+fn the_working_state_is_admitted_once_and_a_refusal_labels_nothing() {
+    let view = cycle();
+    let plain = compare_view(view.as_ref(), &[], &mut control(), Limit::ENGINE).expect("completes");
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let done = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut memory,
+    )
+    .expect("admitted");
+    assert_eq!(done.labelled.digest, plain.labelled.digest);
+    assert_eq!(done.labelled.placements, plain.labelled.placements);
+    assert_eq!(memory.admitted_bytes(), done.admitted_bytes);
+    let admitted = done.admitted_bytes;
+    assert!(admitted > 0);
+
+    let mut at_bound = Ceiling(admitted);
+    let fits = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut at_bound),
+    );
+    assert!(fits.is_ok());
+    let mut under = Ceiling(admitted - 1);
+    let refused = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut under),
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+}
+
+/// An error after the admission returns the grant before it returns the
+/// error: the account holds nothing once the stop signal ended the run, and
+/// holds the comparison's bytes when the same view completes.
+#[test]
+fn an_admitted_comparison_that_ends_in_an_error_returns_its_grant() {
+    let view = cycle();
+    let flag = Flag::default();
+    let mut ceiling = Ceiling(usize::MAX);
+    let mut memory = Memory::new(&mut ceiling);
+    let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1 << 20), Some(&flag));
+    let done =
+        compare_view_with_memory(view.as_ref(), &[], &mut control, Limit::ENGINE, &mut memory)
+            .expect("completes");
+    assert_eq!(memory.admitted_bytes(), done.admitted_bytes);
+    drop(done);
+    memory
+        .release_bytes(memory.admitted_bytes())
+        .expect("the grant is released");
+    flag.0.store(true, Ordering::Relaxed);
+    let stopped =
+        compare_view_with_memory(view.as_ref(), &[], &mut control, Limit::ENGINE, &mut memory);
+    assert_eq!(stopped.err(), Some(ViewError::Stopped));
+    assert_eq!(memory.admitted_bytes(), 0);
 }

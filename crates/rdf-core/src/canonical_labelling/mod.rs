@@ -27,9 +27,15 @@
 //!
 //! [`reference`] is written for clarity and explores every child of every
 //! branching call it searches; it is the oracle the optimised engine is held to.
+//! The entries of this module run the optimised engine: dense arrays, an
+//! explicit stack of calls, the strict stops of 10.4 and checked automorphisms
+//! (10.1), with the same result.
 
 mod certificate;
 mod lines;
+mod optimised;
+#[cfg(test)]
+mod optimised_tests;
 pub mod reference;
 #[cfg(test)]
 mod tests;
@@ -39,7 +45,9 @@ mod view_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
-pub use view::{Comparison, Record, ViewError, compare_view, lines_of_view};
+pub use view::{
+    Comparison, Record, ViewError, compare_view, compare_view_with_memory, lines_of_view,
+};
 
 use purrdf_hash::Domain;
 use purrdf_lex::term_syntax::write_blank;
@@ -295,6 +303,9 @@ impl Limit {
     /// The limit of the reference engine.
     pub const REFERENCE: Self = Self(reference::ENGINE_LIMIT);
 
+    /// The limit of the optimised engine, which every entry of this module runs.
+    pub const ENGINE: Self = Self(optimised::ENGINE_LIMIT);
+
     /// A limit of `units` limited units.
     #[must_use]
     pub const fn new(units: u64) -> Self {
@@ -315,6 +326,18 @@ pub(crate) enum Halt {
     Refused(Refusal),
     /// The caller's stop signal was set. Not a refusal of the definition.
     Stopped,
+}
+
+impl Halt {
+    /// The refusal of a run that was given no stop signal.
+    pub(crate) fn expect_refusal(self) -> Refusal {
+        match self {
+            Self::Refused(refusal) => refusal,
+            // INVARIANT: an engine reports a stop only when it was given a
+            // signal, and the caller of this function gave none.
+            Self::Stopped => unreachable!("a run with no stop signal was stopped"),
+        }
+    }
 }
 
 /// A refusal: a closed list of typed variants.
@@ -416,11 +439,19 @@ pub struct Labelled {
     /// included, which differs between relabellings of one dataset.
     pub twin_units: u64,
     /// Engine figure: comparison units (8.1(e)) of the explored calls under
-    /// the reference method of the worked examples.
+    /// the reference method of the worked examples; counted by the reference
+    /// engine only, zero from the optimised engine.
     /// NOT a property of the dataset and NOT part of the structural record: an
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.
     pub comparison_units: u64,
+    /// Engine figure: children the strict stop of 10.4 ended on `s`, counted
+    /// at the branching calls of the result path. Zero from an engine that
+    /// explores every child.
+    pub stopped_on_s: u64,
+    /// Engine figure: children the strict stop of 10.4 ended on `E`, counted
+    /// as `stopped_on_s` is.
+    pub stopped_on_e: u64,
 }
 
 /// `bits(v)`: the number of binary digits of `v`.
@@ -440,13 +471,33 @@ pub fn write_label<W: TextOut + ?Sized>(position: u64, out: &mut W) {
     write_blank(&position.to_string(), out);
 }
 
-/// Admit `lines` and label them with the reference engine.
+/// Admit `lines` and label them with the optimised engine.
 ///
 /// # Errors
 /// The typed refusal of the definition when the input is ill formed, a
 /// quantity overflows, or the engine's own limit trips on an input that is
 /// not guaranteed.
 pub fn label(lines: &[Line]) -> Result<(LineSet, Labelled), Refusal> {
+    let set = admit(lines)?;
+    let labelled = optimised::label_set(
+        &set,
+        optimised::ENGINE_LIMIT,
+        false,
+        optimised::Options::PRODUCTION,
+        None,
+    )
+    .map_err(Halt::expect_refusal)?;
+    Ok((set, labelled))
+}
+
+/// Admit `lines` and label them with the reference engine: the definition
+/// written for clarity, exploring every child of every branching call it
+/// searches. It is the oracle the optimised engine of [`label`] is held to; the
+/// two give the same result wherever the optimised engine does not refuse.
+///
+/// # Errors
+/// As [`label`].
+pub fn label_reference(lines: &[Line]) -> Result<(LineSet, Labelled), Refusal> {
     let set = admit(lines)?;
     let labelled = reference::label_set(&set, reference::ENGINE_LIMIT, false)?;
     Ok((set, labelled))
