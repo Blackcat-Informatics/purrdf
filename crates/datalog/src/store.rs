@@ -457,51 +457,6 @@ impl Weight for i64 {
     }
 }
 
-// ── Galloping ───────────────────────────────────────────────────────────────────
-
-/// The first position `>= from` in the strictly-ascending run `xs` whose value is
-/// `>= key`, found by GALLOPING — an exponential probe to bracket the answer, then a
-/// binary search inside the bracket. Never a linear scan and never a hash probe.
-///
-/// This is the sorted-run lower bound the whole arrangement leans on (subject-run
-/// location, object-run location, dedup), and the exact primitive a multiway leapfrog
-/// triejoin composes.
-fn gallop_lower_bound<I: TermIdentity>(xs: &[I], from: usize, key: I) -> usize {
-    let len = xs.len();
-    if from >= len {
-        return len;
-    }
-    if xs[from] >= key {
-        return from;
-    }
-    // Exponential probe: keep `xs[lo] < key`, doubling the stride until `hi` brackets a
-    // value `>= key` (or runs off the end).
-    let mut lo = from;
-    let mut step = 1usize;
-    let hi = loop {
-        let probe = lo.saturating_add(step);
-        if probe >= len {
-            break len;
-        }
-        if xs[probe] >= key {
-            break probe;
-        }
-        lo = probe;
-        step = step.saturating_mul(2);
-    };
-    // The first position `>= key` lies in `(lo, hi]`; binary-search it.
-    let (mut left, mut right) = (lo + 1, hi);
-    while left < right {
-        let mid = left + (right - left) / 2;
-        if xs[mid] >= key {
-            right = mid;
-        } else {
-            left = mid + 1;
-        }
-    }
-    left
-}
-
 // ── Batches ─────────────────────────────────────────────────────────────────────
 
 /// The lazily-built secondary access path for one [`Batch`]: the batch's row positions
@@ -666,7 +621,7 @@ impl<W: Weight, I: TermIdentity> Batch<W, I> {
     /// the sorted `subj` column (subject grouping is contiguous in the primary sort).
     pub(crate) fn subject_run(&self, s: I) -> (usize, usize) {
         let subjects = self.data.column(0);
-        let lo = gallop_lower_bound(subjects, 0, s);
+        let lo = purrdf_core::gallop::run_end(subjects, 0, |&x| x < s);
         // `hi` is the first position past `s`'s contiguous run — a binary search of the
         // sorted suffix, so a `Both` probe stays O(log n) rather than O(run length).
         let hi = lo + subjects[lo..].partition_point(|&x| x <= s);
@@ -5075,36 +5030,6 @@ mod tests {
         assert_eq!(<() as Weight>::UNIT.combine(()), Ok(()));
         assert!(!<() as Weight>::UNIT.is_annihilated());
         assert!(0i64.is_annihilated());
-    }
-
-    /// The galloping lower bound is exactly `partition_point` over the ascending run,
-    /// from every start offset — the property the whole arrangement leans on.
-    #[test]
-    fn gallop_lower_bound_matches_the_linear_lower_bound() {
-        // A run with gaps, so keys both present and absent are exercised.
-        let run: Vec<TermId> = (0..64)
-            .map(|i| TermId::from_index(i * 3).unwrap())
-            .collect();
-        for key_slot in 0..200usize {
-            let key = TermId::from_address(key_slot).unwrap();
-            for from in [0usize, 1, 7, 63, 64] {
-                let expected = from + run[from.min(run.len())..].partition_point(|&x| x < key);
-                assert_eq!(
-                    gallop_lower_bound(&run, from, key),
-                    expected,
-                    "key slot {key_slot} from {from}"
-                );
-            }
-        }
-        // An empty run and an out-of-range start both answer with the length.
-        assert_eq!(
-            gallop_lower_bound(&[], 0, TermId::from_index(0).unwrap()),
-            0
-        );
-        assert_eq!(
-            gallop_lower_bound(&run, 999, TermId::from_index(0).unwrap()),
-            64
-        );
     }
 
     /// The tail's duplicate probe as it was written over `(subject, object, row)`

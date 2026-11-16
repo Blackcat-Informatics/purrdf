@@ -1357,6 +1357,27 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
         plan.warm_unique_values(data)?;
     }
 
+    // The body every focus node is walked against, resolved once for this shape, and
+    // only when there is a focus node to walk it. A recursive run answers through
+    // its fixed point and resolves per question.
+    let plan = if focus_nodes.is_empty() {
+        plan
+    } else {
+        plan.walk_body()?
+    };
+    let body = if !focus_nodes.is_empty()
+        && !plan.shape().deactivated
+        && plan.binding().validation_request().recursion.is_none()
+    {
+        Some(plan.resolve_body()?)
+    } else {
+        None
+    };
+    let plan = match &body {
+        Some(body) => plan.with_body(body),
+        None => plan,
+    };
+
     // One validation owns one ordered governor ledger. Letting focus workers charge that
     // shared state directly would make the first trip and its consumed vector depend on
     // rayon scheduling rather than focus order. Governed validation is therefore serial;

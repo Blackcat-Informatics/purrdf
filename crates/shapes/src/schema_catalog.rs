@@ -8,6 +8,8 @@
 //! emitters. It deliberately is not a second public schema algebra: the public
 //! carrier remains [`CompiledSchema`].
 
+use purrdf_iri::json_pointer::JsonPointer;
+
 use crate::json_model::{Object, Value, ValueKind};
 
 use crate::json_schema::CompiledSchema;
@@ -171,8 +173,8 @@ fn validate_definition_limit(
     Ok(())
 }
 
-pub(crate) fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", pointer_escape(key))
+pub(crate) fn definition_path(key: &str) -> SchemaPath {
+    SchemaPath::root().child("$defs").child(key)
 }
 
 pub(crate) fn reference_key(reference: &str) -> Option<String> {
@@ -185,6 +187,38 @@ pub(crate) fn reference_key(reference: &str) -> Option<String> {
 
 /// An RFC 6901 reference token escaped for a `#/$defs/…` pointer.
 pub(crate) use purrdf_iri::json_pointer::escape_token as pointer_escape;
+
+/// A location inside a schema document, held as its unescaped reference
+/// tokens.
+///
+/// It is written as `#` followed by the RFC 6901 spelling of its tokens: the
+/// form every schema projection reports a location in. A member name holding
+/// `/` or `~` stays one token, escaped only when the location is written.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SchemaPath(JsonPointer);
+
+impl SchemaPath {
+    /// The location of the whole document, written `#`.
+    pub(crate) const fn root() -> Self {
+        Self(JsonPointer::root())
+    }
+
+    /// This location extended by the member name `token`.
+    pub(crate) fn child(&self, token: impl AsRef<str>) -> Self {
+        Self(self.0.child(token.as_ref()))
+    }
+
+    /// This location extended by the array index `index`.
+    pub(crate) fn child_index(&self, index: usize) -> Self {
+        Self(self.0.child_index(index))
+    }
+}
+
+impl std::fmt::Display for SchemaPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
 
 pub(crate) const fn schema_map_keywords() -> &'static [&'static str] {
     &[
@@ -219,7 +253,7 @@ pub(crate) const fn schema_single_keywords() -> &'static [&'static str] {
 fn validate_schema(
     value: &Value,
     definitions: &Object,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<(), SchemaCatalogError> {
     let Value::Object(object) = value else {
         return if value.is_boolean() {
@@ -267,11 +301,7 @@ fn validate_schema(
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an object"))
             })?;
             for (key, child) in children {
-                validate_schema(
-                    child,
-                    definitions,
-                    &format!("{path}/{keyword}/{}", pointer_escape(key)),
-                )?;
+                validate_schema(child, definitions, &path.child(keyword).child(key))?;
             }
         }
     }
@@ -281,13 +311,13 @@ fn validate_schema(
                 SchemaCatalogError::new(format!("{path}/{keyword} must be an array"))
             })?;
             for (index, child) in children.iter().enumerate() {
-                validate_schema(child, definitions, &format!("{path}/{keyword}/{index}"))?;
+                validate_schema(child, definitions, &path.child(keyword).child_index(index))?;
             }
         }
     }
     for keyword in schema_single_keywords() {
         if let Some(child) = object.get(keyword) {
-            validate_schema(child, definitions, &format!("{path}/{keyword}"))?;
+            validate_schema(child, definitions, &path.child(keyword))?;
         }
     }
     Ok(())
@@ -472,7 +502,7 @@ mod tests {
             Some("path/with~token")
         );
         assert_eq!(
-            definition_path("path/with~token"),
+            definition_path("path/with~token").to_string(),
             "#/$defs/path~1with~0token"
         );
     }

@@ -382,18 +382,21 @@ pub(crate) struct RootError {
 }
 
 pub(crate) fn root_result<T>(result: Result<T, ShapesError>) -> Result<T, RootError> {
-    let cause = take_cause();
-    match (result, cause) {
-        (Ok(value), None) => Ok(value),
-        (Err(error), cause) => Err(RootError {
+    // No captured cause is the overwhelming case, and it passes the result through
+    // untouched rather than pairing it with an empty cause.
+    let Some(cause) = take_cause() else {
+        return result.map_err(|error| RootError { error, cause: None });
+    };
+    Err(match result {
+        Err(error) => RootError {
             error,
-            cause: cause.map(Box::new),
-        }),
-        (Ok(_), Some(cause)) => Err(RootError {
+            cause: Some(Box::new(cause)),
+        },
+        Ok(_) => RootError {
             error: cause.clone().into_public().to_string().into(),
             cause: Some(Box::new(cause)),
-        }),
-    }
+        },
+    })
 }
 
 pub(crate) fn restore_root_error(error: RootError) -> ShapesError {

@@ -32,7 +32,7 @@ use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, definition_path, finish_text, is_annotation_keyword,
+    CompiledSchemaCatalog, SchemaPath, definition_path, finish_text, is_annotation_keyword,
     known_schema_keyword, pointer_escape, reference_key, schema_array_keywords,
     schema_map_keywords, schema_single_keywords,
 };
@@ -256,9 +256,9 @@ pub struct GraphqlPackage {
     source_schema_json: String,
     config: GraphqlConfig,
     source_definitions: BTreeMap<String, Value>,
-    representations: BTreeMap<String, Representation>,
+    representations: BTreeMap<SchemaPath, Representation>,
     reference_targets: BTreeMap<String, String>,
-    unions: BTreeMap<String, Vec<UnionMember>>,
+    unions: BTreeMap<SchemaPath, Vec<UnionMember>>,
 }
 
 impl GraphqlPackage {
@@ -398,8 +398,16 @@ pub fn emit_graphql(
         dialect: GRAPHQL_DIALECT.to_owned(),
         schema_name: config.schema_name.clone(),
         definitions: definition_maps,
-        fields: planner.fields.clone(),
-        enum_values: planner.enum_values.clone(),
+        fields: planner
+            .fields
+            .iter()
+            .map(|(path, fields)| (path.to_string(), fields.clone()))
+            .collect(),
+        enum_values: planner
+            .enum_values
+            .iter()
+            .map(|(path, values)| (path.to_string(), values.clone()))
+            .collect(),
         unions: planner.union_maps(),
     };
     let mut name_map_json = crate::json_model::write_pretty(&names.to_json());
@@ -582,22 +590,22 @@ impl CodecDirection {
 struct Planner<'a> {
     definitions: &'a Object,
     config: &'a GraphqlConfig,
-    representations: BTreeMap<String, Representation>,
-    schemas: BTreeMap<String, Value>,
-    objects: BTreeMap<String, ObjectNames>,
-    enums: BTreeMap<String, String>,
-    fields: BTreeMap<String, BTreeMap<String, String>>,
-    enum_values: BTreeMap<String, Vec<GraphqlEnumValueMap>>,
+    representations: BTreeMap<SchemaPath, Representation>,
+    schemas: BTreeMap<SchemaPath, Value>,
+    objects: BTreeMap<SchemaPath, ObjectNames>,
+    enums: BTreeMap<SchemaPath, String>,
+    fields: BTreeMap<SchemaPath, BTreeMap<String, String>>,
+    enum_values: BTreeMap<SchemaPath, Vec<GraphqlEnumValueMap>>,
     used_type_names: BTreeMap<String, String>,
     /// The type names the top-level definitions take (each and its `Input`),
     /// which a nested schema's derived name never takes.
     definition_type_names: BTreeSet<String>,
     reference_targets: BTreeMap<String, String>,
-    unions: BTreeMap<String, Vec<UnionMember>>,
-    union_names: BTreeMap<String, ObjectNames>,
+    unions: BTreeMap<SchemaPath, Vec<UnionMember>>,
+    union_names: BTreeMap<SchemaPath, ObjectNames>,
     ledger: LossLedger,
-    recorded_losses: BTreeSet<(String, String)>,
-    relaxed_fields: BTreeSet<String>,
+    recorded_losses: BTreeSet<(String, SchemaPath)>,
+    relaxed_fields: BTreeSet<SchemaPath>,
 }
 
 impl<'a> Planner<'a> {
@@ -683,7 +691,7 @@ impl<'a> Planner<'a> {
     fn plan_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         base: &str,
         depth: usize,
     ) -> Result<(), GraphqlError> {
@@ -784,7 +792,7 @@ impl<'a> Planner<'a> {
                 self.fields.insert(path.to_owned(), field_map.clone());
 
                 for (source, child) in properties {
-                    let child_path = format!("{path}/properties/{}", pointer_escape(&source));
+                    let child_path = path.child("properties").child(&source);
                     let graphql = field_map
                         .get(&source)
                         .expect("field map covers every property");
@@ -798,7 +806,7 @@ impl<'a> Planner<'a> {
                     .expect("array representation comes from an object schema");
                 if let Some(items) = object.get("items") {
                     let child_base = graphql_type_name(&format!("{base} item"), "ArrayItem");
-                    self.plan_schema(items, &format!("{path}/items"), &child_base, depth + 1)?;
+                    self.plan_schema(items, &path.child("items"), &child_base, depth + 1)?;
                 }
             }
             Representation::Union => {
@@ -817,7 +825,7 @@ impl<'a> Planner<'a> {
                         graphql_type_name(&format!("{base} {}", member.input_field), "Alternative");
                     self.plan_schema(
                         &branches[member.branch],
-                        &format!("{path}/anyOf/{}", member.branch),
+                        &path.child("anyOf").child_index(member.branch),
                         &child_base,
                         depth + 1,
                     )?;
@@ -860,7 +868,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn reserve_type_name(&mut self, name: &str, path: &str) -> Result<(), GraphqlError> {
+    fn reserve_type_name(&mut self, name: &str, path: &SchemaPath) -> Result<(), GraphqlError> {
         validate_graphql_name("generated type name", name)?;
         if is_builtin_type(name) {
             return Err(GraphqlError::new(format!(
@@ -869,7 +877,7 @@ impl<'a> Planner<'a> {
         }
         if let Some(previous) = self
             .used_type_names
-            .insert(name.to_owned(), path.to_owned())
+            .insert(name.to_owned(), path.to_string())
         {
             return Err(GraphqlError::new(format!(
                 "GraphQL type name {name:?} collides between {previous} and {path}"
@@ -886,7 +894,7 @@ impl<'a> Planner<'a> {
         for path in paths {
             let mut members = self.unions.remove(&path).unwrap_or_default();
             for member in &mut members {
-                let branch_path = format!("{path}/anyOf/{}", member.branch);
+                let branch_path = path.child("anyOf").child_index(member.branch);
                 if let Some(object_path) = self.resolve_object_path(&branch_path)? {
                     member.output_type = self
                         .objects
@@ -934,7 +942,7 @@ impl<'a> Planner<'a> {
             .iter()
             .map(|(path, members)| {
                 (
-                    path.clone(),
+                    path.to_string(),
                     members
                         .iter()
                         .map(|member| GraphqlUnionMemberMap {
@@ -959,7 +967,7 @@ impl<'a> Planner<'a> {
     fn audit_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), GraphqlError> {
         limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
@@ -989,7 +997,7 @@ impl<'a> Planner<'a> {
         if object.contains_key("allOf") {
             self.record(
                 "intersection-validation-delegated",
-                &format!("{path}/allOf"),
+                &path.child("allOf"),
                 if representation == Representation::Union {
                     "GraphQL has no input intersection type; the @oneOf alternatives carry the \
                      value while this conjunct is not checked"
@@ -1003,21 +1011,21 @@ impl<'a> Planner<'a> {
         {
             self.record(
                 "union-validation-delegated",
-                &format!("{path}/anyOf"),
+                &path.child("anyOf"),
                 "GraphQL has no general input union type",
             );
         }
         if object.contains_key("oneOf") && representation != Representation::Enum {
             self.record(
                 "one-of-validation-delegated",
-                &format!("{path}/oneOf"),
+                &path.child("oneOf"),
                 "GraphQL has no exactly-one input union validation",
             );
         }
         if object.contains_key("not") {
             self.record(
                 "negation-validation-delegated",
-                &format!("{path}/not"),
+                &path.child("not"),
                 if representation == Representation::Union {
                     "GraphQL has no input value-set complement; the @oneOf alternatives carry \
                      the value while this negation is not checked"
@@ -1033,7 +1041,7 @@ impl<'a> Planner<'a> {
         {
             self.record(
                 "tuple-array-validation-delegated",
-                &format!("{path}/prefixItems"),
+                &path.child("prefixItems"),
                 "GraphQL lists cannot express position-specific tuple item schemas",
             );
         }
@@ -1045,7 +1053,7 @@ impl<'a> Planner<'a> {
         {
             self.record(
                 "union-validation-delegated",
-                &format!("{path}/type"),
+                &path.child("type"),
                 "GraphQL has no general input union for a JSON Schema type array",
             );
         }
@@ -1055,7 +1063,7 @@ impl<'a> Planner<'a> {
         }) {
             self.record(
                 "integer-domain-validation-delegated",
-                &format!("{path}/type"),
+                &path.child("type"),
                 "the JSON integer domain is not exactly GraphQL's signed 32-bit Int domain",
             );
         }
@@ -1067,7 +1075,7 @@ impl<'a> Planner<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "conditional-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "GraphQL input fields cannot express content-dependent branches",
                     );
                 }
@@ -1077,7 +1085,7 @@ impl<'a> Planner<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "unevaluated-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "GraphQL coercion does not expose JSON Schema applicator evaluation state",
                 );
             }
@@ -1086,7 +1094,7 @@ impl<'a> Planner<'a> {
             if !known_schema_keyword(key) && !is_annotation_keyword(key) {
                 self.record(
                     "keyword-validation-delegated",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &path.child(key),
                     &format!(
                         "JSON Schema assertion keyword {key:?} is outside the closed GraphQL \
                          capability table"
@@ -1097,7 +1105,7 @@ impl<'a> Planner<'a> {
         if object.contains_key("additionalItems") {
             self.record(
                 "keyword-validation-delegated",
-                &format!("{path}/additionalItems"),
+                &path.child("additionalItems"),
                 "additionalItems is outside the draft 2020-12 GraphQL capability table",
             );
         }
@@ -1118,7 +1126,7 @@ impl<'a> Planner<'a> {
                     if object.contains_key(keyword) {
                         self.record(
                             "string-validation-dropped",
-                            &format!("{path}/{keyword}"),
+                            &path.child(keyword),
                             "GraphQL String does not express this runtime string predicate",
                         );
                     }
@@ -1135,7 +1143,7 @@ impl<'a> Planner<'a> {
                     if object.contains_key(keyword) && !matches!(keyword, "minimum" | "maximum") {
                         self.record(
                             "numeric-validation-dropped",
-                            &format!("{path}/{keyword}"),
+                            &path.child(keyword),
                             "GraphQL Int does not express this runtime numeric predicate",
                         );
                     }
@@ -1156,7 +1164,7 @@ impl<'a> Planner<'a> {
     fn audit_union(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), GraphqlError> {
         let members = self.unions.get(path).cloned().unwrap_or_default();
@@ -1195,7 +1203,7 @@ impl<'a> Planner<'a> {
                     continue;
                 }
                 if object.contains_key(keyword) {
-                    self.record(code, &format!("{path}/{keyword}"), note);
+                    self.record(code, &path.child(keyword), note);
                 }
             }
         }
@@ -1207,7 +1215,7 @@ impl<'a> Planner<'a> {
         for member in &members {
             self.audit_schema(
                 &branches[member.branch],
-                &format!("{path}/anyOf/{}", member.branch),
+                &path.child("anyOf").child_index(member.branch),
                 depth + 1,
             )?;
         }
@@ -1217,7 +1225,7 @@ impl<'a> Planner<'a> {
     fn audit_object(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), GraphqlError> {
         if !matches!(object.get("additionalProperties"), Some(Value::Bool(false))) {
@@ -1225,8 +1233,8 @@ impl<'a> Planner<'a> {
                 "additional-properties-validation-narrowed",
                 object
                     .contains_key("additionalProperties")
-                    .then(|| format!("{path}/additionalProperties"))
-                    .as_deref()
+                    .then(|| path.child("additionalProperties"))
+                    .as_ref()
                     .unwrap_or(path),
                 "GraphQL input objects reject source keys outside the declared field set",
             );
@@ -1235,7 +1243,7 @@ impl<'a> Planner<'a> {
             for pattern in patterns.keys() {
                 self.record(
                     "pattern-properties-validation-changed",
-                    &format!("{path}/patternProperties/{}", pointer_escape(pattern)),
+                    &path.child("patternProperties").child(pattern),
                     "GraphQL fixed fields cannot preserve regex-selected dynamic or overlapping keys",
                 );
             }
@@ -1243,7 +1251,7 @@ impl<'a> Planner<'a> {
         if object.contains_key("propertyNames") {
             self.record(
                 "property-name-validation-changed",
-                &format!("{path}/propertyNames"),
+                &path.child("propertyNames"),
                 "GraphQL fixed fields do not apply the source schema to each runtime key name",
             );
         }
@@ -1251,7 +1259,7 @@ impl<'a> Planner<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "property-count-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "GraphQL cannot count supplied input object fields",
                 );
             }
@@ -1260,7 +1268,7 @@ impl<'a> Planner<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "dependency-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "GraphQL input object definitions cannot enforce cross-field dependencies",
                 );
             }
@@ -1273,7 +1281,7 @@ impl<'a> Planner<'a> {
             .unwrap_or(&empty);
         let required = required_names(object, path)?;
         for (source, child) in properties {
-            let child_path = format!("{path}/properties/{}", pointer_escape(source));
+            let child_path = path.child("properties").child(source);
             let nullable = schema_allows_null(child, self.definitions, &mut BTreeSet::new())?;
             if (required.contains(source) && nullable) || (!required.contains(source) && !nullable)
             {
@@ -1287,7 +1295,7 @@ impl<'a> Planner<'a> {
         }
         let property_names = properties.keys().cloned().collect::<BTreeSet<_>>();
         for source in required.difference(&property_names) {
-            let required_path = format!("{path}/required/{}", pointer_escape(source));
+            let required_path = path.child("required").child(source);
             self.record(
                 "custom-scalar-validation-delegated",
                 &required_path,
@@ -1305,7 +1313,7 @@ impl<'a> Planner<'a> {
     fn audit_array(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         depth: usize,
     ) -> Result<(), GraphqlError> {
         self.record(
@@ -1317,7 +1325,7 @@ impl<'a> Planner<'a> {
             if object.contains_key(keyword) {
                 self.record(
                     "array-cardinality-validation-dropped",
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                     "GraphQL list types cannot constrain list length",
                 );
             }
@@ -1327,7 +1335,7 @@ impl<'a> Planner<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "array-contains-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "GraphQL list coercion cannot quantify matching elements",
                     );
                 }
@@ -1336,27 +1344,24 @@ impl<'a> Planner<'a> {
         if object.get("uniqueItems") == Some(&Value::Bool(true)) {
             self.record(
                 "unique-items-validation-dropped",
-                &format!("{path}/uniqueItems"),
+                &path.child("uniqueItems"),
                 "GraphQL list coercion cannot enforce pairwise-distinct values",
             );
         }
         if let Some(items) = object.get("items") {
-            self.audit_schema(items, &format!("{path}/items"), depth + 1)?;
+            self.audit_schema(items, &path.child("items"), depth + 1)?;
         } else {
             self.record(
                 "custom-scalar-validation-delegated",
-                &format!("{path}/items"),
+                &path.child("items"),
                 "an unconstrained list item uses the caller-owned fallback scalar",
             );
         }
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &str, note: &str) {
-        if !self
-            .recorded_losses
-            .insert((code.to_owned(), path.to_owned()))
-        {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+        if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
         self.ledger.record(LossEntry {
@@ -1365,7 +1370,7 @@ impl<'a> Planner<'a> {
             to: GRAPHQL_DIALECT.into(),
             note: note.to_owned().into(),
             location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path),
+                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
             )),
         });
     }
@@ -1388,7 +1393,7 @@ impl<'a> Planner<'a> {
     fn type_expression(
         &self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         position: TypePosition,
     ) -> Result<String, GraphqlError> {
         let representation = self
@@ -1414,8 +1419,8 @@ impl<'a> Planner<'a> {
                     .as_object()
                     .expect("array representation comes from an object schema");
                 let (item_schema, item_path) = object.get("items").map_or_else(
-                    || (None, format!("{path}/items")),
-                    |items| (Some(items), format!("{path}/items")),
+                    || (None, path.child("items")),
+                    |items| (Some(items), path.child("items")),
                 );
                 let item_type = if let Some(items) = item_schema {
                     self.type_expression(items, &item_path, position)?
@@ -1467,7 +1472,7 @@ impl<'a> Planner<'a> {
         writeln!(output, "scalar {}", self.config.fallback_scalar_name)
             .expect("writing GraphQL SDL to a String cannot fail");
 
-        let mut declarations = Vec::<(String, DeclarationKind, String)>::new();
+        let mut declarations = Vec::<(String, DeclarationKind, SchemaPath)>::new();
         for (path, name) in &self.enums {
             declarations.push((name.clone(), DeclarationKind::Enum, path.clone()));
         }
@@ -1482,8 +1487,8 @@ impl<'a> Planner<'a> {
                 if member.wrapped {
                     declarations.push((
                         member.output_type.clone(),
-                        DeclarationKind::Wrapper,
-                        format!("{path}/anyOf/{}", member.branch),
+                        DeclarationKind::Wrapper(member.branch),
+                        path.clone(),
                     ));
                 }
             }
@@ -1494,7 +1499,9 @@ impl<'a> Planner<'a> {
             match kind {
                 DeclarationKind::Union => self.render_union(&mut output, &path)?,
                 DeclarationKind::OneOf => self.render_one_of(&mut output, &path)?,
-                DeclarationKind::Wrapper => self.render_wrapper(&mut output, &path)?,
+                DeclarationKind::Wrapper(index) => {
+                    self.render_wrapper(&mut output, &path, index)?;
+                }
                 DeclarationKind::Enum => self.render_enum(&mut output, &path)?,
                 DeclarationKind::Output => {
                     self.render_object_type(&mut output, &path, TypePosition::Output)?;
@@ -1507,7 +1514,7 @@ impl<'a> Planner<'a> {
         Ok(finish_text(output))
     }
 
-    fn render_union(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
+    fn render_union(&self, output: &mut String, path: &SchemaPath) -> Result<(), GraphqlError> {
         let names = self
             .union_names
             .get(path)
@@ -1532,7 +1539,7 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn render_one_of(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
+    fn render_one_of(&self, output: &mut String, path: &SchemaPath) -> Result<(), GraphqlError> {
         let names = self
             .union_names
             .get(path)
@@ -1560,7 +1567,7 @@ impl<'a> Planner<'a> {
         for member in members {
             let expression = self.type_expression(
                 &branches[member.branch],
-                &format!("{path}/anyOf/{}", member.branch),
+                &path.child("anyOf").child_index(member.branch),
                 TypePosition::Input,
             )?;
             writeln!(output, "  {}: {expression}", member.input_field)
@@ -1570,13 +1577,13 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn render_wrapper(&self, output: &mut String, branch_path: &str) -> Result<(), GraphqlError> {
-        let (path, index) = branch_path
-            .rsplit_once("/anyOf/")
-            .expect("a wrapper path names its alternative");
-        let index = index
-            .parse::<usize>()
-            .expect("a wrapper path ends in its alternative index");
+    fn render_wrapper(
+        &self,
+        output: &mut String,
+        path: &SchemaPath,
+        index: usize,
+    ) -> Result<(), GraphqlError> {
+        let branch_path = path.child("anyOf").child_index(index);
         let member = self
             .unions
             .get(path)
@@ -1586,7 +1593,7 @@ impl<'a> Planner<'a> {
             .schemas
             .get(path)
             .expect("rendered union has a retained schema")["anyOf"][index];
-        let expression = self.type_expression(branch, branch_path, TypePosition::Output)?;
+        let expression = self.type_expression(branch, &branch_path, TypePosition::Output)?;
         writeln!(output, "type {} {{", member.output_type)
             .expect("writing GraphQL SDL to a String cannot fail");
         writeln!(output, "  value: {expression}!")
@@ -1595,7 +1602,7 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn render_enum(&self, output: &mut String, path: &str) -> Result<(), GraphqlError> {
+    fn render_enum(&self, output: &mut String, path: &SchemaPath) -> Result<(), GraphqlError> {
         let name = self
             .enums
             .get(path)
@@ -1624,7 +1631,7 @@ impl<'a> Planner<'a> {
     fn render_object_type(
         &self,
         output: &mut String,
-        path: &str,
+        path: &SchemaPath,
         position: TypePosition,
     ) -> Result<(), GraphqlError> {
         let schema = self
@@ -1662,7 +1669,7 @@ impl<'a> Planner<'a> {
         let mut ordered_fields = field_map.iter().collect::<Vec<_>>();
         ordered_fields.sort_by(|left, right| left.1.cmp(right.1));
         for (source, graphql) in ordered_fields {
-            let child_path = format!("{path}/properties/{}", pointer_escape(source));
+            let child_path = path.child("properties").child(source);
             let child = properties.get(source);
             if let Some(description) = child.map(schema_doc).transpose()?.flatten() {
                 writeln!(output, "  {}", graphql_string(description))
@@ -1724,7 +1731,7 @@ impl<'a> Planner<'a> {
                 {
                     continue;
                 }
-                let child_path = format!("{path}/properties/{}", pointer_escape(source));
+                let child_path = path.child("properties").child(source);
                 if let Some(target) = self.resolve_object_path(&child_path)? {
                     edges.push(InputEdge {
                         source: path.clone(),
@@ -1738,9 +1745,9 @@ impl<'a> Planner<'a> {
         Ok(edges)
     }
 
-    fn resolve_object_path(&self, path: &str) -> Result<Option<String>, GraphqlError> {
+    fn resolve_object_path(&self, path: &SchemaPath) -> Result<Option<SchemaPath>, GraphqlError> {
         match self.representations.get(path) {
-            Some(Representation::Object) => Ok(Some(path.to_owned())),
+            Some(Representation::Object) => Ok(Some(path.clone())),
             Some(Representation::Reference(key)) => {
                 let endpoint = self.reference_targets.get(key).ok_or_else(|| {
                     GraphqlError::new(format!("missing resolved GraphQL reference for {key:?}"))
@@ -1763,21 +1770,21 @@ enum DeclarationKind {
     Input,
     Union,
     OneOf,
-    Wrapper,
+    Wrapper(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct InputEdge {
-    source: String,
-    target: String,
-    field_path: String,
+    source: SchemaPath,
+    target: SchemaPath,
+    field_path: SchemaPath,
 }
 
 impl GraphqlPackage {
     fn translate_value(
         &self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         value: &Value,
         direction: CodecDirection,
         depth: usize,
@@ -1807,7 +1814,7 @@ impl GraphqlPackage {
                     translated.push(if let Some(item_schema) = items {
                         self.translate_value(
                             item_schema,
-                            &format!("{path}/items"),
+                            &path.child("items"),
                             item,
                             direction,
                             depth + 1,
@@ -1815,8 +1822,12 @@ impl GraphqlPackage {
                     } else {
                         item.clone()
                     });
-                    limits::ensure_depth(depth + 1, &format!("{path}/value/{index}"), "GraphQL")
-                        .map_err(GraphqlError::new)?;
+                    limits::ensure_depth(
+                        depth + 1,
+                        &path.child("value").child_index(index),
+                        "GraphQL",
+                    )
+                    .map_err(GraphqlError::new)?;
                 }
                 Ok(Value::Array(translated))
             }
@@ -1879,7 +1890,7 @@ impl GraphqlPackage {
     /// admits.
     fn select_member<'m>(
         members: &'m [UnionMember],
-        path: &str,
+        path: &SchemaPath,
         value: &Value,
     ) -> Result<Option<&'m UnionMember>, GraphqlError> {
         let Some(class) = ValueClass::of(value) else {
@@ -1920,7 +1931,7 @@ impl GraphqlPackage {
     fn translate_union(
         &self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         value: &Value,
         direction: CodecDirection,
         depth: usize,
@@ -1936,7 +1947,7 @@ impl GraphqlPackage {
         let branch = |member: &UnionMember| {
             (
                 &branches[member.branch],
-                format!("{path}/anyOf/{}", member.branch),
+                path.child("anyOf").child_index(member.branch),
             )
         };
         match direction {
@@ -2030,14 +2041,15 @@ impl GraphqlPackage {
 
     fn translate_enum(
         &self,
-        path: &str,
+        path: &SchemaPath,
         value: &Value,
         direction: CodecDirection,
     ) -> Result<Value, GraphqlError> {
-        let mappings =
-            self.names.enum_values.get(path).ok_or_else(|| {
-                GraphqlError::new(format!("GraphQL enum at {path} has no value map"))
-            })?;
+        let mappings = self
+            .names
+            .enum_values
+            .get(&path.to_string())
+            .ok_or_else(|| GraphqlError::new(format!("GraphQL enum at {path} has no value map")))?;
         if direction.encodes() {
             mappings
                 .iter()
@@ -2069,7 +2081,7 @@ impl GraphqlPackage {
     fn translate_object(
         &self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         value: &Value,
         direction: CodecDirection,
         depth: usize,
@@ -2085,7 +2097,7 @@ impl GraphqlPackage {
             .get("properties")
             .and_then(Value::as_object)
             .unwrap_or(&empty);
-        let field_map = self.names.fields.get(path).ok_or_else(|| {
+        let field_map = self.names.fields.get(&path.to_string()).ok_or_else(|| {
             GraphqlError::new(format!("GraphQL object at {path} has no field map"))
         })?;
         let reverse = field_map
@@ -2110,7 +2122,7 @@ impl GraphqlPackage {
                 })?;
                 (*source, *source)
             };
-            let child_path = format!("{path}/properties/{}", pointer_escape(source_key));
+            let child_path = path.child("properties").child(source_key);
             let translated = if let Some(child) = properties.get(source_key) {
                 self.translate_value(child, &child_path, input_value, direction, depth + 1)?
             } else {
@@ -2139,7 +2151,7 @@ enum JsonKind {
 
 fn classify_schema(
     schema: &Value,
-    path: &str,
+    path: &SchemaPath,
     definitions: &Object,
 ) -> Result<(Representation, Option<Vec<UnionMember>>), GraphqlError> {
     let Value::Object(object) = schema else {
@@ -2160,7 +2172,10 @@ fn classify_schema(
     Ok((classify_plain_schema(object, path)?, None))
 }
 
-fn classify_plain_schema(object: &Object, path: &str) -> Result<Representation, GraphqlError> {
+fn classify_plain_schema(
+    object: &Object,
+    path: &SchemaPath,
+) -> Result<Representation, GraphqlError> {
     if has_unknown_assertion(object)
         || object.contains_key("allOf")
         || object.contains_key("anyOf")
@@ -2242,7 +2257,7 @@ struct Alternative {
 /// alternative it selects. `None` when the alternatives overlap.
 fn union_members(
     object: &Object,
-    path: &str,
+    path: &SchemaPath,
     definitions: &Object,
 ) -> Result<Option<Vec<UnionMember>>, GraphqlError> {
     let Some(branches) = object.get("anyOf").and_then(Value::as_array) else {
@@ -2254,7 +2269,7 @@ fn union_members(
     let mut alternatives = Vec::with_capacity(branches.len());
     for (index, branch) in branches.iter().enumerate() {
         let Some(alternative) =
-            analyse_alternative(branch, &format!("{path}/anyOf/{index}"), definitions)?
+            analyse_alternative(branch, &path.child("anyOf").child_index(index), definitions)?
         else {
             return Ok(None);
         };
@@ -2345,7 +2360,7 @@ fn union_members(
 /// than one kind, or kinds it does not declare.
 fn analyse_alternative(
     branch: &Value,
-    path: &str,
+    path: &SchemaPath,
     definitions: &Object,
 ) -> Result<Option<Alternative>, GraphqlError> {
     if schema_allows_null(branch, definitions, &mut BTreeSet::new())? {
@@ -2422,7 +2437,7 @@ fn analyse_alternative(
     }))
 }
 
-fn finite_values(schema: &Value, path: &str) -> Result<Option<Vec<Value>>, GraphqlError> {
+fn finite_values(schema: &Value, path: &SchemaPath) -> Result<Option<Vec<Value>>, GraphqlError> {
     let Value::Object(object) = schema else {
         return Ok(None);
     };
@@ -2456,7 +2471,8 @@ fn finite_values(schema: &Value, path: &str) -> Result<Option<Vec<Value>>, Graph
             .iter()
             .enumerate()
         {
-            let Some(branch_values) = finite_values(branch, &format!("{path}/branch/{index}"))?
+            let Some(branch_values) =
+                finite_values(branch, &path.child("branch").child_index(index))?
             else {
                 return Ok(None);
             };
@@ -2495,19 +2511,22 @@ fn pure_reference(object: &Object) -> Option<&str> {
         .then_some(reference)
 }
 
-fn declared_types(object: &Object, path: &str) -> Result<Option<BTreeSet<JsonKind>>, GraphqlError> {
+fn declared_types(
+    object: &Object,
+    path: &SchemaPath,
+) -> Result<Option<BTreeSet<JsonKind>>, GraphqlError> {
     let Some(value) = object.get("type") else {
         return Ok(None);
     };
     let values = match value {
-        Value::String(value) => vec![(value.as_str(), format!("{path}/type"))],
+        Value::String(value) => vec![(value.as_str(), path.child("type"))],
         Value::Array(values) if !values.is_empty() => values
             .iter()
             .enumerate()
             .map(|(index, value)| {
                 value
                     .as_str()
-                    .map(|value| (value, format!("{path}/type/{index}")))
+                    .map(|value| (value, path.child("type").child_index(index)))
                     .ok_or_else(|| {
                         GraphqlError::new(format!("{path}/type/{index} must be a string"))
                     })
@@ -2569,7 +2588,7 @@ fn is_exact_graphql_int_domain(object: &Object) -> bool {
         && !object.contains_key("exclusiveMaximum")
 }
 
-fn object_field_count(object: &Object, path: &str) -> Result<usize, GraphqlError> {
+fn object_field_count(object: &Object, path: &SchemaPath) -> Result<usize, GraphqlError> {
     let properties = object
         .get("properties")
         .and_then(Value::as_object)
@@ -2582,7 +2601,11 @@ fn object_field_count(object: &Object, path: &str) -> Result<usize, GraphqlError
     Ok(properties + required.difference(&property_names).count())
 }
 
-fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<(), GraphqlError> {
+fn validate_schema_keywords(
+    schema: &Value,
+    path: &SchemaPath,
+    depth: usize,
+) -> Result<(), GraphqlError> {
     limits::ensure_depth(depth, path, "GraphQL").map_err(GraphqlError::new)?;
     let Value::Object(object) = schema else {
         return if schema.is_boolean() {
@@ -2678,7 +2701,7 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
                 object
                     .get(keyword)
                     .expect("present keyword was just checked"),
-                &format!("{path}/{keyword}"),
+                &path.child(keyword),
             )?;
         }
     }
@@ -2722,30 +2745,30 @@ fn validate_schema_keywords(schema: &Value, path: &str, depth: usize) -> Result<
     for keyword in schema_map_keywords() {
         if let Some(children) = object.get(keyword).and_then(Value::as_object) {
             for (key, child) in children {
-                validate_schema_keywords(
-                    child,
-                    &format!("{path}/{keyword}/{}", pointer_escape(key)),
-                    depth + 1,
-                )?;
+                validate_schema_keywords(child, &path.child(keyword).child(key), depth + 1)?;
             }
         }
     }
     for keyword in schema_array_keywords() {
         if let Some(children) = object.get(keyword).and_then(Value::as_array) {
             for (index, child) in children.iter().enumerate() {
-                validate_schema_keywords(child, &format!("{path}/{keyword}/{index}"), depth + 1)?;
+                validate_schema_keywords(
+                    child,
+                    &path.child(keyword).child_index(index),
+                    depth + 1,
+                )?;
             }
         }
     }
     for keyword in schema_single_keywords() {
         if let Some(child) = object.get(keyword) {
-            validate_schema_keywords(child, &format!("{path}/{keyword}"), depth + 1)?;
+            validate_schema_keywords(child, &path.child(keyword), depth + 1)?;
         }
     }
     Ok(())
 }
 
-fn validate_nonnegative_integer(value: &Value, path: &str) -> Result<(), GraphqlError> {
+fn validate_nonnegative_integer(value: &Value, path: &SchemaPath) -> Result<(), GraphqlError> {
     if value.as_u64().is_some()
         || value
             .as_finite_f64()
@@ -2759,7 +2782,7 @@ fn validate_nonnegative_integer(value: &Value, path: &str) -> Result<(), Graphql
     }
 }
 
-fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, GraphqlError> {
+fn required_names(object: &Object, path: &SchemaPath) -> Result<BTreeSet<String>, GraphqlError> {
     let Some(value) = object.get("required") else {
         return Ok(BTreeSet::new());
     };
@@ -2780,6 +2803,10 @@ fn required_names(object: &Object, path: &str) -> Result<BTreeSet<String>, Graph
     Ok(required)
 }
 
+/// Whether `schema` admits `null`. Every definition passed
+/// `validate_schema_keywords` before planning, so the typed readers below see
+/// only schemas whose `type` and finite values are well formed; the root path
+/// they take is never reported.
 fn schema_allows_null(
     schema: &Value,
     definitions: &Object,
@@ -2790,7 +2817,7 @@ fn schema_allows_null(
         match current {
             Value::Bool(value) => return Ok(*value),
             Value::Object(object) => {
-                if let Some(values) = finite_values(current, "nullable schema")? {
+                if let Some(values) = finite_values(current, &SchemaPath::root())? {
                     return Ok(values.iter().any(Value::is_null));
                 }
                 if let Some(reference) = pure_reference(object) {
@@ -2809,7 +2836,7 @@ fn schema_allows_null(
                     })?;
                     continue;
                 }
-                if let Some(kinds) = declared_types(object, "nullable schema")? {
+                if let Some(kinds) = declared_types(object, &SchemaPath::root())? {
                     return Ok(kinds.contains(&JsonKind::Null));
                 }
                 // `anyOf` admits null only through an alternative that does.
@@ -2834,10 +2861,10 @@ fn schema_allows_null(
 }
 
 fn find_cycle_edge(
-    objects: &BTreeMap<String, ObjectNames>,
+    objects: &BTreeMap<SchemaPath, ObjectNames>,
     edges: &[InputEdge],
-    relaxed: &BTreeSet<String>,
-) -> Option<String> {
+    relaxed: &BTreeSet<SchemaPath>,
+) -> Option<SchemaPath> {
     let mut adjacency = objects
         .keys()
         .map(|path| (path.clone(), Vec::<&InputEdge>::new()))
@@ -2855,7 +2882,7 @@ fn find_cycle_edge(
         });
     }
 
-    let mut colors = BTreeMap::<String, u8>::new();
+    let mut colors = BTreeMap::<SchemaPath, u8>::new();
     for start in objects.keys() {
         if colors.get(start).copied().unwrap_or(0) != 0 {
             continue;
