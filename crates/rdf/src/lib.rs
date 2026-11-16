@@ -62,6 +62,7 @@ pub use purrdf_core::describe;
 /// Deterministic embedding companions bound to exact PurRDF packs.
 pub use purrdf_core::embedding;
 pub use purrdf_core::embedding::*;
+pub use purrdf_core::rdfc12;
 pub mod gts_view;
 // The native RDF text codecs: the codec-only `GtsCodecBackend`
 // over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs.

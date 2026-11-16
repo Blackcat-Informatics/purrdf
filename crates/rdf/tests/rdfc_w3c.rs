@@ -7,7 +7,7 @@
 //! `SOURCE.md`) is the acceptance gate for the native canonicalizer. Each
 //! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec,
 //! canonicalized graph-preservingly by
-//! [`purrdf_rdf::try_canonicalize_with`], and its canonical N-Quads compared to
+//! [`purrdf_rdf::rdfc12::try_canonicalize_with`], and its canonical N-Quads compared to
 //! the expected `testNNN-rdfc10.nq`. Inputs WITHOUT an expected output are
 //! **negative** (poison / complexity-limit) tests that must refuse rather than
 //! canonicalize.
@@ -36,7 +36,8 @@
 use purrdf_core::FastSet;
 use std::path::{Path, PathBuf};
 
-use purrdf_rdf::{CanonHash, NativeRdfFormat, parse_dataset, try_canonicalize_with};
+use purrdf_rdf::rdfc12::{CanonHash, try_canonicalize_with};
+use purrdf_rdf::{NativeRdfFormat, parse_dataset};
 
 /// Tests that specify `rdfc:hashAlgorithm "SHA384"` in the W3C manifest (the rest
 /// use the SHA-256 default). As of the vendored suite this is exactly `test075`
@@ -163,7 +164,7 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
                 &quads,
                 hash_for(&stem),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                     None,
                 ),
             );
@@ -188,7 +189,7 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
                 &quads,
                 hash_for(&stem),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                     None,
                 ),
             ) {

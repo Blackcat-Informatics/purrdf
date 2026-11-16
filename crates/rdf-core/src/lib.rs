@@ -106,6 +106,9 @@ pub mod graph;
 // `(nested-refinement-labelling, 1)`: typed lines in, a typed canonical map,
 // canonical line sequence with its digest, and structural record out.
 pub mod canonical_labelling;
+// The RDFC-1.0 family under its own name: the W3C algorithm, and the recompute of
+// every digest recorded under the profile that preceded the canonical labelling.
+pub mod rdfc12;
 // The one execution-governance vocabulary: stop causes, governed resource
 // dimensions, tripped-governor reports, and evidence. Named by the demand-paging
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,
