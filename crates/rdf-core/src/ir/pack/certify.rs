@@ -45,7 +45,8 @@ use purrdf_hash::hex::Digest32;
 
 use crate::dataset_view::DatasetView;
 use crate::ir::import::{DatasetImportError, DatasetImporter};
-use crate::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
 
 use super::container::{PackError, PackView};
 
@@ -351,9 +352,8 @@ pub fn verify_pack(
 
     let reconstructed = dataset_from_view(&view).map_err(PackError::Materialization)?;
 
-    let canonicalized =
-        crate::try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
-            .map_err(PackError::CanonRefused)?;
+    let canonicalized = try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
+        .map_err(PackError::CanonRefused)?;
     let computed = *canonicalized.as_bytes();
 
     let expected = view.rdfc_digest();

@@ -120,7 +120,7 @@ fn file_backed_pack_view_matches_heap_and_source_by_value() {
     let dataset = build_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build must succeed");
 
@@ -143,12 +143,12 @@ fn file_backed_pack_view_matches_heap_and_source_by_value() {
     // -- Certificate verification over the disk-read slice --------------------------
     let disk_digest = verify_pack(
         &disk[..],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("verify_pack must succeed over the disk-read slice");
     let heap_digest = verify_pack(
         &heap_bytes[..],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("verify_pack must succeed over the heap slice");
     assert_eq!(

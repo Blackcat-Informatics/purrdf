@@ -81,23 +81,20 @@ pub use builder::{
     NativeBuildError, RdfDatasetBuilder, TripleDatasetBuilder, ValidatedRdfDatasetBuilder,
 };
 pub use bundle::{GtsBundle, RdfEnvelope};
+pub use canon::labelled::{
+    CANON_CORPUS_POLICY, CANON_LABELLING_NAME, CANON_LABELLING_VERSION,
+    CANON_PRESENTATION_LINES_ID, CANON_PRESENTATION_LINES_VERSION, canonical_relabel,
+    canonical_relabel_with_mapping, check_admissible, check_admissible_checked_view,
+    check_admissible_view, try_canonical_digest_checked_view, try_canonical_digest_view,
+    try_canonicalize, try_canonicalize_checked_graph_view, try_canonicalize_checked_view,
+    try_canonicalize_digest_view, try_canonicalize_graph_view, try_canonicalize_view,
+    try_graph_digest_view,
+};
 pub use canon::{
-    BudgetExceeded, CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
-    CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
-    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonOutput, CanonPhase, CanonPresentation, CanonSelection, CanonicalRelabeling,
+    BudgetExceeded, CanonError, CanonOutput, CanonPhase, CanonSelection, CanonicalRelabeling,
     CanonicalizationControl, Canonicalized, DatasetStateDigest, DatasetStateError,
-    RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfcActiveGroup, RdfcActivePath,
-    RdfcCandidateProgress, RdfcGroupLabels, RdfcGroupObservation, RdfcGroupObservations,
-    RdfcGroupStats, RdfcRefusalObservation, RdfcRootProgress, RdfcSearchContext,
-    ReservedVocabulary, SearchConfiguration, SearchEvent, SearchPolicy, SearchPosition,
-    SearchReceipt, SearchRefusal, SearchWork, TermPosition, ViewCanonError, blank_count_view,
-    canonical_relabel, canonical_relabel_with_mapping, check_admissible,
-    check_admissible_flat_view, check_admissible_view, try_blank_count_view,
-    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_sha256_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_blake3_view, try_flat_digest_view, try_graph_digest_view,
+    SearchConfiguration, SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal,
+    SearchWork, TermPosition, ViewCanonError, blank_count_view, try_blank_count_view,
 };
 pub use compare::{DatasetDiff, dataset_diff, datasets_isomorphic};
 pub use dataset::{

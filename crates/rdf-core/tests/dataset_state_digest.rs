@@ -14,12 +14,12 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CanonHash, CompositeDatasetView, DatasetMut, DatasetStateDigest, DatasetStateError,
+    BlankScope, CompositeDatasetView, DatasetMut, DatasetStateDigest, DatasetStateError,
     DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
     MutableDataset, PagedDataset, PagedQueryLimits, QuadIds, QuadValues, RdfDataset,
     RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, TermId, TermRef,
-    TermValue, ViewLimits, ViewOperationStatus, WorkspaceReservation, try_canonicalize,
-    try_flat_digest_view, try_graph_digest_view,
+    TermValue, ViewLimits, ViewOperationStatus, WorkspaceReservation,
+    try_canonical_digest_checked_view, try_canonicalize, try_graph_digest_view,
 };
 use purrdf_iri::vocab::rdf::REIFIES;
 
@@ -189,10 +189,7 @@ impl State {
     fn digest(&self) -> DatasetStateDigest {
         DatasetStateDigest::from_view(
             &self.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("valid finite state")
     }
@@ -336,76 +333,96 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
     assert_eq!(
         try_canonicalize(
             &a.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         try_canonicalize(
             &b.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads()
     );
 }
 
-fn legacy_flat_digest_erases_ordinary_annotation_roles() {
+fn flat_digest_erases_ordinary_annotation_roles_only_in_rdfc12() {
     let a = role_fixture(Role::Ordinary);
     let b = role_fixture(Role::Annotation);
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
+    // The RDFC-1.0 flat digest erases the role; the labelling's digest keeps it.
     assert_eq!(
-        try_flat_digest_view(
+        purrdf_core::rdfc12::try_flat_digest_view(
             &*a.materialize(),
-            CanonHash::Sha256,
+            purrdf_core::rdfc12::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
         .unwrap(),
-        try_flat_digest_view(
+        purrdf_core::rdfc12::try_flat_digest_view(
             &*b.materialize(),
-            CanonHash::Sha256,
+            purrdf_core::rdfc12::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
         .unwrap(),
     );
+    assert_ne!(
+        try_canonical_digest_checked_view(
+            &*a.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
+        )
+        .unwrap(),
+        try_canonical_digest_checked_view(
+            &*b.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
+        )
+        .unwrap(),
+    );
 }
 
-fn legacy_flat_digest_erases_ordinary_reifier_roles() {
+fn flat_digest_erases_ordinary_reifier_roles_only_in_rdfc12() {
     let mut a = role_fixture(Role::Ordinary);
     a.rows.pop();
     let mut b = a.clone();
     b.rows[0].role = Role::Ordinary;
     assert!(!isomorphic(&a, &b));
     assert_ne!(a.digest(), b.digest());
+    // The RDFC-1.0 flat digest erases the role; the labelling's digest keeps it.
     assert_eq!(
-        try_flat_digest_view(
+        purrdf_core::rdfc12::try_flat_digest_view(
             &*a.materialize(),
-            CanonHash::Sha256,
+            purrdf_core::rdfc12::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
         .unwrap(),
-        try_flat_digest_view(
+        purrdf_core::rdfc12::try_flat_digest_view(
             &*b.materialize(),
-            CanonHash::Sha256,
+            purrdf_core::rdfc12::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
+        )
+        .unwrap(),
+    );
+    assert_ne!(
+        try_canonical_digest_checked_view(
+            &*a.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
+        )
+        .unwrap(),
+        try_canonical_digest_checked_view(
+            &*b.materialize(),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
     );
@@ -422,7 +439,7 @@ fn per_graph_digests_do_not_enforce_a_global_bijection() {
                 &*a.materialize(),
                 graph,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -430,7 +447,7 @@ fn per_graph_digests_do_not_enforce_a_global_bijection() {
                 &*b.materialize(),
                 graph,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -518,19 +535,13 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
     assert_eq!(
         try_canonicalize(
             &a.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         try_canonicalize(
             &b.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads()
@@ -777,10 +788,7 @@ fn operational_failures_never_certify_partial_state() {
         let probe = Probe::new(state.materialize(), mode);
         let Err(DatasetStateError::Operation(failure)) = DatasetStateDigest::from_view(
             &probe,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) else {
             panic!("an incomplete source must refuse")
         };
@@ -804,10 +812,7 @@ fn operational_failures_never_certify_partial_state() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &neighbor,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         state.digest()
@@ -838,10 +843,7 @@ fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &refused,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(DatasetStateError::Read(SourceFault::new(
             "workspace refused"
@@ -859,7 +861,7 @@ fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
             DatasetStateDigest::from_view(
                 &probe,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -871,10 +873,7 @@ fn workspace_refusal_and_embedded_lookup_refusals_have_valid_neighbors() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &good,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         state.digest()
@@ -888,10 +887,7 @@ fn repeated_same_role_rows_are_set_semantic_before_refinement() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &duplicate,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         state.digest()
@@ -925,7 +921,7 @@ fn named_graphs_from_each_role_are_part_of_state_even_without_a_declaration_iter
             DatasetStateDigest::from_view(
                 &probe,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1065,7 +1061,7 @@ fn scoped_blanks_share_one_mapping_with_cdt_lists_maps_and_all_roles() {
             DatasetStateDigest::from_view(
                 &renamed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1098,10 +1094,7 @@ fn interchangeable_empty_blank_declarations_do_not_require_factorial_search() {
         state.digest(),
         DatasetStateDigest::from_view(
             &renamed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1121,20 +1114,14 @@ fn refinable_connected_cycle_finishes_without_exhausting_search_work() {
     assert!(
         DatasetStateDigest::from_view(
             &state.materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_ok()
     );
     assert!(
         DatasetStateDigest::from_view(
             &cycle_fixture(false, [0, 1, 2, 3, 4, 5]).materialize(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_ok()
     );
@@ -1186,7 +1173,7 @@ fn complete_state_agrees_across_production_view_carriers() {
             DatasetStateDigest::from_view(
                 &independent,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1197,7 +1184,7 @@ fn complete_state_agrees_across_production_view_carriers() {
             DatasetStateDigest::from_view(
                 &shared,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1208,7 +1195,7 @@ fn complete_state_agrees_across_production_view_carriers() {
             DatasetStateDigest::from_view(
                 &delta,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1219,7 +1206,7 @@ fn complete_state_agrees_across_production_view_carriers() {
             DatasetStateDigest::from_view(
                 &reader,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1299,10 +1286,7 @@ fn exact_lexical_bytes_and_maximum_accepted_nesting_have_neighbors() {
         state.digest(),
         DatasetStateDigest::from_view(
             &renamed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1352,10 +1336,7 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &capacity,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(DatasetStateError::Capacity)
     );
@@ -1370,10 +1351,7 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &invalid,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(DatasetStateError::InvalidTerm)
     );
@@ -1384,10 +1362,7 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
     assert_eq!(
         DatasetStateDigest::from_view(
             &ready,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         state.digest()
@@ -1399,21 +1374,18 @@ fn disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor(
         DatasetStateDigest::from_view(
             &fixtures::triangle_components(8),
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 None
             )
         ),
         Err(DatasetStateError::SearchBudgetExceeded { limit, work })
-            if purrdf_core::SearchPolicy::Finite(limit) == purrdf_core::RDFC_V2_CORPUS_POLICY
+            if purrdf_core::SearchPolicy::Finite(limit) == purrdf_core::CANON_CORPUS_POLICY
                 && work.total() == limit
     ));
     assert!(
         DatasetStateDigest::from_view(
             &fixtures::triangle_components(2),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_ok()
     );
@@ -1436,17 +1408,14 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
     ] {
         let expected = DatasetStateDigest::from_view(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(
             DatasetStateDigest::from_view(
                 &renamed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1461,10 +1430,7 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
             .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
         let actual = DatasetStateDigest::from_view(
             &probe,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let observed = probe.allocation_window.take().unwrap().close();
         assert_eq!(actual.unwrap(), expected);
@@ -1476,7 +1442,7 @@ fn capped_workspace_admits_anchors_and_interchangeable_leaves_and_covers_allocat
         let mut lower = Probe::new(Arc::clone(&probe.source), FaultMode::Ready);
         lower.workspace_limit = probe.reservation_peak.get() - 1;
         assert!(matches!(
-            DatasetStateDigest::from_view(&lower, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)),
+            DatasetStateDigest::from_view(&lower, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)),
             Err(DatasetStateError::Read(error)) if error == SourceFault::new("workspace ceiling"),
         ));
         assert!(!lower.reservation_live.get());
@@ -1529,10 +1495,7 @@ fn high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbo
             .replace(Some(purrdf_alloc_probe::CurrentThreadWindow::open()));
         let actual = DatasetStateDigest::from_view(
             &probe,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let observed = probe.allocation_window.take().unwrap().close();
         assert_eq!(actual.unwrap(), expected);
@@ -1551,8 +1514,8 @@ fn high_incidence_nested_cdt_and_duplicate_rows_have_admitted_allocation_neighbo
 
 purrdf_testkit::harness_main!(
     legacy_canonical_form_omits_an_empty_named_declaration,
-    legacy_flat_digest_erases_ordinary_annotation_roles,
-    legacy_flat_digest_erases_ordinary_reifier_roles,
+    flat_digest_erases_ordinary_annotation_roles_only_in_rdfc12,
+    flat_digest_erases_ordinary_reifier_roles_only_in_rdfc12,
     per_graph_digests_do_not_enforce_a_global_bijection,
     oracle_has_one_mapping_across_graphs_nested_and_composite_terms,
     oracle_distinguishes_same_color_connected_and_disconnected_cycles,

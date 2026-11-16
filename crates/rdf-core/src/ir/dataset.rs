@@ -3896,13 +3896,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &ab,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ba,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
@@ -4028,13 +4028,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &u,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),

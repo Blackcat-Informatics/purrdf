@@ -208,7 +208,7 @@ fn pack_view_narrowed_lookup_equals_the_scan() {
     let ds = build_fixture();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");

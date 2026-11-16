@@ -161,6 +161,7 @@ mod rendering;
 use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::walk::WorkList;
 mod control;
+pub mod labelled;
 mod memo;
 use control::SearchRun;
 pub use control::{
@@ -1216,12 +1217,30 @@ fn relabel_recording(
     .issue_labels()?
     .canonical
     .issued;
+    rebuild_with_labels(ds, &labels, false, record, run)
+}
+
+/// Rewrite `ds` with each blank node of `labels` at its label and every other
+/// term unchanged. The one rewrite both canonical families share.
+///
+/// With `verbatim` set (the nested-refinement family) a composite literal is a
+/// literal: its text is copied as written, a blank label spelled inside it is
+/// not a blank node of the graph, and a blank that no line holds keeps its
+/// label. Without it (RDFC-1.0) the rewrite reaches inside composite literals
+/// and every blank node holds a `c14n` label.
+fn rebuild_with_labels(
+    ds: &RdfDataset,
+    labels: &BTreeMap<TermId, Box<str>>,
+    verbatim: bool,
+    record: impl FnMut(RelabelSource<'_>, TermId),
+    run: &SearchRun<'_>,
+) -> Result<RdfDataset, CanonError> {
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
     let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
         .named_graphs()
-        .filter(|g| !labels.contains_key(g))
+        .filter(|g| !verbatim && !labels.contains_key(g))
         .filter_map(|g| match ds.resolve(g) {
             TermRef::Blank { label, scope } => Some((label, scope, g)),
             _ => None,
@@ -1240,8 +1259,9 @@ fn relabel_recording(
     let result = rebuild_dataset(
         ds,
         &mut CanonicalRelabeler {
-            labels: &labels,
+            labels,
             extra,
+            verbatim,
             record,
             stop: run.stop(),
         },
@@ -1258,6 +1278,9 @@ struct CanonicalRelabeler<'a, R> {
     labels: &'a BTreeMap<TermId, Box<str>>,
     /// Continuation labels for declaration-only blank graphs.
     extra: BTreeMap<TermId, Box<str>>,
+    /// Composite literals are copied as written and an unlabelled blank keeps
+    /// its label.
+    verbatim: bool,
     /// Receives actual term pairs during the same rebuild traversal.
     record: R,
 }
@@ -1269,15 +1292,15 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         &mut self,
         builder: &mut super::builder::RdfDatasetBuilder,
         id: TermId,
-        _label: &str,
-        _scope: BlankScope,
+        source_label: &str,
+        source_scope: BlankScope,
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
-        let label = self
-            .labels
-            .get(&id)
-            .or_else(|| self.extra.get(&id))
-            .expect("every blank node holds a canonical or continuation label");
+        let held = self.labels.get(&id).or_else(|| self.extra.get(&id));
+        if self.verbatim && held.is_none() {
+            return Ok(builder.intern_blank(source_label, source_scope)?);
+        }
+        let label = held.expect("every blank node holds a canonical or continuation label");
         Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
     }
 
@@ -1289,6 +1312,10 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
         Ok(builder.intern_iri(iri)?)
+    }
+
+    fn composite_text_is_verbatim(&self) -> bool {
+        self.verbatim
     }
 
     fn record_term(&mut self, source: TermId, target: TermId) {
@@ -2714,6 +2741,10 @@ pub enum CanonError<E = Infallible> {
     CounterCapacity,
     /// The source cannot retain an owned canonical result or refusal.
     OwnedWorkspaceUnavailable,
+    /// The nested-refinement labelling refused the input: the typed refusal of
+    /// its definition (`input`, `graph`, `width` or `limit`). Only the default
+    /// canonicalization family returns it.
+    Refused(crate::canonical_labelling::Refusal),
     /// The source spelled one term with a different length when it was read
     /// again during the same run. A source must present the same dataset for the
     /// whole of a run; this refusal detects only a change of length, not a
@@ -2732,6 +2763,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         Stopped => "canonical-stopped" {},
         CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
+        Refused(refusal) => "canonical-refused" { "code" => Unsigned(u128::from(refusal.code())) },
         SourceInconsistent => "canonical-source-inconsistent" {},
     }
 }
@@ -2754,6 +2786,13 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::OwnedWorkspaceUnavailable => {
                 f.write_str("canonical payload requires source-owned workspace admission")
             }
+            Self::Refused(refusal) => {
+                write!(
+                    f,
+                    "the canonical labelling refused the input: {}",
+                    labelled::refusal_name(refusal)
+                )
+            }
             Self::SourceInconsistent => f.write_str(
                 "the source spelled a term with a different length when it was read again",
             ),
@@ -2772,6 +2811,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::Stopped
             | Self::CounterCapacity
             | Self::OwnedWorkspaceUnavailable
+            | Self::Refused(_)
             | Self::SourceInconsistent => None,
         }
     }
@@ -2798,6 +2838,7 @@ impl CanonError {
             Self::Stopped => CanonError::Stopped,
             Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
+            Self::Refused(refusal) => CanonError::Refused(refusal),
             Self::SourceInconsistent => CanonError::SourceInconsistent,
         }
     }
@@ -6482,7 +6523,7 @@ mod tests {
         );
         assert_eq!(
             canonicalized.presentation(),
-            CanonPresentation::Overlay,
+            Some(CanonPresentation::Overlay),
             "an overlay-producing entry point must report the Overlay presentation on its result"
         );
     }
@@ -6518,7 +6559,7 @@ mod tests {
         );
         assert_eq!(
             flat.presentation(),
-            CanonPresentation::FlatAssertion,
+            Some(CanonPresentation::FlatAssertion),
             "a flat-producing entry point must report the FlatAssertion presentation on its result"
         );
     }

@@ -40,9 +40,10 @@ use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
 
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 use crate::{
-    BlankScope, CanonError, CanonHash, CanonicalizationControl, ContentDigest, DatasetView,
-    RdfTextDirection, StopSignal, TermLookupError, TermValue, try_canonical_sha256_view,
+    BlankScope, CanonError, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
+    StopSignal, TermLookupError, TermValue,
 };
 
 /// A caller's record beside a view: an opaque payload, compared whole and never
@@ -606,27 +607,14 @@ impl<Id: Copy> Labelling<Id> {
     }
 }
 
-/// Label the lines of `view` and `records` within `scope`, with the engine's
-/// own `limit` and the caller's `stop` signal (polled while the rows are
-/// lowered and at every call of the engine).
-///
-/// Positions are those of the lines of this scope and records together; they
-/// are never mixed with the positions of another scope or record set.
-///
-/// # Errors
-/// As [`lines_of_view`], and [`ViewError::Stopped`] when `stop` is set. A
-/// refusal is [`ViewError::Refused`] with the typed refusal of the
-/// definition, [`Refusal::Limit`] included.
-pub fn label_view<D: DatasetView>(
+/// The labelling of admitted `lines`, with the view's identifier of each
+/// blank node.
+fn labelling_of<D: DatasetView>(
     view: &D,
-    records: &[Record<'_>],
-    scope: Scope<'_>,
+    lines: LineSet,
     limit: Limit,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
-    let lines = lowered(view, scope, records, stop)?
-        .into_result()
-        .map_err(ViewError::Refused)?;
     let labelled = label_lines(&lines, limit, stop)?;
     let mut blanks = Vec::with_capacity(lines.blank_nodes());
     for node in 0..lines.blank_nodes() {
@@ -650,4 +638,74 @@ pub fn label_view<D: DatasetView>(
         labelled,
         blanks,
     })
+}
+
+/// Label the lines of `view` and `records` within `scope`, with the engine's
+/// own `limit` and the caller's `stop` signal (polled while the rows are
+/// lowered and at every call of the engine).
+///
+/// Positions are those of the lines of this scope and records together; they
+/// are never mixed with the positions of another scope or record set. The
+/// labelling does not meter its storage; use [`label_view_with_memory`] where
+/// the caller admits the working state of a computation.
+///
+/// # Errors
+/// As [`lines_of_view`], and [`ViewError::Stopped`] when `stop` is set. A
+/// refusal is [`ViewError::Refused`] with the typed refusal of the
+/// definition, [`Refusal::Limit`] included.
+pub fn label_view<D: DatasetView>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let lines = lowered(view, scope, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    labelling_of(view, lines, limit, stop)
+}
+
+/// A labelling and the bytes of working state still granted for it.
+type LabellingWithBytes<Id> = (Labelling<Id>, usize);
+
+/// [`label_view`] with the working state of the labelling admitted once, before
+/// the engine starts, through the caller's `memory`, as
+/// [`compare_view_with_memory`] does. On success the grant stays outstanding and
+/// its size is returned: release that many bytes when the labelling is dropped.
+/// On any error the grant is returned before the error is.
+///
+/// # Errors
+/// As [`label_view`], and [`ViewError::Storage`] when the admission refuses or
+/// the sum of the bytes passes the word.
+pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+    memory: &mut Memory<'_, S>,
+) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
+    let lines = lowered(view, scope, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    let bytes = lines
+        .footprint_bytes()
+        .zip(optimised::working_bytes(&lines))
+        .and_then(|(held, working)| held.checked_add(working))
+        .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
+    memory.add_bytes(bytes).map_err(ViewError::Storage)?;
+    match labelling_of(view, lines, limit, stop) {
+        Ok(labelling) => Ok((labelling, bytes)),
+        Err(error) => {
+            // A refusal of the refund cannot replace the error that ended the
+            // run: the grant stays outstanding with the caller's account.
+            let _ = memory.release_bytes(bytes);
+            Err(error)
+        }
+    }
 }

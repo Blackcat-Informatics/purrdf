@@ -209,8 +209,9 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use crate::rdfc12::CanonHash;
     use crate::{
-        CanonHash, GraphMatch, NoopReservation, OwnedWorkspaceReservation, QuadIds, RdfDataset,
+        GraphMatch, NoopReservation, OwnedWorkspaceReservation, QuadIds, RdfDataset,
         RdfDatasetBuilder, RdfStoreCapabilities, TermId, TermRef, TermValue, WorkspaceReservation,
     };
     use purrdf_testkit::error_capture::{CallerRefusal, Capture};
@@ -335,7 +336,7 @@ mod tests {
             let error = super::super::try_canonicalize_view(
                 &source,
                 CanonHash::Sha256,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap_err();
             drop(source);
@@ -385,7 +386,7 @@ mod tests {
                 let output = super::super::try_canonicalize_view(
                     &healthy,
                     CanonHash::Sha256,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
                 );
                 drop(healthy);
                 match capability {

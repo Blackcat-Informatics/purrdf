@@ -115,7 +115,8 @@ use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
-use super::canon::{CanonError, CanonHash, try_canonicalize_view, try_graph_digest_view};
+use super::canon::CanonError;
+use super::canon::labelled::{try_canonicalize_view, try_graph_digest_view as graph_digest32};
 use super::composite::{CompositeDatasetView, CompositeSource, GraphPlacement, owned_value};
 use super::dataset::RdfDataset;
 use super::mutable::DeltaDatasetView;
@@ -596,7 +597,7 @@ impl<H> BundleCore<H> {
         view: &D,
         control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<ContentDigest, PipelineBundleError> {
-        let canonical = try_canonicalize_view(view, CanonHash::Sha256, control)
+        let canonical = try_canonicalize_view(view, control)
             .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
         DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
         Ok(self.digest_over(canonical.nquads()))
@@ -608,7 +609,7 @@ impl<H> BundleCore<H> {
         control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<ContentDigest, PipelineBundleError> {
         let residue = ResidueView(view);
-        let canonical = try_canonicalize_view(&residue, CanonHash::Sha256, control)
+        let canonical = try_canonicalize_view(&residue, control)
             .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?;
         DigestWorkCounter::bump(&self.work.residue_canonicalizations);
         Ok(ContentDigest::of(canonical.nquads().as_bytes()))
@@ -1993,46 +1994,77 @@ fn seeded_composed_digest(
     Ok(digest)
 }
 
+/// The canonical digest of one named graph of `view`, as the bundle's pinned
+/// content identity.
+fn try_graph_digest_view<D: DatasetView>(
+    view: &D,
+    graph: &str,
+    control: &mut crate::CanonicalizationControl<'_>,
+) -> Result<ContentDigest, CanonError<D::ReadError>> {
+    graph_digest32(view, graph, control).map(|digest| ContentDigest::from_raw(digest.into_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Owned carriers preserve the same scoped native failures as view carriers.
+    /// A latched stop signal.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl crate::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// Owned carriers preserve the same scoped native failures as view carriers,
+    /// and a vocabulary the old profile reserved is ordinary data that digests.
     #[test]
     fn owned_carrier_identity_returns_scoped_canonicalization_refusals() {
         for graph in [None, Some("http://example.org/g")] {
             let mut builder = RdfDatasetBuilder::new();
             let node = builder.intern_iri("http://example.org/node").unwrap();
-            let reserved = builder.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
+            let ordinary = builder
+                .intern_iri("http://example.org/reserved-before")
+                .unwrap();
             let graph_id = graph.map(|name| builder.intern_iri(name).unwrap());
-            builder.push_quad(node, reserved, node, graph_id).unwrap();
+            builder.push_quad(node, ordinary, node, graph_id).unwrap();
             let bundle = bundle_over(builder.freeze().unwrap());
+            let stop = Latched;
             let refusal = bundle
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
-                    None,
+                    crate::CANON_CORPUS_POLICY,
+                    Some(&stop),
                 ))
                 .unwrap_err();
             assert!(matches!(
                 refusal,
                 PipelineBundleError::Canonicalization { scope: CanonScopeName::Carrier, ref source }
-                    if matches!(&**source, CanonError::ReservedVocabulary(_))
+                    if matches!(&**source, CanonError::Stopped)
             ));
             let expected = graph.map_or(CanonScopeName::Residue, |name| {
                 CanonScopeName::Graph(name.to_owned())
             });
             assert!(matches!(
-                bundle.pipeline_root(&mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)),
+                bundle.pipeline_root(&mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&stop))),
                 Err(PipelineBundleError::Canonicalization { scope, source })
-                    if scope == expected && matches!(*source, CanonError::ReservedVocabulary(_))
+                    if scope == expected && matches!(*source, CanonError::Stopped)
             ));
             if let Some(graph) = graph {
                 assert!(matches!(
-                    bundle.graph_digest(graph, &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)),
+                    bundle.graph_digest(graph, &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&stop))),
                     Err(PipelineBundleError::Canonicalization { scope: CanonScopeName::Graph(name), source })
-                        if name == graph && matches!(*source, CanonError::ReservedVocabulary(_))
+                        if name == graph && matches!(*source, CanonError::Stopped)
                 ));
             }
+            // The neighbouring valid case: the same bundle digests when not stopped.
+            bundle
+                .digest(&mut crate::CanonicalizationControl::new(
+                    crate::CANON_CORPUS_POLICY,
+                    None,
+                ))
+                .unwrap();
         }
     }
 
@@ -2107,7 +2139,7 @@ mod tests {
         let digest = bundle
             .graph_digest(
                 graph,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         let payload = SyntheticHandle {
@@ -2118,7 +2150,7 @@ mod tests {
                 graph,
                 payload.clone(),
                 digest,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("matching digest pins");
         assert_eq!(bundle.handle(graph).map(|h| &h.payload), Some(&payload));
@@ -2137,7 +2169,7 @@ mod tests {
                     note: "bad".to_owned(),
                 },
                 wrong,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect_err("mismatched digest must hard-fail");
         assert!(matches!(
@@ -2166,7 +2198,7 @@ mod tests {
         let d1 = bundle
             .graph_digest(
                 g1,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         bundle
@@ -2176,7 +2208,7 @@ mod tests {
                     note: "first".to_owned(),
                 },
                 d1,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("first pin");
         // Accumulate a NEW disjoint named graph + handle.
@@ -2189,7 +2221,7 @@ mod tests {
                 SyntheticHandle {
                     note: "second".to_owned(),
                 },
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("additive accumulate succeeds");
         // The first handle's pinned digest is UNCHANGED (additive), and both are present.
@@ -2200,13 +2232,13 @@ mod tests {
             bundle
                 .graph_digest(
                     g2,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             bundle
                 .graph_digest(
                     "http://example.org/absent",
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap()
         );
@@ -2219,7 +2251,7 @@ mod tests {
         let d1 = bundle
             .graph_digest(
                 g1,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         bundle
@@ -2229,19 +2261,19 @@ mod tests {
                     note: "first".to_owned(),
                 },
                 d1,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("first pin");
         // Everything the refusal must leave exactly where it found it.
         let before_digest = bundle
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
         let before_root = bundle
             .pipeline_root(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
@@ -2257,7 +2289,7 @@ mod tests {
                 SyntheticHandle {
                     note: "x".to_owned(),
                 },
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect_err("disturbing a pinned graph must hard-fail");
         assert!(matches!(
@@ -2270,7 +2302,7 @@ mod tests {
         assert_eq!(
             bundle
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2280,7 +2312,7 @@ mod tests {
         assert_eq!(
             bundle
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2292,7 +2324,7 @@ mod tests {
             bundle
                 .graph_digest(
                     g1,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             d1,
@@ -2312,14 +2344,14 @@ mod tests {
                 SyntheticHandle {
                     note: "ok".to_owned(),
                 },
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("an undisturbing contribution must still be admitted");
         assert_eq!(
             bundle
                 .graph_digest(
                     g1,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             d1
@@ -2335,28 +2367,27 @@ mod tests {
         let present = bundle
             .graph_digest(
                 "http://example.org/graph",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         let absent = bundle
             .graph_digest(
                 "http://example.org/missing",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         assert_ne!(present, absent, "present vs empty projection differ");
-        // The absent-graph digest is the canon of the empty dataset.
+        // The absent-graph digest is the digest of the empty canonical line sequence.
         let empty_ds = RdfDatasetBuilder::new().freeze().expect("empty");
         assert_eq!(
             absent,
-            ContentDigest::of(
-                super::super::canon::try_canonicalize(
+            ContentDigest::from_raw(
+                super::super::canon::labelled::try_canonical_digest_view(
                     &empty_ds,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap()
-                .nquads()
-                .as_bytes()
+                .into_bytes()
             )
         );
     }
@@ -2419,12 +2450,12 @@ mod tests {
             without
                 .graph_digest(
                     "http://example.org/g1",
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             with.graph_digest(
                 "http://example.org/g1",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "<g1>'s digest must not observe statement-layer rows asserted in <g2>"
@@ -2436,12 +2467,12 @@ mod tests {
             without
                 .graph_digest(
                     "http://example.org/g2",
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             with.graph_digest(
                 "http://example.org/g2",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "the added rows must be observable somewhere"
@@ -2449,12 +2480,12 @@ mod tests {
         assert_ne!(
             with.graph_digest(
                 "http://example.org/g1",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             with.graph_digest(
                 "http://example.org/g2",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -2469,7 +2500,7 @@ mod tests {
         let pinned = bundle
             .graph_digest(
                 g1,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         bundle
@@ -2479,7 +2510,7 @@ mod tests {
                     note: "g1".to_owned(),
                 },
                 pinned,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("pin over <g1>");
 
@@ -2509,14 +2540,14 @@ mod tests {
                 SyntheticHandle {
                     note: "g2".to_owned(),
                 },
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("folding <g2> must not disturb the pinned <g1>");
         assert_eq!(
             bundle
                 .graph_digest(
                     g1,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             pinned
@@ -2528,7 +2559,7 @@ mod tests {
         let mut bundle = empty_bundle();
         let before = bundle
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
@@ -2536,7 +2567,7 @@ mod tests {
         let digest = bundle
             .graph_digest(
                 graph,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         bundle
@@ -2546,13 +2577,13 @@ mod tests {
                     note: "h".to_owned(),
                 },
                 digest,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("pin");
         assert_eq!(
             bundle
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2563,7 +2594,7 @@ mod tests {
         assert_eq!(
             bundle
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2592,12 +2623,12 @@ mod tests {
         };
         assert_ne!(
             a.digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None
             ))
             .unwrap(),
             b.digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None
             ))
             .unwrap(),
@@ -2610,7 +2641,7 @@ mod tests {
         let base = empty_bundle();
         let base_digest = base
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
@@ -2629,7 +2660,7 @@ mod tests {
         assert_ne!(
             with_resource
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2642,7 +2673,7 @@ mod tests {
     fn digest_is_sensitive_to_a_blob() {
         let base_digest = empty_bundle()
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
@@ -2657,7 +2688,7 @@ mod tests {
         assert_ne!(
             with_blob
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2670,7 +2701,7 @@ mod tests {
     fn digest_is_sensitive_to_the_public_provenance() {
         let base_digest = empty_bundle()
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap();
@@ -2696,7 +2727,7 @@ mod tests {
         assert_ne!(
             with_prov
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2740,7 +2771,7 @@ mod tests {
                 prov,
             )
             .digest(&mut crate::CanonicalizationControl::new(
-                crate::RDFC_V2_CORPUS_POLICY,
+                crate::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap()
@@ -2815,12 +2846,12 @@ mod core_tests {
         assert_eq!(
             bundle(base())
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
                 .to_hex(),
-            "a04da97c5160a57a7a022ec256205bac9733b0840c65767144cc8240c33c4a98"
+            "bca649dd858c96964c87d0ca182d73405add78c5772d03ae4fd6064cdb8fc931"
         );
     }
 
@@ -2841,13 +2872,13 @@ mod core_tests {
         assert_ne!(
             carrier
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             carrier
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -2859,19 +2890,19 @@ mod core_tests {
                 G2,
                 &contribution(G2),
                 Note("g2"),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("single-graph accumulate succeeds");
         assert_ne!(
             grown
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             carrier
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
@@ -2881,13 +2912,13 @@ mod core_tests {
             grown
                 .graph_digest(
                     G1,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             carrier
                 .graph_digest(
                     G1,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             "and must leave every other leaf alone"
@@ -2916,13 +2947,13 @@ mod core_tests {
         assert_eq!(
             bundle(without.clone())
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             bundle(with.clone())
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -2930,13 +2961,13 @@ mod core_tests {
         assert_ne!(
             bundle(without)
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             bundle(with)
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -2960,13 +2991,13 @@ mod core_tests {
         assert_ne!(
             build(false)
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             build(true)
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -2986,13 +3017,13 @@ mod core_tests {
         assert_eq!(
             build(true)
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             renumbered
                 .pipeline_root(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -3058,7 +3089,7 @@ mod core_tests {
             let mut carrier = bundle(base());
             let before = carrier
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None,
                 ))
                 .unwrap();
@@ -3067,7 +3098,7 @@ mod core_tests {
                     G2,
                     &contribution,
                     Note("x"),
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
                 )
                 .expect_err("a stray row outside the target graph must hard-fail");
             assert!(
@@ -3078,7 +3109,7 @@ mod core_tests {
             assert_eq!(
                 carrier
                     .digest(&mut crate::CanonicalizationControl::new(
-                        crate::RDFC_V2_CORPUS_POLICY,
+                        crate::CANON_CORPUS_POLICY,
                         None
                     ))
                     .unwrap(),
@@ -3095,7 +3126,7 @@ mod core_tests {
                 G2,
                 &contribution(G2),
                 Note("ok"),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("a contained contribution must still be admitted");
         assert!(carrier.handle(G2).is_some());
@@ -3109,7 +3140,7 @@ mod core_tests {
         let before = carrier
             .graph_digest(
                 G2,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         let snapshot = carrier.clone();
@@ -3118,13 +3149,13 @@ mod core_tests {
                 G2,
                 &contribution(G2),
                 Note("grown"),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .expect("accumulate");
         let after = carrier
             .graph_digest(
                 G2,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap();
         assert_ne!(before, after, "the fixture must actually move <g2>");
@@ -3132,7 +3163,7 @@ mod core_tests {
             snapshot
                 .graph_digest(
                     G2,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap(),
             before,
@@ -3141,13 +3172,13 @@ mod core_tests {
         assert_eq!(
             snapshot
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             bundle(base())
                 .digest(&mut crate::CanonicalizationControl::new(
-                    crate::RDFC_V2_CORPUS_POLICY,
+                    crate::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()

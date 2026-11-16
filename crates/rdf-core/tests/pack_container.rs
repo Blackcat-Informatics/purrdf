@@ -164,12 +164,12 @@ fn build_bytes_is_deterministic_for_a_rich_dataset() {
     let dataset = rich_fixture();
     let a = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
     let b = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
     assert_eq!(a, b, "PackBuilder::build_bytes must be byte-deterministic");
@@ -194,7 +194,7 @@ fn golden_bytes_match_committed_fixture() {
     let dataset = small_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
     let golden = std::fs::read(GOLDEN_PATH).unwrap_or_else(|e| {
@@ -222,7 +222,7 @@ fn regenerate_pack_small_golden() {
     let dataset = small_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
     std::fs::write(GOLDEN_PATH, &bytes).expect("writes the golden fixture file");
@@ -233,7 +233,7 @@ fn round_trip_exposes_capabilities_and_digest() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -267,7 +267,7 @@ fn from_bytes_rejects_a_corrupted_section_body() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -291,7 +291,7 @@ fn from_bytes_rejects_a_flipped_magic_byte() {
     let dataset = rich_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -307,7 +307,7 @@ fn from_bytes_rejects_truncated_input() {
     let dataset = small_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -367,7 +367,7 @@ fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
     let dataset = b.freeze().expect("valid dataset");
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -438,7 +438,7 @@ fn from_bytes_rejects_unsupported_version() {
     let dataset = small_fixture();
     let bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
 
@@ -553,12 +553,12 @@ fn build_view_bytes_over_a_composite_equals_build_bytes_over_the_flat_dataset() 
 
     let flat = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds");
     let shared = PackBuilder::build_view_bytes(
         &composite,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("builds from the composite");
     assert_eq!(
@@ -567,7 +567,7 @@ fn build_view_bytes_over_a_composite_equals_build_bytes_over_the_flat_dataset() 
     );
     verify_pack(
         &shared,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("a composite-built pack certifies its own identity");
 }
@@ -593,18 +593,12 @@ fn build_view_bytes_over_a_delta_equals_the_flat_dataset_it_snapshots() {
     assert_eq!(
         PackBuilder::build_view_bytes(
             &delta,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("builds from the delta"),
         PackBuilder::build_bytes(
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("builds"),
         "delta and flat pack bytes must be byte-identical"
@@ -638,18 +632,12 @@ fn build_view_bytes_over_a_graph_selection_equals_the_equivalent_flat_dataset() 
     assert_eq!(
         PackBuilder::build_view_bytes(
             &selected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("builds from the selection"),
         PackBuilder::build_bytes(
             &selected_graph_expectation(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("builds"),
         "a packed selection must equal the packed flat projection"
@@ -673,7 +661,7 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     ));
     let err = PackBuilder::build_view_bytes(
         &truncating,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect_err("a truncated read must never be framed as a pack");
     assert!(
@@ -692,7 +680,7 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     assert_eq!(spent.quads().count(), 0, "the budget is already gone");
     let err = PackBuilder::build_view_bytes(
         &spent,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect_err("an already-faulted view must never be framed as a pack");
     assert!(
@@ -713,18 +701,12 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     assert_eq!(
         PackBuilder::build_view_bytes(
             &generous,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("an intact read packs"),
         PackBuilder::build_bytes(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("builds"),
         "an intact fallible view must pack exactly as its flat source does"

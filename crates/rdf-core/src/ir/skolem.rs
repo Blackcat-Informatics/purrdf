@@ -368,6 +368,13 @@ pub(crate) trait TermMapper {
     /// ID in the source dictionary; only an interested recorder looks it up.
     fn record_embedded_iri(&mut self, _iri: &str, _target: TermId) {}
 
+    /// Whether a composite literal's lexical form is kept as written. A mapper
+    /// that answers `true` treats the text as a literal: a blank label spelled
+    /// inside it is text, not a blank node of the graph, so nothing is rewritten.
+    fn composite_text_is_verbatim(&self) -> bool {
+        false
+    }
+
     /// Observe the implicit predicate after all reifier records have been
     /// inserted. Callers without mappings need no builder lookup.
     fn record_reifier_predicate(&mut self, _builder: &RdfDatasetBuilder) {}
@@ -409,7 +416,14 @@ fn reintern<M: TermMapper>(
                     // `intern_literal` re-derives from the string below.
                     let mapped_datatype = mapper.map_iri(builder, dt, true)?;
                     mapper.record_term(datatype, mapped_datatype);
-                    let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, *mapper)?;
+                    // A verbatim mapper still sees every term the text embeds, so its
+                    // recorder maps them, but keeps the text as written.
+                    let rewritten = remap_composite_lexical(ds, builder, lexical, dt, *mapper)?;
+                    let lexical_form = if mapper.composite_text_is_verbatim() {
+                        lexical.to_owned()
+                    } else {
+                        rewritten
+                    };
                     Ok(builder.intern_literal(RdfLiteral {
                         lexical_form,
                         datatype: Some(dt.to_owned()),
@@ -889,13 +903,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &back,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
@@ -916,13 +930,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &a,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1257,7 +1271,7 @@ mod tests {
         let ds = hostile_dataset();
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         let round = deskolemize(&skolemize(&ds, AUTHORITY).expect("skolemize"), AUTHORITY)
@@ -1265,13 +1279,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &relabeled,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1279,13 +1293,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &round,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1347,7 +1361,7 @@ mod tests {
         let desk = deskolemize(&sk, AUTHORITY).expect("deskolemize");
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         for (name, out) in [
@@ -1391,7 +1405,7 @@ mod tests {
         let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         for (name, out) in [("skolemize", &sk), ("canonical_relabel", &relabeled)] {

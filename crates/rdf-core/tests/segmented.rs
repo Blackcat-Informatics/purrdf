@@ -978,7 +978,7 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     // migration keeps it without a sidecar.
     let current = purrdf_core::PackBuilder::build_bytes(
         source.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let migrated = SegmentedImage::from_pack_v1(&current, limits).unwrap();
@@ -1002,10 +1002,7 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
         purrdf_core::datasets_isomorphic(
             source.as_ref(),
             restored.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1018,7 +1015,7 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     builder.push_quad(p, p, p, None).unwrap();
     let old = purrdf_core::PackBuilder::build_bytes(
         builder.freeze().unwrap().as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(

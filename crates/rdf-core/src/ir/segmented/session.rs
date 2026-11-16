@@ -2413,7 +2413,8 @@ mod operation_tests {
 
     #[test]
     fn canonical_reserved_refusal_retains_its_original_bounded_admission() {
-        use crate::{CanonError, CanonHash, TermPosition, try_canonicalize_view};
+        use crate::rdfc12::{CanonHash, try_canonicalize_view};
+        use crate::{CanonError, TermPosition};
         let (image, _) = image("urn:purrdf:rdfc:escaped");
         let session = image
             .open_session(SegmentedReadLimits::new(2_000_000, 1, 100, 1_000_000, 2))
@@ -2422,7 +2423,7 @@ mod operation_tests {
         let CanonError::ReservedVocabulary(refusal) = try_canonicalize_view(
             &session,
             CanonHash::Sha256,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::rdfc12::RDFC_V2_CORPUS_POLICY, None),
         )
         .unwrap_err() else {
             panic!("the reserved IRI must be refused");

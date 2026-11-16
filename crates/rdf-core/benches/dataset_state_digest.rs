@@ -86,10 +86,7 @@ fn bench_state(c: &mut Bench) {
     for (name, dataset) in cases() {
         DatasetStateDigest::from_view(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("every measured fixture is admitted");
         group.bench_function(name, |bencher| {
@@ -98,7 +95,7 @@ fn bench_state(c: &mut Bench) {
                     DatasetStateDigest::from_view(
                         black_box(&dataset),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )

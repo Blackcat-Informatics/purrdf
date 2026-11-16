@@ -128,8 +128,8 @@ use sha2::{Digest, Sha256};
 
 use crate::bytes::{read_u32_le, read_u64_le};
 use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
-use crate::ir::canon::try_canonical_sha256_view;
-use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
+use crate::{CanonError, RdfDataset, RdfStoreCapabilities};
 
 use super::dict::{PackDict, PackDictError};
 use super::side::{self, PackSideError, SideTables, SideTablesRef};

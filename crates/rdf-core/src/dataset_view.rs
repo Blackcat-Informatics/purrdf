@@ -1911,7 +1911,7 @@ impl<T: FallibleDatasetView> FallibleDatasetView for Arc<T> {
 ///
 /// Public: it is now part of a public error's own vocabulary rather than an
 /// implementation detail of this module alone. The `purrdf-core` flat-presentation
-/// view-canon entry points (`try_canonicalize_flat_view` and its siblings) carry this
+/// view-canon entry points (`try_canonicalize_checked_view` and its siblings) carry this
 /// value directly in their own typed refusal, so a caller distinguishing "the view
 /// was already broken" from "the view faulted mid-run" names this type rather than
 /// re-deriving the distinction from a rendered message.

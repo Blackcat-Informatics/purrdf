@@ -2481,7 +2481,7 @@ mod tests {
         let dataset = RdfDatasetBuilder::new().freeze().unwrap();
         let pack = PackBuilder::build_bytes(
             &dataset,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let contract = ExternalBindingContract {
@@ -2498,7 +2498,7 @@ mod tests {
             scope,
             crate::verify_pack_bytes(
                 &pack,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap(),
             &contract,
@@ -2508,7 +2508,7 @@ mod tests {
         assert!(matches!(
             crate::verify_pack_bytes(
                 b"ordinary bytes",
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             ),
             Err(crate::PackError::Truncated)
         ));

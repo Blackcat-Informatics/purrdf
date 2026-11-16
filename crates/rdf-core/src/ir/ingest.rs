@@ -768,7 +768,7 @@ mod tests {
                 datasets_isomorphic(
                     &**source,
                     &*replayed,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
                 )
                 .unwrap()
             );
@@ -844,7 +844,7 @@ mod tests {
             datasets_isomorphic(
                 &original,
                 &rebuilt,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "replayed dataset is isomorphic to the original"
@@ -897,7 +897,7 @@ mod tests {
             datasets_isomorphic(
                 &original,
                 &rebuilt,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "replayed dataset with a graph-scoped reifier/annotation must be isomorphic"
@@ -929,7 +929,7 @@ mod tests {
             datasets_isomorphic(
                 &original,
                 &rebuilt,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );

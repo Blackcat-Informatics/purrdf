@@ -47,7 +47,7 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     let base = sample_catalog();
     roundtrip(
         &base,
-        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
     );
     let mut input = base.as_input().clone();
     input.functions[0].expects.reverse();
@@ -76,7 +76,7 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     input.implementations.push(unused);
     roundtrip(
         &FnoCatalog::try_new(input).unwrap(),
-        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
     );
 
     let mut input = base.as_input().clone();
@@ -87,7 +87,7 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     input.functions.push(other);
     roundtrip(
         &FnoCatalog::try_new(input).unwrap(),
-        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
     );
 
     let mut input = base.as_input().clone();
@@ -105,7 +105,7 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
         .clone_from(&param.iri);
     roundtrip(
         &FnoCatalog::try_new(input).unwrap(),
-        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
     );
 }
 
@@ -361,7 +361,7 @@ fn strict_reader_refuses_unreproducible_rows_and_retains_original_operands() {
         }
         roundtrip(
             &catalog,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         );
     }
 }
@@ -408,7 +408,7 @@ fn document_empty_graph_and_foreign_identifier_boundaries_have_healthy_neighbors
     );
     roundtrip(
         &catalog,
-        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
     );
 }
 
@@ -498,7 +498,7 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
         assert_eq!(row.s, TermValue::iri("urn:test:reifier"));
         roundtrip(
             &catalog,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         );
     }
 }
