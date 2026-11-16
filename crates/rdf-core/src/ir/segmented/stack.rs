@@ -331,30 +331,36 @@ impl PartialEq for SegmentedStackSnapshot {
 impl Eq for SegmentedStackSnapshot {}
 
 impl SegmentedStackSnapshot {
-    pub(super) fn content_identity(&self) -> purrdf_hash::hex::Digest32 {
+    pub(super) fn content_identity(
+        &self,
+    ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
         const SNAPSHOT: purrdf_hash::Domain =
             purrdf_hash::Domain::new(b"purrdf-core/segmented-stack-snapshot/v1");
         let mut hash = purrdf_hash::blake3::Hasher::new();
         hash.update(SNAPSHOT.as_bytes());
         hash.update(&(self.layers.len() as u64).to_le_bytes());
-        fn metadata(hash: &mut purrdf_hash::blake3::Hasher, metadata: &SegmentedLayerMetadata) {
+        fn metadata(
+            hash: &mut purrdf_hash::blake3::Hasher,
+            metadata: &SegmentedLayerMetadata,
+        ) -> Result<(), purrdf_lex::allocation::StorageError> {
             for owner in [metadata.removals(), metadata.declarations()] {
                 hash.update(&[u8::from(owner.is_some())]);
                 if let Some(owner) = owner {
-                    hash.update(owner.frozen_snapshot_identity().as_bytes());
+                    hash.update(owner.frozen_snapshot_identity()?.as_bytes());
                 }
             }
+            Ok(())
         }
         for layer in self.layers.iter() {
             hash.update(layer.receipt.snapshot.as_bytes());
-            metadata(&mut hash, &layer.metadata);
+            metadata(&mut hash, &layer.metadata)?;
         }
         hash.update(&[u8::from(self.head.is_some())]);
         if let Some(head) = &self.head {
-            hash.update(head.dataset.frozen_snapshot_identity().as_bytes());
-            metadata(&mut hash, &head.metadata);
+            hash.update(head.dataset.frozen_snapshot_identity()?.as_bytes());
+            metadata(&mut hash, &head.metadata)?;
         }
-        purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
     }
 
     /// Original chronological source descriptors, including empty layers.

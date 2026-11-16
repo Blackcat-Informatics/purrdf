@@ -357,7 +357,14 @@ export interface PartialAnswers {
  * throwing it would discard the rows the budget already paid for and tell the caller the
  * engine misbehaved.
  */
-/** Actual execution coordinates; decimal seed strings retain every unsigned bit. */
+/**
+ * Actual execution coordinates; decimal seed strings retain every unsigned bit.
+ *
+ * `runIdentity` binds the request, the clock, the seed and the environment; it is
+ * `null` for a run that called extension code without a certified implementation
+ * identity. No query hashes its dataset, so a receipt carries no content identity
+ * until {@link bindExecutionReceipt} adds `contentIdentity` and `executionIdentity`.
+ */
 export type ExecutionReceipt =
   | { readonly state: "not-started" }
   | {
@@ -366,9 +373,22 @@ export type ExecutionReceipt =
       readonly entropySeed: string;
       readonly suppliedNow: boolean;
       readonly suppliedEntropySeed: boolean;
-      readonly executionIdentity: string | null;
-      readonly snapshotIdentity: string | null;
+      readonly runIdentity: string | null;
+      readonly readsFocusGraph: boolean;
+      /** Present only on a receipt {@link bindExecutionReceipt} returned. */
+      readonly contentIdentity?: string;
+      /** Present only on a receipt {@link bindExecutionReceipt} returned. */
+      readonly executionIdentity?: string;
     };
+
+/**
+ * Bind a query's execution receipt to the content identity of the dataset it read,
+ * as `Dataset#contentIdentity()` returned it: the receipt JSON with `contentIdentity`
+ * and `executionIdentity` added. Throws with code `purrdf-wasm-options` for a
+ * receipt that is not one or an identity that is not 64 hexadecimal digits, and
+ * `purrdf-wasm-receipt` for a run that cannot have an execution identity.
+ */
+export function bindExecutionReceipt(receiptJson: string, contentIdentity: string): string;
 
 export interface QueryOutcome {
   readonly executionReceipt: ExecutionReceipt;
@@ -850,6 +870,12 @@ export class Dataset implements Iterable<Quad> {
    * own at generation zero. Later changes to either leave the other as it is.
    */
   snapshot(): Dataset;
+  /**
+   * The 64-hex content identity of this dataset's current content, the snapshot every
+   * query reads: a digest of every row, computed on this call and never by a query.
+   * Bind it to a query's receipt with {@link bindExecutionReceipt}.
+   */
+  contentIdentity(): string;
   /**
    * Canonical N-Quads of the flat assertion projection (RDFC-1.0 over the
    * RDF 1.2 abstract syntax).

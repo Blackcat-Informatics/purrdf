@@ -153,6 +153,18 @@ impl crate::FallibleDatasetView for PackView<'_> {
     }
 }
 
+/// The BLAKE3 digest of the authenticated complete container bytes, computed on
+/// the first request and sealed.
+impl crate::ContentIdentified for PackView<'_> {
+    type IdentityError = std::convert::Infallible;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        Ok(*self.snapshot_identity.get_or_init(|| {
+            purrdf_hash::hex::Digest32::new(*purrdf_hash::blake3::hash(self.bytes.0).as_bytes())
+        }))
+    }
+}
+
 /// A [`PackView`] answers [`DatasetView`] directly over its decoded dictionary +
 /// borrowed bitmap-triples + borrowed side-tables — no materialization step. See
 /// the [module docs](self) for the id/`TermRef`/`GraphMatch` mapping this impl
@@ -165,10 +177,6 @@ impl DatasetView for PackView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(Some(self.snapshot_identity))
-    }
 
     fn reserve_owned_workspace(
         &self,

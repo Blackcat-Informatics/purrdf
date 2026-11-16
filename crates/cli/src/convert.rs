@@ -59,7 +59,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, LossLedger, RdfDataset};
+use purrdf_core::{LossLedger, RdfDataset};
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::SourceFormat;
 use purrdf_rdf::{CanonHash, ViewCanonError, try_canonicalize_flat_view};
@@ -87,7 +87,7 @@ struct ConvertOp<'a> {
 impl ViewOp for ConvertOp<'_> {
     type Output = LossLedger;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         canonical: &mut crate::canonical::Request,

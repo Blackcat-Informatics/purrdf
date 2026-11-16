@@ -18,7 +18,8 @@
 //! `rdfs:subClassOf` can match, so every constraint that reads the data graph sees
 //! exactly the data graph.
 
-use crate::data_view::{ShaclDatasetView, ShaclRead};
+use crate::data_view::{DataIdentityError, ShaclDatasetView, ShaclRead};
+use purrdf_core::ContentIdentified as _;
 use std::hash::Hasher as _;
 use std::sync::{Arc, OnceLock};
 
@@ -116,10 +117,10 @@ impl ClassMembershipIndex {
 #[derive(Debug, Default)]
 struct SharedIndex {
     index: OnceLock<Option<ClassMembershipIndex>>,
-    /// The view's source identity, bound on first request. Hashing a frozen
-    /// dataset's content is paid only by a consumer that reads it (a receipt or
-    /// coordinate observer), never by an ordinary bind.
-    snapshot: OnceLock<Option<purrdf_hash::hex::Digest32>>,
+    /// The view's content identity, sealed on the first request. Hashing a
+    /// frozen dataset's content is paid only by a caller that asks for it, never
+    /// by a bind, a validation or a query.
+    snapshot: OnceLock<purrdf_hash::hex::Digest32>,
     #[cfg(test)]
     builds: std::sync::atomic::AtomicUsize,
 }
@@ -484,18 +485,18 @@ impl ClassMembershipView {
 fn class_snapshot(
     base: &ShaclDatasetView,
     edges: &[(TermId, TermId)],
-) -> Option<purrdf_hash::hex::Digest32> {
+) -> Result<purrdf_hash::hex::Digest32, DataIdentityError> {
     const DOMAIN: purrdf_hash::Domain =
         purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v1");
-    let source = base
-        .snapshot_identity()
-        .unwrap_or_else(|never| match never {})?;
+    let source = base.content_identity()?;
     let mut members = purrdf_hash::multiset::Multiset256::default();
     for &edge in edges {
         let mut member = purrdf_hash::blake3::Streaming::<1024>::new();
         for id in <[TermId; 2]>::from(edge) {
+            // INVARIANT: `from_view_with_supplement` resolves every edge endpoint
+            // through `term_id_by_iri`, so each one names an IRI.
             let purrdf_core::TermRef::Iri(iri) = base.resolve_term(id) else {
-                return None;
+                unreachable!("a supplementary edge endpoint is resolved by its IRI")
             };
             purrdf_hash::frame::frame_le_with(iri.as_bytes(), &mut |bytes| {
                 member.update(bytes);
@@ -510,7 +511,7 @@ fn class_snapshot(
     hash.update(DOMAIN.as_bytes());
     hash.update(source.as_bytes());
     hash.update(&members.fingerprint(DOMAIN));
-    Some(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
 }
 
 #[cfg(test)]
@@ -733,6 +734,20 @@ impl crate::sparql::FocusGraphSource for ClassMembershipView {
     }
 }
 
+/// The identity binds the base view's identity and the supplementary subclass
+/// edges; it is sealed on the first request and shared by clones.
+impl purrdf_core::ContentIdentified for ClassMembershipView {
+    type IdentityError = DataIdentityError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, DataIdentityError> {
+        if let Some(identity) = self.shared.snapshot.get() {
+            return Ok(*identity);
+        }
+        let identity = class_snapshot(&self.base, self.supplement())?;
+        Ok(*self.shared.snapshot.get_or_init(|| identity))
+    }
+}
+
 impl DatasetView for ClassMembershipView {
     type Id = TermId;
     type ReadError = std::convert::Infallible;
@@ -741,13 +756,6 @@ impl DatasetView for ClassMembershipView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(*self
-            .shared
-            .snapshot
-            .get_or_init(|| class_snapshot(&self.base, self.supplement())))
-    }
 
     fn reserve_owned_workspace(
         &self,
@@ -1193,28 +1201,28 @@ mod tests {
         };
         assert!(!sealed(&view));
         let clone = view.clone();
-        let identity = clone.snapshot_identity().unwrap().expect("native identity");
+        let identity = clone.content_identity().unwrap();
         assert!(sealed(&view));
-        assert_eq!(view.snapshot_identity().unwrap(), Some(identity));
+        assert_eq!(view.content_identity().unwrap(), identity);
     }
 
     #[test]
     fn bound_membership_is_transitive_unique_and_built_once() {
         let (view, [rdf_type, _, sub, mid, top, _, alice, _]) = fixture();
-        let snapshot = view.snapshot_identity().unwrap().expect("native identity");
+        let snapshot = view.content_identity().unwrap();
         assert_eq!(view.build_count(), 0);
         let supplemented = ClassMembershipView::from_view_with_supplement(
             Arc::clone(&view.base),
             &[(format!("{EX}Other"), format!("{EX}Top"))],
         );
-        assert_ne!(supplemented.snapshot_identity().unwrap(), Some(snapshot));
+        assert_ne!(supplemented.content_identity().unwrap(), snapshot);
         assert_eq!(supplemented.build_count(), 0);
         assert!(view.is_instance(alice, sub));
         assert!(view.is_instance(alice, mid));
         assert!(view.is_instance(alice, top));
         assert_eq!(view.build_count(), 1);
 
-        assert_eq!(view.snapshot_identity().unwrap(), Some(snapshot));
+        assert_eq!(view.content_identity().unwrap(), snapshot);
 
         assert_eq!(
             view.quads_for_pattern(Some(alice), Some(rdf_type), Some(top), GraphMatch::Default)

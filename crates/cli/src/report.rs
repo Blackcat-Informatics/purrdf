@@ -261,7 +261,7 @@ pub(crate) fn materialize_reported_over_input(
     impl ViewOp for Op<'_> {
         type Output = Arc<RdfDataset>;
 
-        fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        fn run<D: source::InputView>(
             self,
             view: &D,
             canonical: &mut crate::canonical::Request,

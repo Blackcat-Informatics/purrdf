@@ -229,6 +229,78 @@ fn select_file_and_pack_are_byte_identical_and_non_vacuous() {
     );
 }
 
+/// The one `purrdf-execution` receipt a run printed on stderr.
+fn receipt(out: &Output) -> purrdf_lex::json::Value {
+    let text = stderr(out);
+    let line = text
+        .lines()
+        .find_map(|line| line.strip_prefix("purrdf-execution "))
+        .expect("an execution receipt");
+    purrdf_lex::json::read(line).expect("receipt JSON")
+}
+
+fn is_digest(value: &purrdf_lex::json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+/// The default receipt carries the run identity and never the data's content
+/// identity; `--content-identity` asks for it and for the execution identity
+/// binding the two. A run whose extension code nothing certifies has no
+/// execution identity, so the request is refused (exit 2, no result written)
+/// while the same run without the request still answers.
+#[test]
+fn the_content_identity_is_bound_into_the_receipt_only_on_request() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let ttl = write_file(dir.path(), "data.ttl", DATA_TTL);
+    let query = "SELECT ?o WHERE { ?s <http://example.org/knows> ?o }";
+    let fixed = ["--now", "2024-01-01T00:00:00Z", "--entropy-seed", "7"];
+    let mut args = vec!["query", "--data", &ttl];
+    args.extend(fixed);
+
+    let plain = run(&[args.as_slice(), &[query]].concat());
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    let plain_receipt = receipt(&plain);
+    assert!(is_digest(&plain_receipt["runIdentity"]));
+    assert!(plain_receipt.get("contentIdentity").is_none());
+    assert!(plain_receipt.get("executionIdentity").is_none());
+
+    let bound = run(&[args.as_slice(), &["--content-identity", query]].concat());
+    assert!(bound.status.success(), "{}", stderr(&bound));
+    assert_eq!(
+        stdout(&bound),
+        stdout(&plain),
+        "the request changes no result"
+    );
+    let bound_receipt = receipt(&bound);
+    assert_eq!(bound_receipt["runIdentity"], plain_receipt["runIdentity"]);
+    assert!(is_digest(&bound_receipt["contentIdentity"]));
+    assert!(is_digest(&bound_receipt["executionIdentity"]));
+
+    // Uncertified extension code: the request is refused, the run without it answers.
+    let aggregates = ["--aggregate-namespace", "https://example.org/agg#"];
+    let opaque = run(&[args.as_slice(), &aggregates, &[query]].concat());
+    assert!(opaque.status.success(), "{}", stderr(&opaque));
+    assert!(receipt(&opaque)["runIdentity"].is_null());
+    let refused = run(&[args.as_slice(), &aggregates, &["--content-identity", query]].concat());
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(
+        stdout(&refused).is_empty(),
+        "a refused request writes no result"
+    );
+    assert!(stderr(&refused).contains("--content-identity:"));
+    assert!(receipt(&refused).get("executionIdentity").is_none());
+
+    // The closure an entailment regime queries is not the data source.
+    let entailed = run(&[
+        args.as_slice(),
+        &["--entailment", "rdfs", "--content-identity", query],
+    ]
+    .concat());
+    assert_eq!(entailed.status.code(), Some(2), "{}", stderr(&entailed));
+}
+
 /// Each of the four SPARQL-results formats (json / xml / csv / tsv) serializes a SELECT
 /// non-vacuously and DETERMINISTICALLY (two runs are byte-identical). TSV and XML are
 /// explicit acceptance criteria and are covered here alongside JSON and CSV.

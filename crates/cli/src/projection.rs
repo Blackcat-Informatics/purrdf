@@ -3,7 +3,7 @@
 
 //! `project` and `lift` graph, tabular, and research-object carrier pipelines.
 
-use purrdf_core::{DatasetView, LossLedger};
+use purrdf_core::LossLedger;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::SourceFormat;
 use purrdf_rdf::{
@@ -29,7 +29,7 @@ struct ProjectOp<'a> {
 impl ViewOp for ProjectOp<'_> {
     type Output = ProjectionArchive;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,

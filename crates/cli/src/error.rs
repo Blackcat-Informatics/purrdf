@@ -190,6 +190,13 @@ pub enum CliError {
     GlobRdf(Box<crate::GlobRdfFailure>),
     /// Original refusal while admitting a native diagnostic owner.
     GlobRdfStorage(purrdf_lex::allocation::StorageError),
+    /// `--content-identity` asked for an execution identity the run cannot have
+    /// (exit code 2): the receipt is still printed, without one.
+    ContentIdentityRefused(purrdf_sparql_eval::ReceiptError),
+    /// `--content-identity` asked for the dataset's content identity and the view
+    /// refused to produce it (exit code 1): the receipt is still printed, without
+    /// one.
+    ContentIdentityFailed(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl CliError {
@@ -197,7 +204,9 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::WordId(error) if matches!(&**error, crate::WordIdFailure::Usage(_)) => 2,
-            Self::Usage(_) | Self::ShaclProfileRequest { .. } => 2,
+            Self::Usage(_) | Self::ShaclProfileRequest { .. } | Self::ContentIdentityRefused(_) => {
+                2
+            }
             Self::OutputPublication { .. }
             | Self::OutputIo(_)
             | Self::PartialOutputRemoved { .. }
@@ -206,6 +215,7 @@ impl CliError {
             | Self::Canonical { .. }
             | Self::ReceiptPublication { .. }
             | Self::Runtime(_)
+            | Self::ContentIdentityFailed(_)
             | Self::GlobCompile(_)
             | Self::GlobMatch(_)
             | Self::GlobIri(_)
@@ -263,6 +273,10 @@ impl fmt::Display for CliError {
             Self::GlobIri(error) => error.fmt(f),
             Self::GlobRdf(error) => error.fmt(f),
             Self::GlobRdfStorage(error) => error.fmt(f),
+            Self::ContentIdentityRefused(error) => write!(f, "--content-identity: {error}"),
+            Self::ContentIdentityFailed(error) => {
+                write!(f, "--content-identity: the content identity: {error}")
+            }
             Self::Fingerprint(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
@@ -296,6 +310,8 @@ impl std::error::Error for CliError {
             Self::GlobIri(error) => Some(error),
             Self::GlobRdf(error) => Some(&**error),
             Self::GlobRdfStorage(error) => Some(error),
+            Self::ContentIdentityRefused(error) => Some(error),
+            Self::ContentIdentityFailed(error) => Some(&**error),
             Self::Fingerprint(error) => Some(error),
             _ => None,
         }
