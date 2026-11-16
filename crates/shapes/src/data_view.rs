@@ -641,7 +641,6 @@ impl ShaclDatasetView {
             .flatten();
         let dedup = self.statements_projected && self.source_can_duplicate;
         let mut seen = ProjectionDedup::default();
-        let membership_plan = RdfDataset::probe_plan(true, true, true, GraphMatch::Default);
         self.raw_probe(*plan, s, p, o, source_graph)
             .take(if allowed { usize::MAX } else { 0 })
             .map(|q| (q, false))
@@ -661,7 +660,7 @@ impl ShaclDatasetView {
                     && overlay
                     && self
                         .raw_probe(
-                            membership_plan,
+                            RdfDataset::probe_plan(true, true, true, GraphMatch::Default),
                             Some(q.s),
                             Some(q.p),
                             Some(q.o),
