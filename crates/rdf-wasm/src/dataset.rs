@@ -18,11 +18,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
-    CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
-    SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
-    datasets_isomorphic, empty_named_graphs_dropped, serialize_dataset_to_format,
+    JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
+    SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify, datasets_isomorphic,
+    empty_named_graphs_dropped, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
-    serialize_dataset_with, try_canonicalize_flat_view,
+    serialize_dataset_with, try_canonicalize_checked_view,
 };
 use purrdf_core::DatasetHandle;
 use purrdf_lex::json::{self, Value};
@@ -758,7 +758,7 @@ impl Dataset {
     ///
     /// This surface reads caller-supplied (untrusted) documents, so a refusal —
     /// reserved vocabulary, or n-degree search budget exhaustion — comes back as a
-    /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
+    /// thrown `JsError` via the typed [`try_canonicalize_checked_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
     #[expect(
@@ -776,7 +776,7 @@ impl Dataset {
                     .inner
                     .freeze()
                     .map_err(purrdf_core::CanonError::Invalid)?;
-                match try_canonicalize_flat_view(&frozen, CanonHash::Sha256, control) {
+                match try_canonicalize_checked_view(&frozen, control) {
                     Ok(canonicalized) => Ok(canonicalized),
                     Err(ViewCanonError::Refused(cause)) => Err(cause),
                     Err(ViewCanonError::NotReady { error, .. }) => match error {},

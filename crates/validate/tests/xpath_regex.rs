@@ -199,10 +199,7 @@ fn product_validation_follows_the_selected_law() {
             &pattern_shapes(pattern),
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         for (law, expected) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
@@ -232,7 +229,7 @@ fn product_validation_follows_the_selected_law() {
         &pattern_shapes(BACKREFERENCE),
         None,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(
@@ -268,14 +265,14 @@ fn a_product_refusal_keeps_its_dimension_and_a_law_refusal_is_its_own() {
         &pattern_shapes(&over),
         None,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let neighbour = pack_shapes_product(
         &pattern_shapes(&at),
         None,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let wrong = [0_u8; 32];
@@ -352,15 +349,12 @@ fn entail(
     let selected = entail_to_ntriples_with_xpath_regex(
         &request,
         law,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )?;
     if law.is_none() {
         let compatibility = entail_to_ntriples(
             &request,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(
@@ -607,7 +601,7 @@ fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
                 profile,
                 coordinates(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -619,10 +613,7 @@ fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
             &request,
             profile,
             coordinates(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_err();
         assert!(error.to_string().contains("entail(max_stored_facts=...)"));

@@ -51,10 +51,7 @@ fn products_preserve_same_named_function_bodies_in_their_original_domains() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored = ShapesProduct::open(&bytes)
@@ -89,7 +86,7 @@ fn products_preserve_same_named_function_bodies_in_their_original_domains() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -121,10 +118,7 @@ fn a_product_keeps_definitions_reached_only_through_an_exported_root() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored = ShapesProduct::open(&bytes)
@@ -217,7 +211,7 @@ fn products_keep_same_named_definitions_in_distinct_retained_domains() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -233,7 +227,7 @@ fn products_keep_same_named_definitions_in_distinct_retained_domains() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -257,10 +251,7 @@ fn products_keep_declarations_when_no_shape_root_is_exported() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored = ShapesProduct::open(&bytes)
@@ -294,7 +285,7 @@ fn products_keep_declarations_when_no_shape_root_is_exported() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -334,19 +325,13 @@ fn product_identity_changes_with_the_exported_root_set() {
     let first = original
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let second = empty
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     assert_ne!(
@@ -428,7 +413,7 @@ fn where_products_keep_blank_operands_in_their_original_domains() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -479,7 +464,7 @@ fn where_products_keep_blank_operands_in_their_original_domains() {
                     .to_product(
                         &ShapesProfile::CORE,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -589,7 +574,7 @@ fn where_products_keep_equal_blank_labels_in_distinct_rdf_scopes() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -672,7 +657,7 @@ fn where_products_keep_equal_blank_labels_in_distinct_rdf_scopes() {
                             .to_product(
                                 &ShapesProfile::CORE,
                                 &mut purrdf_core::CanonicalizationControl::new(
-                                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                    purrdf_core::CANON_CORPUS_POLICY,
                                     None
                                 )
                             )

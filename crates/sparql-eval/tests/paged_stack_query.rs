@@ -84,7 +84,7 @@ fn assert_same_result(
             PackBuilder::build_bytes(
                 a,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -92,7 +92,7 @@ fn assert_same_result(
             PackBuilder::build_bytes(
                 e,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -187,10 +187,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     stack
         .seal_head(
             bound(2),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     assert_eq!(stack.remove(&repeated).unwrap(), values.remove(&repeated));
@@ -198,10 +195,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     stack
         .seal_head(
             bound(1),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let removed = stack.snapshot().unwrap();
@@ -242,10 +236,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     stack
         .seal_head(
             bound(3),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     matrix(&stack.snapshot().unwrap(), &oracle, QUERIES);
@@ -255,10 +246,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
         let expected = canonical_paged_seal(
             oracle.as_ref(),
             bound(n),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         for retained in [&head, &stack.snapshot().unwrap()] {
@@ -267,7 +255,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
                     PagedQueryLimits::UNBOUNDED,
                     bound(n),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -282,10 +270,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     stack
         .seal_head(
             bound(1),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let withdrawn = stack.snapshot().unwrap();
@@ -298,7 +283,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
                     PagedQueryLimits::UNBOUNDED,
                     bound(2),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -309,7 +294,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
                 withdrawn_oracle.as_ref(),
                 bound(2),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -358,7 +343,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
                 .seal_head(
                     bound(1 + step % 3),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -376,7 +361,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
                             PagedQueryLimits::UNBOUNDED,
                             bound(n),
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None
                             )
                         )
@@ -387,7 +372,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
                         oracle.as_ref(),
                         bound(n),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -402,10 +387,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
     empty
         .seal_head(
             bound(1),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     matrix(
@@ -420,7 +402,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
                     PagedQueryLimits::UNBOUNDED,
                     bound(2),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -512,10 +494,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
     stack
         .seal_head(
             bound(1),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let after = stack.snapshot().unwrap();
@@ -531,7 +510,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                             PagedQueryLimits::UNBOUNDED,
                             bound(n),
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None
                             )
                         )
@@ -542,7 +521,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                         oracle.as_ref(),
                         bound(n),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -574,10 +553,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
     stack
         .seal_head(
             bound(1),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored_sealed = stack.snapshot().unwrap();
@@ -599,7 +575,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                             PagedQueryLimits::UNBOUNDED,
                             bound(n),
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None
                             )
                         )
@@ -610,7 +586,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
                         restored_oracle.as_ref(),
                         bound(n),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -669,7 +645,7 @@ fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
                     PagedQueryLimits::UNBOUNDED,
                     bound(1),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -680,7 +656,7 @@ fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
                 oracle.as_ref(),
                 bound(1),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -867,7 +843,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
                     limits,
                     bound(1),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -944,7 +920,7 @@ fn source_faults_are_operational_sticky_and_refuse_compacted_artifacts() {
                     PagedQueryLimits::UNBOUNDED,
                     bound(1),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -1018,7 +994,7 @@ fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
                         PagedQueryLimits::UNBOUNDED,
                         bound(1),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -1091,7 +1067,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                         &view,
                         bound(1),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )
@@ -1136,7 +1112,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                     &view,
                     bound(1),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

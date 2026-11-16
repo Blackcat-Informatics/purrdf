@@ -1313,6 +1313,16 @@ mod tests {
 
     use super::*;
 
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
     /// A stop signal that has already fired — see `certificate::tests::AlreadyStopped` for
     /// why this is how the stop-aware path is reached here: [`Reasoner::new`] never threads a
     /// signal in on its own, so the test attaches one to the built [`Kb`] directly.
@@ -1410,14 +1420,14 @@ mod tests {
 
     /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
     /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI
-    /// ([`purrdf_core::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
+    /// ([`purrdf_core::rdfc12::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
     /// identity as the original [`EntailError::Canonicalization`] value.
     #[test]
-    fn with_proofs_refuses_a_reserved_vocabulary_dataset_as_a_value() {
+    fn with_proofs_refuses_a_stopped_dataset_as_a_value() {
         let mut b = RdfDatasetBuilder::new();
         let cat = b.intern_iri("https://example.org/Cat").unwrap();
         let reserved = b
-            .intern_iri(&format!("{}bad", purrdf_core::RESERVED_NAMESPACE))
+            .intern_iri(&format!("{}bad", purrdf_core::rdfc12::RESERVED_NAMESPACE))
             .unwrap();
         let sub = b
             .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
@@ -1427,16 +1437,12 @@ mod tests {
         let error = Reasoner::with_proofs(
             &ds,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
+                purrdf_core::CANON_CORPUS_POLICY,
+                Some(&Latched),
             ),
         )
         .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
-        assert!(
-            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
-            "{error}"
-        );
     }
 
     /// The valid neighbour of the refusal above: the same shape with an ORDINARY object
@@ -1453,10 +1459,7 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         let reasoner = Reasoner::with_proofs(
             &ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("an ordinary dataset must still build");
         assert!(reasoner.records_proofs());

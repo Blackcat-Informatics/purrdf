@@ -13,6 +13,7 @@ use purrdf_validate::{
     MaterializeLimits, RegimeHost, RulesHost, RulesRequest, apply_rules_to_ntriples,
     materialize_to_nquads_string, materialize_to_nquads_string_with,
 };
+use std::fmt::Write as _;
 
 /// Five `ex:p` triples.
 const DATA: &str = "<http://example.org/s0> <http://example.org/p> <http://example.org/o0> .\n\
@@ -132,27 +133,33 @@ const REGIME_HOSTS: [(RegimeHost, &str, &str); 6] = [
 
 #[test]
 fn canonical_materialization_refusal_retains_the_original_native_cause() {
-    let input = "_:x <http://example.org/link> _:y .\n\
-                 _:y <http://example.org/link> _:x .\n";
+    // The 13-node circulant of quadratic residues, in both directions: the
+    // search-free run cannot label it, so a zero limit refuses.
+    let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
+    let mut input = String::new();
+    for (u, v) in (0..13).flat_map(|u| (0..13).map(move |v| (u, v))) {
+        if u != v && squares.contains(&((v + 13 - u) % 13)) {
+            writeln!(input, "_:v{u} <http://example.org/link> _:v{v} .")
+                .expect("a String takes writes");
+        }
+    }
     let mut control =
         purrdf_core::CanonicalizationControl::new(purrdf_core::SearchPolicy::Finite(0), None);
-    let refused = materialize_to_nquads_string("rdfs", input, "", &mut control)
-        .expect_err("a symmetric blank pair requires a search frame");
+    let refused = materialize_to_nquads_string("rdfs", &input, "", &mut control)
+        .expect_err("the circulant needs a search that a zero limit refuses");
     let native = purrdf_validate::canonical::native_canonical_cause(&refused)
         .expect("the shared host boundary retains its native canonicalizer cause");
     let ReasoningError::Canonical(CanonicalServiceError::Canonical { cause, .. }) = &refused else {
         panic!("the finite refusal must retain a canonical cause");
     };
     assert!(std::ptr::eq(native, cause.as_ref()));
-    let purrdf_core::CanonError::BudgetExceeded(budget) = native else {
-        panic!("the original native cause must remain a finite search refusal");
+    let purrdf_core::CanonError::Refused(refusal) = native else {
+        panic!("the original native cause must remain the labelling's refusal");
     };
-    assert_eq!(budget.limit, 0);
-    assert_eq!(budget.work.total(), 0);
-    assert!(matches!(
-        budget.context,
-        purrdf_core::RdfcSearchContext::InitialFrame { .. }
-    ));
+    let purrdf_core::canonical_labelling::Refusal::Limit { units, .. } = refusal.as_ref() else {
+        panic!("the refusal must be the labelling's limit");
+    };
+    assert!(*units > 0, "the refusal reports the limited units it spent");
 }
 
 #[test]
@@ -164,10 +171,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             regime,
             DATA,
             "",
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the default");
         let stored: usize = unlimited
@@ -193,7 +197,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 &[],
                 &short,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -220,7 +224,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 &[],
                 &exact,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -235,7 +239,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 &[],
                 &limits(None, Some(1)),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -267,10 +271,7 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
             &[],
             &[],
             limits,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("closes")
         .report()
@@ -301,10 +302,7 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             regime,
             DATA,
             "",
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let bytes: u64 = reference
@@ -326,10 +324,7 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             &[],
             &[],
             &short,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect_err("one original byte short");
         assert!(
@@ -359,10 +354,7 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             &[],
             &[],
             &exact,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(actual.nquads(), reference.nquads());

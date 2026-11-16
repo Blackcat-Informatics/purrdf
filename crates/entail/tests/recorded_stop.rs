@@ -87,10 +87,7 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
         let dataset = taxonomy(inconsistent);
         let plain = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .consistency();
@@ -100,7 +97,7 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
             SchemaPreparationBudget::default(),
             signal.clone(),
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 Some(signal.as_ref()),
             ),
         )
@@ -127,7 +124,7 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
                 Some(result.certificate()),
                 &context,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -136,7 +133,7 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
             purrdf_entail::try_ontology_identity(
                 &dataset,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     Some(&Signal::after(usize::MAX))
                 )
             )
@@ -144,7 +141,7 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
             purrdf_entail::try_ontology_identity(
                 &dataset,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -162,7 +159,7 @@ fn recorded_stop_refuses_before_identity_preparation() {
             SchemaPreparationBudget::default(),
             signal.clone(),
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 Some(signal.as_ref())
             ),
         ),
@@ -177,7 +174,7 @@ fn recorded_stop_retains_the_signal_after_identity() {
     purrdf_entail::try_ontology_identity(
         &dataset,
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(&counter),
         ),
     )
@@ -190,7 +187,7 @@ fn recorded_stop_retains_the_signal_after_identity() {
             SchemaPreparationBudget::default(),
             signal.clone(),
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 Some(signal.as_ref())
             ),
         ),
@@ -208,7 +205,7 @@ fn recorded_stop_covers_identity_digest_streaming() {
     purrdf_entail::try_ontology_identity(
         &dataset,
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(&counter),
         ),
     )
@@ -219,7 +216,7 @@ fn recorded_stop_covers_identity_digest_streaming() {
         purrdf_entail::try_ontology_identity(
             &dataset,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 Some(&signal)
             )
         ),
@@ -230,7 +227,7 @@ fn recorded_stop_covers_identity_digest_streaming() {
     purrdf_entail::try_ontology_identity(
         &dataset,
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(&late),
         ),
     )
@@ -246,7 +243,7 @@ fn recorded_stop_reports_cancelled_search_without_a_semantic_verdict() {
         SchemaPreparationBudget::default(),
         signal.clone(),
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(signal.as_ref()),
         ),
     )
@@ -264,10 +261,7 @@ fn recorded_stop_reports_cancelled_search_without_a_semantic_verdict() {
             &Question::Consistency,
             Some(result.certificate()),
             &reasoner.proof_context().unwrap(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
 }
@@ -282,7 +276,7 @@ fn recorded_stop_preserves_preparation_budget_selection() {
     let plain = Reasoner::with_proofs_and_preparation_budget(
         &dataset,
         budget,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let signal = Arc::new(Signal::after(usize::MAX));
@@ -291,7 +285,7 @@ fn recorded_stop_preserves_preparation_budget_selection() {
         budget,
         signal.clone(),
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(signal.as_ref()),
         ),
     )
@@ -314,7 +308,7 @@ fn recorded_stop_covers_every_preparation_poll() {
         SchemaPreparationBudget::default(),
         counter.clone(),
         &mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             Some(counter.as_ref()),
         ),
     )
@@ -329,7 +323,7 @@ fn recorded_stop_covers_every_preparation_poll() {
                     SchemaPreparationBudget::default(),
                     signal.clone(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         Some(signal.as_ref())
                     ),
                 ),

@@ -2727,7 +2727,7 @@ pub enum CanonError<E = Infallible> {
     /// Logical capacity or physical storage refusal during the rewrite.
     Storage(purrdf_lex::allocation::StorageError),
     /// The n-degree search's call/permutation budget was exhausted.
-    BudgetExceeded(BudgetExceeded),
+    BudgetExceeded(Box<BudgetExceeded>),
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset refused a read or scoped scratch admission.
@@ -2744,7 +2744,7 @@ pub enum CanonError<E = Infallible> {
     /// The nested-refinement labelling refused the input: the typed refusal of
     /// its definition (`input`, `graph`, `width` or `limit`). Only the default
     /// canonicalization family returns it.
-    Refused(crate::canonical_labelling::Refusal),
+    Refused(Box<crate::canonical_labelling::Refusal>),
     /// The source spelled one term with a different length when it was read
     /// again during the same run. A source must present the same dataset for the
     /// whole of a run; this refusal detects only a change of length, not a
@@ -2756,7 +2756,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
     purrdf_hash::error_visit! {
         Invalid(cause) => "canonical-invalid" { "cause" => Cause(cause) },
         Storage(cause) => "canonical-storage" { "cause" => Cause(cause) },
-        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
+        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause.as_ref()) },
         ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
         Read(cause) => "canonical-read" { "cause" => Cause(cause) },
         OwnedAdmission(cause) => "canonical-owned-admission" { "cause" => Cause(cause) },
@@ -2790,7 +2790,7 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
                 write!(
                     f,
                     "the canonical labelling refused the input: {}",
-                    labelled::refusal_name(refusal)
+                    labelled::refusal_name(refusal.as_ref())
                 )
             }
             Self::SourceInconsistent => f.write_str(
@@ -2805,7 +2805,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
         match self {
             Self::Invalid(error) => Some(error),
             Self::Storage(error) => Some(error),
-            Self::BudgetExceeded(err) => Some(err),
+            Self::BudgetExceeded(err) => Some(err.as_ref()),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
             Self::Stopped
@@ -2820,7 +2820,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
 purrdf_lex::variant_from!(impl<E> CanonError<E> {
     Storage(purrdf_lex::allocation::StorageError),
     Invalid(crate::RdfDiagnostic),
-    BudgetExceeded(BudgetExceeded),
+    BudgetExceeded(Box<BudgetExceeded>),
     ReservedVocabulary(ReservedVocabulary)
 });
 
@@ -3137,12 +3137,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     path,
                     groups,
                 });
-                CanonError::BudgetExceeded(BudgetExceeded {
+                CanonError::BudgetExceeded(Box::new(BudgetExceeded {
                     blank_count: self.blanks.len(),
                     limit,
                     work: self.run.work(),
                     context,
-                })
+                }))
             }
         })
     }

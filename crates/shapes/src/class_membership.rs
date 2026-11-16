@@ -1094,18 +1094,24 @@ mod tests {
 
     const EX: &str = "https://example.org/class-membership/";
 
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl purrdf_core::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn canonical_refusals_cross_resident_shacl_adapters() {
-        use purrdf_core::{CanonError, CanonHash, TermPosition, try_canonicalize_view};
+    fn a_canonical_stop_crosses_resident_shacl_adapters() {
+        use purrdf_core::{CanonError, try_canonicalize_view};
         use purrdf_rdf::ir::{CompositeDatasetView, MutableDataset, ViewLimits};
 
-        for reserved in [false, true] {
-            let iri = if reserved {
-                "urn:purrdf:rdfc:wrapped"
-            } else {
-                EX
-            };
+        for stopped in [false, true] {
+            let iri = EX;
             let mut builder = RdfDatasetBuilder::new();
             let subject = builder.intern_iri(iri).unwrap();
             let predicate = builder.intern_iri("urn:predicate").unwrap();
@@ -1131,29 +1137,23 @@ mod tests {
                 let view = Arc::new(view);
                 let plain = try_canonicalize_view(
                     view.as_ref(),
-                    CanonHash::Sha256,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
-                        None,
+                        purrdf_core::CANON_CORPUS_POLICY,
+                        stopped.then_some(&Latched as &dyn purrdf_core::StopSignal),
                     ),
                 );
                 let membership = ClassMembershipView::from_view(view);
                 let derived = try_canonicalize_view(
                     &membership,
-                    CanonHash::Sha256,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
-                        None,
+                        purrdf_core::CANON_CORPUS_POLICY,
+                        stopped.then_some(&Latched as &dyn purrdf_core::StopSignal),
                     ),
                 );
                 drop(membership);
                 for result in [plain, derived] {
-                    match (reserved, result) {
-                        (true, Err(CanonError::ReservedVocabulary(refusal))) => {
-                            assert_eq!(refusal.iri(), iri);
-                            assert_eq!(refusal.position(), TermPosition::Subject);
-                        }
-                        (false, Ok(_)) => {}
+                    match (stopped, result) {
+                        (true, Err(CanonError::Stopped)) | (false, Ok(_)) => {}
                         (_, result) => panic!("unexpected wrapped canonicalization: {result:?}"),
                     }
                 }

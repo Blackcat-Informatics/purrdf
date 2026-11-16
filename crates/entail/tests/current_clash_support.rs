@@ -66,20 +66,14 @@ fn current_clash_preserves_named_and_scoped_blank_source_identity() {
         let dataset = derived(blank);
         let (answer, proof) = prove_consistency(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(answer, ProofAnswer::Inconsistent);
         let decoded = DlProof::decode(&proof.encode()).unwrap();
         let context = DlProofContext::of_ontology(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let expected = if blank {
@@ -107,19 +101,13 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
         let source = derived(blank);
         let bytes = purrdf_core::PackBuilder::build_bytes(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
         let producer = Reasoner::with_proofs(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
@@ -130,10 +118,7 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
         );
         let consumer = Reasoner::with_proofs(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
@@ -145,7 +130,7 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
                 Some(answer.certificate()),
                 &context,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -164,19 +149,13 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
         assert!(branches > 0);
         let (verdict, raw) = prove_consistency(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(verdict, ProofAnswer::Inconsistent);
         let independent = DlProofContext::of_ontology(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(
@@ -184,7 +163,7 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
             DlProofContext::of_ontology(
                 &source,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -200,7 +179,7 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
     let plain = Reasoner::new(&dataset).unwrap().consistency();
     let reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let recorded = reasoner.consistency();
@@ -215,10 +194,7 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
             &Question::Consistency,
             Some(recorded.certificate()),
             &context,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     assert!(
@@ -234,7 +210,7 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
     let other = Fixture::default().freeze();
     let wrong = DlProofContext::of_ontology(
         &other,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let proof = recorded
@@ -267,14 +243,14 @@ fn current_clash_replays_generated_existential_witnesses() {
     let dataset = fixture.freeze();
     let (answer, proof) = prove_consistency(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(answer, ProofAnswer::Inconsistent);
     let proof = DlProof::decode(&proof.encode()).unwrap();
     let context = DlProofContext::of_ontology(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(
@@ -307,7 +283,7 @@ fn current_clash_checks_fresh_refutation_assumptions_without_a_source_name() {
     let dataset = fixture.freeze();
     let mut reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let result = reasoner.class_satisfiability(&term("A")).unwrap();
@@ -321,10 +297,7 @@ fn current_clash_checks_fresh_refutation_assumptions_without_a_source_name() {
             &Question::ClassSatisfiability { class: term("A") },
             Some(result.certificate()),
             &context,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let proofs: Vec<_> = result
@@ -385,7 +358,7 @@ fn current_clash_replays_equality_before_observing_role_premises() {
     let dataset = fixture.freeze();
     let (answer, proof) = prove_consistency(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(answer, ProofAnswer::Inconsistent);
@@ -400,7 +373,7 @@ fn current_clash_replays_equality_before_observing_role_premises() {
     let proof = DlProof::decode(&proof.encode()).unwrap();
     let context = DlProofContext::of_ontology(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(
@@ -427,28 +400,19 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
         let dataset = derived(blank);
         let producer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
         let consumer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let owned = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .proof_context()
@@ -464,7 +428,7 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     Some(answer.certificate()),
                     &owned,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -493,7 +457,7 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     Some(answer.certificate()),
                     &later,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -501,10 +465,7 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
         );
         let wrong_consumer = Reasoner::with_proofs(
             &other,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let wrong = wrong_consumer.borrowed_proof_context().unwrap();
@@ -526,20 +487,14 @@ fn public_causal_service_preserves_source_scope_and_excludes_disconnected_inputs
         let dataset = derived(blank);
         let producer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
         let consumer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
@@ -640,7 +595,7 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
     let dataset = fixture.freeze();
     let mut producer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.class_satisfiability(&term("A")).unwrap();
@@ -648,7 +603,7 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
     let question = Question::ClassSatisfiability { class: term("A") };
     let mut consumer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     consumer.prepare(&question).unwrap();
@@ -680,7 +635,7 @@ fn public_causal_service_binds_the_requested_question_and_query_assumptions() {
     ));
     let wrong = Reasoner::with_proofs(
         &Fixture::default().freeze(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let wrong_ctx = wrong.borrowed_proof_context().unwrap();
@@ -741,7 +696,7 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -751,7 +706,7 @@ fn public_causal_service_checks_nominal_merge_branches_after_wire_roundtrip() {
     assert_eq!(proof.encode(), original.encode());
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -820,10 +775,7 @@ fn check_singleton_nominal_target_support() {
         let source = f.freeze();
         let producer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
@@ -831,10 +783,7 @@ fn check_singleton_nominal_target_support() {
         let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
         let consumer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
@@ -952,7 +901,7 @@ fn public_causal_service_checks_reserved_birth_and_generative_trigger() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -960,7 +909,7 @@ fn public_causal_service_checks_reserved_birth_and_generative_trigger() {
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -1073,7 +1022,7 @@ fn public_causal_service_checks_nested_reserved_origin() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -1081,7 +1030,7 @@ fn public_causal_service_checks_nested_reserved_origin() {
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -1172,10 +1121,7 @@ fn public_causal_service_preserves_literal_metadata_in_key_support() {
         let expected = source.term_value(value);
         let producer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
@@ -1183,10 +1129,7 @@ fn public_causal_service_preserves_literal_metadata_in_key_support() {
         let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
         let consumer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
@@ -1253,7 +1196,7 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -1261,7 +1204,7 @@ fn public_causal_service_checks_inverse_transitive_path_licenses() {
     let proof = purrdf_entail::ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let context = consumer.borrowed_proof_context().unwrap();

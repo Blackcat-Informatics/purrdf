@@ -156,14 +156,14 @@ fn run_case(case: &Case) -> Result<(), String> {
 
     let produced_canon_owner = try_canonicalize(
         produced.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
 
     let produced_canon = produced_canon_owner.nquads();
     let expected_canon_owner = try_canonicalize(
         expected_full.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let expected_canon = expected_canon_owner.nquads();
@@ -306,19 +306,13 @@ fn entail_dataset_composes_project_then_apply_rules() {
     assert_eq!(
         try_canonicalize(
             via_entail.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         try_canonicalize(
             via_apply.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
@@ -357,10 +351,7 @@ fn sh_order_is_order_independent_over_the_closure() {
             purrdf_shapes::entail_dataset(data.as_ref(), &shapes)
                 .expect("entail")
                 .as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     };

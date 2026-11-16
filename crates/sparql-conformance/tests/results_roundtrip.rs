@@ -217,7 +217,7 @@ fn roundtrip_srx(
 #[test]
 fn every_vendored_results_fixture_round_trips() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let root = suite_root();
     let fixtures = results_fixtures(&root);

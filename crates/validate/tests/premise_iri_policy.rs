@@ -65,10 +65,7 @@ fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
     for premise in REFUSED {
         for (service, outcome) in every_service(
             premise,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             let error = outcome.expect_err(&format!("{service} accepted premise IRI {premise:?}"));
             assert!(
@@ -84,7 +81,7 @@ fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
 fn an_absolute_premise_iri_is_accepted_by_every_service() {
     for (service, outcome) in every_service(
         ONTOLOGY,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     ) {
         outcome.unwrap_or_else(|error| panic!("{service} refused {ONTOLOGY:?}: {error}"));
     }

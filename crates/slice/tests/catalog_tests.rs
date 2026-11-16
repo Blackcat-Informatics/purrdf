@@ -7,6 +7,7 @@
 use purrdf_slice::SliceVocab;
 use purrdf_slice::artifact::ArtifactRole;
 use purrdf_slice::catalog::{SliceCatalog, SliceInventory};
+use std::fmt::Write as _;
 
 /// Pure fixtures use a caller-supplied example.org vocabulary.
 fn test_vocab() -> SliceVocab {
@@ -31,13 +32,13 @@ fn path_independence() {
     let rec_src = SliceCatalog::from_slice_dir(
         &src,
         &test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("load from src");
     let rec_dst = SliceCatalog::from_slice_dir(
         &dst,
         &test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("load from dst");
 
@@ -92,7 +93,7 @@ fn lossless_round_trip() {
     let rec = SliceCatalog::from_slice_dir(
         &dir,
         &test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("load slice");
 
@@ -134,7 +135,7 @@ fn recoverability() {
     let rec = SliceCatalog::from_slice_dir(
         &dir,
         &test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("load slice");
 
@@ -184,7 +185,7 @@ fn role_classification() {
     let rec = SliceCatalog::from_slice_dir(
         &dir,
         &test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("load slice");
 
@@ -244,7 +245,7 @@ fn physical_inventory_defers_rdf_admission_and_preserves_reserved_roles() {
     }
     let input = inventory.into_records().pop().expect("physical slice");
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
     assert!(input.into_record(&mut control).is_err());
     assert!(SliceCatalog::discover(tmp.path(), test_vocab(), &mut control).is_err());
 }
@@ -277,7 +278,7 @@ fn retained_inventory_admits_original_relative_iris_after_removal() {
     )
     .expect("relative source");
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
     let expected = SliceCatalog::from_slice_dir(&dir, &test_vocab(), &mut control)
         .expect("direct semantic admission");
     let inventory = SliceInventory::discover(tmp.path(), test_vocab()).expect("retained inputs");
@@ -294,18 +295,30 @@ fn retained_inventory_refuses_exhausted_semantic_control() {
     let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = tmp.path().join("slice");
     copy_dir_all(&fixture_dir(), &dir).expect("copy fixture");
-    std::fs::write(
-        dir.join("module.ttl"),
-        b"_:a <https://example.org/p> _:b .\n_:b <https://example.org/p> _:a .\n",
-    )
-    .expect("symmetric source");
+    // The 13-node circulant of quadratic residues, in both directions: the
+    // search-free run cannot label it, so the labelling must spend its limit.
+    let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
+    let mut source = String::new();
+    for (u, v) in (0..13).flat_map(|u| (0..13).map(move |v| (u, v))) {
+        if u != v && squares.contains(&((v + 13 - u) % 13)) {
+            writeln!(source, "_:v{u} <https://example.org/p> _:v{v} .")
+                .expect("a String takes writes");
+        }
+    }
+    std::fs::write(dir.join("module.ttl"), source).expect("circulant source");
     let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("physical inputs");
     let mut control =
         purrdf_core::CanonicalizationControl::new(purrdf_core::SearchPolicy::Finite(0), None);
     match input.into_record(&mut control) {
         Err(purrdf_slice::SliceError::Canonicalize { path, cause }) => {
             assert_eq!(path, dir.join("module.ttl"));
-            assert!(matches!(*cause, purrdf_core::CanonError::BudgetExceeded(_)));
+            let purrdf_core::CanonError::Refused(refusal) = *cause else {
+                panic!("expected the labelling's refusal, got {cause:?}");
+            };
+            assert!(matches!(
+                *refusal,
+                purrdf_core::canonical_labelling::Refusal::Limit { .. }
+            ));
         }
         other => panic!("expected a native semantic refusal, got {other:?}"),
     }
@@ -360,10 +373,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
         let rec = SliceCatalog::from_slice_dir(
             dir,
             &test_vocab(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("load slice");
         rec.artifacts

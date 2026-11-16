@@ -145,19 +145,13 @@ fn encode_is_byte_deterministic() {
     let first = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable");
     let second = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable");
 
@@ -214,10 +208,7 @@ fn encode_decode_encode_is_idempotent() {
     let round_tripped = restored
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a restored preparation re-encodes");
 

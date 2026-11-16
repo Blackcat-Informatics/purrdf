@@ -2369,7 +2369,7 @@ fn canonical_without_to_emits_canonical_nquads() {
 /// `--canonical` on a dataset carrying the canonicalizer's OWN reserved vocabulary
 /// (`urn:purrdf:rdfc:...`) is a REFUSED conversion, reported as an ordinary runtime
 /// error (exit 1, a diagnostic on stderr) — not a process abort. This is the CLI's
-/// untrusted-input contract for `--canonical`: `try_canonicalize_flat_view`'s refusal
+/// untrusted-input contract for `--canonical`: `try_canonicalize_checked_view`'s refusal
 /// comes back as a value the CLI maps into [`CliError::Runtime`], never a panic that
 /// would take the whole process down over a caller-supplied document.
 #[test]

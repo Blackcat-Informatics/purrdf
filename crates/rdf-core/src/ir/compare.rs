@@ -265,6 +265,48 @@ mod tests {
         );
     }
 
+    /// A blank label written inside a composite (`cdt:List`) literal is text:
+    /// it is not a node of the graph, so it neither co-refers with a graph
+    /// blank node nor stays out of the identity. Datasets that differ only in
+    /// such a label are not isomorphic and digest differently; datasets that
+    /// differ only in a graph-level blank label are isomorphic even when the
+    /// dictionary holds a different number of blank labels (one dataset spells
+    /// the same label in its composite text).
+    #[test]
+    fn a_composite_literal_blank_label_is_text_not_a_node() {
+        use super::super::term::BlankScope;
+        const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
+        let build = |graph_blank: &str, composite: &str| -> Arc<RdfDataset> {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, q, o) = (
+                iri(&mut b, "s"),
+                iri(&mut b, "p"),
+                iri(&mut b, "q"),
+                iri(&mut b, "o"),
+            );
+            let node = b.intern_blank(graph_blank, BlankScope::DEFAULT).unwrap();
+            let list = b
+                .intern_literal(RdfLiteral::typed(format!("[{composite}]"), LIST))
+                .unwrap();
+            b.push_quad(node, p, o, None).unwrap();
+            b.push_quad(s, q, list, None).unwrap();
+            b.freeze().expect("valid")
+        };
+        let control = || crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
+        let base = build("x", "_:x");
+        let other_text = build("x", "_:y");
+        assert!(!datasets_isomorphic(&base, &other_text, &mut control()).unwrap());
+        assert_ne!(
+            crate::try_canonical_digest_view(&*base, &mut control()).unwrap(),
+            crate::try_canonical_digest_view(&*other_text, &mut control()).unwrap(),
+        );
+        // The neighbour: only the graph-level label differs, so the two are
+        // isomorphic although the first dictionary holds one blank label and
+        // the second two.
+        let renamed = build("y", "_:x");
+        assert!(datasets_isomorphic(&base, &renamed, &mut control()).unwrap());
+    }
+
     #[test]
     fn identical_ground_datasets_are_isomorphic() {
         let a = ground_triple();

@@ -30,7 +30,7 @@ fn passes(group: &str, local: &str, control: &mut purrdf_core::CanonicalizationC
 #[test]
 fn turtle_boolean_results_grade_true_and_false_ask_answers() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     passes("type-promotion", "type-promotion-01", &mut control);
     passes("type-promotion", "type-promotion-23", &mut control);
@@ -39,7 +39,7 @@ fn turtle_boolean_results_grade_true_and_false_ask_answers() {
 #[test]
 fn rdf_xml_solutions_and_explicit_indices_grade_the_frozen_order() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     passes("sort", "dawg-sort-1", &mut control);
     passes("sort", "dawg-sort-builtin", &mut control);
@@ -50,7 +50,7 @@ fn rdf_xml_solutions_and_explicit_indices_grade_the_frozen_order() {
 #[test]
 fn the_manifest_lax_cardinality_grades_both_reduced_cases() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     passes("reduced", "reduced-1", &mut control);
     passes("reduced", "reduced-2", &mut control);
@@ -59,7 +59,7 @@ fn the_manifest_lax_cardinality_grades_both_reduced_cases() {
 #[test]
 fn query_dataset_sources_are_loaded_under_their_declared_iris() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     for local in ["01", "03", "05", "06", "07", "08", "11", "12b"] {
         passes("dataset", &format!("dawg-dataset-{local}"), &mut control);
@@ -69,7 +69,7 @@ fn query_dataset_sources_are_loaded_under_their_declared_iris() {
 #[test]
 fn named_graph_blank_scopes_survive_the_global_result_comparison() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     passes("graph", "dawg-graph-11", &mut control);
 }

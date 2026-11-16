@@ -2053,7 +2053,7 @@ mod tests {
     #[test]
     fn the_golden_vector_matches() {
         check_regime_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("the regime golden vector");
@@ -2069,7 +2069,7 @@ mod tests {
     #[test]
     fn an_inconsistent_input_is_refused_with_its_report() {
         check_inconsistent_refusal(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("the inconsistent refusal");
@@ -2084,7 +2084,7 @@ mod tests {
     #[test]
     fn the_dl_proof_golden_vector_matches() {
         check_dl_proof_golden_vectors(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("the DL proof golden vector");
@@ -2095,7 +2095,7 @@ mod tests {
     #[test]
     fn an_absent_proof_is_never_presented_as_a_verified_one() {
         check_absent_proof_is_not_verifiable(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("the absent-proof refusal");
@@ -2310,10 +2310,7 @@ mod tests {
                 host: RegimeHost::CAbi,
                 ..MaterializeLimits::default()
             },
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("rdfs closure");
         let nquads = std::str::from_utf8(nquads.as_bytes()).expect("utf8");
@@ -2373,7 +2370,7 @@ mod tests {
                     ..MaterializeLimits::default()
                 },
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -2414,7 +2411,7 @@ mod tests {
                     ..MaterializeLimits::default()
                 },
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -2434,10 +2431,7 @@ mod tests {
                 host: RegimeHost::CAbi,
                 ..MaterializeLimits::default()
             },
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect_err("a rule document for a rule-table regime");
         assert!(
@@ -2460,7 +2454,7 @@ mod tests {
                     ..MaterializeLimits::default()
                 },
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

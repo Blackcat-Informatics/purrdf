@@ -61,7 +61,7 @@ fn run_triple(
 #[test]
 fn official_default_graph_queries_use_compact_storage_and_original_grading() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite");
     let mut inventory = String::new();

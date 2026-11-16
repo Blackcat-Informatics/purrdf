@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use purrdf_core::{
-    CanonHash, DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds,
-    RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermGuard, TermRef, TermValue,
-    TripleDataset, TripleReadError, ViewOperationStatus, ViewTermId, WorkspaceReservation,
-    try_canonicalize_flat_view,
+    DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RdfDataset,
+    RdfDatasetBuilder, SparqlRequest, SparqlResult, TermGuard, TermRef, TermValue, TripleDataset,
+    TripleReadError, ViewOperationStatus, ViewTermId, WorkspaceReservation,
+    try_canonicalize_checked_view,
 };
 use purrdf_sparql_eval::{EvalCtx, FallibleSparqlError, NativeSparqlEngine, QueryOptions, eval};
 
@@ -577,21 +577,19 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
                 assert_eq!(actual.boolean(), Some(expected), "{query}");
             }
             SparqlResult::Graph(expected) => assert_eq!(
-                try_canonicalize_flat_view(
+                try_canonicalize_checked_view(
                     actual.graph().unwrap(),
-                    CanonHash::Sha256,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
                 .unwrap()
                 .nquads(),
-                try_canonicalize_flat_view(
+                try_canonicalize_checked_view(
                     expected.as_ref(),
-                    CanonHash::Sha256,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

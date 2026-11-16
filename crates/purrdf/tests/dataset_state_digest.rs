@@ -17,10 +17,7 @@ fn complete_state_identity_and_typed_refusal_are_public() {
     let result: Result<DatasetStateDigest, DatasetStateError<Infallible, ()>> =
         DatasetStateDigest::from_view(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
     let digest = result.expect("the complete empty dataset is admitted");
     assert_eq!(digest.as_bytes().len(), 32);

@@ -543,13 +543,10 @@ impl Dataset {
             .collect()
     }
 
-    /// The canonical N-Quads document (full W3C RDFC-1.0) of this dataset's quads,
-    /// **flattened** — the RDF 1.2 statement overlay (reifier bindings + annotations)
-    /// is re-materialized back into plain `rdf:reifies` / annotation triples BEFORE
-    /// canonicalizing, with no overlay re-fold. This is byte-identical to
-    /// `purrdf_rdf::canonical_nquads` over the flat quad set: both canonicalize
-    /// the same flat triple set, so the semantic digest is preserved (the native
-    /// folded `canonicalize` would instead emit reserved overlay sentinels).
+    /// The canonical N-Quads document of this dataset: the canonical line
+    /// sequence of the nested-refinement labelling, spelled as statements, with
+    /// reifier bindings and annotations written as their `rdf:reifies` and
+    /// annotation statements.
     ///
     /// # Errors
     /// Retains native storage, structural and canonicalization refusals.
@@ -964,7 +961,7 @@ mod tests {
         let ds = Dataset::parse(trig.as_bytes(), "application/trig", None, "test").unwrap();
         let mut lines: Vec<String> = ds
             .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 None,
             ))
             .unwrap()

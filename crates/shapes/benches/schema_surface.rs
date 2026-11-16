@@ -195,7 +195,7 @@ fn bench_schema_surface(c: &mut Bench) {
                 compile_schema(
                     &request,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -215,7 +215,7 @@ fn bench_schema_surface(c: &mut Bench) {
                 compile_schema(
                     &request,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -235,7 +235,7 @@ fn bench_schema_surface(c: &mut Bench) {
                 compile_schema(
                     &request,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -259,7 +259,7 @@ fn bench_schema_surface(c: &mut Bench) {
                     compile_schema(
                         &request,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -285,7 +285,7 @@ fn bench_schema_surface(c: &mut Bench) {
                     compile_schema(
                         &request,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -329,7 +329,7 @@ fn bench_schema_surface(c: &mut Bench) {
                     compile_schema(
                         &request,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -354,7 +354,7 @@ fn bench_ontology_emitters(c: &mut Bench) {
             tree.ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("tree ontology compilation")
     .compiled;
@@ -432,10 +432,7 @@ fn bench_linkml_import_scaling(c: &mut Bench) {
                 sparse.ontology.as_ref(),
                 SchemaSurfaceMode::OntologyComplete,
             ),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("sparse ontology compilation")
         .compiled;
@@ -494,7 +491,7 @@ fn bench_input_width_scaling(c: &mut Bench) {
                         compile_schema(
                             &request,
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None,
                             ),
                         )
@@ -505,10 +502,7 @@ fn bench_input_width_scaling(c: &mut Bench) {
         );
         let compiled = compile_schema(
             &request,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("untimed schema compilation")
         .compiled;

@@ -635,11 +635,7 @@ fn compute_semantic_digest(
     let dataset = Dataset::parse_with_retained_base(bytes, path, base)?;
 
     // Canonical label search and digest output share one measured native run.
-    let digest = match purrdf_core::try_flat_digest_view(
-        dataset.inner(),
-        purrdf_core::CanonHash::Sha256,
-        control,
-    ) {
+    let digest = match purrdf_core::try_canonical_digest_checked_view(dataset.inner(), control) {
         Ok(digest) => digest,
         Err(purrdf_core::ViewCanonError::Refused(cause)) => {
             return Err(match cause {
@@ -840,20 +836,14 @@ ex:subject ex:predicate ex:object .
             turtle_bytes,
             &ttl_path,
             &crate::retrieval::retrieval_base_iri(&ttl_path).expect("retrieval IRI"),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("Turtle semantic digest must not fail");
         let digest_nt = compute_semantic_digest(
             nt_bytes,
             &nt_path,
             &crate::retrieval::retrieval_base_iri(&nt_path).expect("retrieval IRI"),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("N-Triples semantic digest must not fail");
 
@@ -885,10 +875,7 @@ ex:subject ex:predicate ex:object .
             relative,
             &path,
             &crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI"),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a relative-IRI artifact resolves under its own retrieval IRI");
         assert_ne!(digest, "");
@@ -910,7 +897,7 @@ ex:subject ex:predicate ex:object .
                 &expanded_path,
                 &crate::retrieval::retrieval_base_iri(&expanded_path).expect("retrieval IRI"),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -935,7 +922,7 @@ ex:subject ex:predicate ex:object .
                 &path,
                 &crate::retrieval::retrieval_base_iri(&path).expect("retrieval IRI"),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

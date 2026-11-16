@@ -1933,10 +1933,7 @@ mod tests {
         .0;
         let nquads_owner = purrdf_core::try_canonicalize(
             &closed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let nquads = nquads_owner.nquads();
@@ -2072,10 +2069,7 @@ mod tests {
             .0;
         let nquads_owner = purrdf_core::try_canonicalize(
             &closed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let nquads = nquads_owner.nquads();

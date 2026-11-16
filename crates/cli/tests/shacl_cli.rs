@@ -1646,7 +1646,7 @@ const SECTION_AST: u32 = 2;
 fn foreign_stage_product_source(shapes_ttl: &str) -> Vec<u8> {
     purrdf_shapes::product_fixture::core_product(
         shapes_ttl,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the fixture is admitted under its explicit corpus policy")
 }

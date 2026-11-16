@@ -657,10 +657,7 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored = ShapesProduct::open(&bytes)
@@ -672,7 +669,7 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -709,7 +706,7 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -722,7 +719,7 @@ fn restored_product_reconstructs_evidence_without_changing_carried_bytes() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

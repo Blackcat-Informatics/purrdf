@@ -107,7 +107,7 @@ fn single_validated_owner() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -183,7 +183,7 @@ fn ownership_conflict() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -232,7 +232,7 @@ fn ownership_mismatch() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -323,7 +323,7 @@ fn parsed_not_textual_edges() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -445,10 +445,7 @@ fn path_independence() {
         &SliceCatalog::discover(
             tmp1.path(),
             test_vocab(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap(),
     )
@@ -458,10 +455,7 @@ fn path_independence() {
         &SliceCatalog::discover(
             tmp2.path(),
             test_vocab(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap(),
     )
@@ -539,7 +533,7 @@ fn semantic_vs_nonsemantic() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -627,7 +621,7 @@ fn declared_but_unowned_term() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -731,7 +725,7 @@ fn group_aggregate_iri_reaches_dependency_walk() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -799,7 +793,7 @@ fn query_edge_evidence(query_body: &str, defined_term: &str) -> Vec<NamedNode> {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
@@ -951,7 +945,7 @@ fn property_function_relation_iri_is_excluded_from_dependency_walk_when_configur
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
 
@@ -1052,7 +1046,7 @@ fn malformed_artifact_hard_fails_analysis() {
     let error = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect_err("a malformed ownership artifact must hard-fail discovery");
     let message = error.to_string();
@@ -1090,7 +1084,7 @@ fn every_rdf_artifact_carries_a_semantic_digest_and_no_other_kind_does() {
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("a clean slice discovers");
     let record = catalog.records().first().expect("one slice");

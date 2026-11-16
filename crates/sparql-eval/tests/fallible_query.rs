@@ -855,7 +855,7 @@ fn resident_and_pack_views_keep_the_ordinary_byte_identical_result_path() {
     let resident = local_dataset([("a", "p", "b"), ("b", "q", "c")]);
     let pack_bytes = PackBuilder::build_bytes(
         &resident,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("build pack");
     let pack = PackView::from_bytes(&pack_bytes).expect("open pack");

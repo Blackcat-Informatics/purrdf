@@ -203,7 +203,7 @@ fn entail_with<E: From<ShapesError>>(
 /// blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
 ///
-/// The writer is [`purrdf_core::try_canonicalize_flat_view`], which is
+/// The writer is [`purrdf_core::try_canonicalize_checked_view`], which is
 /// graph-CARRYING — it spells out a fourth term for any row in a named graph, and
 /// it re-materializes the RDF 1.2 statement layer in the graph that asserted it.
 /// The result is nonetheless N-Triples, byte for byte, and that is a property of
@@ -215,7 +215,7 @@ fn entail_with<E: From<ShapesError>>(
 /// silent drop.
 ///
 /// Both inputs are wholly caller-supplied, so this function calls the typed,
-/// non-panicking [`purrdf_core::try_canonicalize_flat_view`] rather than the
+/// non-panicking [`purrdf_core::try_canonicalize_checked_view`] rather than the
 /// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a reserved-vocabulary
 /// or search-budget refusal comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
@@ -247,7 +247,7 @@ fn entail_with<E: From<ShapesError>>(
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, None, data, &[], &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data, &[], &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("entailment produced");
 /// assert!(nt.nquads().contains("<http://example.org/adult>"));
 /// ```
 pub fn entail_to_ntriples_string(
@@ -317,8 +317,7 @@ fn canonical_ntriples(
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
     // reserved-vocabulary or budget-exhausting document must come back as an `Err`
     // value, not abort the process.
-    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
-    {
+    match purrdf_core::try_canonicalize_checked_view(dataset, control) {
         Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Canonical(err)),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
@@ -383,7 +382,7 @@ mod tests {
     #[test]
     fn entail_materializes_the_inferred_triple() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let nt_owner = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
             .expect("entailment produced");
@@ -442,7 +441,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn entail_is_bounded_by_the_four_limits_named_in_each_hosts_terms() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let one = |pick: usize| {
             let mut limits = RuleLimits::default();
@@ -505,7 +504,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn entail_is_deterministic() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let a_owner = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
             .expect("entailment produced");
@@ -519,7 +518,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn malformed_shapes_is_an_error() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(
             entail_to_ntriples_string("@@@ not turtle", None, DATA, &[], &mut control).is_err()
@@ -527,40 +526,41 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     }
 
     /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
-    /// wasm/Python/C-ABI boundary as-is), so a materialized dataset carrying a
-    /// reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`]) must come
-    /// back as an `Err` VALUE rather than aborting the process — the gap this
-    /// function's migration off the panicking [`purrdf_rdf::canonical_flat_nquads`]
-    /// wrapper closes.
+    /// wasm/Python/C-ABI boundary as-is), so a canonicalization that is stopped
+    /// must come back as an `Err` VALUE rather than aborting the process.
     #[test]
-    fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn entail_refuses_a_stopped_canonicalization_as_a_value_not_a_panic() {
+        #[derive(Debug)]
+        struct Latched;
+        impl purrdf_core::StopSignal for Latched {
+            fn stopped(&self) -> bool {
+                true
+            }
+        }
+        let mut control = purrdf_core::CanonicalizationControl::new(
+            purrdf_core::CANON_CORPUS_POLICY,
+            Some(&Latched),
+        );
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
-            <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control).expect_err(
-            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
-             as a value, not panic",
-        );
+            <http://example.org/bob> .\n";
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
+            .expect_err("a stopped canonicalization must refuse as a value, not panic");
         assert!(
             matches!(
                 &error,
-                ShapesError::Canonical(purrdf_core::CanonError::ReservedVocabulary(refusal))
-                    if refusal.iri() == "urn:purrdf:rdfc:bad"
-                        && refusal.position() == purrdf_core::TermPosition::Object
+                ShapesError::Canonical(purrdf_core::CanonError::Stopped)
             ),
             "{error}"
         );
     }
 
-    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
-    /// reserved prefix) in the exact same shape still entails successfully — the
-    /// refusal above is not an over-refusal of ordinary documents.
+    /// The valid neighbour of the refusal above: the exact same shape, with no stop
+    /// latched, still entails successfully.
     #[test]
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <http://example.org/bad> .\n";
@@ -582,7 +582,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn the_python_binding_repoint_is_byte_identical() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let produced_owner = entail_to_ntriples_string(
             PYTHON_BINDING_GOLDEN_SHAPES,

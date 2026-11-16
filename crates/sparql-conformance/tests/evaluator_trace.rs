@@ -793,7 +793,7 @@ fn write_golden(corpus: Corpus, control: &mut purrdf_core::CanonicalizationContr
 #[test]
 fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     assert_matches_golden(Corpus::Query, &mut control);
 }
@@ -801,7 +801,7 @@ fn the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden() {
 #[test]
 fn the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     assert_matches_golden(Corpus::Update, &mut control);
 }
@@ -812,7 +812,7 @@ fn the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden() {
 #[ignore = "regeneration path: writes the committed golden"]
 fn regenerate_evaluator_trace() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     write_golden(Corpus::Query, &mut control);
 }
@@ -823,7 +823,7 @@ fn regenerate_evaluator_trace() {
 #[ignore = "regeneration path: writes the committed golden"]
 fn regenerate_update_trace() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     write_golden(Corpus::Update, &mut control);
 }

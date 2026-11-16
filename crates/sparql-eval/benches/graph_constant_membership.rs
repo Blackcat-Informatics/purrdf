@@ -126,7 +126,7 @@ fn bench_graph_constant_membership(c: &mut Bench) {
     .expect("two sources compose");
     let bytes = pack_bytes(
         &frozen,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("the pack opens");

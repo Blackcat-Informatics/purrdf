@@ -47,10 +47,7 @@ pub(crate) fn carrier_pages(dataset: &PagedDataset) -> Vec<Vec<u8>> {
                 .expect("checked page read materializes before retaining canonical output");
         let bytes = PackBuilder::build_bytes(
             &materialized,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("complete canonical page carrier");
         ordered.push(bytes);

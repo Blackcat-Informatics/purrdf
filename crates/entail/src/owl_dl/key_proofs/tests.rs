@@ -51,10 +51,7 @@ fn recorded_key_memberships_are_checked_in_the_original_world_with_all_branches(
         assert!(matches!(ordinary.key_proofs, Records::Disabled));
         let reasoner = Reasoner::with_proofs(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let context = reasoner.borrowed_proof_context().unwrap();
@@ -124,7 +121,7 @@ fn deferred_key_recording_retains_the_original_request_and_rejects_a_later_world
             work: Some(0),
             bytes: None,
         },
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     {

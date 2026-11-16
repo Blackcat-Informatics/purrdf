@@ -548,17 +548,11 @@ fn parallel_paths_are_byte_identical_across_the_corpus() {
 
         let parallel_cmp = comparable(
             &parallel,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let sequential_cmp = comparable(
             &sequential,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
 
         assert_eq!(
@@ -781,14 +775,14 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
             comparable(
                 &parallel,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
             comparable(
                 &sequential,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -941,17 +935,11 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
     assert_eq!(
         comparable(
             &parallel,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         comparable(
             &sequential,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         "custom aggregate diverged between forced-parallel and forced-sequential evaluation"
     );

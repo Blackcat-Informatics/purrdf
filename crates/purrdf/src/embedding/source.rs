@@ -163,11 +163,7 @@ pub(super) fn canonical_source(
     dataset: &RdfDataset,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(RdfcDigest, Canonicalized), SourceAttachmentError> {
-    let (canonical, digest) = purrdf_core::try_canonicalize_sha256_view(
-        dataset,
-        purrdf_core::CanonHash::Sha256,
-        control,
-    )?;
+    let (canonical, digest) = purrdf_core::try_canonicalize_digest_view(dataset, control)?;
     let digest = RdfcDigest::from_raw(*digest.as_bytes());
     Ok((digest, canonical))
 }

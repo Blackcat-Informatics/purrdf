@@ -26,27 +26,18 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
         let dataset = shared_schema(2, 3, contradictory);
         let bytes = purrdf_core::PackBuilder::build_bytes(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
         let shared = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let packed = Reasoner::with_proofs(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let plain = Reasoner::new(&view).unwrap();
@@ -68,10 +59,7 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
         // does not borrow any prepared state from the proof producer.
         let consumer = Reasoner::with_proofs(
             &view,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let context = consumer.borrowed_proof_context().unwrap();
@@ -91,7 +79,7 @@ fn dataset_views_prepare_and_check_without_materializing_another_dataset() {
                     Some(answer.certificate()),
                     &context,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -112,7 +100,7 @@ fn dataset_views_preserve_constructor_cancellation() {
     let dataset = shared_schema(1, 1, false);
     let bytes = purrdf_core::PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let view = purrdf_core::PackView::from_bytes(&bytes).unwrap();
@@ -126,10 +114,7 @@ fn dataset_views_preserve_constructor_cancellation() {
             &view,
             SchemaPreparationBudget::default(),
             stopped,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(EntailError::Stopped)
     ));
@@ -141,7 +126,7 @@ fn borrowed_context_shares_prepared_source_and_releases_the_reasoner() {
     let dataset = shared_schema(2, 3, false);
     let consumer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let before = consumer.schema_preparation();
@@ -167,30 +152,21 @@ fn borrowed_context_matches_owned_replay_without_producer_state() {
         let dataset = shared_schema(2, 3, contradictory);
         let producer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
         let proof = answer.proof().unwrap();
         let owned = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .proof_context()
         .unwrap();
         let consumer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let borrowed = consumer.borrowed_proof_context().unwrap();
@@ -205,7 +181,7 @@ fn borrowed_context_matches_owned_replay_without_producer_state() {
                     Some(answer.certificate()),
                     context,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -233,14 +209,14 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     };
     let mut producer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.class_satisfiability(&class).unwrap();
     let proof = answer.proof().unwrap();
     let mut consumer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let unprepared = consumer.borrowed_proof_context().unwrap();
@@ -252,7 +228,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 Some(answer.certificate()),
                 &unprepared,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -268,7 +244,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     let borrowed = consumer.borrowed_proof_context().unwrap();
     let mut owner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     owner.prepare(&question).unwrap();
@@ -292,7 +268,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 Some(answer.certificate()),
                 &borrowed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -306,7 +282,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 Some(answer.certificate()),
                 &borrowed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -318,7 +294,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 Some(answer.certificate()),
                 &owned,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -332,7 +308,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 None,
                 &borrowed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -347,7 +323,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
                 Some(answer.certificate()),
                 &borrowed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -355,7 +331,7 @@ fn borrowed_context_preserves_prepared_question_and_source_refusals() {
     );
     let mut changed_consumer = Reasoner::with_proofs(
         &changed,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     changed_consumer.prepare(&question).unwrap();
@@ -381,7 +357,7 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
     ));
     let producer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -390,7 +366,7 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
         &dataset,
         SchemaPreparationBudget::default(),
         stop.clone(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let borrowed = consumer.borrowed_proof_context().unwrap();
@@ -409,10 +385,7 @@ fn borrowed_context_preserves_recording_refusal_and_caller_stop() {
             &Question::Consistency,
             Some(answer.certificate()),
             &borrowed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(DlProofError::Stopped)
     ));

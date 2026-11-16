@@ -1341,7 +1341,7 @@ mod tests {
                     Reasoner::with_proofs(
                         &source,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -1424,20 +1424,14 @@ mod tests {
         let complete = FailingSource::new(Arc::clone(&data), false, usize::MAX);
         try_ontology_identity(
             &complete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("complete identity");
         let identity_passes = complete.passes.get();
         assert!(identity_passes > 0);
         DlProofContext::of_ontology(
             &complete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("complete checking context");
 
@@ -1448,7 +1442,7 @@ mod tests {
                 let error = DlProofContext::of_ontology(
                     &source,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

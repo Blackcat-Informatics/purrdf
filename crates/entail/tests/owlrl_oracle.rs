@@ -864,7 +864,7 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
 fn input_text(fixture: &Fixture) -> purrdf_core::Canonicalized {
     try_canonicalize(
         &build(fixture),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
 }
@@ -897,7 +897,7 @@ fn purrdf_closure_lines(fixture: &Fixture) -> BTreeSet<String> {
         .unwrap_or_else(|e| panic!("{}: OWL-RL materialization refused: {e}", fixture.name));
     try_canonicalize(
         &closed,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .nquads()

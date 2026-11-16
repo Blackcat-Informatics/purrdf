@@ -86,7 +86,7 @@ fn a_schema_past_sixteen_mebibytes_emits_in_every_language_deterministically() {
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the ontology compiles")
     .compiled;
@@ -261,7 +261,7 @@ fn ontology_width_and_coverage_past_the_old_caps_emit_in_all_three_languages() {
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("65,537 actual ontology classes compile");
     let cells: usize = compilation

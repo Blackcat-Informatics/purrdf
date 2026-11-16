@@ -13,7 +13,7 @@ use purrdf_iri::vocab::{owl, rdf, rdfs};
 fn checked_fixture(input: &purrdf_core::RdfDataset) -> (DlProof, DlProofContext<'static>) {
     let producer = Reasoner::with_proofs(
         input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let result = producer.consistency();
@@ -29,7 +29,7 @@ fn checked_fixture(input: &purrdf_core::RdfDataset) -> (DlProof, DlProofContext<
         .clone();
     let consumer = Reasoner::with_proofs(
         input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     (proof, consumer.proof_context().unwrap())
@@ -318,7 +318,7 @@ fn checked_schema_recording_refuses_other_owner_tampering_legacy_and_storage_fai
     );
     let wrong = Reasoner::with_proofs(
         &Fixture::default().freeze(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()
@@ -1428,7 +1428,7 @@ fn resolution_preserves_the_consumers_typed_stop() {
         &input,
         crate::reasoner::SchemaPreparationBudget::default(),
         stop.clone(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let context = consumer.borrowed_proof_context().unwrap();
@@ -1501,7 +1501,7 @@ fn source_resolution_refuses_wrong_source_and_absent_current_support() {
     let (mut proof, context) = derived();
     let wrong = Reasoner::with_proofs(
         &Fixture::default().freeze(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()

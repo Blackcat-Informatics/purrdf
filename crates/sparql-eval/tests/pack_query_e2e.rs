@@ -226,7 +226,7 @@ fn assert_pack_matches_source(
     let single = build_fixture();
     let bytes = build_pack_bytes(
         &single,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");

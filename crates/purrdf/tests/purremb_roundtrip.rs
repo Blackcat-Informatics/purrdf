@@ -71,7 +71,7 @@ fn build_fixture(reverse_input: bool) -> Fixture {
     let rdf = rdf.freeze().expect("valid RDF 1.2 dataset");
     let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
         &rdf,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
 
@@ -203,7 +203,7 @@ fn typed_round_trip_verifies_source_and_matryoshka_views() {
     let source_report = verify_embedding_source(
         &view,
         EmbeddingSource::Purrpck(&fixture.source_bytes),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("certified source verification");
     assert_eq!(source_report.ordinals_checked(), 1);

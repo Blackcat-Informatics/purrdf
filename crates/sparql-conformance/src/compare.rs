@@ -987,31 +987,36 @@ mod tests {
     use super::*;
     use crate::manifest::TestKind;
 
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    pub(super) struct Latched;
+
+    impl purrdf_core::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// A control whose stop is already latched.
+    pub(super) fn stopped_control() -> purrdf_core::CanonicalizationControl<'static> {
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, Some(&Latched))
+    }
+
     /// Identity refusal survives input disposal and is distinct from inequality.
     #[test]
     fn graph_comparison_retains_the_original_canonicalization_refusal() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut builder = RdfDatasetBuilder::new();
         let node = builder.intern_iri("http://example.org/node").unwrap();
-        let reserved = builder.intern_iri(purrdf_core::RESERVED_NAMESPACE).unwrap();
-        builder.push_quad(node, reserved, node, None).unwrap();
+        let predicate = builder.intern_iri("http://example.org/predicate").unwrap();
+        builder.push_quad(node, predicate, node, None).unwrap();
         let dataset = builder.freeze().unwrap();
-        let original = purrdf_core::try_canonicalize(
-            &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            &original,
-            purrdf_core::CanonError::ReservedVocabulary(_)
-        ));
+        let original = purrdf_core::try_canonicalize(&dataset, &mut stopped_control()).unwrap_err();
+        assert!(matches!(&original, purrdf_core::CanonError::Stopped));
         let result = SparqlResult::Graph(dataset.into());
-        let refusal = compare_results(&result, &result, false, &mut control).unwrap_err();
+        let refusal = compare_results(&result, &result, false, &mut stopped_control()).unwrap_err();
         drop(result);
         assert_eq!(refusal, CompareError::Canonicalization(original));
         let captured = purrdf_testkit::error_capture::Capture::read(&refusal);
@@ -1028,11 +1033,10 @@ mod tests {
 
     #[test]
     fn solution_comparison_never_treats_a_refusal_as_a_reduced_mismatch() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        let mut control = stopped_control();
 
         let variables = vec!["x".to_owned()];
-        let rows = vec![vec![Some(TermValue::iri(purrdf_core::RESERVED_NAMESPACE))]];
+        let rows = vec![vec![Some(TermValue::iri("https://example.org/value"))]];
         let expected = ParsedSolutions {
             variables: variables.clone(),
             rows: rows.clone(),
@@ -1040,7 +1044,7 @@ mod tests {
         let refusal = canonical_solutions(&variables, &rows, false, &mut control).unwrap_err();
         assert!(matches!(
             &refusal,
-            CompareError::Canonicalization(purrdf_core::CanonError::ReservedVocabulary(_))
+            CompareError::Canonicalization(purrdf_core::CanonError::Stopped)
         ));
         assert_eq!(
             compare_solutions(&variables, &rows, &expected, false, &mut control).unwrap_err(),
@@ -1060,8 +1064,10 @@ mod tests {
             variables: variables.clone(),
             rows: healthy.clone(),
         };
+        let mut running =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
         assert!(
-            compare_case_solutions(&case, &variables, &healthy, &expected, false, &mut control)
+            compare_case_solutions(&case, &variables, &healthy, &expected, false, &mut running)
                 .is_ok()
         );
     }
@@ -1129,7 +1135,7 @@ mod tests {
     #[test]
     fn an_expected_failure_is_not_satisfied_by_a_run_that_succeeded() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let case = case_with(ExpectedResult::EvalError(suite_error_file(
             "infeasible-chain.err",
@@ -1197,7 +1203,7 @@ mod tests {
     #[test]
     fn literal_field_boundaries_do_not_collide() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert_ne!(
             one(lit("a", DT_B), &mut control).nquads(),
@@ -1210,7 +1216,7 @@ mod tests {
     #[test]
     fn iri_cannot_collide_with_literal() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert_ne!(
             one(TermValue::Iri("L:something".to_owned()), &mut control).nquads(),
@@ -1222,7 +1228,7 @@ mod tests {
     #[test]
     fn blank_node_relabelling_is_isomorphic() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         // A single-column row bound to a blank node must encode identically
         // regardless of the blank's original label — the core isomorphism fix.
@@ -1236,7 +1242,7 @@ mod tests {
     #[test]
     fn equal_labels_from_different_source_scopes_remain_distinct() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let variables = vec!["x".to_owned(), "y".to_owned()];
         let scoped = |scope| TermValue::Blank {
@@ -1259,7 +1265,7 @@ mod tests {
     #[test]
     fn unbound_solution_multiplicity_is_observable() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let variables = vec!["x".to_owned()];
         let expected = ParsedSolutions {
@@ -1285,7 +1291,7 @@ mod tests {
     #[test]
     fn shared_blank_across_columns_is_distinguished_from_two_distinct_blanks() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         // ?x and ?y bound to the SAME blank (coreference) must differ from ?x
         // and ?y bound to two independent blanks, even though both relabel away.
@@ -1328,7 +1334,7 @@ mod tests {
     #[test]
     fn term_position_is_not_normalized_away() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         // The same blank bound to ?x vs to ?y is a different row (position
         // matters); only blank *identity* is bijection-normalized.
@@ -1361,7 +1367,7 @@ mod tests {
     #[test]
     fn cross_row_bijection_rejects_row_local_relabelling() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let vars = ["x".to_owned()];
         let two_distinct = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
@@ -1382,7 +1388,7 @@ mod tests {
     #[test]
     fn cross_row_global_relabelling_is_equal() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let vars = ["x".to_owned()];
         let ab = &[vec![Some(blank("a"))], vec![Some(blank("b"))]];
@@ -1403,7 +1409,7 @@ mod tests {
     #[test]
     fn ordered_comparison_is_position_sensitive() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let vars = ["x".to_owned()];
         let forward = &[
@@ -1449,7 +1455,7 @@ mod tests {
     #[test]
     fn compare_solutions_ordered_flag_threads_through() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let vars = vec!["x".to_owned()];
         let rows = vec![vec![Some(lit("1", XSD_INTEGER))]];
@@ -1486,7 +1492,7 @@ mod tests {
     #[test]
     fn lax_cardinality_accepts_only_the_declared_multiplicity_range() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut case = case_with(ExpectedResult::None);
         case.lax_cardinality = true;
@@ -1521,7 +1527,7 @@ mod tests {
     #[test]
     fn lax_cardinality_preserves_global_blank_coreference_and_count_correspondence() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut case = case_with(ExpectedResult::None);
         case.lax_cardinality = true;
@@ -1727,7 +1733,7 @@ mod numeric_value_tests {
     #[test]
     fn same_datatype_value_equal_numerics_match() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (a, e, local) in [
             ("2", "2.0", "decimal"),
@@ -1750,7 +1756,7 @@ mod numeric_value_tests {
     #[test]
     fn a_different_datatype_still_mismatches() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(!matches(
             xsd("2", "integer"),
@@ -1773,7 +1779,7 @@ mod numeric_value_tests {
     #[test]
     fn a_different_value_still_mismatches() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(!matches(
             xsd("2", "decimal"),
@@ -1800,7 +1806,7 @@ mod numeric_value_tests {
     #[test]
     fn a_non_numeric_lexical_difference_still_mismatches() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(!matches(
             xsd("true", "boolean"),

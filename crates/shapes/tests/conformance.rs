@@ -157,7 +157,7 @@ fn canonical_without_messages(nt: &str) -> purrdf_core::Canonicalized {
         .unwrap_or_else(|e| panic!("a report's N-Triples parse: {e}"));
     purrdf_rdf::try_canonicalize(
         dataset.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
 }

@@ -98,7 +98,7 @@ fn lift<E>(error: ViewError<E>) -> CanonError<E> {
     match error {
         ViewError::Read(error) => CanonError::Read(error),
         ViewError::ForeignId => CanonError::SourceInconsistent,
-        ViewError::Refused(refusal) => CanonError::Refused(refusal),
+        ViewError::Refused(refusal) => CanonError::Refused(Box::new(refusal)),
         ViewError::Stopped => CanonError::Stopped,
         ViewError::Storage(error) => CanonError::Storage(error),
     }
@@ -150,9 +150,9 @@ fn document<D: DatasetView>(
         write_line(line, &mut text).map_err(|_| {
             // INVARIANT: the engine encodes every line it returns by 3.7, so
             // this is unreachable; a refusal names the line kind it cannot read.
-            CanonError::Refused(Refusal::Input {
+            CanonError::Refused(Box::new(Refusal::Input {
                 reason: InputReason::Kind,
-            })
+            }))
         })?;
         total = total
             .checked_add(text.len())
@@ -163,9 +163,9 @@ fn document<D: DatasetView>(
         run.check_stop().map_err(|_| CanonError::Stopped)?;
         text.clear();
         write_line(line, &mut text).map_err(|_| {
-            CanonError::Refused(Refusal::Input {
+            CanonError::Refused(Box::new(Refusal::Input {
                 reason: InputReason::Kind,
-            })
+            }))
         })?;
         if !text.is_empty() {
             builder.append(&text)?;

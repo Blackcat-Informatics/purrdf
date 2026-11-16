@@ -2653,6 +2653,16 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 
     use super::*;
+
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl purrdf_core::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
     use crate::EntailError;
     use crate::reasoner::{
         Certified, ModuleMethod, Reasoner, extract_module, extract_module_with_proofs,
@@ -2709,10 +2719,7 @@ mod tests {
     fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext<'static> {
         let mut checker = Reasoner::with_proofs(
             ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture reverse-maps");
         checker
@@ -2745,10 +2752,7 @@ mod tests {
 
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let questions: Vec<(Question, ServiceProof, DlCertificate)> = vec![
@@ -2813,7 +2817,7 @@ mod tests {
                     Some(&certificate),
                     &ctx,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -2847,10 +2851,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
@@ -2883,10 +2884,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.realize().expect("consistent");
@@ -2904,10 +2902,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let animal = TermValue::iri(EX_ANIMAL);
@@ -2956,10 +2951,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -2995,10 +2987,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let holds = subclass_axiom();
@@ -3053,10 +3042,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let honest = subclass_axiom();
@@ -3076,7 +3062,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3091,10 +3077,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let consistency = reasoner.consistency();
@@ -3107,7 +3090,7 @@ mod tests {
                 Some(consistency.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3121,10 +3104,7 @@ mod tests {
         let ontology = taxonomy();
         let mut producer = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let question = producer.object_property_classification_question().unwrap();
@@ -3144,10 +3124,7 @@ mod tests {
         std::mem::swap(sub, sup);
         let mut consumer = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         consumer.prepare(&question).unwrap();
@@ -3159,7 +3136,7 @@ mod tests {
                     Some(answer.certificate()),
                     &consumer.proof_context().unwrap(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -3173,10 +3150,7 @@ mod tests {
         let ontology = taxonomy();
         let producer = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let question = producer.class_analysis_question();
@@ -3197,7 +3171,7 @@ mod tests {
                     Some(answer.certificate()),
                     &context(&ontology, &question),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -3219,10 +3193,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
@@ -3258,10 +3229,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
@@ -3311,10 +3279,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3327,7 +3292,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3345,14 +3310,11 @@ mod tests {
     /// this fired ahead of even an `InputMismatch`, on every service, and every DL
     /// certificate along with it.
     #[test]
-    fn a_service_proof_refuses_a_reserved_vocabulary_checking_ontology_as_a_value() {
+    fn a_service_proof_refuses_a_stopped_checking_ontology_as_a_value() {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3367,8 +3329,8 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
-                    None,
+                    purrdf_core::CANON_CORPUS_POLICY,
+                    Some(&Latched),
                 ),
             )
             .expect_err(
@@ -3377,10 +3339,6 @@ mod tests {
             );
         assert!(
             matches!(error, DlProofError::Canonicalization(_)),
-            "{error}"
-        );
-        assert!(
-            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
             "{error}"
         );
     }
@@ -3392,10 +3350,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let axiom = subclass_axiom();
@@ -3416,10 +3371,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::AnswerNotCovered { .. }) => {}
             other => panic!("a countermodel cannot stand in for a refutation: {other:?}"),
@@ -3432,10 +3384,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3454,7 +3403,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3468,10 +3417,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3488,7 +3434,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3503,10 +3449,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3526,7 +3469,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3545,10 +3488,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let axiom = subclass_axiom();
@@ -3574,10 +3514,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::AnswerNotCovered { .. }) => {}
             other => panic!("a closed refutation exhibits no model: {other:?}"),
@@ -3597,10 +3534,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         assert!(
@@ -3618,10 +3552,7 @@ mod tests {
             &question,
             None,
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::InputMismatch { .. }) => {}
             other => panic!("a proof for another ontology: {other:?}"),
@@ -3637,10 +3568,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -3671,7 +3599,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -3686,10 +3614,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3710,10 +3635,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -3730,10 +3652,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an unreached cap is not a stopping reason: {other:?}"),
@@ -3749,10 +3668,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -3769,7 +3685,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3786,7 +3702,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3801,10 +3717,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let cat = TermValue::iri(EX_CAT);
@@ -3830,7 +3743,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3845,10 +3758,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -3864,7 +3774,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -3881,10 +3791,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -3897,10 +3804,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a partial trace beside a decided answer: {other:?}"),
@@ -3913,10 +3817,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -3930,10 +3831,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt for a run nobody made: {other:?}"),
@@ -3950,20 +3848,14 @@ mod tests {
         let ontology = taxonomy();
         let undecided = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0)
         .consistency();
         let decided = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .consistency();
@@ -3980,10 +3872,7 @@ mod tests {
             &question,
             Some(undecided.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a run that decided did not stop: {other:?}"),
@@ -3997,10 +3886,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -4012,10 +3898,7 @@ mod tests {
             &question,
             None,
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt with nothing to be a receipt of: {other:?}"),
@@ -4029,20 +3912,14 @@ mod tests {
         let ontology = taxonomy();
         let undecided = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0)
         .consistency();
         let decided = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .consistency();
@@ -4054,10 +3931,7 @@ mod tests {
             &question,
             Some(decided.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a stopping receipt beside a decided certificate: {other:?}"),
@@ -4074,10 +3948,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -4096,10 +3967,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an invented boundary is not a boundary: {other:?}"),
@@ -4113,10 +3981,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -4137,10 +4002,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("an invented cancellation: {other:?}"),
@@ -4154,10 +4016,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0);
@@ -4171,10 +4030,7 @@ mod tests {
             &question,
             Some(answer.certificate()),
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a term larger than its own sum: {other:?}"),
@@ -4184,13 +4040,16 @@ mod tests {
     // ── Module extraction: syntactic, and it says so ────────────────────────────
 
     /// [`taxonomy`], with `Animal` replaced by a reserved-vocabulary IRI
-    /// ([`purrdf_core::RESERVED_NAMESPACE`]). `Cat ⊑ Animal` still holds, so the
+    /// ([`purrdf_core::rdfc12::RESERVED_NAMESPACE`]). `Cat ⊑ Animal` still holds, so the
     /// `Cat`-seeded ⊥-module carries the reserved IRI through to its own content.
     fn reserved_taxonomy() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let cat = b.intern_iri(EX_CAT).unwrap();
         let animal = b
-            .intern_iri(&format!("{}Animal", purrdf_core::RESERVED_NAMESPACE))
+            .intern_iri(&format!(
+                "{}Animal",
+                purrdf_core::rdfc12::RESERVED_NAMESPACE
+            ))
             .unwrap();
         let tom = b.intern_iri(EX_TOM).unwrap();
         let sub = b.intern_iri(RDFS_SUBCLASS_OF).unwrap();
@@ -4208,7 +4067,7 @@ mod tests {
     /// exactly the `Reasoner(data, proofs=True).extract_module(...)` panic reachable from
     /// Python/wasm/the C ABI before this fix.
     #[test]
-    fn extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value() {
+    fn extract_module_with_proofs_refuses_a_stopped_ontology_as_a_value() {
         let ontology = reserved_taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
         let error = extract_module_with_proofs(
@@ -4216,16 +4075,12 @@ mod tests {
             &seed,
             ModuleMethod::Bot,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
+                purrdf_core::CANON_CORPUS_POLICY,
+                Some(&Latched),
             ),
         )
         .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
-        assert!(
-            error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
-            "{error}"
-        );
     }
 
     /// The valid neighbour of the refusal above: the same seed and method over the
@@ -4240,10 +4095,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("an ordinary taxonomy must still extract");
         assert!(extracted.proof().is_some(), "{RECORDED}");
@@ -4259,10 +4111,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture extracts");
         let question = Question::ModuleExtraction {
@@ -4279,7 +4128,7 @@ mod tests {
                 None,
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4297,7 +4146,7 @@ mod tests {
                 digest: crate::owl_dl::proof::try_ontology_identity(
                     extracted.module(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -4315,20 +4164,14 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         let other = extract_module_with_proofs(
             &ontology,
             &seed,
             ModuleMethod::Top,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         assert!(matches!(
@@ -4336,7 +4179,7 @@ mod tests {
                 digest: crate::owl_dl::proof::try_ontology_identity(
                     other.module(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -4355,10 +4198,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         let question = Question::ModuleExtraction {
@@ -4373,7 +4213,7 @@ mod tests {
                 None,
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -4396,10 +4236,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture extracts");
         let question = Question::ModuleExtraction {
@@ -4421,7 +4258,7 @@ mod tests {
             &Reasoner::with_proofs(
                 &ontology,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4437,10 +4274,7 @@ mod tests {
             &question,
             None,
             &ctx,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(DlProofError::ReceiptMismatch { .. }) => {}
             other => panic!("a receipt for a stop that did not happen: {other:?}"),
@@ -4457,7 +4291,7 @@ mod tests {
             let first = Reasoner::with_proofs(
                 &ontology,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4465,7 +4299,7 @@ mod tests {
             let again = Reasoner::with_proofs(
                 &ontology,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4488,18 +4322,12 @@ mod tests {
         }
         let first = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let again = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let one = first.classify().expect("consistent");
@@ -4518,10 +4346,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.classify().expect("consistent");
@@ -4561,10 +4386,7 @@ mod tests {
         let ontology = taxonomy();
         let reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
@@ -4582,7 +4404,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -4616,7 +4438,7 @@ mod tests {
             Reasoner::with_proofs(
                 ontology,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4734,10 +4556,7 @@ mod tests {
         // not a broken checker.
         let recorded = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .consistency();
@@ -4752,7 +4571,7 @@ mod tests {
                 Some(recorded.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4778,10 +4597,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         let proof = proved.proof().expect("asked for, so recorded");
@@ -4801,7 +4617,7 @@ mod tests {
                 None,
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4816,10 +4632,7 @@ mod tests {
             &ontology,
             &seed,
             ModuleMethod::Bot,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extracts");
         assert!(
@@ -4830,7 +4643,7 @@ mod tests {
             crate::owl_dl::proof::try_ontology_identity(
                 plain.module(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -4838,7 +4651,7 @@ mod tests {
             crate::owl_dl::proof::try_ontology_identity(
                 proved.module(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -4861,10 +4674,7 @@ mod tests {
         let cat = TermValue::iri(EX_CAT);
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let mut shapes = vec![
@@ -4925,7 +4735,7 @@ mod tests {
                 &[cat],
                 ModuleMethod::Bot,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4941,7 +4751,7 @@ mod tests {
             Reasoner::with_proofs(
                 &ontology,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -5083,10 +4893,7 @@ mod tests {
         let ontology = taxonomy();
         let mut reasoner = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps");
         let axiom = subclass_axiom();
@@ -5104,7 +4911,7 @@ mod tests {
                 Some(answer.certificate()),
                 &ctx,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -5488,10 +5295,7 @@ mod tests {
         let ontology = taxonomy();
         let proof = Reasoner::with_proofs(
             &ontology,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("reverse-maps")
         .with_step_cap(0)

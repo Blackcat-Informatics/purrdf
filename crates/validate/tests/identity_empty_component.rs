@@ -62,7 +62,7 @@ fn products() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         SHAPES,
         None,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("shapes pack");
     let emptied = repack(&plain, |label, value| {

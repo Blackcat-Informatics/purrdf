@@ -296,10 +296,7 @@ fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let identity = *purrdf_shapes::product::ShapesProduct::open(&bytes)

@@ -32,7 +32,7 @@ fn copy_tree(from: &Path, to: &Path) {
 #[test]
 fn every_applicable_dated_execution_passes_exactly() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let corpus = Corpus::acquire(&corpus_root()).unwrap();
     let (totals, executions) = corpus.run(&mut control).unwrap();
@@ -105,7 +105,7 @@ fn every_applicable_dated_execution_passes_exactly() {
 #[test]
 fn nested_suite_executes_the_same_reviewed_inputs() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let copy = scratch.path().join("community");
@@ -150,7 +150,7 @@ fn nested_suite_executes_the_same_reviewed_inputs() {
 #[test]
 fn an_unimplemented_profile_is_reported_apart_from_failures() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let mut profiles = Value::object::<&str, Value>([]);
     profiles["shacl12-20991231"] = Value::object([(
@@ -216,7 +216,7 @@ fn an_unimplemented_profile_is_reported_apart_from_failures() {
 #[test]
 fn a_report_graded_against_another_expectation_is_a_mismatch() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let corpus = Corpus::acquire(&corpus_root()).unwrap();
     let cases = corpus.cases().unwrap();
@@ -373,7 +373,7 @@ fn corrupted_expectation_fails(
 #[test]
 fn an_omitted_source_constraint_is_not_excused() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     corrupted_expectation_fails(
         "anchored-optional-blank-violating",
@@ -386,7 +386,7 @@ fn an_omitted_source_constraint_is_not_excused() {
 #[test]
 fn a_wrong_source_blank_is_not_repaired_by_report_isomorphism() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     // Moving the first result onto the conforming blank keeps the report graph
     // isomorphic to the original; only the source correspondence can tell.
@@ -403,7 +403,7 @@ fn a_wrong_source_blank_is_not_repaired_by_report_isomorphism() {
 #[test]
 fn a_changed_path_topology_is_a_mismatch() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     corrupted_expectation_fails(
         "complex-sequence-inverse-path",
@@ -416,7 +416,7 @@ fn a_changed_path_topology_is_a_mismatch() {
 #[test]
 fn a_missing_row_message_is_a_mismatch() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     corrupted_expectation_fails(
         "solution-message-priority",
@@ -456,7 +456,7 @@ fn query_ingress_preserves_artifact_bases_and_admitted_sources() {
     }
     replace_reviewed_bytes(&relative, "sparql/service/service-bnode-distinct.srj", br#"{"head":{"vars":["localSelf","remoteSelf"]},"results":{"bindings":[{"localSelf":{"type":"uri","value":"http://example.org/community/sparql/service/local.ttl"},"remoteSelf":{"type":"uri","value":"http://example.org/community/sparql/service/endpoint-a.ttl"}}]}}"#);
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
     let corpus = Corpus::acquire(&relative).unwrap();
     let cases = corpus.cases().unwrap();
     let case = cases
@@ -543,7 +543,7 @@ fn query_ingress_preserves_artifact_bases_and_admitted_sources() {
 #[test]
 fn the_community_earl_asserts_each_subject_and_test_once() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     use purrdf_conformance_kit::outcome::{AssertorDescription, DescriptionTerm, to_earl};
     use purrdf_iri::vocab::{earl, rdf, rdfs};

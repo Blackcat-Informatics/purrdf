@@ -465,13 +465,13 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
     let expected_full = merge(base.as_ref(), expected_triples(&tc.expected)?.as_ref())?;
     let produced_owner = try_canonicalize(
         inferred.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let produced = produced_owner.nquads();
     let expected_owner = try_canonicalize(
         expected_full.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let expected = expected_owner.nquads();
@@ -570,7 +570,7 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let produced_owner = try_canonicalize(
                 produced.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -579,7 +579,7 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let expected_owner = try_canonicalize(
                 expected.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

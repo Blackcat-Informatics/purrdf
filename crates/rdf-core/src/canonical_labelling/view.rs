@@ -7,8 +7,9 @@
 //! Lowering is outside the definition (its section 11): this is the one rule
 //! by which PurRDF supplies lines for a dataset view.
 //!
-//! * Each quad becomes a `quad` line.
-//! * Each row of the reifier side table, `(reifier, rdf:reifies, triple term,
+//! * Each distinct quad becomes a `quad` line; a view that visits a row
+//!   again repeats nothing, because a statement is a set member.
+//! * Each distinct row of the reifier side table, `(reifier, rdf:reifies, triple term,
 //!   graph)`, becomes a `reifier-binding` line of the reifier, the triple term
 //!   and the graph.
 //! * Each distinct row of the annotation side table becomes an `annotation`
@@ -309,14 +310,23 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
 
     fn lower(&mut self, records: &[Record<'_>]) -> Result<(), ViewError<D::ReadError>> {
         let view = self.view;
+        // A view may visit a physical row more than once; a statement and a
+        // reifier binding are set members, so each is lowered once. An
+        // annotation row is not a set member: its multiplicity is its count.
+        let mut statements = BTreeSet::new();
         for q in view.quads() {
-            if let Slot::Kept(g) = self.slot(q.g) {
+            if let Slot::Kept(g) = self.slot(q.g)
+                && statements.insert((q.s, q.p, q.o, g))
+            {
                 self.row(Kind::Quad, None, &[q.s, q.p, q.o], GraphTerm::Iri, g)?;
             }
         }
         // A reifier row is `(reifier, rdf:reifies, triple term, graph)`.
+        let mut bindings = BTreeSet::new();
         for q in view.reifier_quads() {
-            if let Slot::Kept(g) = self.slot(q.g) {
+            if let Slot::Kept(g) = self.slot(q.g)
+                && bindings.insert((q.s, q.o, g))
+            {
                 self.row(
                     Kind::ReifierBinding,
                     None,

@@ -128,7 +128,7 @@ fn knn_space() -> EmbeddingSpace {
     let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(
         &empty,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
 

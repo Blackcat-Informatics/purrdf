@@ -40,7 +40,7 @@ fn source_fixture(
     let dataset = dataset.freeze().expect("dataset");
     let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
     let columnar_files = compression.map(|compression| {
@@ -53,10 +53,7 @@ fn source_fixture(
     let source = columnar_files.as_ref().map_or(source, |files| {
         CertifiedEmbeddingSource::certify(
             EmbeddingSource::Columnar(files),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     });
@@ -114,7 +111,7 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
     verify_embedding_source(
         &view,
         EmbeddingSource::Purrpck(&fixture.source_bytes),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("exact source");
 
@@ -123,10 +120,7 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
         verify_embedding_source(
             &view,
             EmbeddingSource::Purrpck(short),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::SourceLengthMismatch { .. }
@@ -138,10 +132,7 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
         verify_embedding_source(
             &view,
             EmbeddingSource::Purrpck(&changed),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::DigestMismatch { .. }
@@ -205,10 +196,7 @@ fn assert_wrong_rdf_claim(fixture: &Fixture) {
                 EmbeddingSource::Purrpck(&fixture.source_bytes),
                 EmbeddingSource::Columnar,
             ),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::DigestMismatch { .. }
@@ -241,7 +229,7 @@ fn attachment_verification_rejects_a_stale_source_ordinal() {
                 &view,
                 EmbeddingSource::Purrpck(&fixture.source_bytes),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -290,10 +278,7 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
         let report = verify_embedding_source(
             &view,
             EmbeddingSource::Columnar(files),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(
@@ -306,7 +291,7 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
                 &view,
                 EmbeddingSource::Purrpck(&fixture.source_bytes),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -322,7 +307,7 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
                     &view,
                     EmbeddingSource::Columnar(&changed),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 ),
@@ -339,10 +324,7 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
         let changed = purrdf::columnar::write(&*read.dataset, &blobs, compression).unwrap();
         let certificate = CertifiedEmbeddingSource::certify(
             EmbeddingSource::Columnar(&changed.files),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(
@@ -355,7 +337,7 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
                 &view,
                 EmbeddingSource::Columnar(&changed.files),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -379,12 +361,12 @@ fn columnar_empty_tables_require_five_valid_files_and_preserve_native_causes() {
     .files;
     let certificate = CertifiedEmbeddingSource::certify(
         EmbeddingSource::Columnar(&files),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let (pack, _) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(
@@ -397,10 +379,7 @@ fn columnar_empty_tables_require_five_valid_files_and_preserve_native_causes() {
         let missing = ParquetFiles::from_array(missing);
         let error = CertifiedEmbeddingSource::certify(
             EmbeddingSource::Columnar(&missing),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_err();
         drop(missing);
@@ -441,10 +420,7 @@ fn exact_columnar_files_still_require_complete_strict_validation() {
         verify_embedding_source(
             &view,
             EmbeddingSource::Columnar(&files),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         Err(SourceAttachmentError::Columnar(_))
     ));

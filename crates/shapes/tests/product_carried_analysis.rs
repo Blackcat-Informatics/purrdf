@@ -329,10 +329,7 @@ fn the_ast_section_ends_with_the_class_analysis() {
     let ast = section_of(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         SECTION_AST,
@@ -380,16 +377,13 @@ fn the_ast_section_ends_with_the_class_analysis() {
 fn a_restore_uses_the_carried_analysis_verbatim() {
     let ghost_product = core_product(
         SHAPES_WITH_GHOST,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("fixture product");
     let forged = with_catalog_tail(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         &ranked_tail(&CLASSES_WITH_GHOST),
@@ -426,7 +420,7 @@ fn a_restore_uses_the_carried_analysis_verbatim() {
 fn an_untouched_repack_still_admits() {
     let product = core_product(
         SHAPES,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("fixture product");
     let repacked = reframe(&product, &section_of(&product, SECTION_AST), None);
@@ -455,10 +449,7 @@ fn a_carried_analysis_the_identity_does_not_pin_is_refused() {
     let forged = with_catalog_tail(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         &ranked_tail(&CLASSES_WITH_GHOST),
@@ -492,10 +483,7 @@ fn a_rearranged_analysis_is_refused() {
     let forged = with_catalog_tail(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         &swapped,
@@ -528,7 +516,7 @@ fn a_rearranged_analysis_is_refused() {
 fn an_analysis_that_is_not_an_arrangement_of_its_own_slots_is_refused() {
     let product = core_product(
         SHAPES,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("fixture product");
     for (what, tail) in [
@@ -579,10 +567,7 @@ fn a_valid_but_underived_arrangement_is_not_refused_as_malformed() {
     let refusal = admit(&with_catalog_tail(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         &swapped,
@@ -619,10 +604,7 @@ fn rebuild_ignores_the_carried_analysis() {
     let forged = with_catalog_tail(
         &core_product(
             SHAPES,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture product"),
         &undecodable,
@@ -666,7 +648,7 @@ fn rebuild_ignores_the_carried_analysis() {
 fn parsing_admitting_and_rebuilding_agree() {
     let product = core_product(
         SHAPES,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("fixture product");
     let parsed = expected_report_nt();
@@ -763,10 +745,7 @@ fn an_admitted_product_constrains_exactly_as_a_fresh_parse_does() {
     let product = parsed
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable as a product");
     let admitted = admit(&product).expect("the product admits in the process that wrote it");

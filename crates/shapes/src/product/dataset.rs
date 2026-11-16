@@ -437,10 +437,7 @@ mod tests {
     fn canonical(dataset: &RdfDataset) -> purrdf_core::Canonicalized {
         try_canonicalize(
             dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixture datasets canonicalize")
     }
@@ -452,10 +449,7 @@ mod tests {
         let source = dataset_of(PLAIN_SHAPES);
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
         let restored = open_dataset(&bytes).expect("open");
@@ -478,7 +472,7 @@ mod tests {
             encode_dataset(
                 &source,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -490,7 +484,7 @@ mod tests {
             encode_dataset(
                 &restored,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -507,10 +501,7 @@ mod tests {
         let source = Shapes::default().dataset().clone();
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode the empty dataset");
         let restored = open_dataset(&bytes).expect("open the empty dataset");
@@ -522,10 +513,7 @@ mod tests {
         );
         certify_dataset(
             &bytes,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("an empty section certifies");
     }
@@ -537,19 +525,13 @@ mod tests {
         let source = dataset_of(PLAIN_SHAPES);
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
 
         let certified = certify_dataset(
             &bytes,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("certify");
         let stored = pack_digest(&bytes).expect("read the stored identity");
@@ -564,18 +546,12 @@ mod tests {
         let restored = open_dataset(&bytes).expect("open");
         let reencoded = encode_dataset(
             &restored,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("re-encode");
         let recertified = certify_dataset(
             &reencoded,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("re-certify");
         assert_eq!(
@@ -588,10 +564,7 @@ mod tests {
         // this the assertion above would hold for a constant.
         let other = encode_dataset(
             &dataset_of(RDF12_SHAPES),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode the other fixture");
         assert_ne!(
@@ -599,7 +572,7 @@ mod tests {
             certify_dataset(
                 &other,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -616,10 +589,7 @@ mod tests {
         let source = dataset_of(PLAIN_SHAPES);
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
 
@@ -648,10 +618,7 @@ mod tests {
         // TIER 2 — certification refuses, because only it recomputes.
         let refusal = certify_dataset(
             &tampered,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect_err("a tampered identity must NOT certify");
         assert_eq!(
@@ -665,10 +632,7 @@ mod tests {
         // above — over-refusal is the mirror of a silent drop and hides just as well.
         certify_dataset(
             &bytes,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the untampered section must certify");
     }
@@ -679,10 +643,7 @@ mod tests {
     fn refusals_name_their_dimension_and_neighbours_still_open() {
         let bytes = encode_dataset(
             &dataset_of(PLAIN_SHAPES),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
 
@@ -718,10 +679,7 @@ mod tests {
         assert!(restored.quad_count() > 0);
         certify_dataset(
             &bytes,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the untouched section must certify");
 
@@ -763,7 +721,7 @@ mod tests {
             let section = encode_dataset(
                 direct.dataset(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -810,10 +768,7 @@ mod tests {
 
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
         let restored = open_dataset(&bytes).expect("open");
@@ -881,10 +836,7 @@ mod tests {
 
         let bytes = encode_dataset(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode");
         let restored = open_dataset(&bytes).expect("open");

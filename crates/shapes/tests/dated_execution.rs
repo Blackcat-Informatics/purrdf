@@ -677,10 +677,7 @@ fn product_admit_rebuild_and_expectation_doors_reconstruct_the_current_bundle() 
     let bytes = preparation
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let expected = *ShapesProduct::open(&bytes)
@@ -716,7 +713,7 @@ fn product_admit_rebuild_and_expectation_doors_reconstruct_the_current_bundle() 
                     .to_product(
                         &ShapesProfile::CORE,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     )

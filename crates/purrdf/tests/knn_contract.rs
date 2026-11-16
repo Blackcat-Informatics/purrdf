@@ -55,7 +55,7 @@ fn fixture_with_indexes(
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
 
@@ -1420,7 +1420,7 @@ fn a_derived_index_guard_naming_this_space_is_checked_and_a_matching_one_is_admi
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
     let coordinates = IndexCoordinates {
@@ -1507,7 +1507,7 @@ fn prefixed_fixture(
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
 

@@ -101,7 +101,7 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
         &[],
         0,
         0,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the ontology reverse-maps");
     assert_eq!(
