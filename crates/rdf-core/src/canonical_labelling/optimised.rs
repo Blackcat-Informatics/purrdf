@@ -730,7 +730,8 @@ impl<'a> Engine<'a> {
             .sum();
         units.fix += s + entries.len() as u64 + removed_incidences;
         // A child is stopped when its `s` is greater than the best's, or when
-        // its `s` is equal and it has more entries (10.4).
+        // its `s` is equal and its sorted entries come after the best's in list
+        // order (10.4).
         let cut = bound.and_then(|best| {
             if !self.options.stops {
                 return None;
