@@ -332,6 +332,21 @@ impl WorkspaceReservation for TripleReservation<'_> {
     }
 }
 
+/// The triple carrier's identity, computed on the first request and sealed; a
+/// read that already failed refuses.
+impl crate::ContentIdentified for TripleRead<'_> {
+    type IdentityError = TripleReadError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        self.dataset
+            .frozen_snapshot_identity()
+            .map_err(TripleReadError::Storage)
+    }
+}
+
 impl DatasetView for TripleRead<'_> {
     type Id = TermId;
     type ReadError = TripleReadError;
@@ -340,13 +355,6 @@ impl DatasetView for TripleRead<'_> {
     where
         Self: 'a;
     type ProbePlan = TripleOrder;
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        if let Some(error) = self.read_error() {
-            return Err(error);
-        }
-        Ok(Some(self.dataset.snapshot_identity))
-    }
 
     fn read_error(&self) -> Option<Self::ReadError> {
         if !self.failure.failed.load(Ordering::Acquire) {

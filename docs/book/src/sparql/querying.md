@@ -2342,6 +2342,22 @@ Invalid coordinates fail before UPDATE data is read, after the existing global
 initialization. Native callers supply the same `QueryOptions` to
 `update_with_options`, `update_governed` or `update_governed_handle`.
 
+Every run prints its execution receipt on stderr as `purrdf-execution {...}`:
+the effective time and seed, which of them were supplied, the run identity
+(`runIdentity`, which binds the query, its parameters, these inputs and the
+evaluation environment) and whether a focus graph was read. No query hashes its
+dataset, so the receipt carries no content identity by default. `purrdf query
+--content-identity` asks for one: the receipt then also carries
+`contentIdentity`, a digest of every row of the data source, and
+`executionIdentity`, which binds the run to it. A run that calls extension code
+nothing certifies (`--aggregate-namespace`, `--path-relation`) has no run
+identity; with `--content-identity` it prints its receipt, writes no result and
+exits 2. The flag is refused beside `--entailment`, whose closure is not the
+data source. The C ABI (`purrdf_execution_receipt_bind`), the wasm package
+(`Dataset#contentIdentity`, `bindExecutionReceipt`) and Python
+(`QuadStore.content_identity`, `purrdf.bind_execution_receipt`) bind a returned
+receipt to the content identity of the dataset it read.
+
 UPDATE remains transactional: a later-operation failure or governor trip
 publishes no mutation and the CLI writes no partial dataset. Existing governor
 and expression-error evidence retains its meaning; these flags add no

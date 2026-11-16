@@ -31,16 +31,136 @@ pub enum QueryCoordinates {
     Started(SuppliedQueryCoordinates),
 }
 
-/// Effective inputs and identities captured before the context's first draw.
+/// Effective inputs and the run identity captured before the context's first draw.
 /// Private fields preserve the original timestamp owner across every clone.
+///
+/// The coordinates carry no source content identity: a run never hashes the
+/// dataset it reads. A caller that wants a receipt supplies its sources'
+/// identities to [`execution_identity`](Self::execution_identity).
 #[derive(Debug, Clone)]
 pub struct SuppliedQueryCoordinates {
     now: DateTime,
     entropy_seed: u64,
     supplied_now: bool,
     supplied_seed: bool,
-    snapshot: Option<purrdf_hash::hex::Digest32>,
-    execution: Option<purrdf_hash::hex::Digest32>,
+    run: Option<purrdf_hash::hex::Digest32>,
+    focus_graph: bool,
+}
+
+/// The content identities of the sources one run read, supplied by a caller that
+/// wants an execution receipt. The run never computes them itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionSources {
+    dataset: purrdf_hash::hex::Digest32,
+    focus_graph: Option<purrdf_hash::hex::Digest32>,
+}
+
+impl ExecutionSources {
+    /// The sources of a run that read one dataset view, given its content identity.
+    #[must_use]
+    pub const fn new(dataset: purrdf_hash::hex::Digest32) -> Self {
+        Self {
+            dataset,
+            focus_graph: None,
+        }
+    }
+    /// Add the content identity of the run's focus graph.
+    #[must_use]
+    pub const fn with_focus_graph(mut self, identity: purrdf_hash::hex::Digest32) -> Self {
+        self.focus_graph = Some(identity);
+        self
+    }
+    /// The dataset view's content identity.
+    #[must_use]
+    pub const fn dataset(&self) -> &purrdf_hash::hex::Digest32 {
+        &self.dataset
+    }
+    /// The focus graph's content identity, when supplied.
+    #[must_use]
+    pub const fn focus_graph(&self) -> Option<&purrdf_hash::hex::Digest32> {
+        self.focus_graph.as_ref()
+    }
+
+    /// The execution identity of a run with run identity `run` over these sources,
+    /// under the `purrdf-sparql-eval/execution-coordinates/v2` law: the run
+    /// identity, the dataset's content identity, then whether the run read a focus
+    /// graph and that graph's content identity.
+    ///
+    /// This is the one home of the law. [`SuppliedQueryCoordinates::execution_identity`]
+    /// applies it to a run's own coordinates; a host applies it to the run identity
+    /// and focus flag its receipt carries.
+    ///
+    /// # Errors
+    /// [`ReceiptError::FocusGraphIdentityMissing`] or
+    /// [`ReceiptError::FocusGraphIdentityUnused`] when the sources disagree with
+    /// `reads_focus_graph`.
+    pub fn execution_identity_of(
+        &self,
+        run: &purrdf_hash::hex::Digest32,
+        reads_focus_graph: bool,
+    ) -> Result<purrdf_hash::hex::Digest32, ReceiptError> {
+        let mut digest = purrdf_hash::blake3::Streaming::<1024>::new();
+        digest.update(EXECUTION.as_bytes());
+        digest.update(run.as_bytes());
+        digest.update(self.dataset.as_bytes());
+        match (reads_focus_graph, &self.focus_graph) {
+            (true, Some(focus)) => {
+                digest.update(&[1]);
+                digest.update(focus.as_bytes());
+            }
+            (false, None) => {
+                digest.update(&[0]);
+            }
+            (true, None) => return Err(ReceiptError::FocusGraphIdentityMissing),
+            (false, Some(_)) => return Err(ReceiptError::FocusGraphIdentityUnused),
+        }
+        Ok(purrdf_hash::hex::Digest32::new(
+            *digest.finalize().as_bytes(),
+        ))
+    }
+}
+
+/// Why a run's execution identity cannot be produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReceiptError {
+    /// No evaluation context was created, so there is no run to identify.
+    NotStarted,
+    /// The run called external code without a caller-certified implementation
+    /// identity, so nothing binds what that code did.
+    OpaqueImplementation,
+    /// The run read a focus graph and the sources carry no identity for it.
+    FocusGraphIdentityMissing,
+    /// The sources carry a focus-graph identity for a run that read no focus graph.
+    FocusGraphIdentityUnused,
+}
+
+impl std::fmt::Display for ReceiptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotStarted => "no evaluation context was created, so there is no run",
+            Self::OpaqueImplementation => {
+                "the run called external code without a certified implementation identity"
+            }
+            Self::FocusGraphIdentityMissing => {
+                "the run read a focus graph and no identity was supplied for it"
+            }
+            Self::FocusGraphIdentityUnused => {
+                "a focus-graph identity was supplied for a run that read no focus graph"
+            }
+        })
+    }
+}
+
+impl std::error::Error for ReceiptError {}
+
+impl purrdf_hash::error::StructuredError for ReceiptError {
+    purrdf_hash::error_visit! {
+        NotStarted => "query-receipt-not-started" {},
+        OpaqueImplementation => "query-receipt-opaque-implementation" {},
+        FocusGraphIdentityMissing => "query-receipt-focus-graph-identity-missing" {},
+        FocusGraphIdentityUnused => "query-receipt-focus-graph-identity-unused" {},
+    }
 }
 
 impl purrdf_hash::error::StructuredError for QueryCoordinates {
@@ -52,17 +172,21 @@ impl purrdf_hash::error::StructuredError for QueryCoordinates {
 
 impl purrdf_hash::error::StructuredError for SuppliedQueryCoordinates {
     purrdf_hash::error_visit! {
-        @record self { now, entropy_seed, supplied_now, supplied_seed, snapshot, execution }
+        @record self { now, entropy_seed, supplied_now, supplied_seed, run, focus_graph }
         => "query-coordinates" {
             "now" => Record(&self.now), "entropy_seed" => Unsigned(u128::from(self.entropy_seed)),
             "supplied_now" => Boolean(self.supplied_now), "supplied_seed" => Boolean(self.supplied_seed),
-            "snapshot" => Value(self.snapshot.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+            "run" => Value(self.run.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
                 |value| purrdf_hash::error::ErrorValue::Record(value))),
-            "execution" => Value(self.execution.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
-                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "focus_graph" => Boolean(self.focus_graph),
         }
     }
 }
+
+const EXECUTION: purrdf_hash::Domain =
+    purrdf_hash::Domain::new(b"purrdf-sparql-eval/execution-coordinates/v2");
+const RUN: purrdf_hash::Domain = purrdf_hash::Domain::new(b"purrdf-sparql-eval/execution-run/v1");
+
 impl SuppliedQueryCoordinates {
     /// Effective supplied time, including exact seconds and declared timezone.
     #[must_use]
@@ -92,15 +216,38 @@ impl SuppliedQueryCoordinates {
     pub const fn effective_entropy_seed(&self) -> u64 {
         self.entropy_seed
     }
-    /// Certified immutable source identity when the carrier supplies one.
+    /// Whether the run read a focus graph, whose identity a receipt then needs.
     #[must_use]
-    pub const fn snapshot_identity(&self) -> Option<&purrdf_hash::hex::Digest32> {
-        self.snapshot.as_ref()
+    pub const fn reads_focus_graph(&self) -> bool {
+        self.focus_graph
     }
-    /// Identity binding the request, source and actual effective coordinates.
-    #[must_use]
-    pub const fn execution_identity(&self) -> Option<&purrdf_hash::hex::Digest32> {
-        self.execution.as_ref()
+    /// Identity of everything the run read except its sources' content: the
+    /// request, the implementation identity, the graph-existence policy, the
+    /// clock, the seed, the extension environment and every evaluation switch.
+    ///
+    /// # Errors
+    /// [`ReceiptError::OpaqueImplementation`] when the run called external code
+    /// without a caller-certified implementation identity.
+    pub const fn run_identity(&self) -> Result<&purrdf_hash::hex::Digest32, ReceiptError> {
+        match &self.run {
+            Some(run) => Ok(run),
+            None => Err(ReceiptError::OpaqueImplementation),
+        }
+    }
+    /// Identity binding the run to the content of the sources it read.
+    ///
+    /// The caller supplies the sources' identities (for a view, its
+    /// [`ContentIdentified::content_identity`](purrdf_core::ContentIdentified::content_identity)),
+    /// so only a caller that asks for a receipt pays for hashing them.
+    ///
+    /// # Errors
+    /// [`ReceiptError`] when the run has no run identity, or when the focus-graph
+    /// identity is missing for a run that read one or supplied for one that did not.
+    pub fn execution_identity(
+        &self,
+        sources: &ExecutionSources,
+    ) -> Result<purrdf_hash::hex::Digest32, ReceiptError> {
+        sources.execution_identity_of(self.run_identity()?, self.focus_graph)
     }
 }
 impl PartialEq for SuppliedQueryCoordinates {
@@ -109,13 +256,28 @@ impl PartialEq for SuppliedQueryCoordinates {
             && self.supplied_now == other.supplied_now
             && self.supplied_seed == other.supplied_seed
             && self.now.same_representation(&other.now)
-            && self.snapshot == other.snapshot
-            && self.execution == other.execution
+            && self.run == other.run
+            && self.focus_graph == other.focus_graph
     }
 }
 impl Eq for SuppliedQueryCoordinates {}
 
 impl QueryCoordinates {
+    /// [`SuppliedQueryCoordinates::execution_identity`] of a started run.
+    ///
+    /// # Errors
+    /// [`ReceiptError::NotStarted`] when no evaluation context was created;
+    /// otherwise as [`SuppliedQueryCoordinates::execution_identity`].
+    pub fn execution_identity(
+        &self,
+        sources: &ExecutionSources,
+    ) -> Result<purrdf_hash::hex::Digest32, ReceiptError> {
+        match self {
+            Self::NotStarted => Err(ReceiptError::NotStarted),
+            Self::Started(started) => started.execution_identity(sources),
+        }
+    }
+
     pub(crate) fn started(
         now: &XsdValue,
         seed: u64,
@@ -132,18 +294,18 @@ impl QueryCoordinates {
             entropy_seed: seed,
             supplied_now,
             supplied_seed,
-            snapshot: None,
-            execution: None,
+            run: None,
+            focus_graph: false,
         }))
     }
 }
 
-/// Whether the identities a capture seals are read by anyone.
+/// Whether the run identity a capture computes is read by anyone.
 ///
-/// The source snapshot identity can hash every row of a frozen dataset, so it is
-/// requested only for a consumer: the caller's coordinate observer, or a result
-/// that carries the coordinates back to the caller (`Retained`). A lane that
-/// drops its capture and has no observer (`Discarded`) never reads it.
+/// The run identity is fingerprinted under the evaluation's account, so it is
+/// computed only for a consumer: the caller's coordinate observer, or a result
+/// that carries the coordinates back to the caller (`Retained`). No capture
+/// hashes the dataset, for any consumer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Consumer {
     /// The coordinates are returned to the caller inside the result.
@@ -222,7 +384,11 @@ pub(crate) fn capture_query<D: purrdf_core::DatasetView + Sync>(
     }
 }
 
-/// Bind a request digest to its actual immutable source and initial coordinates.
+/// Bind a request digest to its initial coordinates and environment.
+///
+/// The run identity binds everything the run read except its sources' content;
+/// nothing here hashes a dataset. A caller that wants a receipt supplies the
+/// sources' identities to [`SuppliedQueryCoordinates::execution_identity`].
 pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
     ctx: &crate::eval::EvalCtx<'_, D>,
     request: [u8; 32],
@@ -237,16 +403,13 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
         options.entropy_seed.is_some(),
     )?;
     let identity: Result<(), EvalError> = (|| {
-        if !consumer.reads_identity(options) {
-            return Ok(());
-        }
         let QueryCoordinates::Started(value) = &mut coordinates else {
             unreachable!()
         };
-        value.snapshot = ctx
-            .dataset
-            .snapshot_identity()
-            .map_err(|error| ctx.workspace.source_error(error))?;
+        value.focus_graph = options.focus_graph.is_some();
+        if !consumer.reads_identity(options) {
+            return Ok(());
+        }
         let opaque = external_source
             || options.candidate_scope.is_some()
             || options.remote.is_some()
@@ -254,13 +417,9 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
             || !options.property_functions().is_empty()
             || !options.aggregates().is_empty()
             || options.functions.declarations().has_opaque_bodies();
-        if let Some(snapshot) = value.snapshot
-            && (!opaque || options.implementation_identity.is_some())
-        {
-            const DOMAIN: purrdf_hash::Domain =
-                purrdf_hash::Domain::new(b"purrdf-sparql-eval/execution-coordinates/v1");
+        if !opaque || options.implementation_identity.is_some() {
             let mut digest = purrdf_hash::blake3::Streaming::<1024>::new();
-            digest.update(DOMAIN.as_bytes());
+            digest.update(RUN.as_bytes());
             digest.update(&request);
             match options.implementation_identity {
                 Some(identity) => {
@@ -280,7 +439,6 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
                     ));
                 }
             }]);
-            digest.update(snapshot.as_bytes());
             digest.update(value.now.representation_identity().as_bytes());
             digest.update(&value.entropy_seed.to_le_bytes());
             let mut frame = LexicalFrame::new(&ctx.growth);
@@ -383,23 +541,8 @@ pub(crate) fn capture_request<D: purrdf_core::DatasetView + Sync>(
                     digest.update(&[0]);
                 }
             }
-            if let Some(graph) = options.focus_graph {
-                digest.update(&[1]);
-                match purrdf_core::DatasetView::snapshot_identity(graph.as_ref()) {
-                    Ok(Some(identity)) => {
-                        digest.update(identity.as_bytes());
-                    }
-                    Ok(None) => {
-                        return Err(EvalError::Invariant(
-                            crate::EvaluatorInvariant::CoordinateFocusIdentityMissing,
-                        ));
-                    }
-                    Err(never) => match never {},
-                }
-            } else {
-                digest.update(&[0]);
-            }
-            value.execution = Some(purrdf_hash::hex::Digest32::new(
+            digest.update(&[u8::from(value.focus_graph)]);
+            value.run = Some(purrdf_hash::hex::Digest32::new(
                 *digest.finalize().as_bytes(),
             ));
         }
@@ -535,7 +678,7 @@ mod tests {
         };
         assert!(started.now().unwrap().same_representation(&first));
         assert_eq!(started.entropy_seed(), Some(7));
-        assert!(started.execution_identity().is_some());
+        assert!(started.run_identity().is_ok());
         assert_eq!((coordinates.clone(), rows.clone()), execute(&first, 7));
         let (other, shifted_rows) = execute(&shifted, 7);
         assert_ne!(
@@ -583,8 +726,7 @@ mod tests {
                 if let Some(seed) = supplied_seed {
                     assert_eq!(started.effective_entropy_seed(), seed);
                 }
-                assert!(started.snapshot_identity().is_some());
-                assert!(started.execution_identity().is_some());
+                assert!(started.run_identity().is_ok());
             };
             let receipt = engine
                 .execute_governed_admitted(
@@ -683,7 +825,7 @@ mod tests {
         };
         assert!(started.effective_now().same_representation(&now));
         assert_eq!(started.entropy_seed(), Some(7));
-        assert!(started.execution_identity().is_some());
+        assert!(started.run_identity().is_ok());
     }
 
     /// The coordinate is the only returned timestamp owner, while producers stay alive between runs.

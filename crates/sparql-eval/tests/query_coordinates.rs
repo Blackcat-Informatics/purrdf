@@ -7,12 +7,12 @@ mod support;
 
 use purrdf_core::DatasetView as _;
 use purrdf_core::{
-    RdfDatasetBuilder, SegmentedEvidence, SparqlRequest, SparqlResult, StopCause, TermValue,
-    TrippedGovernor,
+    ContentIdentified as _, RdfDatasetBuilder, SegmentedEvidence, SparqlRequest, SparqlResult,
+    StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernedOutcome, NativeSparqlEngine, QueryCoordinates, QueryGovernors,
-    QueryOptions,
+    CancellationFlag, ExecutionSources, GovernedOutcome, NativeSparqlEngine, QueryCoordinates,
+    QueryGovernors, QueryOptions,
 };
 use purrdf_testkit::harness::without_host_clock_or_entropy;
 use purrdf_xsd::{XsdDatatype, XsdValue};
@@ -95,7 +95,8 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
         panic!("sampled context")
     };
     assert!(actual.now().is_none() && actual.entropy_seed().is_none());
-    assert!(actual.execution_identity().is_some());
+    let source = ExecutionSources::new(dataset.content_identity().unwrap());
+    assert!(actual.execution_identity(&source).is_ok());
     let options = QueryOptions::new()
         .with_now(actual.effective_now())
         .with_entropy_seed(actual.effective_entropy_seed());
@@ -106,7 +107,10 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
     let QueryCoordinates::Started(replayed) = replay.coordinates() else {
         panic!("replayed context")
     };
-    assert_eq!(actual.execution_identity(), replayed.execution_identity());
+    assert_eq!(
+        actual.execution_identity(&source),
+        replayed.execution_identity(&source)
+    );
     let SparqlResult::Solutions { rows: expected, .. } = sampled.into_complete().unwrap() else {
         panic!("SELECT")
     };
@@ -128,8 +132,11 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
     let QueryCoordinates::Started(changed) = changed_query.coordinates() else {
         panic!("changed query")
     };
-    assert_ne!(actual.execution_identity(), changed.execution_identity());
-    assert_eq!(actual.snapshot_identity(), changed.snapshot_identity());
+    assert_ne!(actual.run_identity(), changed.run_identity());
+    assert_ne!(
+        actual.execution_identity(&source),
+        changed.execution_identity(&source)
+    );
     engine
         .update_with_options(
             &mut dataset,
@@ -146,8 +153,14 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
     let QueryCoordinates::Started(changed) = changed_source.coordinates() else {
         panic!("changed source")
     };
-    assert_ne!(actual.snapshot_identity(), changed.snapshot_identity());
-    assert_ne!(actual.execution_identity(), changed.execution_identity());
+    // The same request over changed content: the same run, bound to other content.
+    let changed_content = ExecutionSources::new(dataset.content_identity().unwrap());
+    assert_ne!(source, changed_content);
+    assert_eq!(actual.run_identity(), changed.run_identity());
+    assert_ne!(
+        actual.execution_identity(&source),
+        changed.execution_identity(&changed_content)
+    );
 }
 
 fn supplied_large_fraction_and_timezone_survive_repeated_now() {
@@ -576,8 +589,7 @@ fn update_receipts_distinguish_contexts_and_independent_inputs() {
                 QueryCoordinates::NotStarted => assert!(!started),
                 QueryCoordinates::Started(inputs) => {
                     assert!(started);
-                    assert!(inputs.execution_identity().is_some());
-                    assert!(inputs.snapshot_identity().is_some());
+                    assert!(inputs.run_identity().is_ok());
                     assert_eq!(inputs.entropy_seed(), options.entropy_seed);
                     assert_eq!(inputs.now().is_some(), options.now.is_some());
                     if let Some(actual) = inputs.now() {
@@ -638,7 +650,7 @@ fn update_receipts_release_the_resident_owner_after_the_last_clone() {
 }
 
 /// A retained unused blank is observable by the native mint collision law.
-fn snapshot_identity_binds_unused_blank_mint_reservations() {
+fn content_identity_binds_unused_blank_mint_reservations() {
     let empty = RdfDatasetBuilder::new().freeze().unwrap();
     let mut builder = RdfDatasetBuilder::new();
     builder
@@ -677,15 +689,18 @@ fn snapshot_identity_binds_unused_blank_mint_reservations() {
     let (ordinary, ordinary_result) = run(&empty);
     let (collision, collision_result) = run(&reserved);
     assert_ne!(ordinary_result, collision_result);
-    assert_ne!(ordinary.snapshot_identity(), collision.snapshot_identity());
+    let identity = |dataset: &purrdf_core::RdfDataset| {
+        ExecutionSources::new(dataset.content_identity().unwrap())
+    };
+    assert_ne!(identity(&empty), identity(&reserved));
     assert_ne!(
-        ordinary.execution_identity(),
-        collision.execution_identity()
+        ordinary.execution_identity(&identity(&empty)),
+        collision.execution_identity(&identity(&reserved))
     );
 }
 
 purrdf_testkit::harness_main!(
-    snapshot_identity_binds_unused_blank_mint_reservations,
+    content_identity_binds_unused_blank_mint_reservations,
     supplied_inputs_repeat_complete_results_without_host_reads,
     sampled_coordinates_replay_and_bind_query_and_snapshot,
     supplied_large_fraction_and_timezone_survive_repeated_now,

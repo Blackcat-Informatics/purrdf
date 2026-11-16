@@ -32,7 +32,7 @@ use purrdf::handles::{
 };
 use purrdf::parse::purrdf_parse;
 use purrdf::projection::{purrdf_lift, purrdf_project, purrdf_project_with_assets};
-use purrdf::query::{purrdf_query, purrdf_query_json};
+use purrdf::query::{purrdf_execution_receipt_bind, purrdf_query, purrdf_query_json};
 use purrdf::rowcursor::{
     PurrdfRowCursor, purrdf_rowcursor_free, purrdf_rowcursor_next, purrdf_rowcursor_term,
     purrdf_rowcursor_variable_count, purrdf_rowcursor_variable_name,
@@ -2135,6 +2135,70 @@ unsafe fn run_select(dataset: *const PurrdfDataset, query: &str) -> *mut PurrdfR
         );
         assert_eq!(kind, 0, "expected a SELECT (Solutions) result");
         rows
+    }
+}
+
+/// Bind `receipt` to `dataset`'s content; the status and the bound receipt, if any.
+unsafe fn bind_receipt(dataset: *const PurrdfDataset, receipt: &[u8]) -> (i32, Option<String>) {
+    unsafe {
+        let receipt = Box::into_raw(Box::new(PurrdfBuffer::from(receipt.to_vec())));
+        let mut bound = receipt::Output::default();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let status =
+            purrdf_execution_receipt_bind(dataset, receipt, &raw mut bound.0, &raw mut error);
+        purrdf_buffer_free(receipt);
+        purrdf_error_free(error);
+        let text = (!bound.0.is_null()).then(|| String::from_utf8(buffer_bytes(bound.0)).unwrap());
+        (status, text)
+    }
+}
+
+/// A query receipt carries the run identity and no content identity; binding it
+/// to the dataset it ran on is the explicit request that adds both identities. A
+/// receipt whose run never started, and a buffer that is no receipt, are refused
+/// with their own statuses.
+#[test]
+fn a_query_receipt_is_bound_to_its_dataset_only_on_request() {
+    unsafe {
+        let dataset = parse("text/turtle", "<http://a> <http://b> <http://c> .");
+        let query = CString::new("SELECT ?s WHERE { ?s ?p ?o }").unwrap();
+        let mut kind: i32 = -1;
+        let mut rows: *mut PurrdfRowCursor = std::ptr::null_mut();
+        let mut graph: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut boolean: u8 = 0;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        let mut receipt = receipt::Output::default();
+        let status = purrdf_query(
+            dataset,
+            query.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &raw mut receipt.0,
+            &raw mut kind,
+            &raw mut rows,
+            &raw mut graph,
+            &raw mut boolean,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        purrdf_rowcursor_free(rows);
+        let plain = String::from_utf8(buffer_bytes(receipt.0)).unwrap();
+        assert!(plain.contains("\"runIdentity\":\""));
+        assert!(!plain.contains("contentIdentity"));
+
+        let (status, bound) = bind_receipt(dataset, plain.as_bytes());
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        let bound = bound.expect("a bound receipt");
+        assert!(bound.contains("\"contentIdentity\":\""));
+        assert!(bound.contains("\"executionIdentity\":\""));
+
+        let (status, bound) = bind_receipt(dataset, br#"{"state":"not-started"}"#);
+        assert_eq!(status, PurrdfStatus::QueryError as i32);
+        assert!(bound.is_none());
+        let (status, _) = bind_receipt(dataset, b"[]");
+        assert_eq!(status, PurrdfStatus::InvalidArgument as i32);
+        purrdf_dataset_free(dataset);
     }
 }
 

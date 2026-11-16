@@ -19,24 +19,104 @@ use purrdf_xsd::temporal::DateTime;
 /// can inherit an outer supplied scope; a partially supplied request replaces it.
 /// The exact time shares the original caller-input owner, extending its lifetime
 /// without copying its coefficient or allocating another owner. This retention is
-/// not a new execution allocation. A complete execution identity is available
-/// when the source and every nested query expose certified identities.
+/// not a new execution allocation. Inference computes no content identity: a
+/// caller that wants a receipt supplies the data and shapes identities to
+/// [`execution_identity`](Self::execution_identity).
 #[derive(Debug, Clone, Default)]
 pub struct RuleCoordinates {
     now: Option<Arc<DateTime>>,
     entropy_seed: Option<u64>,
     executions: Arc<[QueryCoordinates]>,
     pub(crate) program: Option<Digest32>,
-    pub(crate) snapshot: Option<Digest32>,
-    pub(crate) shapes: Option<Digest32>,
     pub(crate) contract: Option<Digest32>,
     pub(crate) source_rules: bool,
-    execution: Option<Digest32>,
+}
+
+/// The content identities of the data and shapes graphs one rule inference read,
+/// supplied by a caller that wants an execution receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuleSources {
+    data: Digest32,
+    shapes: Digest32,
+}
+
+impl RuleSources {
+    /// The sources of one inference.
+    #[must_use]
+    pub const fn new(data: Digest32, shapes: Digest32) -> Self {
+        Self { data, shapes }
+    }
+    /// The data graph's content identity.
+    #[must_use]
+    pub const fn data(&self) -> &Digest32 {
+        &self.data
+    }
+    /// The shapes graph's content identity.
+    #[must_use]
+    pub const fn shapes(&self) -> &Digest32 {
+        &self.shapes
+    }
+}
+
+/// Why a rule inference's execution identity cannot be produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RuleReceiptError {
+    /// The inference failed before its program and contract were bound.
+    Incomplete,
+    /// A nested query started no evaluation context.
+    NotStarted {
+        /// The nested execution's position, in execution order.
+        index: usize,
+    },
+    /// A nested query has no run identity.
+    Execution {
+        /// The nested execution's position, in execution order.
+        index: usize,
+        /// Why that run has none.
+        cause: purrdf_sparql_eval::ReceiptError,
+    },
+}
+
+impl std::fmt::Display for RuleReceiptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Incomplete => {
+                f.write_str("the inference failed before its program and contract were bound")
+            }
+            Self::NotStarted { index } => {
+                write!(f, "nested query {index} started no evaluation context")
+            }
+            Self::Execution { index, cause } => write!(f, "nested query {index}: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for RuleReceiptError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Execution { cause, .. } => Some(cause),
+            Self::Incomplete | Self::NotStarted { .. } => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RuleReceiptError {
+    purrdf_hash::error_visit! {
+        Incomplete => "shacl-rule-receipt-incomplete" {},
+        NotStarted { index } => "shacl-rule-receipt-not-started" {
+            "index" => Unsigned(*index as u128),
+        },
+        Execution { index, cause } => "shacl-rule-receipt-execution" {
+            "index" => Unsigned(*index as u128),
+            "cause" => Record(cause),
+        },
+    }
 }
 
 impl purrdf_hash::error::StructuredError for RuleCoordinates {
     purrdf_hash::error_visit! {
-        @record self { now, entropy_seed, executions, program, snapshot, shapes, contract, source_rules, execution }
+        @record self { now, entropy_seed, executions, program, contract, source_rules }
         => "shacl-rule-coordinates" {
             "now" => Value(self.now.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
                 |value| purrdf_hash::error::ErrorValue::Record(value))),
@@ -45,15 +125,9 @@ impl purrdf_hash::error::StructuredError for RuleCoordinates {
             "executions" => List(self.executions.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
             "program" => Value(self.program.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
                 |value| purrdf_hash::error::ErrorValue::Record(value))),
-            "snapshot" => Value(self.snapshot.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
-                |value| purrdf_hash::error::ErrorValue::Record(value))),
-            "shapes" => Value(self.shapes.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
-                |value| purrdf_hash::error::ErrorValue::Record(value))),
             "contract" => Value(self.contract.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
                 |value| purrdf_hash::error::ErrorValue::Record(value))),
             "source_rules" => Boolean(self.source_rules),
-            "execution" => Value(self.execution.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
-                |value| purrdf_hash::error::ErrorValue::Record(value))),
         }
     }
 }
@@ -64,20 +138,57 @@ impl RuleCoordinates {
     pub const fn program_identity(&self) -> Option<&Digest32> {
         self.program.as_ref()
     }
-    /// Certified immutable source identity, when available.
-    #[must_use]
-    pub const fn snapshot_identity(&self) -> Option<&Digest32> {
-        self.snapshot.as_ref()
-    }
-    /// Certified shapes graph identity, when available.
-    #[must_use]
-    pub const fn shapes_identity(&self) -> Option<&Digest32> {
-        self.shapes.as_ref()
-    }
-    /// Identity of the program, input snapshots and ordered actual query contexts.
-    #[must_use]
-    pub const fn execution_identity(&self) -> Option<&Digest32> {
-        self.execution.as_ref()
+    /// Identity of the program, the supplied input graphs and the ordered nested
+    /// runs, under the `purrdf-shapes/rule-execution/v2` law.
+    ///
+    /// Each nested query read a dataset the inference derived from the data graph
+    /// under this program and these coordinates, so the data identity binds those
+    /// datasets and each nested run contributes its run identity.
+    ///
+    /// # Errors
+    /// [`RuleReceiptError`] when the inference failed before binding its program, or
+    /// a nested query started nothing or has no run identity.
+    pub fn execution_identity(&self, sources: &RuleSources) -> Result<Digest32, RuleReceiptError> {
+        let (Some(program), Some(contract)) = (&self.program, &self.contract) else {
+            return Err(RuleReceiptError::Incomplete);
+        };
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        let mut field = |bytes: &[u8]| {
+            purrdf_hash::frame::frame_le_with(bytes, &mut |part| {
+                hash.update(part);
+            });
+        };
+        field(EXECUTION.as_bytes());
+        field(program.as_bytes());
+        field(sources.data.as_bytes());
+        field(sources.shapes.as_bytes());
+        field(contract.as_bytes());
+        field(&[u8::from(self.source_rules)]);
+        match self.now() {
+            Some(now) => {
+                field(b"supplied-now");
+                field(now.representation_identity().as_bytes());
+            }
+            None => field(b"unsupplied-now"),
+        }
+        match self.entropy_seed() {
+            Some(seed) => {
+                field(b"supplied-seed");
+                field(&seed.to_le_bytes());
+            }
+            None => field(b"unsupplied-seed"),
+        }
+        field(&(self.executions.len() as u64).to_le_bytes());
+        for (index, execution) in self.executions.iter().enumerate() {
+            let QueryCoordinates::Started(started) = execution else {
+                return Err(RuleReceiptError::NotStarted { index });
+            };
+            let run = started
+                .run_identity()
+                .map_err(|cause| RuleReceiptError::Execution { index, cause })?;
+            field(run.as_bytes());
+        }
+        Ok(Digest32::from(*hash.finalize().as_bytes()))
     }
     /// Actual nested query contexts in execution order, including sampled defaults.
     #[must_use]
@@ -104,11 +215,8 @@ impl PartialEq for RuleCoordinates {
     fn eq(&self, other: &Self) -> bool {
         self.executions == other.executions
             && self.program == other.program
-            && self.snapshot == other.snapshot
-            && self.shapes == other.shapes
             && self.contract == other.contract
             && self.source_rules == other.source_rules
-            && self.execution == other.execution
             && self.entropy_seed == other.entropy_seed
             && match (&self.now, &other.now) {
                 (None, None) => true,
@@ -135,11 +243,8 @@ pub(crate) fn snapshot() -> RuleCoordinates {
                 entropy_seed: runtime.entropy,
                 executions: Arc::default(),
                 program: None,
-                snapshot: None,
-                shapes: None,
                 contract: None,
                 source_rules: false,
-                execution: None,
             })
     })
 }
@@ -280,49 +385,12 @@ impl RecordingScope {
         })?;
         coordinates.executions = std::mem::take(&mut *entries).into();
         drop(entries);
-        coordinates.execution = execution_identity(&coordinates);
         Ok(coordinates)
     }
 }
 
-const EXECUTION: purrdf_hash::Domain = purrdf_hash::Domain::new(b"purrdf-shapes/rule-execution/v1");
+const EXECUTION: purrdf_hash::Domain = purrdf_hash::Domain::new(b"purrdf-shapes/rule-execution/v2");
 
-fn execution_identity(coordinates: &RuleCoordinates) -> Option<Digest32> {
-    let mut hash = purrdf_hash::blake3::Hasher::new();
-    let mut field = |bytes: &[u8]| {
-        purrdf_hash::frame::frame_le_with(bytes, &mut |part| {
-            hash.update(part);
-        });
-    };
-    field(EXECUTION.as_bytes());
-    field(coordinates.program.as_ref()?.as_bytes());
-    field(coordinates.snapshot.as_ref()?.as_bytes());
-    field(coordinates.shapes.as_ref()?.as_bytes());
-    field(coordinates.contract.as_ref()?.as_bytes());
-    field(&[u8::from(coordinates.source_rules)]);
-    match coordinates.now() {
-        Some(now) => {
-            field(b"supplied-now");
-            field(now.representation_identity().as_bytes());
-        }
-        None => field(b"unsupplied-now"),
-    }
-    match coordinates.entropy_seed() {
-        Some(seed) => {
-            field(b"supplied-seed");
-            field(&seed.to_le_bytes());
-        }
-        None => field(b"unsupplied-seed"),
-    }
-    field(&(coordinates.executions.len() as u64).to_le_bytes());
-    for execution in coordinates.executions() {
-        let QueryCoordinates::Started(started) = execution else {
-            return None;
-        };
-        field(started.execution_identity()?.as_bytes());
-    }
-    Some(Digest32::from(*hash.finalize().as_bytes()))
-}
 impl Drop for RecordingScope {
     fn drop(&mut self) {
         CURRENT.with(|slot| {
@@ -431,8 +499,8 @@ mod tests {
         .unwrap();
         assert_eq!(result.coordinates().entropy_seed(), Some(expected_seed));
         assert!(result.coordinates().program_identity().is_some());
-        assert!(result.coordinates().snapshot_identity().is_some());
-        assert!(result.coordinates().execution_identity().is_some());
+        let sources = RuleSources::new(Digest32::new([1; 32]), Digest32::new([2; 32]));
+        assert!(result.coordinates().execution_identity(&sources).is_ok());
         let mut next = expected_seed;
         let first_seed = purrdf_hash::mix::splitmix64_next(&mut next);
         let QueryCoordinates::Started(first) = &result.coordinates().executions()[0] else {
@@ -503,16 +571,27 @@ mod tests {
             srl::infer(&second, &source, &options)
         })
         .unwrap();
+        let sources = RuleSources::new(Digest32::new([1; 32]), Digest32::new([2; 32]));
         assert_eq!(first_result.coordinates().executions(), []);
-        assert!(first_result.coordinates().execution_identity().is_some());
+        assert!(
+            first_result
+                .coordinates()
+                .execution_identity(&sources)
+                .is_ok()
+        );
+        // A receipt that bound no program is refused; the inference's own succeeds above.
+        assert_eq!(
+            RuleCoordinates::default().execution_identity(&sources),
+            Err(RuleReceiptError::Incomplete)
+        );
         assert_eq!(first_result.coordinates(), repeated.coordinates());
         assert_ne!(
             first_result.coordinates().program_identity(),
             second_result.coordinates().program_identity()
         );
         assert_ne!(
-            first_result.coordinates().execution_identity(),
-            second_result.coordinates().execution_identity()
+            first_result.coordinates().execution_identity(&sources),
+            second_result.coordinates().execution_identity(&sources)
         );
         let error = srl::infer(
             &first,
@@ -527,11 +606,7 @@ mod tests {
             error.coordinates.program_identity(),
             first_result.coordinates().program_identity()
         );
-        assert_eq!(
-            error.coordinates.snapshot_identity(),
-            first_result.coordinates().snapshot_identity()
-        );
-        assert!(error.coordinates.execution_identity().is_some());
+        assert!(error.coordinates.execution_identity(&sources).is_ok());
         assert!(matches!(
             *error.cause,
             crate::rules::RulesError::LimitExceeded(_)

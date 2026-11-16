@@ -111,6 +111,8 @@ pub(crate) const OPTIONS_CODE: &str = "purrdf-wasm-options";
 /// The host asked a job for something out of turn: an outcome of another kind, before
 /// the job finished, or twice.
 pub(crate) const USAGE_CODE: &str = "purrdf-wasm-usage";
+/// An execution receipt was asked for an execution identity its run cannot have.
+pub(crate) const RECEIPT_CODE: &str = "purrdf-wasm-receipt";
 
 // ---------------------------------------------------------------------------
 // Errors
