@@ -137,7 +137,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
                 &dataset,
                 &reopened,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -197,10 +197,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
         datasets_isomorphic(
             &dataset,
             &reopened,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -294,7 +291,7 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
                 &rich,
                 &reopened,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -308,28 +305,19 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "source:\n{}\nreparsed:\n{}",
         canonical_flat_nquads(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical source")
         .nquads(),
         canonical_flat_nquads(
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical reparsed")
         .nquads()
@@ -373,10 +361,7 @@ fn derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -404,28 +389,19 @@ fn heterogeneous_values_partition_across_compatible_aliases() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
         canonical_flat_nquads(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical source")
         .nquads(),
         canonical_flat_nquads(
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical reparsed")
         .nquads()
@@ -456,10 +432,7 @@ fn safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -487,10 +460,7 @@ fn explicit_list_items_inherit_active_property_id_coercion() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -527,28 +497,19 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "expected:\n{}\nactual:\n{}",
         canonical_flat_nquads(
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical expected")
         .nquads(),
         canonical_flat_nquads(
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical actual")
         .nquads()
@@ -613,7 +574,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -639,7 +600,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -671,7 +632,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -709,7 +670,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
                     &dataset,
                     &reopened,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -729,10 +690,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         datasets_isomorphic(
             &dataset,
             &reopened,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -750,10 +708,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         datasets_isomorphic(
             &dataset,
             &reopened,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -765,10 +720,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -784,28 +736,19 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
         canonical_flat_nquads(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical source")
         .nquads(),
         canonical_flat_nquads(
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical reparsed")
         .nquads()
@@ -824,28 +767,19 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
         canonical_flat_nquads(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical source")
         .nquads(),
         canonical_flat_nquads(
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical reparsed")
         .nquads()
@@ -876,10 +810,7 @@ fn language_and_id_maps_compact_and_expand_losslessly() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -914,10 +845,7 @@ fn authored_reverse_nest_and_scoped_contexts_expand_through_one_lens() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -950,10 +878,7 @@ fn mapped_index_type_and_set_containers_preserve_rdf() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -990,28 +915,19 @@ fn null_entries_in_graph_id_type_and_index_containers_are_ignored() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "expected:\n{}\nactual:\n{}",
         canonical_flat_nquads(
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical expected")
         .nquads(),
         canonical_flat_nquads(
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical actual")
         .nquads()
@@ -1051,28 +967,19 @@ fn graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "expected:\n{}\nactual:\n{}",
         canonical_flat_nquads(
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical expected")
         .nquads(),
         canonical_flat_nquads(
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical actual")
         .nquads()
@@ -1107,10 +1014,7 @@ fn named_graph_references_compact_into_graph_id_maps() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1143,10 +1047,7 @@ fn a_standalone_named_graph_is_not_embedded_again_by_a_later_graph() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1176,28 +1077,19 @@ fn configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures() 
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "source:\n{}\nreparsed:\n{}\njson:\n{compacted}",
         canonical_flat_nquads(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical source")
         .nquads(),
         canonical_flat_nquads(
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical reparsed")
         .nquads()
@@ -1250,10 +1142,7 @@ fn configured_context_preserves_many_to_many_reifier_bindings() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1283,10 +1172,7 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1311,10 +1197,7 @@ fn mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1342,10 +1225,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1373,10 +1253,7 @@ fn reverse_aliases_and_graph_index_maps_compact_losslessly() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1419,10 +1296,7 @@ fn graph_index_containers_apply_inside_named_graphs() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1449,10 +1323,7 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1470,10 +1341,7 @@ fn list_coercion_and_shared_list_identity_are_preserved() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1518,10 +1386,7 @@ fn a_well_formed_list_suffix_folds_behind_a_shared_head() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1546,10 +1411,7 @@ fn graph_names_are_not_folded_as_list_heads() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1579,10 +1441,7 @@ fn generated_list_cells_do_not_collide_with_nested_annotation_ids() {
         datasets_isomorphic(
             &expected,
             &actual,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1614,10 +1473,7 @@ fn registry_backed_compaction_has_a_matching_parse_lens() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1673,7 +1529,7 @@ prop_test! {
         });
         let (dataset, compacted) = serialize_with_context(&source, &context);
         let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand generated compact document");
-        prop_assert!(datasets_isomorphic(&dataset, &reparsed, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap());
+        prop_assert!(datasets_isomorphic(&dataset, &reparsed, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).unwrap());
 
         let compiled = CompiledJsonLdContext::compile(&context, None).expect("compile context");
         let reserialized = serialize_dataset_to_jsonld_with_options(

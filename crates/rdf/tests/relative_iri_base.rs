@@ -530,7 +530,7 @@ fn a_ucschar_that_renders_as_whitespace_survives_serialize_then_parse() {
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -690,7 +690,7 @@ fn every_base_emitting_format_round_trips_through_its_own_declaration() {
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -751,10 +751,7 @@ fn a_caller_jsonld_context_and_the_egress_base_compose() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "the composed round trip must be isomorphic:\n{text}"
@@ -911,7 +908,7 @@ fn a_base_and_the_statement_layer_survive_together_under_a_non_dataset_selection
                 &dataset,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1865,10 +1862,7 @@ fn a_document_declared_base_survives_a_transcode_with_no_caller_base() {
         datasets_isomorphic(
             &original,
             &round_tripped,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "a base-preserving transcode must not change what the document denotes",

@@ -45,7 +45,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonHash, try_canonical_sha256_view};
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 
 // ---------------------------------------------------------------------------
 // Part 1 — content projection + refold digest

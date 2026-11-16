@@ -391,7 +391,7 @@ fn run_case(entry: &Value) -> Result<(), String> {
     if datasets_isomorphic(
         &actual.dataset,
         &expected,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     {
@@ -413,7 +413,7 @@ fn run_case(entry: &Value) -> Result<(), String> {
                 try_canonicalize(
                     &actual.dataset,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -422,7 +422,7 @@ fn run_case(entry: &Value) -> Result<(), String> {
                 try_canonicalize(
                     &expected,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

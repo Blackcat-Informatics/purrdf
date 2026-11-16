@@ -20,12 +20,12 @@
 //! | Field           | Type      | Bytes | Offset | Meaning                                            |
 //! |-----------------|-----------|-------|--------|-----------------------------------------------------|
 //! | `magic`         | `[u8; 8]` | 8     | 0      | `MAGIC` = `b"PURRPCK1"`                            |
-//! | `version`       | `u32`     | 4     | 8      | `FORMAT_VERSION` = `1`                             |
+//! | `version`       | `u32`     | 4     | 8      | `FORMAT_VERSION` = `2` (reads `1` too)             |
 //! | `flags`         | `u32`     | 4     | 12     | capability bitmask — see "Capability flags" below    |
 //! | `n_terms`       | `u64`     | 8     | 16     | the dictionary's total unified-id count              |
 //! | `section_count` | `u32`     | 4     | 24     | always `SECTION_COUNT` = `3` in this format version |
 //! | `reserved`      | `u32`     | 4     | 28     | always `0`; reserved for a future format revision    |
-//! | `rdfc_digest`   | `[u8;32]` | 32    | 32     | SHA-256 of the dataset's `purrdf-rdfc12` N-Quads     |
+//! | `rdfc_digest`   | `[u8;32]` | 32    | 32     | the dataset's canonical-identity digest (below)      |
 //!
 //! ## Capability flags (the header's `flags` field)
 //!
@@ -83,16 +83,19 @@
 //!   release's included: the 3.0.x reader opens it, enumerates the declared graphs and
 //!   certifies it, because the frame, every section grammar and every structural check
 //!   are the ones it already applies;
-//! - a source with no declaration-only graph writes byte-for-byte the pack it wrote
+//! - a source with no declaration-only graph writes the same sections it wrote
 //!   before. A graph that owns only statement-layer rows is not declaration-only: it
 //!   gets no partition, and [`PackView`] enumerates it from the side tables.
 //!
-//! The `rdfc_digest` is the SHA-256 of the canonical N-Quads, which has no spelling
-//! for an empty graph, so a declaration never changes it: a dataset and the same
-//! dataset with extra declared empty graphs share their canonical digest, and
-//! [`super::certify::verify_pack`] certifies both. The pack BYTES — the DICT and
-//! TRIPLES sections, their directory digests, and therefore any digest of the whole
-//! file — do differ, and only for a source that declares a graph with no row.
+//! The `rdfc_digest` of version `1` is the SHA-256 of the RDFC-1.0 canonical N-Quads,
+//! which has no spelling for an empty graph, so a declaration never changes it there.
+//! Version `2` records the digest of the canonical line sequence, which holds one
+//! line for each declared empty graph, so a dataset and the same dataset with extra
+//! declared empty graphs have different digests. [`super::certify::verify_pack`]
+//! certifies both versions, each by the function that recorded its digest. The pack
+//! BYTES — the DICT and TRIPLES sections, their directory digests, and therefore any
+//! digest of the whole file — also differ, and only for a source that declares a
+//! graph with no row.
 //!
 //! # Determinism
 //!
@@ -128,7 +131,7 @@ use sha2::{Digest, Sha256};
 
 use crate::bytes::{read_u32_le, read_u64_le};
 use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
-use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
+use crate::ir::canon::labelled::try_canonical_digest_view;
 use crate::{CanonError, RdfDataset, RdfStoreCapabilities};
 
 use super::dict::{PackDict, PackDictError};
@@ -147,9 +150,17 @@ use super::triples::{PackTriplesError, Triples, TriplesRef};
 /// bumped only if the magic itself is ever retired.
 const MAGIC: [u8; 8] = *b"PURRPCK1";
 
-/// The on-disk format version [`PackBuilder::build_bytes`] writes and
-/// [`PackView::from_bytes`] requires.
-const FORMAT_VERSION: u32 = 1;
+/// The on-disk format version [`PackBuilder::build_bytes`] writes. Its
+/// `rdfc_digest` header field is the digest of the dataset's canonical line
+/// sequence ([`crate::CANON_LABELLING_NAME`]).
+const FORMAT_VERSION: u32 = 2;
+
+/// The earlier format version [`PackView::from_bytes`] still reads. Its
+/// `rdfc_digest` header field is the SHA-256 of the dataset's RDFC-1.0
+/// canonical N-Quads ([`crate::rdfc12`]); [`super::certify::verify_pack`]
+/// recomputes it with that function. The frame, the sections and every
+/// structural check are the same as in [`FORMAT_VERSION`].
+const FORMAT_VERSION_RDFC12: u32 = 1;
 
 /// The number of fixed-order sections this format version frames.
 const SECTION_COUNT: usize = 3;
@@ -589,8 +600,8 @@ fn encode_view<D: DatasetView>(
 
     // Recomputed from the pack's OWN sections, never copied from the source view's
     // `capabilities()` claim — the header must describe what was actually written.
-    let canonicalized = try_canonical_sha256_view(view, CanonHash::Sha256, control)
-        .map_err(PackError::CanonRefused)?;
+    let canonicalized =
+        try_canonical_digest_view(view, control).map_err(PackError::CanonRefused)?;
     let rdfc_digest = *canonicalized.as_bytes();
 
     Ok(assemble(
@@ -688,6 +699,7 @@ pub struct PackView<'a> {
     side: SideTablesRef<'a>,
     capabilities: RdfStoreCapabilities,
     rdfc_digest: [u8; 32],
+    format_version: u32,
 }
 
 impl<'a> PackView<'a> {
@@ -715,7 +727,7 @@ impl<'a> PackView<'a> {
         // Every field is little-endian at its offset (see the module docs'
         // header table), read through `crate::bytes`.
         let version = read_u32_le(bytes, 8).ok_or(PackError::Truncated)?;
-        if version != FORMAT_VERSION {
+        if version != FORMAT_VERSION && version != FORMAT_VERSION_RDFC12 {
             return Err(PackError::UnsupportedVersion(version));
         }
         let flags = read_u32_le(bytes, 12).ok_or(PackError::Truncated)?;
@@ -793,7 +805,21 @@ impl<'a> PackView<'a> {
             side,
             capabilities,
             rdfc_digest,
+            format_version: version,
         })
+    }
+
+    /// The header's format version: `2` for a pack whose `rdfc_digest` is the
+    /// canonical line-sequence digest, `1` for one recorded under RDFC-1.0.
+    #[must_use]
+    pub const fn format_version(&self) -> u32 {
+        self.format_version
+    }
+
+    /// Whether the header's digest is the RDFC-1.0 SHA-256 of a pack written
+    /// before the canonical line sequence.
+    pub(super) const fn is_rdfc12(&self) -> bool {
+        self.format_version == FORMAT_VERSION_RDFC12
     }
 
     /// The decoded, owned value dictionary.
@@ -822,10 +848,11 @@ impl<'a> PackView<'a> {
         self.capabilities
     }
 
-    /// The SHA-256 digest of the dataset's RDFC-1.0 canonical N-Quads form,
-    /// as recorded in the header at build time — a caller can independently
-    /// re-canonicalize and compare to certify the pack matches a claimed
-    /// dataset identity.
+    /// The canonical-identity digest recorded in the header at build time: the
+    /// digest of the dataset's canonical line sequence for format version `2`, the
+    /// SHA-256 of its RDFC-1.0 canonical N-Quads for version `1`
+    /// ([`Self::format_version`]). A caller can independently re-canonicalize and
+    /// compare to certify the pack matches a claimed dataset identity.
     #[must_use]
     pub fn rdfc_digest(&self) -> [u8; 32] {
         self.rdfc_digest

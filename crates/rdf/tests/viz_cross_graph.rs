@@ -181,17 +181,11 @@ fn parsed_added_and_explicit_inputs_share_cross_graph_visual_roles() {
     assert_eq!(
         canonical_flat_nquads(
             &parsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         canonical_flat_nquads(
             &added,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
     );
     let spec = VizSpec::default();
@@ -276,17 +270,11 @@ fn removing_and_restoring_reification_updates_roles_without_changing_properties(
     assert_eq!(
         canonical_flat_nquads(
             &restored,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         canonical_flat_nquads(
             &parsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
     );
     assert_eq!(

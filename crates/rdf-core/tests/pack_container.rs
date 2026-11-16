@@ -23,7 +23,10 @@ use sha2::{Digest, Sha256};
 
 /// The committed golden fixture's path (see [`golden_bytes_match_committed_fixture`]
 /// and [`regenerate_pack_small_golden`] below for how it was produced).
-const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/pack_small.bin");
+const GOLDEN_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/goldens/pack_small_v2.bin"
+);
 
 /// The SMALL, deterministic golden fixture: `example.org` IRIs only, one of
 /// each term kind the pack format has to frame — an IRI-only base quad, a
@@ -176,7 +179,7 @@ fn build_bytes_is_deterministic_for_a_rich_dataset() {
 }
 
 /// Golden-bytes acceptance: [`small_fixture`]'s pack bytes must match the
-/// committed `tests/goldens/pack_small.bin` file exactly.
+/// committed `tests/goldens/pack_small_v2.bin` file exactly.
 ///
 /// # Regenerating the golden file
 ///
@@ -187,7 +190,7 @@ fn build_bytes_is_deterministic_for_a_rich_dataset() {
 /// cargo test -p purrdf-core --test pack_container regenerate_pack_small_golden -- --ignored
 /// ```
 ///
-/// then commit the updated `tests/goldens/pack_small.bin` alongside the
+/// then commit the updated `tests/goldens/pack_small_v2.bin` alongside the
 /// format change that caused it to differ.
 #[test]
 fn golden_bytes_match_committed_fixture() {
@@ -213,7 +216,7 @@ fn golden_bytes_match_committed_fixture() {
 }
 
 /// NOT part of the normal test run (`#[ignore]`): (re)writes
-/// `tests/goldens/pack_small.bin` from [`small_fixture`]'s current encoded
+/// `tests/goldens/pack_small_v2.bin` from [`small_fixture`]'s current encoded
 /// bytes. Run explicitly (see [`golden_bytes_match_committed_fixture`]'s doc
 /// comment) only after an intentional, reviewed format change.
 #[test]

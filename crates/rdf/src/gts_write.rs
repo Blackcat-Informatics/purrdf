@@ -304,10 +304,7 @@ mod tests {
             crate::import_gts_graph(graph).expect("import the round-tripped GTS graph into the IR");
         crate::ir::try_canonicalize(
             &bundle.dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     }

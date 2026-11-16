@@ -44,6 +44,7 @@ use std::sync::Arc;
 use purrdf_hash::hex::Digest32;
 
 use crate::dataset_view::DatasetView;
+use crate::ir::canon::labelled::try_canonical_digest_view;
 use crate::ir::import::{DatasetImportError, DatasetImporter};
 use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
@@ -352,9 +353,17 @@ pub fn verify_pack(
 
     let reconstructed = dataset_from_view(&view).map_err(PackError::Materialization)?;
 
-    let canonicalized = try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
-        .map_err(PackError::CanonRefused)?;
-    let computed = *canonicalized.as_bytes();
+    // A version-1 pack recorded its digest under RDFC-1.0, so it is recomputed with
+    // that function; a version-2 pack recorded the canonical line-sequence digest.
+    let computed = if view.is_rdfc12() {
+        let canonicalized = try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
+            .map_err(PackError::CanonRefused)?;
+        *canonicalized.as_bytes()
+    } else {
+        *try_canonical_digest_view(&*reconstructed, control)
+            .map_err(PackError::CanonRefused)?
+            .as_bytes()
+    };
 
     let expected = view.rdfc_digest();
     if computed != expected {

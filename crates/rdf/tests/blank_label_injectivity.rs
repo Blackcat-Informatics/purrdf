@@ -113,12 +113,12 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
     // a genuinely three-node one — silently changing what the data IS.
     let probe = try_canonicalize(
         &parse(PROBE),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let merged = try_canonicalize(
         &parse(MERGED),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(probe.label_count(), 5, "five blank nodes to canonicalize");
@@ -133,10 +133,7 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
         probe.nquads(),
         try_canonicalize(
             &parse(&serialize(&parse(PROBE))),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads()

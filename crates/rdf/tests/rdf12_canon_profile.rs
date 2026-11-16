@@ -633,7 +633,7 @@ fn the_profile_identity_is_readable_from_the_api() {
         )
         .expect("empty dataset canonicalizes")
         .presentation(),
-        CanonPresentation::Overlay
+        Some(CanonPresentation::Overlay)
     );
     assert_eq!(
         try_canonicalize_flat_view(
@@ -646,7 +646,7 @@ fn the_profile_identity_is_readable_from_the_api() {
         )
         .expect("empty dataset canonicalizes")
         .presentation(),
-        CanonPresentation::FlatAssertion
+        Some(CanonPresentation::FlatAssertion)
     );
 }
 
