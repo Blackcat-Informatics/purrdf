@@ -8,6 +8,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **An unreadable stack floor refuses instead of switching the guard off
+  (breaking):** when the operating system would not report a native thread's
+  stack bounds (`pthread_getattr_np` and its siblings can fail under memory
+  pressure, and some targets have no such call), `purrdf-stack` used to take a
+  floor of address 0, which made every later stack check on that thread report
+  "enough stack" for the life of the thread. The floor is now a typed
+  `purrdf_stack::FloorError` (`Unsupported`, or `Read` naming the failed call
+  and its code), returned by the new `try_remaining`; while it is unknown
+  `remaining` is `0`, `is_low` is `true`, `reserve` keeps nothing and `widen`
+  returns `false`, so every guard refuses with its own typed stack error. A
+  failed read is not cached, so a thread measures normally once a read
+  succeeds. A thread started by `on_stack` no longer asks the operating system
+  at all: its floor is the requested size below where it starts, so it is
+  measured even when the system call fails.
+
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the
   group ordinal beside its hash, instead of cloning every key into a second

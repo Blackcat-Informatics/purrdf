@@ -53,9 +53,15 @@
 //!   stack switch never turns into a refusal. (A stack a host switched to *above* the
 //!   cached floor is measured against the old floor, which overstates what is left: such a
 //!   host installs its own floor with [`replace_floor`], as the wasm asynchronous lane
-//!   does.) On a platform whose limit cannot be read at all the measurement is inactive —
-//!   there is nothing to measure against — and [`remaining`] reports the whole address
-//!   range below the frame, so nothing refuses.
+//!   does.) A thread started by [`on_stack`] never reads the operating system at all: the
+//!   request gives its floor.
+//! * **A floor that cannot be read** is a failure, never a floor of `0`: on a thread whose
+//!   limit the operating system will not report (a failed call, or a target with no call
+//!   to make) [`try_remaining`] returns the typed [`FloorError`], and every other
+//!   measurement is conservative — [`remaining`] is `0`, [`is_low`] is `true`, [`reserve`]
+//!   keeps nothing and [`widen`] keeps nothing — so a guard refuses instead of going
+//!   unguarded. Nothing is cached from a failed read: the next check asks again, so a
+//!   thread that failed under memory pressure measures normally once a read succeeds.
 //!
 //! # The margin
 //!
@@ -208,6 +214,9 @@ thread_local! {
     /// The bytes [`widen`] added to the open scopes, given back when the outermost of
     /// them closes.
     static WIDENED: Cell<usize> = const { Cell::new(0) };
+    /// Makes this thread's floor reads fail, as a refused operating-system call does.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    static READ_FAILS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The current stack pointer, as the address of a local of the calling frame.
@@ -224,14 +233,74 @@ pub fn stack_pointer() -> usize {
     core::hint::black_box(&raw const marker) as usize
 }
 
+/// Why the floor of the running thread's stack is not known.
+///
+/// A floor that cannot be read is not a floor of `0`: a guard that treated it as one would
+/// stop refusing for the life of the thread without any signal. Every measurement of this
+/// crate is conservative while the floor is unknown (see [`remaining`] and [`is_low`]), and
+/// [`try_remaining`] reports this value so a caller that must tell "too deep" from "cannot
+/// measure" can.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FloorError {
+    /// This target exposes no call that reports a thread's stack bounds.
+    Unsupported,
+    /// The operating system call that reports the bounds failed.
+    Read {
+        /// The call that failed.
+        call: &'static str,
+        /// What it returned: the `errno` value the `pthread` calls return directly.
+        code: i32,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for FloorError {
+    purrdf_hash::error_visit! {
+        Unsupported => "stack-floor-unsupported" {},
+        Read { call, code } => "stack-floor-read" {
+            "call" => Code(call),
+            "code" => Signed(i128::from(*code))
+        },
+    }
+}
+
+impl core::fmt::Display for FloorError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unsupported => f.write_str(
+                "this target has no call that reports a thread's stack bounds, so the stack \
+                 left cannot be measured and every stack check refuses",
+            ),
+            Self::Read { call, code } => write!(
+                f,
+                "{call} failed with code {code}, so the stack left on this thread cannot be \
+                 measured and its stack checks refuse until a read succeeds"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FloorError {}
+
 /// The bytes of stack left below the calling frame before the floor, or `0` when the
-/// frame is already below it or [`EXHAUSTED`] is installed.
+/// frame is already below it, [`EXHAUSTED`] is installed, or the floor cannot be read
+/// (see [`try_remaining`] for the cause).
 #[must_use]
 pub fn remaining() -> usize {
+    try_remaining().unwrap_or(0)
+}
+
+/// [`remaining`], or the [`FloorError`] when the stack's floor is unknown.
+///
+/// # Errors
+///
+/// [`FloorError`] when the operating system does not report this thread's stack bounds.
+/// Nothing is cached from the failure, so the next call reads again.
+pub fn try_remaining() -> Result<usize, FloorError> {
     let sp = stack_pointer();
     match FLOOR.with(Cell::get) {
-        EXHAUSTED => 0,
-        floor => sp.checked_sub(floor).unwrap_or_else(|| refresh(sp)),
+        EXHAUSTED => Ok(0),
+        floor => sp.checked_sub(floor).map_or_else(|| refresh(sp), Ok),
     }
 }
 
@@ -316,8 +385,8 @@ pub fn replace_context(context: Context) -> Context {
 /// Reserves nest, and add up. A floor read again while one is open (a native thread
 /// that finds its frame below the cached floor) is raised by what is reserved, and a
 /// host's [`replace_context`] carries the reserve with the computation that made it. On
-/// a platform whose stack bound cannot be read, where every guard of this crate is
-/// inactive, nothing is reserved either.
+/// a thread whose stack bound cannot be read ([`FloorError`]) nothing is reserved: every
+/// check there already refuses.
 ///
 /// A reserve is also a *scope* — even one of zero bytes — that [`widen`] can add to while
 /// the computation runs: whatever it adds is given back when the outermost open scope
@@ -325,10 +394,10 @@ pub fn replace_context(context: Context) -> Context {
 /// frame up to where the computation started.
 pub fn reserve(bytes: usize) -> Reserve {
     // Read the floor first, so what is raised is a real floor rather than the "not yet
-    // read" marker.
-    let _ = remaining();
+    // read" marker. Where it cannot be read there is nothing to raise.
+    let measured = try_remaining().is_ok();
     let floor = FLOOR.with(Cell::get);
-    if floor == EXHAUSTED || inactive(floor) {
+    if floor == EXHAUSTED || !measured {
         return Reserve {
             bytes: 0,
             scoped: false,
@@ -345,12 +414,6 @@ pub fn reserve(bytes: usize) -> Reserve {
     }
 }
 
-/// Whether `floor` is the "no readable bound" floor of a native platform, where every
-/// guard of this crate is inactive.
-const fn inactive(floor: usize) -> bool {
-    cfg!(not(target_arch = "wasm32")) && floor == 0
-}
-
 /// Keep `bytes` more stack out of reach of every check in the running computation, for
 /// as long as its outermost open [`reserve`] scope lives — when the computation finds, as
 /// it runs, that it needs more than it reserved when it started (the SPARQL evaluator
@@ -359,8 +422,9 @@ const fn inactive(floor: usize) -> bool {
 /// Returns whether the bytes are kept. They are not, and nothing changes, when no scope
 /// is open (nothing would give them back), when a refusal is latched ([`EXHAUSTED`] is
 /// installed), or when the calling frame would be left with less than [`MARGIN_BYTES`]
-/// above the raised floor — the caller refuses then, typed. On a platform whose stack
-/// bound cannot be read nothing is measured, so nothing is kept and `true` is returned.
+/// above the raised floor — the caller refuses then, typed. They are not kept either,
+/// and `false` is returned, when the stack bound cannot be read ([`FloorError`]): there
+/// is nothing to raise, and every check there refuses.
 ///
 /// The bytes are given back when the outermost scope closes rather than the innermost,
 /// because what the computation built with them may be walked in any frame up to the
@@ -368,12 +432,12 @@ const fn inactive(floor: usize) -> bool {
 /// has at least the margin and every widened byte above the real floor.
 #[must_use]
 pub fn widen(bytes: usize) -> bool {
-    let _ = remaining();
-    let floor = FLOOR.with(Cell::get);
-    if inactive(floor) || bytes == 0 {
+    if bytes == 0 {
         return true;
     }
-    if floor == EXHAUSTED || SCOPES.with(Cell::get) == 0 {
+    let measured = try_remaining().is_ok();
+    let floor = FLOOR.with(Cell::get);
+    if !measured || floor == EXHAUSTED || SCOPES.with(Cell::get) == 0 {
         return false;
     }
     let raised = floor.saturating_add(bytes);
@@ -574,25 +638,33 @@ pub fn is_low() -> bool {
 fn is_low_cold(sp: usize) -> bool {
     let left = match FLOOR.with(Cell::get) {
         EXHAUSTED => return true,
-        floor => sp.checked_sub(floor).unwrap_or_else(|| refresh(sp)),
+        // An unreadable floor leaves nothing to measure against: nothing is left.
+        floor => sp
+            .checked_sub(floor)
+            .unwrap_or_else(|| refresh(sp).unwrap_or(0)),
     };
     left < MARGIN_BYTES
 }
 
-/// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it.
+/// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it;
+/// the [`FloorError`] when it cannot be read, caching nothing.
 #[cfg(not(target_arch = "wasm32"))]
-fn refresh(sp: usize) -> usize {
+fn refresh(sp: usize) -> Result<usize, FloorError> {
     // `platform::stack_floor` reads the thread's bounds directly from the operating
     // system rather than from any particular frame, so — unlike a floor derived from a
     // "bytes left" figure measured a few frames down — this is the thread's exact floor,
     // not an approximation of it.
-    let floor = match platform::stack_floor() {
-        // What the open reserves keep is above the real floor.
-        Some(floor) => floor.saturating_add(RESERVED.with(Cell::get)),
-        None => 0,
-    };
+    #[cfg(test)]
+    if READ_FAILS.with(Cell::get) {
+        return Err(FloorError::Read {
+            call: "injected",
+            code: 12,
+        });
+    }
+    // What the open reserves keep is above the real floor.
+    let floor = platform::stack_floor()?.saturating_add(RESERVED.with(Cell::get));
     FLOOR.with(|cell| cell.set(floor));
-    sp.saturating_sub(floor)
+    Ok(sp.saturating_sub(floor))
 }
 
 /// The floor of the synchronous shadow stack when no host has installed one: address 0.
@@ -617,13 +689,13 @@ const DEFAULT_FLOOR: usize = 0;
 /// re-reads (a host that switched stacks under it) cannot arise here, where every stack
 /// switch installs its floor.
 #[cfg(target_arch = "wasm32")]
-fn refresh(sp: usize) -> usize {
+fn refresh(sp: usize) -> Result<usize, FloorError> {
     if FLOOR.with(Cell::get) == UNKNOWN {
         let floor = DEFAULT_FLOOR + RESERVED.with(Cell::get);
         FLOOR.with(|cell| cell.set(floor));
-        return sp.saturating_sub(floor);
+        return Ok(sp.saturating_sub(floor));
     }
-    0
+    Ok(0)
 }
 
 /// Why [`on_stack`] did not run its computation.
@@ -750,7 +822,15 @@ fn on_thread<'env, R: Send + 'env>(
     std::thread::scope(|scope| {
         let handle = std::thread::Builder::new()
             .stack_size(bytes)
-            .spawn_scoped(scope, f)
+            .spawn_scoped(scope, move || {
+                // The request is the thread's stack: its floor is `bytes` below where the
+                // thread starts, so nothing here asks the operating system and nothing
+                // can fail. The mapping is never smaller than the request (the system
+                // rounds up, never down), and the few kilobytes the C library keeps at
+                // its top are far inside the margin.
+                replace_context(Context::on_floor(stack_pointer().saturating_sub(bytes)));
+                f()
+            })
             .map_err(|cause| StackError::Spawn(cause.into()))?;
         match handle.join() {
             Ok(value) => Ok(value),
@@ -1081,26 +1161,29 @@ mod tests {
 
     /// A floor read again inside a reserve — a native thread whose frame is found below
     /// the cached floor — is raised by what is reserved, so the reserve survives it.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_floor_read_again_keeps_the_reserve() {
         on_stack(4 * 1024 * 1024, || {
-            let before = remaining();
+            // The system's own report of this thread's floor: what a floor read again lands on.
+            let system_floor = platform::stack_floor().expect("a supported platform reads a floor");
             let kept = reserve(1024 * 1024);
-            let raised = FLOOR.with(Cell::get);
             // As if the thread had switched stacks: the cached floor is above the frame.
             replace_floor(stack_pointer() + 4096);
             let within = remaining();
             assert_eq!(
                 FLOOR.with(Cell::get),
-                raised,
+                system_floor + 1024 * 1024,
                 "the floor read again is raised"
             );
             assert!(
-                within + 1024 * 1024 <= before + 1024,
-                "{within} bytes left inside a 1 MiB reserve of {before}"
+                (stack_pointer() - system_floor - 1024 * 1024 - 1024
+                    ..stack_pointer() - system_floor - 1024 * 1024 + 1024)
+                    .contains(&within),
+                "{within} bytes left inside a 1 MiB reserve"
             );
             drop(kept);
-            assert!(remaining() + 1024 > before);
+            assert_eq!(FLOOR.with(Cell::get), system_floor);
         })
         .expect("spawn");
     }
@@ -1343,6 +1426,69 @@ mod tests {
             drop(kept);
         })
         .expect("spawn");
+    }
+
+    /// A thread whose floor the operating system will not report is never unguarded: every
+    /// measurement refuses (nothing left, low, nothing reserved or widened) and
+    /// [`try_remaining`] names the failed call. Nothing is cached from the failure, so the
+    /// neighbouring case — the same thread once a read succeeds — measures its real stack.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_unreadable_floor_refuses_every_check_and_recovers_when_a_read_succeeds() {
+        let outcome = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                READ_FAILS.with(|fails| fails.set(true));
+                let refused = (
+                    remaining(),
+                    is_low(),
+                    try_remaining(),
+                    reserve(4096).bytes(),
+                    widen(4096),
+                    scoped(),
+                );
+                READ_FAILS.with(|fails| fails.set(false));
+                let recovered = (is_low(), try_remaining());
+                (refused, recovered)
+            })
+            .expect("spawn")
+            .join()
+            .expect("the thread runs");
+        let (refused, recovered) = outcome;
+        assert_eq!(
+            refused,
+            (
+                0,
+                true,
+                Err(FloorError::Read {
+                    call: "injected",
+                    code: 12
+                }),
+                0,
+                false,
+                false
+            )
+        );
+        assert!(!recovered.0, "a thread whose floor reads is not low");
+        assert!(recovered.1.is_ok_and(|left| left > MARGIN_BYTES));
+    }
+
+    /// A thread `on_stack` starts has its floor from the request, so a failing system read
+    /// does not touch it: a shallow computation is measured and runs, and a deep one is
+    /// refused at the margin, exactly as when reads succeed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_on_stack_thread_is_measured_while_system_reads_fail() {
+        let (shallow, deep) = on_stack(512 * 1024, || {
+            READ_FAILS.with(|fails| fails.set(true));
+            (deeper(10, &is_low), deeper(100, &is_low))
+        })
+        .expect("spawn");
+        assert!(
+            !shallow,
+            "40 KiB of frames on a 512 KiB stack leaves the margin"
+        );
+        assert!(deep, "400 KiB of frames on a 512 KiB stack eats the margin");
     }
 
     /// The typed refusal says what was asked for and what was left.
