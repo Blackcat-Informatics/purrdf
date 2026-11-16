@@ -801,7 +801,7 @@ fn wrong_on(lines: &[Line], options: Options) -> bool {
 /// 10.5: each wrong shortcut changes the result on the input the definition
 /// prints, under the stated naming (seed `1`, or `3` for (b)) and ascending
 /// order, with every proved shortcut on; the sound engine on the same input
-/// equals the oracle. Shortcuts (c) and (e) are not reproduced by the engine.
+/// equals the oracle.
 #[test]
 fn each_wrong_shortcut_changes_the_result_on_its_printed_input() {
     let sound = Options::PRODUCTION;
@@ -1044,4 +1044,84 @@ fn descending_order_uses_the_classes_and_still_names_the_smallest_attaining_chil
             assert!(b.explored.total() < a.explored.total(), "{name}");
         }
     }
+}
+
+/// 10.5(c), Lemma M (iii): on the complete graph on `a`, `b`, `c`, the state of
+/// the child `c` carried onto `a` by the transposition of `a` and `c` gives
+/// `a 0`, `c 1`, `b 2`, and the canonical map has `a 0`, `b 1`, `c 2`; the sound
+/// engine, in the same descending order, and the reference give the canonical
+/// map. The search is forced, since the search-free run settles the graph.
+#[test]
+fn carrying_a_choice_across_a_map_gives_the_state_of_the_wrong_child() {
+    let edges: Vec<(String, String)> = [("a", "b"), ("a", "c"), ("b", "c")]
+        .iter()
+        .map(|&(x, y)| (x.to_owned(), y.to_owned()))
+        .collect();
+    let set = admit(&both_directions(&edges)).expect("well formed");
+    let by_name = |labelled: &Labelled| -> Vec<(String, u64)> {
+        let mut named: Vec<(String, u64)> = labelled
+            .placements
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    String::from_utf8_lossy(set.source(i)).into_owned(),
+                    p.position,
+                )
+            })
+            .collect();
+        named.sort();
+        named
+    };
+    let canonical = |names: [(&str, u64); 3]| -> Vec<(String, u64)> {
+        names.iter().map(|&(n, p)| (n.to_owned(), p)).collect()
+    };
+    let oracle = reference::label_set(&set, reference::ENGINE_LIMIT, true).expect("labelled");
+    assert_eq!(by_name(&oracle), canonical([("a", 0), ("b", 1), ("c", 2)]));
+    let options = |wrong| Options {
+        descending: true,
+        wrong,
+        ..Options::PRODUCTION
+    };
+    let run = |wrong| {
+        optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options(wrong), None)
+            .expect("labelled")
+    };
+    assert_eq!(by_name(&run(Wrong::Sound)), by_name(&oracle));
+    assert_eq!(
+        by_name(&run(Wrong::CarryChoice)),
+        canonical([("a", 0), ("b", 2), ("c", 1)])
+    );
+}
+
+/// 10.5(e): the second component of `SHARED`, refined alone, has the node cells
+/// `[y1] [y2] [y3] [y0]`; refined with the first, `[y1] [y3] [y2] [y0]`. Every
+/// cell is a singleton, so the engine that shares the partition returns another
+/// canonical line sequence, and the sound engine the reference's.
+#[test]
+fn a_partition_shared_by_two_components_changes_the_second_one() {
+    let set = admit(&shared()).expect("well formed");
+    let cells = |names: &[&[&str]]| -> Vec<Vec<Vec<u8>>> {
+        names
+            .iter()
+            .map(|cell| cell.iter().map(|n| n.as_bytes().to_vec()).collect())
+            .collect()
+    };
+    assert_eq!(
+        optimised::fresh_node_cells(&set, false)[1],
+        cells(&[&["y1"], &["y2"], &["y3"], &["y0"]])
+    );
+    assert_eq!(
+        optimised::fresh_node_cells(&set, true)[1],
+        cells(&[&["y1"], &["y3"], &["y2"], &["y0"]])
+    );
+    let shared_options = Options {
+        wrong: Wrong::SharedPartition,
+        ..Options::PRODUCTION
+    };
+    assert!(!wrong_on(&shared(), Options::PRODUCTION), "sound");
+    assert!(wrong_on(&shared(), shared_options), "(e) SHARED");
+    let oracle = reference_of(&shared());
+    let wrong = optimised_of(&shared(), shared_options);
+    assert_ne!(oracle.lines, wrong.lines, "the canonical line sequence");
 }

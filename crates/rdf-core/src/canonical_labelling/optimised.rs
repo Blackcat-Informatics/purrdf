@@ -100,6 +100,13 @@ pub(crate) enum Wrong {
     InvariantFirst,
     /// (f) A child fixes the whole class of twins of its node.
     FixTwinClass,
+    /// (c) The attaining child of smallest source identifier, when its class
+    /// was skipped, takes the state of the explored child carried through the
+    /// transposition of the two nodes.
+    CarryChoice,
+    /// (e) The input is refined once as a whole before the components start,
+    /// and each component starts from the cells that gives it.
+    SharedPartition,
 }
 
 impl Options {
@@ -468,6 +475,9 @@ struct Branch {
     visited: Vec<bool>,
     /// The child explored although its class was explored.
     forced: Option<usize>,
+    /// The target index of the child that is the best so far.
+    #[cfg(test)]
+    best_ti: usize,
     /// Target indices of the explored children that attain the best so far.
     attain: Vec<usize>,
     /// Union-find over target indices: the classes of checked maps and twins.
@@ -536,6 +546,43 @@ struct Engine<'a> {
     /// Whether the pool holds the maps of a whole first pass.
     #[cfg(test)]
     pooled: bool,
+}
+
+impl<'a> Engine<'a> {
+    /// An engine over `comp` with nothing run yet; `start` is the start charge
+    /// of each line of the component.
+    fn new(
+        set: &'a LineSet,
+        comp: &'a Comp,
+        index: &'a Index,
+        options: Options,
+        stop: Option<&'a dyn StopSignal>,
+        limit: u64,
+        start: Vec<u64>,
+    ) -> Self {
+        Self {
+            set,
+            comp,
+            index,
+            options,
+            meter: Meter::new(limit),
+            twin: TwinTest::new(set, comp, start),
+            failures: Vec::new(),
+            stop,
+            fixed_pos: vec![None; comp.nodes.len()],
+            map: (0..comp.nodes.len()).collect(),
+            lambda: vec![0; comp.nodes.len()],
+            scratch: Scratch::default(),
+            found: Vec::new(),
+            exchanges: Vec::new(),
+            branch_depth: 0,
+            local: vec![usize::MAX; comp.nodes.len()],
+            #[cfg(test)]
+            pool: Vec::new(),
+            #[cfg(test)]
+            pooled: false,
+        }
+    }
 }
 
 impl<'a> Engine<'a> {
@@ -668,6 +715,8 @@ impl<'a> Engine<'a> {
             by_global,
             visited: vec![false; k],
             forced: None,
+            #[cfg(test)]
+            best_ti: 0,
             attain: Vec::new(),
             classes: Classes::new(k),
             class_explored: vec![false; k],
@@ -943,6 +992,142 @@ impl<'a> Engine<'a> {
         out.sort_by(|a, b| b.0.cmp(a.0));
         out
     }
+}
+
+/// The wrong shortcut of 10.5(c): the state of the best child, with the
+/// target nodes of the two children exchanged, stands for the child `minimum`.
+#[cfg(test)]
+fn carry_choice(b: &mut Branch, minimum: usize) -> bool {
+    let (u, w) = (b.node_g[b.target[b.best_ti]], b.node_g[b.target[minimum]]);
+    let Some(best) = b.best.as_mut() else {
+        return false;
+    };
+    let swap = |x: &mut usize| {
+        if *x == u {
+            *x = w;
+        } else if *x == w {
+            *x = u;
+        }
+    };
+    for (x, _) in &mut best.fixed {
+        swap(x);
+    }
+    let mut work: Vec<&mut Tree> = best.nested.iter_mut().collect();
+    while let Some(tree) = work.pop() {
+        for (x, _) in &mut tree.fixed {
+            swap(x);
+        }
+        tree.target.iter_mut().for_each(swap);
+        work.extend(tree.nested.iter_mut());
+    }
+    b.best_ti = minimum;
+    true
+}
+
+/// The cells of the node and line partitions of `comp` after refining the
+/// whole of `set` once (10.5(e)), restricted to `comp`, in local indices.
+#[cfg(test)]
+pub(crate) fn shared_cells(set: &LineSet, comp: &Comp) -> [Vec<Vec<usize>>; 2] {
+    let all = super::reference::top_components(set);
+    let mut merged = Comp {
+        nodes: Vec::new(),
+        lines: Vec::new(),
+        occ: Vec::new(),
+        node_lines: Vec::new(),
+        line_nodes: Vec::new(),
+    };
+    let (mut node_at, mut line_at) = (0, 0);
+    for c in &all {
+        if c.nodes[0] == comp.nodes[0] {
+            (node_at, line_at) = (merged.nodes.len(), merged.lines.len());
+        }
+        let (nn, ln) = (merged.nodes.len(), merged.lines.len());
+        merged.nodes.extend(&c.nodes);
+        merged.lines.extend(&c.lines);
+        merged
+            .occ
+            .extend(c.occ.iter().map(|o| o.iter().map(|&x| x + nn).collect()));
+        merged.node_lines.extend(
+            c.node_lines
+                .iter()
+                .map(|v| v.iter().map(|&l| l + ln).collect()),
+        );
+        merged.line_nodes.extend(
+            c.line_nodes
+                .iter()
+                .map(|v| v.iter().map(|&x| x + nn).collect()),
+        );
+    }
+    let index = Index::new(&merged);
+    let mut engine = Engine::new(
+        set,
+        &merged,
+        &index,
+        Options::PRODUCTION,
+        None,
+        ENGINE_LIMIT,
+        vec![0; merged.lines.len()],
+    );
+    let (inst, _) = engine.fresh();
+    let restrict = |side: &Side, at: usize, len: usize| -> Vec<Vec<usize>> {
+        side.starts()
+            .map(|c| {
+                side.elems[c..c + side.size[c]]
+                    .iter()
+                    .filter(|&&x| x >= at && x < at + len)
+                    .map(|&x| x - at)
+                    .collect::<Vec<usize>>()
+            })
+            .filter(|cell| !cell.is_empty())
+            .collect()
+    };
+    [
+        restrict(&inst.pair[0], node_at, comp.nodes.len()),
+        restrict(&inst.pair[1], line_at, comp.lines.len()),
+    ]
+}
+
+/// The node cells of each top component after its fresh refinement, as source
+/// identifiers: alone, or after refining the whole input (10.5(e)).
+#[cfg(test)]
+pub(crate) fn fresh_node_cells(set: &LineSet, shared: bool) -> Vec<Vec<Vec<Vec<u8>>>> {
+    let comps = super::reference::top_components(set);
+    comps
+        .iter()
+        .map(|comp| {
+            let cells = if shared {
+                let [nodes, _] = shared_cells(set, comp);
+                nodes
+            } else {
+                let index = Index::new(comp);
+                let mut engine = Engine::new(
+                    set,
+                    comp,
+                    &index,
+                    Options::PRODUCTION,
+                    None,
+                    ENGINE_LIMIT,
+                    vec![0; comp.lines.len()],
+                );
+                let (inst, _) = engine.fresh();
+                inst.pair[0]
+                    .starts()
+                    .map(|c| inst.pair[0].elems[c..c + inst.pair[0].size[c]].to_vec())
+                    .collect()
+            };
+            cells
+                .into_iter()
+                .map(|cell| {
+                    let mut named: Vec<Vec<u8>> = cell
+                        .into_iter()
+                        .map(|v| set.source(comp.nodes[v]).to_vec())
+                        .collect();
+                    named.sort();
+                    named
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Join the classes of two target indices of a call.
@@ -1231,6 +1416,11 @@ impl<'a> Engine<'a> {
             let Some(minimum) = missing else {
                 return Ok(Act::Finish);
             };
+            #[cfg(test)]
+            if self.options.wrong == Wrong::CarryChoice && carry_choice(b, minimum) {
+                b.visited[minimum] = true;
+                continue;
+            }
             b.forced = Some(minimum);
             b.explore.push(minimum);
         }
@@ -1281,12 +1471,20 @@ impl<'a> Engine<'a> {
                 b.attain.clear();
                 b.attain.push(target_index);
                 b.best = Some(child);
+                #[cfg(test)]
+                {
+                    b.best_ti = target_index;
+                }
             }
             Ordering::Equal => {
                 b.attain.push(target_index);
                 if self.options.descending {
                     // Ties go to the later child, the smaller source.
                     b.best = Some(child);
+                    #[cfg(test)]
+                    {
+                        b.best_ti = target_index;
+                    }
                 }
             }
             Ordering::Greater => {}
@@ -1636,29 +1834,21 @@ impl<'a> Run<'a> {
             start,
             w,
         } = stat;
-        let mut engine = Engine {
-            set,
-            comp,
-            index,
-            options,
-            meter: Meter::new(limit),
-            twin: TwinTest::new(set, comp, start),
-            failures: Vec::new(),
-            stop,
-            fixed_pos: vec![None; comp.nodes.len()],
-            map: (0..comp.nodes.len()).collect(),
-            lambda: vec![0; comp.nodes.len()],
-            scratch: Scratch::default(),
-            found: Vec::new(),
-            exchanges: Vec::new(),
-            branch_depth: 0,
-            local: vec![usize::MAX; comp.nodes.len()],
-            #[cfg(test)]
-            pool: Vec::new(),
-            #[cfg(test)]
-            pooled: false,
-        };
+        let mut engine = Engine::new(set, comp, index, options, stop, limit, start);
         let (fresh, fresh_units) = engine.fresh();
+        #[cfg(test)]
+        let fresh = if options.wrong == Wrong::SharedPartition {
+            let [nodes, lines] = shared_cells(set, comp);
+            Inst {
+                pair: [
+                    Side::from_cells(nodes, comp.nodes.len()),
+                    Side::from_cells(lines, comp.lines.len()),
+                ],
+                ..fresh
+            }
+        } else {
+            fresh
+        };
         let sizes: Vec<usize> = fresh.pair[0]
             .starts()
             .map(|c| fresh.pair[0].size[c])
