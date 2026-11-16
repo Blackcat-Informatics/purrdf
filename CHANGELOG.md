@@ -36,6 +36,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   validation retires about 32 percent fewer instructions (0.680 and 0.675 of
   the previous count).
 
+- **Canonical labelling by nested colour refinement:**
+  `purrdf_core::canonical_labelling` labels the blank nodes of a set of typed
+  lines (`quad`, `reifier-binding`, `annotation`, `empty-graph` and the
+  caller's `record`) under the identifier `(nested-refinement-labelling, 1)`.
+  Where the present canonical form searches factorially on a symmetric input,
+  the labelling refines colours, nests on the components that remain, and
+  searches only a cell it cannot split; an input whose every tied cell is one
+  class of interchangeable nodes is labelled with no search at all. The result
+  is typed: each node's position and stable identity, the canonical line
+  sequence with its digest, and a structural record that states whether the
+  input was guaranteed. Every refusal (ill-formed input, a quantity past 64
+  bits, the engine's own limit) is a typed value. `lines_of_view` lowers a
+  dataset view with its records into lines, and `write_label` spells a
+  position as a decimal blank-node label. `compare_view` runs the present
+  form and the labelling over one view under a caller's control, returning the
+  view's own read error, a refusal, or a stop as distinct typed outcomes, and
+  `compare_view_with_memory` does the same with the labelling's working state
+  admitted once, before the engine starts, through the caller's allocation
+  admission. The engine stops a child of a branching call as soon as its
+  certificate is known to be greater than the best so far, and skips a child
+  that a checked automorphism of the call maps onto an explored child. The
+  earlier hidden evaluation module and its example are removed.
+
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the
   group ordinal beside its hash, instead of cloning every key into a second

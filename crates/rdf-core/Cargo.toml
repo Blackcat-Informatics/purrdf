@@ -141,6 +141,12 @@ name = "freeze"
 harness = false
 
 [[bench]]
+# Canonical labelling work counters (explored units against the reference
+# tree, stops, allocations) over named shapes. Counts only; no clock is read.
+name = "canonical_labelling"
+harness = false
+
+[[bench]]
 # Separate allocator instrumentation for freeze, materialization and build costs.
 name = "freeze_alloc"
 harness = false
