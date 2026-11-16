@@ -232,11 +232,6 @@ impl JsonPointer {
         self.child(index.to_string())
     }
 
-    /// Append the member name `token`, unescaped.
-    pub fn push(&mut self, token: impl Into<String>) {
-        self.tokens.push(token.into());
-    }
-
     /// The reference tokens, unescaped, from the document root.
     #[must_use]
     pub fn tokens(&self) -> &[String] {
@@ -244,11 +239,28 @@ impl JsonPointer {
     }
 }
 
+impl JsonPointer {
+    /// The bytes of the RFC 6901 spelling, escaped as they are read, so a
+    /// comparison allocates nothing.
+    fn spelling(&self) -> impl Iterator<Item = u8> + '_ {
+        self.tokens.iter().flat_map(|token| {
+            core::iter::once(b'/').chain(token.bytes().flat_map(|byte| {
+                let (first, second) = match byte {
+                    b'~' => (b'~', Some(b'0')),
+                    b'/' => (b'~', Some(b'1')),
+                    other => (other, None),
+                };
+                core::iter::once(first).chain(second)
+            }))
+        })
+    }
+}
+
 /// Pointers order by their RFC 6901 spelling, the order a pointer list
 /// written as text has always had.
 impl Ord for JsonPointer {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.to_string().cmp(&other.to_string())
+        self.spelling().cmp(other.spelling())
     }
 }
 
@@ -296,6 +308,28 @@ mod tests {
             .child("Person")
             .child_index(3);
         assert_eq!(plain.to_string(), "/$defs/Person/3");
+    }
+
+    /// Pointers order exactly as their spellings do, which is the order every
+    /// text-keyed map of locations had. Token order would differ: `["a", "b"]`
+    /// spells `/a/b` and sorts after `["a-"]`, spelled `/a-`, because `-`
+    /// sorts before `/`; an escaped `/` and `~` keep their spelled order too.
+    #[test]
+    fn pointers_order_by_their_spelling_not_by_token() {
+        let mut pointers = [
+            JsonPointer::root().child("a").child("b"),
+            JsonPointer::root().child("a-"),
+            JsonPointer::root().child("a/b"),
+            JsonPointer::root().child("a~b"),
+            JsonPointer::root().child("a"),
+            JsonPointer::root(),
+        ];
+        pointers.sort();
+        let spelled: Vec<String> = pointers.iter().map(ToString::to_string).collect();
+        let mut expected = spelled.clone();
+        expected.sort();
+        assert_eq!(spelled, expected);
+        assert_eq!(spelled, ["", "/a", "/a-", "/a/b", "/a~0b", "/a~1b"]);
     }
 
     #[test]

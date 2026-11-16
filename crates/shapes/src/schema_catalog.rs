@@ -507,25 +507,6 @@ mod tests {
         );
     }
 
-    /// A property named with `/` or `~` stays one token of a schema location,
-    /// escaped only in its spelling; an ordinary name spells as it always did.
-    #[test]
-    fn schema_path_keeps_special_member_names_as_single_tokens() {
-        let plain = SchemaPath::root()
-            .child("$defs")
-            .child("Person")
-            .child("properties")
-            .child("ex:name");
-        assert_eq!(plain.to_string(), "#/$defs/Person/properties/ex:name");
-        let special = definition_path("Holder")
-            .child("properties")
-            .child("a/b")
-            .child("c~d")
-            .child_index(2);
-        assert_eq!(special.to_string(), "#/$defs/Holder/properties/a~1b/c~0d/2");
-        assert_eq!(SchemaPath::root().to_string(), "#");
-    }
-
     #[test]
     fn catalog_rejects_malformed_documents_and_schema_values() {
         for (schema_json, expected) in [

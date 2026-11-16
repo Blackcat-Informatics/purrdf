@@ -1634,8 +1634,9 @@ impl<'a> Renderer<'a> {
     ) -> Result<String, LinkmlError> {
         let name = element_name(&format!("Inline {path} {suffix}"));
         if let Some(previous) = self.used_names.get(&name) {
+            let location = path.to_string();
             return Err(LinkmlError::new(format!(
-                "schema locations {previous:?} and {path:?} collide on synthesized LinkML element name {name:?}"
+                "schema locations {previous:?} and {location:?} collide on synthesized LinkML element name {name:?}"
             )));
         }
         self.used_names.insert(name.clone(), path.to_string());
@@ -3213,6 +3214,31 @@ mod tests {
         assert_eq!(attributes["ex:list"]["maximum_cardinality"], 4);
         assert_eq!(attributes["ex:list"]["list_elements_ordered"], true);
         assert_eq!(attributes["ex:list"]["list_elements_unique"], false);
+    }
+
+    /// Two sibling properties with inline object schemas whose locations fold
+    /// to one synthesized element name are refused naming both locations as
+    /// their quoted pointer text, not as an internal representation.
+    #[test]
+    fn inline_name_collision_names_both_locations_as_pointer_text() {
+        let schema = json!({
+            "$defs": {
+                "Holder": {
+                    "type": "object",
+                    "properties": {
+                        "A b": { "type": "object", "properties": { "ex:x": { "type": "string" } } },
+                        "a b": { "type": "object", "properties": { "ex:x": { "type": "string" } } }
+                    }
+                }
+            }
+        });
+        let message = emit(&compiled(&schema), &config()).unwrap_err().to_string();
+        assert_eq!(
+            message,
+            "schema locations \"#/$defs/Holder/properties/A b\" and \
+             \"#/$defs/Holder/properties/a b\" collide on synthesized LinkML element name \
+             \"InlineDefsHolderPropertiesABObject\""
+        );
     }
 
     #[test]

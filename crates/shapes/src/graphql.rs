@@ -2803,6 +2803,10 @@ fn required_names(object: &Object, path: &SchemaPath) -> Result<BTreeSet<String>
     Ok(required)
 }
 
+/// Whether `schema` admits `null`. Every definition passed
+/// `validate_schema_keywords` before planning, so the typed readers below see
+/// only schemas whose `type` and finite values are well formed; the root path
+/// they take is never reported.
 fn schema_allows_null(
     schema: &Value,
     definitions: &Object,

@@ -1669,26 +1669,22 @@ impl NativeImporter {
         let Some(attributes) = class.get("attributes").and_then(Value::as_object) else {
             return Ok(None);
         };
+        let attributes_path = element_path("classes", name).child("attributes");
         if attributes.len() == 1 && attributes.contains_key("@id") {
             let id = attributes["@id"].as_object().ok_or_else(|| {
-                LinkmlError::new(format!("#/classes/{name}/attributes/@id must be a mapping"))
+                LinkmlError::new(format!(
+                    "{} must be a mapping",
+                    attributes_path.child("@id")
+                ))
             })?;
-            if optional_bool(
-                id,
-                "required",
-                &SchemaPath::root()
-                    .child("classes")
-                    .child("helper")
-                    .child("attributes")
-                    .child("@id"),
-            )? == Some(true)
-            {
+            if optional_bool(id, "required", &attributes_path.child("@id"))? == Some(true) {
                 // An IRI or blank-node reference states its `@id` label pattern.
                 let mut id_schema = crate::json_model::json!({ "type": "string" });
                 if let Some(pattern) = id.get("pattern") {
                     let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
-                            "#/classes/{name}/attributes/@id/pattern must be a string"
+                            "{}/pattern must be a string",
+                            attributes_path.child("@id")
                         ))
                     })?;
                     crate::json_model::set_member(
@@ -1715,7 +1711,8 @@ impl NativeImporter {
             // `@value` a string carrying the datatype's format or lexical pattern.
             let value = attributes["@value"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!(
-                    "#/classes/{name}/attributes/@value must be a mapping"
+                    "{} must be a mapping",
+                    attributes_path.child("@value")
                 ))
             })?;
             let mut value_schema = crate::json_model::json!({ "type": "string" });
@@ -1732,7 +1729,8 @@ impl NativeImporter {
             if let Some(pattern) = value.get("pattern") {
                 let pattern = pattern.as_str().ok_or_else(|| {
                     LinkmlError::new(format!(
-                        "#/classes/{name}/attributes/@value/pattern must be a string"
+                        "{}/pattern must be a string",
+                        attributes_path.child("@value")
                     ))
                 })?;
                 crate::json_model::set_member(
@@ -1756,23 +1754,17 @@ impl NativeImporter {
         {
             let value = attributes["@value"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!(
-                    "#/classes/{name}/attributes/@value must be a mapping"
+                    "{} must be a mapping",
+                    attributes_path.child("@value")
                 ))
             })?;
             let datatype = attributes["@type"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!(
-                    "#/classes/{name}/attributes/@type must be a mapping"
+                    "{} must be a mapping",
+                    attributes_path.child("@type")
                 ))
             })?;
-            if optional_bool(
-                value,
-                "required",
-                &SchemaPath::root()
-                    .child("classes")
-                    .child("helper")
-                    .child("attributes")
-                    .child("@value"),
-            )? == Some(true)
+            if optional_bool(value, "required", &attributes_path.child("@value"))? == Some(true)
                 && datatype.get("range").and_then(Value::as_str) == Some("string")
             {
                 return Ok(Some(crate::json_model::json!({
@@ -1809,32 +1801,19 @@ impl NativeImporter {
         {
             let value = attributes["@value"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!(
-                    "#/classes/{name}/attributes/@value must be a mapping"
+                    "{} must be a mapping",
+                    attributes_path.child("@value")
                 ))
             })?;
             let language = attributes["@language"].as_object().ok_or_else(|| {
                 LinkmlError::new(format!(
-                    "#/classes/{name}/attributes/@language must be a mapping"
+                    "{} must be a mapping",
+                    attributes_path.child("@language")
                 ))
             })?;
-            if optional_bool(
-                value,
-                "required",
-                &SchemaPath::root()
-                    .child("classes")
-                    .child("helper")
-                    .child("attributes")
-                    .child("@value"),
-            )? == Some(true)
-                && optional_bool(
-                    language,
-                    "required",
-                    &SchemaPath::root()
-                        .child("classes")
-                        .child("helper")
-                        .child("attributes")
-                        .child("@language"),
-                )? == Some(true)
+            if optional_bool(value, "required", &attributes_path.child("@value"))? == Some(true)
+                && optional_bool(language, "required", &attributes_path.child("@language"))?
+                    == Some(true)
             {
                 // A `sh:languageIn` object states its tag pattern; the object of
                 // any language-tagged literal (`rdf:langString`) states none.
@@ -1842,7 +1821,8 @@ impl NativeImporter {
                 if let Some(pattern) = language.get("pattern") {
                     let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
-                            "#/classes/{name}/attributes/@language/pattern must be a string"
+                            "{}/pattern must be a string",
+                            attributes_path.child("@language")
                         ))
                     })?;
                     crate::json_model::set_member(
@@ -2658,6 +2638,30 @@ mod tests {
                 .to_string()
                 .contains("must be a string")
         );
+    }
+
+    /// A carrier class named with `/` or `~` is reported at the member it
+    /// names: the location holds the class name as one escaped token, and the
+    /// name is neither split nor replaced by a placeholder.
+    #[test]
+    fn carrier_class_location_addresses_the_class_with_slash_or_tilde_names() {
+        for (class, spelled) in [("A/B", "A~1B"), ("C~D", "C~0D")] {
+            let mut value = native_document().into_value();
+            value["classes"][class] = json!({
+                "attributes": { "@id": { "required": "yes" } }
+            });
+            value["classes"]["Person"]["attributes"]["friend"]["range"] =
+                Value::String(class.to_owned());
+            let document = LinkmlDocument::from_value(value).expect("envelope remains valid");
+            let visible = BTreeSet::from(["Person".to_owned()]);
+            let message = import_document(&document, &config(), Some(&visible))
+                .expect_err("a non-boolean required is refused")
+                .to_string();
+            assert_eq!(
+                message,
+                format!("#/classes/{spelled}/attributes/@id/required must be a boolean")
+            );
+        }
     }
 
     #[test]

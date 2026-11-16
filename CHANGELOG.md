@@ -8,16 +8,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **Typed JSON Pointers in the schema projections:**
-  `purrdf_lex::json_pointer::JsonPointer` holds a pointer as its unescaped
-  reference tokens and writes the RFC 6901 spelling only on `Display`, through
-  `escape_token`; `child`, `child_index`, `push`, `tokens` and `parse` build and
-  read it. The GraphQL, TypeScript, Pydantic, LinkML and JSON Schema importer
-  projections in `purrdf-shapes` now carry their locations as one, so a property
-  or definition named with `/` or `~` is one token and is reported at the
-  member it names, where its location was previously built by joining
-  unescaped text. Locations of ordinary names are written exactly as before, and
-  no emitted schema, loss entry or golden changes.
+- **Typed JSON Pointers:** `purrdf_lex::json_pointer::JsonPointer` holds a
+  pointer as its unescaped reference tokens and writes the RFC 6901 spelling
+  only on `Display`, through `escape_token`; `child`, `child_index`, `tokens`
+  and `parse` build and read it, and pointers order by their spelling. The
+  GraphQL, TypeScript, Pydantic, LinkML and JSON Schema importer projections in
+  `purrdf-shapes` carry their schema locations as one instead of joining
+  escaped text, so a member name can no longer reach a location unescaped.
+  Locations, loss entries and emitted schemas are unchanged for every input
+  except one: a LinkML package carrier class (`@id`, typed-literal or
+  language-tagged literal) with a malformed attribute is now reported at its
+  own class, escaped, where the location used a fixed placeholder class name or
+  the class name unescaped.
 
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the
