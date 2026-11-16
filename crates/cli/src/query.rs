@@ -157,7 +157,25 @@ use crate::sink;
 use crate::source::{self, ViewOp};
 
 /// Surface the actual context even when evaluation or result collection fails.
+///
+/// The receipt carries the run identity only: nothing hashes the data source.
 pub(crate) fn with_execution_receipt<T>(
+    run: impl FnOnce(&purrdf_validate::query::ExecutionReceiptCapture) -> Result<T, CliError>,
+) -> Result<T, CliError> {
+    with_bound_execution_receipt(None::<&purrdf_core::RdfDataset>, run)
+}
+
+/// [`with_execution_receipt`], binding the run to the content of `view` when
+/// `--content-identity` supplied it.
+///
+/// Only then is the view's content identity computed, after a run that
+/// succeeded; the receipt then also carries `contentIdentity` and
+/// `executionIdentity`. A run that cannot have an execution identity (it called
+/// external code without a certified implementation identity) is refused with
+/// [`CliError::ContentIdentityRefused`] after its ordinary receipt is printed,
+/// and its results are not written. A run that failed keeps its own error.
+pub(crate) fn with_bound_execution_receipt<T, V: source::InputView>(
+    content: Option<&V>,
     run: impl FnOnce(&purrdf_validate::query::ExecutionReceiptCapture) -> Result<T, CliError>,
 ) -> Result<T, CliError> {
     let capture = purrdf_validate::query::ExecutionReceiptCapture::default();
@@ -165,11 +183,49 @@ pub(crate) fn with_execution_receipt<T>(
     let coordinates = capture
         .into_coordinates()
         .map_err(|error| CliError::Runtime(error.to_string()))?;
-    eprintln!(
-        "purrdf-execution {}",
-        purrdf_validate::query::execution_receipt_json(&coordinates)
-    );
+    let bound = match (content, &outcome) {
+        (Some(view), Ok(_)) => Some(bound_receipt(&coordinates, view)),
+        _ => None,
+    };
+    match bound {
+        Some(Ok(receipt)) => eprintln!("purrdf-execution {receipt}"),
+        Some(Err(refusal)) => {
+            eprintln!(
+                "purrdf-execution {}",
+                purrdf_validate::query::execution_receipt_json(&coordinates)
+            );
+            return Err(CliError::ContentIdentityRefused(refusal));
+        }
+        None => eprintln!(
+            "purrdf-execution {}",
+            purrdf_validate::query::execution_receipt_json(&coordinates)
+        ),
+    }
     outcome
+}
+
+/// The receipt bound to `view`'s content. A run that has no run identity is
+/// refused before the view is hashed.
+fn bound_receipt<V: source::InputView>(
+    coordinates: &purrdf_sparql_eval::QueryCoordinates,
+    view: &V,
+) -> Result<String, purrdf_sparql_eval::ReceiptError> {
+    match coordinates {
+        purrdf_sparql_eval::QueryCoordinates::NotStarted => {
+            return Err(purrdf_sparql_eval::ReceiptError::NotStarted);
+        }
+        purrdf_sparql_eval::QueryCoordinates::Started(started) => {
+            started.run_identity()?;
+        }
+    }
+    let identity = match purrdf_core::ContentIdentified::content_identity(view) {
+        Ok(identity) => identity,
+        Err(never) => match never {},
+    };
+    purrdf_validate::query::execution_receipt_json_with_sources(
+        coordinates,
+        &purrdf_sparql_eval::ExecutionSources::new(identity),
+    )
 }
 
 /// The generic query operation: evaluate the prepared query over whichever concrete
@@ -192,6 +248,8 @@ struct QueryOp<'a> {
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
     coordinates: &'a CoordinateInputs,
+    /// `--content-identity`: bind the receipt to the view's content.
+    content_identity: bool,
 }
 
 /// The `--path-relation` specs one lane will snapshot, plus the query text they force a
@@ -296,7 +354,7 @@ fn engine_options<'a>(
 impl ViewOp for QueryOp<'_> {
     type Output = SparqlResult;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,
@@ -306,7 +364,7 @@ impl ViewOp for QueryOp<'_> {
                 .prepare_against(self.engine, view, self.aggregates)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        with_execution_receipt(|capture| {
+        with_bound_execution_receipt(self.content_identity.then_some(view), |capture| {
             Ok(self.engine.query_prepared_view(
                 view,
                 prepared.as_deref().unwrap_or(self.prepared),
@@ -358,12 +416,14 @@ struct GovernedQueryOp<'a> {
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
     coordinates: &'a CoordinateInputs,
+    /// `--content-identity`: bind the receipt to the view's content.
+    content_identity: bool,
 }
 
 impl ViewOp for GovernedQueryOp<'_> {
     type Output = GovernedOutcome;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,
@@ -379,7 +439,7 @@ impl ViewOp for GovernedQueryOp<'_> {
         // view — which is what the engine's plan/registry identity check demands.
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        with_execution_receipt(|capture| {
+        with_bound_execution_receipt(self.content_identity.then_some(view), |capture| {
             Ok(self.engine.query_prepared_governed_view(
                 view,
                 prepared.as_deref().unwrap_or(self.prepared),
@@ -412,12 +472,14 @@ struct ExplainOp<'a> {
     /// `--division`: the precision of an `xsd:integer`/`xsd:decimal` quotient.
     division: DivisionPolicy,
     coordinates: &'a CoordinateInputs,
+    /// `--content-identity`: bind the receipt to the view's content.
+    content_identity: bool,
 }
 
 impl ViewOp for ExplainOp<'_> {
     type Output = QueryExplanation;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,
@@ -432,7 +494,7 @@ impl ViewOp for ExplainOp<'_> {
         let relations = path_relation::build_registry(view, self.relations.specs)?;
         let env = engine_env(self.aggregates, relations.as_ref())?;
         let options = engine_options(&env, self.relations.geo, self.division, self.coordinates);
-        with_execution_receipt(|capture| {
+        with_bound_execution_receipt(self.content_identity.then_some(view), |capture| {
             Ok(self.engine.explain_query_with_options_view(
                 view,
                 self.query,
@@ -774,7 +836,7 @@ impl ViewOp for EntailedQueryOp<'_> {
     /// query was read. The two registries agree on everything that parse decides — the
     /// call IRIs, their arity, their modes — and differ only in the edges the second one
     /// walks, which is exactly the difference this pairing exists to introduce.
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         canonical: &mut crate::canonical::Request,
@@ -881,6 +943,8 @@ pub(crate) struct QueryOptions<'a> {
     pub(crate) now: Option<&'a str>,
     /// Raw `--entropy-seed`, decoded with `now`.
     pub(crate) entropy_seed: Option<&'a str>,
+    /// `--content-identity`: the receipt binds the run to the data source's content.
+    pub(crate) content_identity: bool,
 }
 
 /// Parse `--division`: `exact`, `N` (fractional digits, truncated toward zero) or
@@ -991,6 +1055,7 @@ pub(crate) fn run(
                 relations,
                 division: options.division,
                 coordinates: &coordinates,
+                content_identity: options.content_identity,
             },
             canonical,
         )?;
@@ -1079,6 +1144,7 @@ pub(crate) fn run(
                 relations,
                 division: options.division,
                 coordinates: &coordinates,
+                content_identity: options.content_identity,
             },
             canonical,
         )?;
@@ -1106,6 +1172,7 @@ pub(crate) fn run(
             relations,
             division: options.division,
             coordinates: &coordinates,
+            content_identity: options.content_identity,
         },
         canonical,
     )?;

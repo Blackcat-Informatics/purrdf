@@ -2950,6 +2950,32 @@ int32_t purrdf_dataset_division_policy(const PurrdfDataset *dataset,
                                        PurrdfError **out_error);
 
 /**
+ * Bind an execution receipt to the content of the dataset its run read.
+ *
+ * A query's receipt (`out_receipt`, or `purrdf_error_execution_receipt_json`) carries
+ * the run identity only: no query hashes its dataset. This call is the explicit
+ * request for the dataset's content identity, which hashes every row of `dataset`
+ * on this call, and writes to `*out_receipt` (UTF-8 JSON, not NUL-terminated; free
+ * with `purrdf_buffer_free`) the same receipt with `contentIdentity` and
+ * `executionIdentity` added. Pass the dataset handle the query ran on: a frozen
+ * handle never changes, so binding later is exact.
+ *
+ * A buffer that is not an execution receipt fails with
+ * `PURRDF_STATUS_INVALID_UTF8` or `PURRDF_STATUS_INVALID_ARGUMENT`. A receipt whose
+ * run cannot have an execution identity (it never started, or called extension
+ * code without a certified implementation identity) fails with
+ * `PURRDF_STATUS_QUERY_ERROR`, and nothing is hashed.
+ *
+ * # Safety
+ * `dataset` and `receipt` must be live handles; `out_receipt` must be writable;
+ * `out_error` must be null or writable.
+ */
+int32_t purrdf_execution_receipt_bind(const PurrdfDataset *dataset,
+                                      const PurrdfBuffer *receipt,
+                                      PurrdfBuffer **out_receipt,
+                                      PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query. The result shape is reported in `*out_kind`:
  * `0` = SELECT → `*out_rows` is a `PurrdfRowCursor` (free with
  * `purrdf_rowcursor_free`); `1` = CONSTRUCT/DESCRIBE → `*out_graph` is a

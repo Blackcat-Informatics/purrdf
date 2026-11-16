@@ -303,6 +303,65 @@ unsafe fn run_query(
     }
 }
 
+/// Bind an execution receipt to the content of the dataset its run read.
+///
+/// A query's receipt (`out_receipt`, or `purrdf_error_execution_receipt_json`) carries
+/// the run identity only: no query hashes its dataset. This call is the explicit
+/// request for the dataset's content identity, which hashes every row of `dataset`
+/// on this call, and writes to `*out_receipt` (UTF-8 JSON, not NUL-terminated; free
+/// with `purrdf_buffer_free`) the same receipt with `contentIdentity` and
+/// `executionIdentity` added. Pass the dataset handle the query ran on: a frozen
+/// handle never changes, so binding later is exact.
+///
+/// A buffer that is not an execution receipt fails with
+/// `PURRDF_STATUS_INVALID_UTF8` or `PURRDF_STATUS_INVALID_ARGUMENT`. A receipt whose
+/// run cannot have an execution identity (it never started, or called extension
+/// code without a certified implementation identity) fails with
+/// `PURRDF_STATUS_QUERY_ERROR`, and nothing is hashed.
+///
+/// # Safety
+/// `dataset` and `receipt` must be live handles; `out_receipt` must be writable;
+/// `out_error` must be null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_execution_receipt_bind(
+    dataset: *const PurrdfDataset,
+    receipt: *const PurrdfBuffer,
+    out_receipt: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || receipt.is_null() || out_receipt.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_execution_receipt_bind",
+                ));
+            }
+            let text = std::str::from_utf8((*receipt).as_bytes()).map_err(|_| {
+                PurrdfError::new(
+                    PurrdfStatus::InvalidUtf8,
+                    "the execution receipt is not UTF-8",
+                )
+            })?;
+            let bound = purrdf_validate::query::bind_execution_receipt(text, || {
+                purrdf_core::ContentIdentified::content_identity(PurrdfDataset::dataset(dataset))
+                    .unwrap_or_else(|never| match never {})
+            })
+            .map_err(|error| {
+                let status = match error {
+                    purrdf_validate::query::ReceiptBindError::Refused(_) => {
+                        PurrdfStatus::QueryError
+                    }
+                    _ => PurrdfStatus::InvalidArgument,
+                };
+                PurrdfError::new(status, error.to_string())
+            })?;
+            *out_receipt = into_handle(PurrdfBuffer::from(bound.into_bytes()));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
 /// Publish one independently owned receipt buffer after the result is prepared.
 pub(crate) unsafe fn store_execution_receipt(
     out: *mut *mut PurrdfBuffer,

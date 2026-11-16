@@ -851,6 +851,23 @@ impl Dataset {
         Self::from_frozen_in(frozen.into(), self.graph_existence())
     }
 
+    /// `contentIdentity()` → the 64-hex content identity of this dataset's current
+    /// content, the frozen snapshot every query reads: a digest of every row, computed
+    /// on this call and never by a query. Equal content has an equal identity, so the
+    /// value a query's receipt binds to through `bindExecutionReceipt` is this call's
+    /// value as long as the dataset has not changed since that query.
+    ///
+    /// # Errors
+    ///
+    /// A dataset whose pending changes cannot be frozen.
+    #[wasm_bindgen(js_name = contentIdentity)]
+    pub fn content_identity(&self) -> Result<String, JsValue> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        let identity = purrdf_core::ContentIdentified::content_identity(&*frozen)
+            .unwrap_or_else(|never| match never {});
+        Ok(identity.to_string())
+    }
+
     /// `generation` — how many mutations this dataset's content has seen.
     ///
     /// Advances on every `add` or `delete` that changed the effective set and on every

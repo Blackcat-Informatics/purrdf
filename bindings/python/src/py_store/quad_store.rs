@@ -943,6 +943,23 @@ impl PyQuadStore {
             .len()
     }
 
+    /// The 64-hex content identity of this store's current content, the frozen
+    /// snapshot every query reads: a digest of every row, computed on this call and
+    /// never by a query. Equal content has an equal identity, so it binds a query's
+    /// receipt through `bind_execution_receipt` as long as the store has not changed
+    /// since that query.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the store cannot be frozen.
+    fn content_identity(&self, py: Python<'_>) -> PyResult<String> {
+        let frozen = self.freeze_snapshot(py)?;
+        Ok(py
+            .detach(|| purrdf_core::ContentIdentified::content_identity(&*frozen))
+            .unwrap_or_else(|never| match never {})
+            .to_string())
+    }
+
     /// Iterate the store's quads (a snapshot taken at iteration time).
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
         let quads = self

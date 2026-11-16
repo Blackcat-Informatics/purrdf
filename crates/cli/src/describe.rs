@@ -147,7 +147,7 @@ struct DescribeOp<'a> {
 impl ViewOp for DescribeOp<'_> {
     type Output = Arc<RdfDataset>;
 
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: source::InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,
