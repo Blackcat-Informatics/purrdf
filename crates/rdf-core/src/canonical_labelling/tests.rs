@@ -444,7 +444,7 @@ fn render(lines: &[Line], full: bool) -> String {
     let set = admit(lines).expect("well formed");
     let plain = reference::label_set(&set, reference::ENGINE_LIMIT, false).expect("labelled");
     let (searched, traces) =
-        reference::label_traced(&set, reference::ENGINE_LIMIT, true, true).expect("labelled");
+        reference::label_traced(&set, reference::ENGINE_LIMIT, true, true, None).expect("labelled");
     assert_eq!(
         searched.record, plain.record,
         "the search agrees with the run"
@@ -1232,9 +1232,9 @@ fn the_empty_input_is_labelled() {
         hex::encode(&l.digest),
         "bf4b40a613c1cc97ababeccefc1c1c810dde52818d8928603f2180376f06fb5e"
     );
-    let empty = super::Record {
+    let empty = super::StatisticsRecord {
         guaranteed: true,
-        ..super::Record::default()
+        ..super::StatisticsRecord::default()
     };
     assert_eq!(l.record, empty);
 }

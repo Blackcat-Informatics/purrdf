@@ -172,7 +172,7 @@ pub enum Kind {
 
 /// The variant of a term held by an `empty-graph` line and carried by another
 /// line, with the blank node's source identifier as the diagnostic field.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GraphTerm {
     /// An IRI (code 0).
     Iri,
@@ -425,7 +425,7 @@ impl Interner {
 
     /// The tokens of `term` in walk order (`s`, `p`, `o` inside a triple
     /// term), over a heap work list so that nesting depth costs no stack.
-    fn term(&mut self, term: &Term, out: &mut Vec<Tok>) {
+    pub(crate) fn term(&mut self, term: &Term, out: &mut Vec<Tok>) {
         let mut pending = vec![term];
         while let Some(term) = pending.pop() {
             match term {
@@ -460,6 +460,19 @@ impl Interner {
                 self.term(term, out);
             }
         }
+    }
+
+    /// The tokens of a record up to its terms: the kind, the payload and the
+    /// number of terms.
+    pub(crate) fn record_head(&mut self, payload: &[u8], terms: usize, out: &mut Vec<Tok>) {
+        out.push(Tok::Tag(Kind::Record as u8));
+        // The payload is one constant whose encoding is `bytes(payload)`; only
+        // the tokens of a record's payload slot ever hold it, so it is never
+        // compared with a leaf.
+        let mut encoding = Vec::with_capacity(8 + payload.len());
+        push_bytes(&mut encoding, payload);
+        out.push(Tok::Const(self.constant(&encoding)));
+        out.push(Tok::Len(terms as u64));
     }
 
     /// The tokens of `line`.
@@ -507,14 +520,7 @@ impl Interner {
                 self.term(term, &mut out);
             }
             Line::Record { payload, terms } => {
-                out.push(Tok::Tag(Kind::Record as u8));
-                // The payload is one constant whose encoding is
-                // `bytes(payload)`; only the tokens of a record's payload
-                // slot ever hold it, so it is never compared with a leaf.
-                let mut encoding = Vec::with_capacity(8 + payload.len());
-                push_bytes(&mut encoding, payload);
-                out.push(Tok::Const(self.constant(&encoding)));
-                out.push(Tok::Len(terms.len() as u64));
+                self.record_head(payload, terms.len(), &mut out);
                 for term in terms {
                     self.term(term, &mut out);
                 }
@@ -532,18 +538,112 @@ pub(crate) struct Admission {
     pub(crate) graph: Option<(GraphTerm, Option<Box<[u8]>>)>,
 }
 
+impl Admission {
+    /// The admitted set, or the refusal of the smallest code that applies.
+    pub(crate) fn into_result(self) -> Result<LineSet, super::Refusal> {
+        if let Some(reason) = self.input {
+            return Err(super::Refusal::Input { reason });
+        }
+        if let Some((term, source)) = self.graph {
+            return Err(super::Refusal::Graph { term, source });
+        }
+        Ok(self.set)
+    }
+}
+
+/// The tokens of a graph term and its variant.
+pub(crate) type GraphTokens = (Vec<Tok>, GraphTerm);
+
+/// What the conditions W1 to W5 need to know of one stored line.
+pub(crate) struct Facts {
+    /// Whether every slot holds a variant it admits (W1).
+    pub(crate) slots_ok: bool,
+    /// Whether the line is an annotation of count zero (W2).
+    pub(crate) zero_count: bool,
+    /// The graph term the line carries, as tokens (W5).
+    pub(crate) carried: Option<GraphTokens>,
+    /// The graph term the line holds as an empty graph, as tokens (W5).
+    pub(crate) held: Option<GraphTokens>,
+}
+
+/// Collects the stored lines of one input and checks W1 to W5 over them: the
+/// one place the conditions are decided, whether the lines were typed by a
+/// caller or lowered from a dataset view.
+#[derive(Default)]
+pub(crate) struct Admitter {
+    pub(crate) interner: Interner,
+    input: Option<InputReason>,
+    /// Lines by their tokens without the count (W3).
+    seen: FastMap<Vec<Tok>, ()>,
+    /// Graph terms carried by statement lines and held by empty-graph lines.
+    carried: Vec<GraphTokens>,
+    empties: Vec<GraphTokens>,
+}
+
+impl Admitter {
+    fn note(&mut self, reason: InputReason) {
+        self.input = Some(self.input.map_or(reason, |r| r.min(reason)));
+    }
+
+    /// Store `tokens` as the next line.
+    pub(crate) fn push(&mut self, tokens: Vec<Tok>, facts: Facts) {
+        if !facts.slots_ok {
+            self.note(InputReason::Slot);
+        }
+        if facts.zero_count {
+            self.note(InputReason::Count);
+        }
+        let uncounted: Vec<Tok> = tokens
+            .iter()
+            .filter(|t| !matches!(t, Tok::Count(_)))
+            .copied()
+            .collect();
+        if self.seen.insert(uncounted, ()).is_some() {
+            self.note(InputReason::Repeated);
+        }
+        self.carried.extend(facts.carried);
+        self.empties.extend(facts.held);
+        self.interner.set.lines.push(tokens.into_boxed_slice());
+    }
+
+    /// The refusal reasons of W1 to W5 and the admitted set.
+    pub(crate) fn finish(self) -> Admission {
+        let Self {
+            interner,
+            input,
+            carried,
+            empties,
+            ..
+        } = self;
+        // W5: the smallest term code, and for a blank the smallest source.
+        let carried: FastMap<Vec<Tok>, ()> = carried.into_iter().map(|(t, _)| (t, ())).collect();
+        let mut graph: Option<(GraphTerm, Option<Box<[u8]>>)> = None;
+        for (tokens, variant) in empties {
+            if !carried.contains_key(&tokens) {
+                continue;
+            }
+            let source = match (&variant, tokens.as_slice()) {
+                (GraphTerm::Blank, [Tok::Blank(b)]) => Some(interner.set.nodes[*b].clone()),
+                _ => None,
+            };
+            let better = graph.as_ref().is_none_or(|(v, s)| {
+                (variant.code(), source.as_deref()) < (v.code(), s.as_deref())
+            });
+            if better {
+                graph = Some((variant, source));
+            }
+        }
+        Admission {
+            set: interner.set,
+            input,
+            graph,
+        }
+    }
+}
+
 /// Admit `lines`: intern them and check W1 to W5.
 pub(crate) fn admit<'a>(lines: impl IntoIterator<Item = &'a Line>) -> Admission {
-    let mut interner = Interner::default();
-    let mut input: Option<InputReason> = None;
-    let mut note = |reason: InputReason| {
-        input = Some(input.map_or(reason, |r| r.min(reason)));
-    };
-    // Lines by their tokens without the count (W3).
-    let mut seen: FastMap<Vec<Tok>, ()> = FastMap::default();
-    // Graph terms carried by statement lines and held by empty-graph lines.
-    let mut carried: Vec<(Vec<Tok>, GraphTerm)> = Vec::new();
-    let mut empties: Vec<(Vec<Tok>, GraphTerm)> = Vec::new();
+    let mut admitter = Admitter::default();
     for line in lines {
         let iri = |t: &Term| matches!(t, Term::Iri(_));
         let slots_ok = match line {
@@ -552,63 +652,36 @@ pub(crate) fn admit<'a>(lines: impl IntoIterator<Item = &'a Line>) -> Admission 
             // Every term of a record's list admits every variant.
             Line::EmptyGraph(_) | Line::Record { .. } => true,
         };
-        if !slots_ok {
-            note(InputReason::Slot);
-        }
-        if let Line::Annotation { count: 0, .. } = line {
-            note(InputReason::Count);
-        }
-        let tokens = interner.line(line);
-        let uncounted: Vec<Tok> = tokens
-            .iter()
-            .filter(|t| !matches!(t, Tok::Count(_)))
-            .copied()
-            .collect();
-        if seen.insert(uncounted, ()).is_some() {
-            note(InputReason::Repeated);
-        }
+        let zero_count = matches!(line, Line::Annotation { count: 0, .. });
+        let tokens = admitter.interner.line(line);
         let graph_tokens = |term: &Term, interner: &mut Interner| {
             let mut out = Vec::new();
             interner.term(term, &mut out);
             (out, term.variant())
         };
-        match line {
+        let (carried, held) = match line {
             Line::Quad { graph: Some(g), .. }
             | Line::ReifierBinding { graph: Some(g), .. }
             | Line::Annotation { graph: Some(g), .. } => {
-                carried.push(graph_tokens(g, &mut interner));
+                (Some(graph_tokens(g, &mut admitter.interner)), None)
             }
-            Line::EmptyGraph(g) => empties.push(graph_tokens(g, &mut interner)),
+            Line::EmptyGraph(g) => (None, Some(graph_tokens(g, &mut admitter.interner))),
             // No graph slot, or the default graph; a record denotes nothing
             // and takes no part in W5.
             Line::Quad { graph: None, .. }
             | Line::ReifierBinding { graph: None, .. }
             | Line::Annotation { graph: None, .. }
-            | Line::Record { .. } => {}
-        }
-        interner.set.lines.push(tokens.into_boxed_slice());
-    }
-    // W5: the smallest term code, and for a blank the smallest source.
-    let carried: FastMap<Vec<Tok>, ()> = carried.into_iter().map(|(t, _)| (t, ())).collect();
-    let mut graph: Option<(GraphTerm, Option<Box<[u8]>>)> = None;
-    for (tokens, variant) in empties {
-        if !carried.contains_key(&tokens) {
-            continue;
-        }
-        let source = match (&variant, tokens.as_slice()) {
-            (GraphTerm::Blank, [Tok::Blank(b)]) => Some(interner.set.nodes[*b].clone()),
-            _ => None,
+            | Line::Record { .. } => (None, None),
         };
-        let better = graph
-            .as_ref()
-            .is_none_or(|(v, s)| (variant.code(), source.as_deref()) < (v.code(), s.as_deref()));
-        if better {
-            graph = Some((variant, source));
-        }
+        admitter.push(
+            tokens,
+            Facts {
+                slots_ok,
+                zero_count,
+                carried,
+                held,
+            },
+        );
     }
-    Admission {
-        set: interner.set,
-        input,
-        graph,
-    }
+    admitter.finish()
 }

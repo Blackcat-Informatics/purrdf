@@ -33,11 +33,17 @@ mod lines;
 pub mod reference;
 #[cfg(test)]
 mod tests;
+mod view;
+#[cfg(test)]
+mod view_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
+pub use view::{Comparison, Record, ViewError, compare_view, lines_of_view};
 
 use purrdf_hash::Domain;
+use purrdf_lex::term_syntax::write_blank;
+use purrdf_lex::text_out::TextOut;
 
 /// The name of the labelling: an opaque constant.
 pub const NAME: &[u8] = b"nested-refinement-labelling";
@@ -234,9 +240,9 @@ pub struct ComponentRecord {
     pub group_order: Vec<Factor>,
 }
 
-/// The structural record of the whole input.
+/// The structural record of the whole input: the statistics record of 7.7.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Record {
+pub struct StatisticsRecord {
     /// The records of the top components, in their order.
     pub components: Vec<ComponentRecord>,
     /// The number of top components.
@@ -276,6 +282,39 @@ pub struct Record {
     /// Whether every branching call of the result path has a target cell
     /// that is one twin class.
     pub guaranteed: bool,
+}
+
+/// The engine's own limit on the limited units of a search (8.1 and 8.3 of the
+/// definition). The definition has no caller budget; an engine states its own.
+/// The engine trips only past `max(limit, A)` for an input that is not
+/// guaranteed, with the typed refusal [`Refusal::Limit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Limit(u64);
+
+impl Limit {
+    /// The limit of the reference engine.
+    pub const REFERENCE: Self = Self(reference::ENGINE_LIMIT);
+
+    /// A limit of `units` limited units.
+    #[must_use]
+    pub const fn new(units: u64) -> Self {
+        Self(units)
+    }
+
+    /// The limit in limited units.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Why an engine run did not complete.
+#[derive(Debug)]
+pub(crate) enum Halt {
+    /// The definition's typed refusal.
+    Refused(Refusal),
+    /// The caller's stop signal was set. Not a refusal of the definition.
+    Stopped,
 }
 
 /// A refusal: a closed list of typed variants.
@@ -363,7 +402,7 @@ pub struct Labelled {
     /// The top components in their order.
     pub components: Vec<Component>,
     /// The structural record.
-    pub record: Record,
+    pub record: StatisticsRecord,
     /// The diagnostic part: failures with their sources, ascending.
     pub diagnostic: Vec<FailureDiagnostic>,
     /// Engine figure: units over the calls the engine explored.
@@ -389,6 +428,18 @@ pub(crate) const fn bits(v: u64) -> u64 {
     v.bit_width() as u64
 }
 
+/// Write the label of `position` into `out` in the blank-node form of the
+/// target syntax: the position in decimal with no leading zero and no affix,
+/// printed after `_:` (7.14 of the definition), so position `7` is `_:7` in
+/// N-Quads. This is the one place a position becomes text. A label is output
+/// only and is never parsed to recover a position or an identity. Position
+/// order differs from the byte order of labels (`10` precedes `2`), so a
+/// dataset read back from its decimal labels as names is not promised the
+/// identity map of the definition's Lemma I.
+pub fn write_label<W: TextOut + ?Sized>(position: u64, out: &mut W) {
+    write_blank(&position.to_string(), out);
+}
+
 /// Admit `lines` and label them with the reference engine.
 ///
 /// # Errors
@@ -406,12 +457,5 @@ pub fn label(lines: &[Line]) -> Result<(LineSet, Labelled), Refusal> {
 /// # Errors
 /// `input` or `graph` with the precedence of the definition.
 pub fn admit(lines: &[Line]) -> Result<LineSet, Refusal> {
-    let admission = lines::admit(lines);
-    if let Some(reason) = admission.input {
-        return Err(Refusal::Input { reason });
-    }
-    if let Some((term, source)) = admission.graph {
-        return Err(Refusal::Graph { term, source });
-    }
-    Ok(admission.set)
+    lines::admit(lines).into_result()
 }

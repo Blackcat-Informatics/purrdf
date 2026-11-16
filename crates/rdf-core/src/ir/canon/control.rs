@@ -223,6 +223,12 @@ impl<'a> CanonicalizationControl<'a> {
         }
     }
 
+    /// The caller-owned stop signal this control carries, for a sibling engine
+    /// that honours the same request.
+    pub(crate) const fn stop_signal(&self) -> Option<&'a dyn crate::StopSignal> {
+        self.stop
+    }
+
     /// Borrow all finalized receipts from this control.
     #[must_use]
     pub fn receipts(&self) -> &[SearchReceipt] {

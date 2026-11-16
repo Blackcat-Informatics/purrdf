@@ -100,11 +100,6 @@ pub mod fno;
 // crates — the `purrdf-slice` link-unit linker and the `purrdf-shex` structural
 // cycle checks — not `purrdf-core` internals. Dependency-free and wasm-clean.
 pub mod graph;
-// The queue-refinement blank-node labelling with nested inheriting calls, its
-// statistics record and its old-against-new comparison over a dataset view. An
-// evaluation surface, hidden: not a stable API.
-#[doc(hidden)]
-pub mod label32;
 // The canonical labelling of the blank nodes of a set of typed lines,
 // `(nested-refinement-labelling, 1)`: typed lines in, a typed canonical map,
 // canonical line sequence with its digest, and structural record out.

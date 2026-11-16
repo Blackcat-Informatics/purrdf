@@ -17,10 +17,11 @@ use super::certificate::{Certificate, entry_of};
 use super::lines::{Leaf, LineSet, Tok};
 use super::{
     COMPONENT_CONTEXT, Component, ComponentRecord, Factor, FactorKind, FailureDiagnostic,
-    FailureRecord, Identity, LINES_CONTEXT, Labelled, Placement, Quantity, Record, Refusal, Units,
-    bits, digest_of,
+    FailureRecord, Halt, Identity, LINES_CONTEXT, Labelled, Placement, Quantity, Refusal,
+    StatisticsRecord, Units, bits, digest_of,
 };
 use crate::FastMap;
+use crate::{StopSignal, governor::is_stopped};
 
 /// The reference engine's own limit on the limited units of a search.
 pub const ENGINE_LIMIT: u64 = 1 << 34;
@@ -215,6 +216,8 @@ enum Stop {
     Failed,
     /// The engine's limit tripped.
     Limit,
+    /// The caller's stop signal was set.
+    Stopped,
 }
 
 #[derive(Clone)]
@@ -246,6 +249,8 @@ struct Engine<'a> {
     twin_units: u64,
     limited: u64,
     limit: u64,
+    /// The caller's stop signal, polled at each call.
+    stop: Option<&'a dyn StopSignal>,
 }
 
 impl<'a> Engine<'a> {
@@ -491,7 +496,7 @@ impl<'a> Engine<'a> {
             match self.call(&inherited, &lines, p + s, &fixed_now) {
                 Ok(tree) => sourced.push((smallest, tree)),
                 Err(Stop::Failed) => failed = true,
-                Err(Stop::Limit) => return Err(Stop::Limit),
+                Err(halt @ (Stop::Limit | Stop::Stopped)) => return Err(halt),
             }
         }
         if failed {
@@ -660,6 +665,9 @@ impl<'a> Engine<'a> {
         p: u64,
         constants: &[Option<u64>],
     ) -> Result<Tree, Stop> {
+        if is_stopped(self.stop) {
+            return Err(Stop::Stopped);
+        }
         let n_k = pair.sides[0].colour.len() as u64;
         let has_singleton = pair.sides[0].cells.values().any(|cell| cell.len() == 1);
         if has_singleton {
@@ -1060,7 +1068,14 @@ struct Run<'a> {
 
 impl<'a> Run<'a> {
     /// The fresh start of `comp`, refined, with the record fields it fixes.
-    fn new(set: &'a LineSet, comp: &'a Comp, stat: Static, limit: u64, tracing: bool) -> Self {
+    fn new(
+        set: &'a LineSet,
+        comp: &'a Comp,
+        stat: Static,
+        limit: u64,
+        tracing: bool,
+        stop: Option<&'a dyn StopSignal>,
+    ) -> Self {
         let Static {
             mut record,
             start,
@@ -1085,6 +1100,7 @@ impl<'a> Run<'a> {
             twin_units: 0,
             limited: 0,
             limit,
+            stop,
         };
         let mut steps = Vec::new();
         let (pair, fresh_units) = fresh_pair(&engine, tracing.then_some(&mut steps));
@@ -1183,27 +1199,40 @@ pub(crate) fn label_set(
     limit: u64,
     force_search: bool,
 ) -> Result<Labelled, Refusal> {
-    label_traced(set, limit, force_search, false).map(|(labelled, _)| labelled)
+    match label_traced(set, limit, force_search, false, None) {
+        Ok((labelled, _)) => Ok(labelled),
+        Err(Halt::Refused(refusal)) => Err(refusal),
+        Err(Halt::Stopped) => {
+            // INVARIANT: the engine reports a stop only when it was given a
+            // signal, and this call gives none.
+            unreachable!("a run with no stop signal was stopped")
+        }
+    }
 }
 
 /// [`label_set`], and with `tracing` the refinement steps and every child of
 /// every branching call of each top component, in the order of 7.3.
 ///
 /// # Errors
-/// As [`label_set`].
+/// As [`label_set`]; [`Halt::Stopped`] when `stop` is set, polled before the
+/// first call and at every call.
 pub(crate) fn label_traced(
     set: &LineSet,
     limit: u64,
     force_search: bool,
     tracing: bool,
-) -> Result<(Labelled, Vec<ComponentTrace>), Refusal> {
+    stop: Option<&dyn StopSignal>,
+) -> Result<(Labelled, Vec<ComponentTrace>), Halt> {
+    if is_stopped(stop) {
+        return Err(Halt::Stopped);
+    }
     let comps = top_components(set);
     // The allowance first, so that a width refusal precedes any search.
     let mut allowance = 0u64;
     let mut statics = Vec::with_capacity(comps.len());
     let mut split_sizes = Vec::with_capacity(comps.len());
     for comp in &comps {
-        let stat = static_record(set, comp)?;
+        let stat = static_record(set, comp).map_err(Halt::Refused)?;
         allowance = add(allowance, stat.record.allowance);
         split_sizes.push((comp.nodes.len() + comp.lines.len()) as u64);
         statics.push(stat);
@@ -1218,7 +1247,7 @@ pub(crate) fn label_traced(
     let mut runs: Vec<Run<'_>> = comps
         .iter()
         .zip(statics)
-        .map(|(comp, stat)| Run::new(set, comp, stat, limit, tracing))
+        .map(|(comp, stat)| Run::new(set, comp, stat, limit, tracing, stop))
         .collect();
     let mut spent = runs.iter().fold(0u64, |spent, run| {
         spent.saturating_add(run.record.units.start + run.fresh_units)
@@ -1229,7 +1258,9 @@ pub(crate) fn label_traced(
         for run in &mut runs {
             // A first failure is recorded in the engine; the search-free run
             // never checks the limit (Lemma A bounds it by the allowance).
-            let _ = run.top_call(true, &mut spent);
+            if matches!(run.top_call(true, &mut spent), Err(Stop::Stopped)) {
+                return Err(Halt::Stopped);
+            }
         }
     }
     let mut failures = Vec::new();
@@ -1255,13 +1286,17 @@ pub(crate) fn label_traced(
         }
         // A search never stops on a failure (it explores every child of a
         // non-empty target cell), so a stop is the limit.
-        if run.top_call(false, &mut spent).is_err() {
-            return Err(Refusal::Limit {
-                broken_by: failures.iter().map(|f| f.record).collect(),
-                source: run.source().into(),
-                nodes: run.record.blank_nodes,
-                units: spent,
-            });
+        match run.top_call(false, &mut spent) {
+            Ok(()) => {}
+            Err(Stop::Stopped) => return Err(Halt::Stopped),
+            Err(Stop::Limit | Stop::Failed) => {
+                return Err(Halt::Refused(Refusal::Limit {
+                    broken_by: failures.iter().map(|f| f.record).collect(),
+                    source: run.source().into(),
+                    nodes: run.record.blank_nodes,
+                    units: spent,
+                }));
+            }
         }
     }
     let mut explored = Units {
@@ -1277,7 +1312,7 @@ pub(crate) fn label_traced(
         let Some(tree) = run.tree.take() else {
             continue;
         };
-        let labelling = finish(run, tree, &mut explored)?;
+        let labelling = finish(run, tree, &mut explored).map_err(Halt::Refused)?;
         twin_units += labelling.twin_units;
         comparison_units += labelling.comparison_units;
         labellings.push(labelling);
@@ -1306,10 +1341,10 @@ pub(crate) fn label_traced(
         set.nodes.len()
     ];
     let mut components = Vec::with_capacity(order.len());
-    let mut record = Record {
+    let mut record = StatisticsRecord {
         top_components: comps.len() as u64,
         allowance,
-        ..Record::default()
+        ..StatisticsRecord::default()
     };
     let mut offset = 0u64;
     let mut histogram: BTreeMap<u64, u64> = BTreeMap::new();
@@ -1367,7 +1402,10 @@ pub(crate) fn label_traced(
         record.calls.branch += r.calls.branch;
         record.chosen_children.discrete += r.chosen_children.discrete;
         record.chosen_children.nest += r.chosen_children.nest;
-        record.units = record.units.checked_add(r.units).ok_or(UNITS_WIDTH)?;
+        record.units = record
+            .units
+            .checked_add(r.units)
+            .ok_or(Halt::Refused(UNITS_WIDTH))?;
         if copy_index == 0 {
             let k = order
                 .iter()
@@ -1391,7 +1429,7 @@ pub(crate) fn label_traced(
         .units
         .fix
         .checked_add(split_charge)
-        .ok_or(UNITS_WIDTH)?;
+        .ok_or(Halt::Refused(UNITS_WIDTH))?;
     record.size_histogram = histogram.into_iter().collect();
     record.group_order = merge_factors(groups);
     record.broken_by = failures.iter().map(|f| f.record).collect();
