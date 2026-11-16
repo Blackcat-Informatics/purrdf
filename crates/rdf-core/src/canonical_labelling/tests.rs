@@ -815,7 +815,7 @@ fn reifier_shape() -> Vec<Line> {
 }
 
 /// The nested instance of 13.2: `G1` and two copies of `G2` hung under `h`.
-fn nested_instance() -> Vec<Line> {
+pub(super) fn nested_instance() -> Vec<Line> {
     let mut lines = g1(["a1", "a2", "b1", "b2"]);
     lines.extend(quads(&[("h", "<q>", "b1"), ("h", "<q>", "b2")]));
     lines.extend(g2(["u", "v1", "v2", "c1", "c2"]));

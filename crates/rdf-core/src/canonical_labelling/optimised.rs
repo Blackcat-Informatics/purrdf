@@ -43,6 +43,8 @@ use super::reference::{
     positions, prepare,
 };
 use super::{ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
+#[cfg(test)]
+use crate::FastMap;
 use crate::StopSignal;
 use crate::governor::is_stopped;
 
@@ -107,6 +109,10 @@ pub(crate) enum Wrong {
     /// (e) The input is refined once as a whole before the components start,
     /// and each component starts from the cells that gives it.
     SharedPartition,
+    /// Not a shortcut of 10.5: every candidate map is corrupted, the images of
+    /// two members of the target cell exchanged, before the check, to show that
+    /// the check refuses a map that is not an automorphism of its call.
+    CorruptedMaps,
 }
 
 impl Options {
@@ -789,11 +795,22 @@ impl<'a> Engine<'a> {
         let on_tie = self.options.wrong == Wrong::StopOnTie;
         #[cfg(not(test))]
         let on_tie = false;
+        // The stop on `s` follows the order of the engine: with the invariant
+        // `s`, larger first, a child with a smaller `s` is the one stopped.
+        #[cfg(test)]
+        let reversed = self.options.wrong == Wrong::InvariantFirst;
+        #[cfg(not(test))]
+        let reversed = false;
         let cut = bound.and_then(|best| {
             if !self.options.stops {
                 return None;
             }
-            match s.cmp(&best.s) {
+            let by_s = if reversed {
+                best.s.cmp(&s)
+            } else {
+                s.cmp(&best.s)
+            };
+            match by_s {
                 Ordering::Greater => Some(Cut::OnS),
                 Ordering::Equal
                     if entries > best.entries || (on_tie && entries == best.entries) =>
@@ -992,6 +1009,46 @@ impl<'a> Engine<'a> {
         out.sort_by(|a, b| b.0.cmp(a.0));
         out
     }
+}
+
+/// What the engine did with the maps it discovered, per thread, for the tests
+/// that hold it to the rule of 10.1: a map discovered by a route is checked
+/// against its call before it is used; only a lifted map is not.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Audit {
+    /// Maps offered to a call by routes (1), (2) and (5).
+    pub(crate) discovered: u64,
+    /// Of those, refused because they do not preserve the target cell.
+    pub(crate) cell_rejected: u64,
+    /// Of those, checked against the call's lines.
+    pub(crate) checked: u64,
+    /// Of the checked, found not to be automorphisms of the call.
+    pub(crate) rejected: u64,
+    /// Maps offered unchecked to a call below, by lifting.
+    pub(crate) lifted: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static AUDIT: std::cell::Cell<Audit> = const { std::cell::Cell::new(Audit {
+        discovered: 0, cell_rejected: 0, checked: 0, rejected: 0, lifted: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn audit(update: impl FnOnce(&mut Audit)) {
+    AUDIT.with(|cell| {
+        let mut figures = cell.get();
+        update(&mut figures);
+        cell.set(figures);
+    });
+}
+
+/// The figures of this thread since the last call, reset to zero.
+#[cfg(test)]
+pub(crate) fn take_audit() -> Audit {
+    AUDIT.with(|cell| cell.replace(Audit::default()))
 }
 
 /// The wrong shortcut of 10.5(c): the state of the best child, with the
@@ -1596,14 +1653,42 @@ impl<'a> Engine<'a> {
     /// is checked: it joins the classes of the target cell and is offered to
     /// the calls below. Whether it was used.
     fn try_map(&mut self, b: &mut Branch, image: &[usize]) -> bool {
+        #[cfg(test)]
+        audit(|a| a.discovered += 1);
+        #[cfg(test)]
+        let corrupted: Vec<usize>;
+        #[cfg(test)]
+        let image = if self.options.wrong == Wrong::CorruptedMaps && b.target.len() >= 2 {
+            let mut changed = image.to_vec();
+            changed.swap(b.target[0], b.target[1]);
+            corrupted = changed;
+            &corrupted[..]
+        } else {
+            image
+        };
         // A map of the call preserves its cells; a map that does not is not used.
         if b.target
             .iter()
             .any(|&x| b.target_index[image[x]] == usize::MAX)
         {
+            #[cfg(test)]
+            audit(|a| a.cell_rejected += 1);
             return false;
         }
-        if !self.is_automorphism(b, image) {
+        let checked = self.is_automorphism(b, image);
+        #[cfg(test)]
+        {
+            audit(|a| {
+                a.checked += 1;
+                a.rejected += u64::from(!checked);
+            });
+            assert_eq!(
+                checked,
+                self.independent_check(b, image),
+                "the check of a map against its call's own state"
+            );
+        }
+        if !checked {
             return false;
         }
         let joins: Vec<(usize, usize)> = b
@@ -1675,6 +1760,8 @@ impl<'a> Engine<'a> {
         for frame in below {
             if let Frame::Branch(a) = frame {
                 for pairs in found {
+                    #[cfg(test)]
+                    audit(|n| n.lifted += 1);
                     join_pairs(a, pairs, false);
                 }
             }
@@ -1735,6 +1822,35 @@ impl<'a> Engine<'a> {
             self.map[g] = g;
         }
         ok
+    }
+
+    /// Whether `image` carries the multiset of the call's own lines onto itself,
+    /// computed from the call's lines alone (10.1), for the tests that hold the
+    /// check of [`Self::is_automorphism`] to account.
+    #[cfg(test)]
+    fn independent_check(&self, b: &Branch, image: &[usize]) -> bool {
+        let local: FastMap<usize, usize> =
+            b.node_g.iter().enumerate().map(|(x, &g)| (g, x)).collect();
+        let mut own: FastMap<Vec<Tok>, usize> = FastMap::default();
+        let mut carried: FastMap<Vec<Tok>, usize> = FastMap::default();
+        for &lg in &b.line_g {
+            let line = &self.set.lines[self.comp.lines[lg]];
+            *own.entry(line.to_vec()).or_default() += 1;
+            let mut occurrences = self.comp.occ[lg].iter();
+            let tokens: Vec<Tok> = line
+                .iter()
+                .map(|&token| match token {
+                    Tok::Blank(_) => {
+                        let node = *occurrences.next().expect("one node per blank leaf");
+                        let image_node = local.get(&node).map_or(node, |&x| b.node_g[image[x]]);
+                        Tok::Blank(self.comp.nodes[image_node])
+                    }
+                    other => other,
+                })
+                .collect();
+            *carried.entry(tokens).or_default() += 1;
+        }
+        own == carried
     }
 
     /// The nest is complete: undo its fixing and deliver what it made.

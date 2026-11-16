@@ -12,8 +12,8 @@
 use super::optimised::{self, Options, Wrong};
 use super::reference;
 use super::tests::{
-    blocks, both_directions, corpus, failure_record, hub, quad, quadratic_residue_13, record,
-    relabel, term,
+    blocks, both_directions, corpus, failure_record, hub, nested_instance, quad,
+    quadratic_residue_13, record, relabel, term,
 };
 use super::{Halt, Labelled, Line, Refusal, Term, admit};
 use crate::StopSignal;
@@ -33,6 +33,60 @@ fn every_option() -> Vec<Options> {
             }
         }
     }
+    out
+}
+
+/// Each proved shortcut of 10.1 and 10.4 on its own, with the classes of the
+/// target cell on and the others off, in both visiting orders: the twins of
+/// route (4), the maps of route (1), the leaves of route (5), the exchange of
+/// route (2), and lifting with a source of maps to lift (routes (1) and (4)).
+fn alone_options() -> Vec<Options> {
+    let off = Options {
+        stops: false,
+        orbits: true,
+        descending: false,
+        maps: false,
+        twins: false,
+        exchanges: false,
+        lifting: false,
+        leaves: false,
+        ..Options::PRODUCTION
+    };
+    let mut out = Vec::new();
+    for descending in [false, true] {
+        let base = Options { descending, ..off };
+        out.push(Options {
+            twins: true,
+            ..base
+        });
+        out.push(Options { maps: true, ..base });
+        out.push(Options {
+            maps: true,
+            leaves: true,
+            ..base
+        });
+        out.push(Options {
+            exchanges: true,
+            ..base
+        });
+        out.push(Options {
+            maps: true,
+            lifting: true,
+            ..base
+        });
+        out.push(Options {
+            twins: true,
+            lifting: true,
+            ..base
+        });
+    }
+    out
+}
+
+/// Every combination of the three switches, and each route alone.
+fn every_variant() -> Vec<Options> {
+    let mut out = every_option();
+    out.extend(alone_options());
     out
 }
 
@@ -85,7 +139,7 @@ fn optimised_of(lines: &[Line], options: Options) -> Labelled {
 /// input shows as a difference from the oracle.
 fn assert_agrees(context: &str, lines: &[Line]) {
     let oracle = reference_of(lines);
-    for options in every_option() {
+    for options in every_variant() {
         let result = optimised_of(lines, options);
         assert_same(&format!("{context} {options:?}"), &oracle, &result);
     }
@@ -243,6 +297,7 @@ fn named_inputs() -> Vec<(&'static str, Vec<Line>)> {
         ("K4PAIR", k4_pair()),
         ("Z4Z4", z4_z4()),
         ("SHARED", shared()),
+        ("NESTED", nested_instance()),
         ("QR13", quadratic_residue_13("r")),
     ]
 }
@@ -645,61 +700,101 @@ fn rec3_lines() -> Vec<Line> {
     out
 }
 
-/// Every `step`-th non-empty mask of a space of `size` lines, from `1`.
-fn masks(size: u32, step: usize) -> impl Iterator<Item = u64> {
-    (1..1u64 << size).step_by(step)
+/// Every non-empty mask of a space of `size` lines (13.2 item (h)).
+fn masks(size: u32) -> impl Iterator<Item = u64> {
+    1..1u64 << size
 }
 
 #[test]
 fn the_optimised_engine_agrees_on_every_set_of_n3p1() {
     let space = loops_space("y", 3);
-    for mask in masks(9, 1) {
+    for mask in masks(9) {
         assert_agrees(&format!("N3P1 mask {mask}"), &picked(&space, mask));
     }
 }
 
-/// `Q4`: every sixty-first mask, about a thousand sets of its sixty-five
-/// thousand, each as numbered and relabelled.
-#[test]
-fn the_optimised_engine_agrees_on_sampled_sets_of_q4() {
+/// `Q4` (13.2 item (h)): every one of the 65,535 sets, by mask, in four
+/// strides run side by side, each against the reference with every variant:
+/// the eight combinations of the stops, the classes and the order, and each
+/// route alone in both orders.
+fn q4_stride(stride: u64) {
     let space = loops_space("x", 4);
-    for mask in masks(16, 61) {
-        let lines = picked(&space, mask);
-        assert_agrees(&format!("Q4 mask {mask}"), &lines);
-        assert_agrees(
-            &format!("Q4 mask {mask} relabelled"),
-            &relabel(&lines, mask),
-        );
+    let mut visited = 0u64;
+    for mask in (1..=65_535u64).filter(|m| m % 4 == stride) {
+        assert_agrees(&format!("Q4 mask {mask}"), &picked(&space, mask));
+        visited += 1;
     }
+    assert_eq!(visited, (65_535 - stride) / 4 + 1 - u64::from(stride == 0));
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q4_stride_0() {
+    q4_stride(0);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q4_stride_1() {
+    q4_stride(1);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q4_stride_2() {
+    q4_stride(2);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q4_stride_3() {
+    q4_stride(3);
 }
 
 /// `Q5DENSE`: the sets of fourteen to twenty of the twenty lines, the only
-/// space whose children do not all attain and where the stops fire. Every
-/// fortieth set in the order of the removed lines.
-#[test]
-fn the_optimised_engine_agrees_on_sampled_sets_of_q5dense() {
+/// space whose children do not all attain and where the stops fire; every
+/// one of its 60,460 sets, in four strides of the enumeration by removed lines.
+fn q5dense_stride(stride: u64) {
     let space = q5_lines();
-    let mut seen = 0usize;
+    let (mut seen, mut visited) = (0u64, 0u64);
     for removed in 0..1u64 << 20 {
         if removed.count_ones() > 6 {
             continue;
         }
         seen += 1;
-        if (seen - 1) % 40 != 0 {
+        if (seen - 1) % 4 != stride {
             continue;
         }
+        visited += 1;
         let lines = picked(&space, !removed & ((1 << 20) - 1));
         assert_agrees(&format!("Q5DENSE without {removed:#x}"), &lines);
     }
     assert_eq!(seen, 60_460, "the sets of Q5DENSE");
+    assert_eq!(visited, (60_460 - stride).div_ceil(4), "the stride's share");
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q5dense_stride_0() {
+    q5dense_stride(0);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q5dense_stride_1() {
+    q5dense_stride(1);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q5dense_stride_2() {
+    q5dense_stride(2);
+}
+
+#[test]
+fn the_optimised_engine_agrees_on_every_set_of_q5dense_stride_3() {
+    q5dense_stride(3);
 }
 
 /// `RB3`: reifier bindings, triple terms and annotations; route (1) over lines
-/// of those kinds. Every seventh set.
+/// of those kinds. Every one of its 4,095 sets.
 #[test]
-fn the_optimised_engine_agrees_on_sampled_sets_of_rb3() {
+fn the_optimised_engine_agrees_on_every_set_of_rb3() {
     let space = rb3_lines();
-    for mask in masks(12, 7) {
+    for mask in masks(12) {
         let lines = picked(&space, mask);
         assert_agrees(&format!("RB3 mask {mask}"), &lines);
         assert_agrees(
@@ -709,11 +804,11 @@ fn the_optimised_engine_agrees_on_sampled_sets_of_rb3() {
     }
 }
 
-/// `REC3`: records over the triangle. Every fifty-third set.
+/// `REC3`: records over the triangle. Every one of its 32,767 sets.
 #[test]
-fn the_optimised_engine_agrees_on_sampled_sets_of_rec3() {
+fn the_optimised_engine_agrees_on_every_set_of_rec3() {
     let space = rec3_lines();
-    for mask in masks(15, 53) {
+    for mask in masks(15) {
         let lines = picked(&space, mask);
         assert_agrees(&format!("REC3 mask {mask}"), &lines);
         assert_agrees(
@@ -818,14 +913,16 @@ fn each_wrong_shortcut_changes_the_result_on_its_printed_input() {
     let z = relabel(&z4_z4(), 3);
     assert!(!wrong_on(&z, sound), "Z4Z4 seed 3: sound");
     assert!(wrong_on(&z, on(Wrong::MapsEverywhere)), "(b) Z4Z4 seed 3");
-    let invariant = Options {
-        stops: false,
-        orbits: false,
-        wrong: Wrong::InvariantFirst,
-        ..sound
-    };
-    assert!(wrong_on(&fifteen(), invariant), "(d) FIFTEEN");
-    assert!(!wrong_on(&fifteen(), no_orbits()), "FIFTEEN: sound");
+    // 10.5 states that each wrong shortcut fails with every proved shortcut on,
+    // and that no visiting order enters (d): run with the stops and the classes
+    // on, as the others are. The stop on `s` follows the order of the wrong
+    // engine (a smaller `s` is stopped), as the stops of 10.4 follow the order
+    // of the definition.
+    assert!(
+        wrong_on(&fifteen(), on(Wrong::InvariantFirst)),
+        "(d) FIFTEEN"
+    );
+    assert!(!wrong_on(&fifteen(), sound), "FIFTEEN: sound");
     assert!(wrong_on(&k33(), on(Wrong::FixTwinClass)), "(f) K33");
     assert!(!wrong_on(&k33(), sound), "K33: sound");
 }
@@ -1124,4 +1221,76 @@ fn a_partition_shared_by_two_components_changes_the_second_one() {
     let oracle = reference_of(&shared());
     let wrong = optimised_of(&shared(), shared_options);
     assert_ne!(oracle.lines, wrong.lines, "the canonical line sequence");
+}
+
+/// 10.1: a map a route discovers is checked against its call's own state
+/// before it is used, and only a lifted map is used unchecked. Over the named
+/// inputs, `NESTED` among them, and generated inputs, every map offered to a
+/// call is either refused for not preserving the target cell or checked against
+/// the call's lines (each check, accepted or refused, is repeated from the
+/// call's lines alone inside the engine and must agree), and lifting offers
+/// maps that were checked below.
+#[test]
+fn every_map_discovered_is_checked_against_its_calls_own_state() {
+    let mut inputs = named_inputs();
+    for seed in 1..=60 {
+        inputs.push(("generated", generated(seed)));
+    }
+    let mut total = optimised::Audit::default();
+    for (name, lines) in inputs {
+        for options in every_variant() {
+            let _ = optimised::take_audit();
+            let result = optimised_of(&lines, options);
+            let audit = optimised::take_audit();
+            assert_eq!(
+                audit.discovered,
+                audit.cell_rejected + audit.checked,
+                "{name} {options:?}: a discovered map that was neither refused nor checked"
+            );
+            assert!(
+                options.orbits || audit.discovered + audit.lifted == 0,
+                "{name} {options:?}: a map used with the classes off"
+            );
+            assert!(
+                options.lifting || audit.lifted == 0,
+                "{name} {options:?}: a map lifted with lifting off"
+            );
+            assert!(result.explored.total() > 0);
+            total.discovered += audit.discovered;
+            total.checked += audit.checked;
+            total.rejected += audit.rejected;
+            total.cell_rejected += audit.cell_rejected;
+            total.lifted += audit.lifted;
+        }
+    }
+    assert!(total.checked > 0 && total.lifted > 0, "{total:?}");
+    eprintln!("maps audited: {total:?}");
+}
+
+/// 10.1: the check refuses a map that is not an automorphism of its call. Every
+/// candidate map is corrupted, the images of two members of the target cell
+/// exchanged: the checks refuse them (counted), the result is still the
+/// oracle's because a refused map is never used, and the engine's own repeat of
+/// the check from the call's lines agrees on each refusal.
+#[test]
+fn a_map_that_is_not_an_automorphism_of_its_call_is_refused() {
+    let mut refused = 0;
+    for (name, lines) in named_inputs() {
+        let oracle = reference_of(&lines);
+        let options = Options {
+            wrong: Wrong::CorruptedMaps,
+            ..Options::PRODUCTION
+        };
+        let _ = optimised::take_audit();
+        let result = optimised_of(&lines, options);
+        let audit = optimised::take_audit();
+        assert_same(name, &oracle, &result);
+        assert_eq!(
+            audit.discovered,
+            audit.cell_rejected + audit.checked,
+            "{name}"
+        );
+        refused += audit.rejected;
+    }
+    assert!(refused > 0, "no corrupted map reached the check");
 }
