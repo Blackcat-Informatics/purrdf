@@ -505,3 +505,52 @@ pub fn canonical_relabel_with_mapping(
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BlankScope, CanonPhase, RdfDatasetBuilder, SearchEvent};
+
+    /// Two interchangeable blank nodes: the labelling must search to tell them
+    /// from one another.
+    fn twin_blanks() -> std::sync::Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let o = b.intern_iri("http://example.org/o").unwrap();
+        for label in ["a", "b"] {
+            let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
+            b.push_quad(s, p, o, None).unwrap();
+        }
+        b.freeze().unwrap()
+    }
+
+    /// The identity a consumer records beside a digest is the name and version
+    /// of the labelling and the line-sequence presentation, and every receipt of
+    /// a run names the same pair.
+    #[test]
+    fn a_run_receipt_names_the_labelling_and_its_version() {
+        assert_eq!(CANON_LABELLING_NAME, "nested-refinement-labelling");
+        assert_eq!(CANON_LABELLING_VERSION, 1);
+        assert_eq!(CANON_PRESENTATION_LINES_ID, "line-sequence");
+        assert_eq!(CANON_PRESENTATION_LINES_VERSION, 1);
+
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
+        let result = try_canonicalize(&twin_blanks(), &mut control).unwrap();
+        assert_eq!(result.presentation(), None);
+        let [receipt] = control.receipts() else {
+            panic!("one run, one receipt");
+        };
+        assert_eq!(
+            receipt.configuration,
+            SearchConfiguration::Labelling {
+                version: CANON_LABELLING_VERSION,
+                selection: crate::CanonSelection::Dataset,
+                output: CanonOutput::Document,
+            }
+        );
+        assert!(receipt.completed);
+        assert_eq!(receipt.phase, CanonPhase::Output);
+        assert!(receipt.work.count(SearchEvent::LabellingUnit) > 0);
+        assert_eq!(receipt.work.count(SearchEvent::RdfcFrame), 0);
+    }
+}
