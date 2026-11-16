@@ -1514,10 +1514,30 @@ fn walk_shape_body<S: ResultSink>(
             if node_constraint_deactivated(context, focus, index)? {
                 continue;
             }
-            let resolved = plan.resolve_constraint(constraint, lowered)?;
-            if walk_node_constraint(context, focus, &node_value_nodes, index, &resolved, sink)?
-                .stopped()
-            {
+            let flow = match plan.planned(constraint, lowered)? {
+                PlannedConstraint::PropertyReference {
+                    definition,
+                    edge,
+                    deactivated_when,
+                } => eval_property_reference(
+                    context,
+                    focus,
+                    definition,
+                    edge,
+                    deactivated_when,
+                    &shape.box_roles,
+                    sink,
+                )?,
+                planned => walk_planned_constraint(
+                    context,
+                    focus,
+                    &node_value_nodes,
+                    index,
+                    planned,
+                    sink,
+                )?,
+            };
+            if flow.stopped() {
                 return Ok(Flow::Stop);
             }
         }
@@ -1651,6 +1671,19 @@ fn walk_node_constraint<'a, S: ResultSink>(
         }
         crate::plan::ResolvedConstraint::Planned(planned) => planned,
     };
+    walk_planned_constraint(context, focus, node_value_nodes, index, planned, sink)
+}
+
+/// Evaluate one planned node-level constraint other than a property edge.
+fn walk_planned_constraint<'a, S: ResultSink>(
+    context: ValidationContext<'a, '_>,
+    focus: &FocusNode,
+    node_value_nodes: &[ValueNode],
+    index: usize,
+    planned: PlannedConstraint<'a>,
+    sink: &mut S,
+) -> Result<Flow, crate::error::ShapesError> {
+    let shape = context.plan.shape();
     let mut node_sink = NodeRoles {
         inner: &mut *sink,
         roles: &shape.box_roles,

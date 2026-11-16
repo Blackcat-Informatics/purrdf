@@ -95,6 +95,13 @@
 //! one result; the cost measured is the shapes-graph subclass supplement validation
 //! builds, which must not re-walk the shared chain once per IRI class.
 //!
+//! `shacl_focus_class_targets` is many `sh:targetClass` closed shapes, each with two
+//! property shapes, over conforming subjects spread evenly across them
+//! (`support/class_targets.rs`). A shape's constraints are resolved once per shape
+//! rather than once per focus node, so the per-subject cost stays flat as the
+//! subjects grow at a fixed shape count; `shacl_class_target_counts` reports the
+//! same workload's retired instructions.
+//!
 //! Every group here is **report-only**: nothing in this file asserts a threshold,
 //! a ratio or a comparison against a baseline. The allocation invariants these
 //! groups illustrate are executed as contracts in
@@ -152,6 +159,10 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_m
 )]
 #[path = "../src/json_model.rs"]
 mod json_model;
+
+#[allow(dead_code, reason = "each target uses part of the shared workload")]
+#[path = "support/class_targets.rs"]
+mod class_targets;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -1246,6 +1257,24 @@ fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     );
 }
 
+fn bench_focus_class_targets(c: &mut Bench) {
+    const CLASSES: usize = 183;
+    let mut group = c.benchmark_group("shacl_focus_class_targets");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &subjects in &[4_096usize, 18_100] {
+        let fixture = class_targets::fixture(subjects, CLASSES);
+        group.throughput(Throughput::Elements(subjects as u64));
+        group.bench_with_input(
+            BenchmarkId::new("closed_two_properties", subjects),
+            &fixture,
+            |bencher, fixture| bencher.iter(|| black_box(class_targets::validate(fixture))),
+        );
+    }
+    group.finish();
+}
+
 fn bench_focus_realtime(c: &mut Bench) {
     const DATASET_FOCUS_NODES: usize = 1_000_000;
 
@@ -2270,6 +2299,7 @@ bench_group!(
     bench_focus_sequence_operators,
     bench_focus_list_components,
     bench_focus_closed_by_types,
+    bench_focus_class_targets,
     bench_focus_realtime,
     bench_change_path_contrast,
     bench_subclass_membership,

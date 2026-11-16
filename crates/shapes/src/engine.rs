@@ -1365,7 +1365,9 @@ fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
     } else {
         plan.walk_body()?
     };
-    let body = if !focus_nodes.is_empty() && plan.binding().validation_request().recursion.is_none()
+    let body = if !focus_nodes.is_empty()
+        && !plan.shape().deactivated
+        && plan.binding().validation_request().recursion.is_none()
     {
         Some(plan.resolve_body()?)
     } else {
