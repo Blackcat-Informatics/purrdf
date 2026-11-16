@@ -79,9 +79,11 @@ impl<'a, A: Admission, C: Progress> RetainedParse<'a, A, C> {
     pub fn dataset(
         &self,
     ) -> Option<
-        impl DatasetView<Id = TermId, ReadError = BorrowedReadError>
-        + purrdf_core::ContentIdentified<IdentityError = Infallible>
-        + '_,
+        impl purrdf_core::ContentIdentified<
+            Id = TermId,
+            ReadError = BorrowedReadError,
+            IdentityError = Infallible,
+        > + '_,
     > {
         self.output.as_ref().ok().map(|output| BorrowedDataset {
             dataset: &output.dataset,
