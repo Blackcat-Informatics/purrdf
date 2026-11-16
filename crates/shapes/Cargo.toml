@@ -265,3 +265,11 @@ harness = false
 # from `make check`.
 name = "frozen_eval_counts"
 harness = false
+
+[[bench]]
+# Retired user-mode instructions of class-targeted SHACL validation: many
+# `sh:targetClass` closed shapes over conforming subjects, one fresh `perf stat`
+# child per sample. Report-only; `make bench` lane only — excluded from
+# `make check`.
+name = "shacl_class_target_counts"
+harness = false

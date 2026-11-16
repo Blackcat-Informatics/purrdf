@@ -455,6 +455,7 @@ impl LoweredShapes {
             binding,
             classes,
             targets,
+            resolved: None,
         })
     }
 
@@ -535,6 +536,7 @@ impl<'a> TargetBinding<'a> {
             binding: self.binding,
             classes: self.classes,
             targets: self.graph.no_targets(),
+            resolved: None,
         })
     }
 }
@@ -1088,6 +1090,9 @@ pub(crate) struct ShapePlan<'a> {
     /// This shape's stage-1 target index. Empty for a shape reached through a
     /// constraint: only a top-level node shape has targets to resolve.
     targets: &'a PreparedTargets,
+    /// This shape's constraints and property shapes resolved once for a whole run
+    /// of focus nodes, when the caller built them (see [`Self::with_body`]).
+    resolved: Option<&'a ResolvedBody<'a>>,
 }
 
 impl<'a> ShapePlan<'a> {
@@ -1140,6 +1145,97 @@ impl<'a> ShapePlan<'a> {
             ));
         }
         Ok(self)
+    }
+
+    /// The plan a validation walks for this root: its original body when the root
+    /// is a plain reference handle, otherwise the root itself.
+    ///
+    /// A plain handle states nothing of its own: no deactivation, no constraint
+    /// reifiers, no box roles. Walking it only reaches the body through its one
+    /// `Reference` constraint, so the catalog is asked once per shape here instead
+    /// of once per focus node, and the body runs under the caller's own sink
+    /// instead of one erased behind the reference.
+    ///
+    /// A recursive run keeps the handle, because the fixed point keys its
+    /// questions on the plan it was started from.
+    ///
+    /// # Errors
+    /// Returns an error when the handle was not lowered as a reference.
+    pub(crate) fn walk_body(self) -> Result<Self, crate::error::ShapesError> {
+        let shape = self.shape;
+        if self.binding.validation_request().recursion.is_some()
+            || shape.deactivated
+            || !shape.deactivated_when.is_empty()
+            || !shape.constraint_annotations.is_empty()
+            || !shape.box_roles.is_empty()
+        {
+            return Ok(self);
+        }
+        self.definition()
+    }
+
+    /// Resolve one constraint of this shape: planned, and for a `sh:property` edge
+    /// paired with the original property body it names.
+    ///
+    /// # Errors
+    /// As [`Self::planned`], or when the edge names no property definition.
+    pub(crate) fn resolve_constraint(
+        &self,
+        constraint: &'a Constraint,
+        lowered: &'a LoweredConstraint,
+    ) -> Result<ResolvedConstraint<'a>, crate::error::ShapesError> {
+        Ok(match self.planned(constraint, lowered)? {
+            PlannedConstraint::PropertyReference {
+                definition,
+                edge,
+                deactivated_when,
+            } => {
+                let (property, plan) =
+                    PropertyPlan::from_reference(definition, edge, deactivated_when)?;
+                ResolvedConstraint::Property {
+                    definition,
+                    edge,
+                    deactivated_when,
+                    property,
+                    plan,
+                }
+            }
+            planned => ResolvedConstraint::Planned(planned),
+        })
+    }
+
+    /// Resolve every constraint and property shape of this shape at once.
+    ///
+    /// Nothing here depends on a focus node, so a run over many focus nodes does it
+    /// once per shape rather than once per focus node.
+    ///
+    /// # Errors
+    /// As [`Self::resolve_constraint`], or when the shape and its lowering disagree.
+    pub(crate) fn resolve_body(&self) -> Result<ResolvedBody<'a>, crate::error::ShapesError> {
+        Ok(ResolvedBody {
+            constraints: self
+                .constraints()?
+                .map(|(constraint, lowered)| self.resolve_constraint(constraint, lowered))
+                .collect::<Result<_, _>>()?,
+            properties: self.properties()?.collect(),
+        })
+    }
+
+    /// This plan, walking `body` instead of resolving its shape's constraints at
+    /// every focus node. `body` must be this plan's own [`Self::resolve_body`].
+    pub(crate) fn with_body<'b>(self, body: &'b ResolvedBody<'b>) -> ShapePlan<'b>
+    where
+        'a: 'b,
+    {
+        ShapePlan {
+            resolved: Some(body),
+            ..self
+        }
+    }
+
+    /// The body a caller resolved for this plan, if any.
+    pub(crate) const fn resolved(&self) -> Option<&'a ResolvedBody<'a>> {
+        self.resolved
     }
 
     /// The `sh:deactivated` expressions of the shape, each paired with its
@@ -1399,6 +1495,8 @@ impl<'a> ShapePlan<'a> {
             // A shape reached through a constraint is never a target's shape, so it
             // has no target index of its own to carry.
             targets: &self.graph.no_targets,
+            // Its constraints are resolved by the walk that reaches it.
+            resolved: None,
         }
     }
 
@@ -1445,6 +1543,49 @@ impl<'a> ShapePlan<'a> {
                 "a custom call has no original lowered function record",
             )
         })
+    }
+}
+
+/// One constraint of a shape with every derivation that does not depend on a focus
+/// node already made.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ResolvedConstraint<'a> {
+    /// Any constraint other than a `sh:property` edge.
+    Planned(PlannedConstraint<'a>),
+    /// A `sh:property` edge and the original property body it names.
+    Property {
+        /// The shape holding the property definition.
+        definition: ShapePlan<'a>,
+        /// The edge.
+        edge: &'a crate::shapes::PropertyReference,
+        /// The edge's lowered `sh:deactivated` expressions.
+        deactivated_when: &'a [LoweredExpr],
+        /// The property definition.
+        property: &'a PropertyShape,
+        /// Its plan, carrying the edge's own overrides.
+        plan: PropertyPlan<'a>,
+    },
+}
+
+/// A shape's constraints and property shapes, resolved once for a run of focus
+/// nodes; see [`ShapePlan::resolve_body`].
+#[derive(Debug)]
+pub(crate) struct ResolvedBody<'a> {
+    // Inline, so resolving an ordinary shape allocates nothing: a validation's entry
+    // cost does not grow with the resolution, only a shape past these counts spills.
+    constraints: purrdf_core::SmallVec<[ResolvedConstraint<'a>; 8]>,
+    properties: purrdf_core::SmallVec<[(&'a PropertyShape, PropertyPlan<'a>); 4]>,
+}
+
+impl<'a> ResolvedBody<'a> {
+    /// The shape's constraints, in declaration order.
+    pub(crate) fn constraints(&self) -> &[ResolvedConstraint<'a>] {
+        &self.constraints[..]
+    }
+
+    /// The shape's own property shapes, in declaration order.
+    pub(crate) fn properties(&self) -> &[(&'a PropertyShape, PropertyPlan<'a>)] {
+        &self.properties[..]
     }
 }
 
@@ -2987,6 +3128,7 @@ impl StandaloneLowering {
             binding,
             classes: &self.graph.classes,
             targets: &self.graph.no_targets,
+            resolved: None,
         }
     }
 }

@@ -48,7 +48,7 @@ use purrdf_hash::fnv::fnv1a64;
 
 use crate::json_schema::CompiledSchema;
 use crate::schema_catalog::{
-    CompiledSchemaCatalog, SchemaCatalogLimits, definition_path, finish_text, pointer_escape,
+    CompiledSchemaCatalog, SchemaCatalogLimits, SchemaPath, definition_path, finish_text,
     reference_key, schema_array_keywords, schema_map_keywords, schema_single_keywords,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_json_schema_from};
@@ -796,23 +796,36 @@ fn definition_names(
     Ok(names)
 }
 
+/// The composition a Pydantic annotation either enforces or leaves as a loss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Composition {
+    AllOf,
+    OneOf,
+    Contains,
+}
+
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
     defs: &'a Object,
     routed: bool,
     ledger: LossLedger,
     helpers: Vec<(String, String)>,
-    helper_by_path: BTreeMap<String, String>,
+    helper_by_path: BTreeMap<SchemaPath, String>,
     used_names: BTreeSet<String>,
     /// Which definitions the runtime negation check evaluates exactly.
     negation: NegationSupport,
     /// Losses the audit found in a composition (`allOf`, `oneOf`, `contains`) that the
     /// runtime check may still enforce: `(code, path, note, enforcement key)`,
     /// recorded by [`Self::finish_losses`] unless [`Self::resolve_type`] enforced it.
-    pending: Vec<(&'static str, String, &'static str, String)>,
+    pending: Vec<(
+        &'static str,
+        SchemaPath,
+        &'static str,
+        (Composition, SchemaPath),
+    )>,
     /// The enforcement keys of the compositions [`Self::resolve_type`] attached a
     /// runtime check for.
-    enforced: BTreeSet<String>,
+    enforced: BTreeSet<(Composition, SchemaPath)>,
 }
 
 impl<'a> Renderer<'a> {
@@ -849,7 +862,7 @@ impl<'a> Renderer<'a> {
         definition: &Value,
         class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
-        let path = format!("#/$defs/{}", pointer_escape(key));
+        let path = definition_path(key);
         let rewritten = rewrite_references(definition, self.names)?;
         let schema_literal = python_value(&rewritten);
 
@@ -866,7 +879,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         class_name: &str,
         definition: &Object,
-        path: &str,
+        path: &SchemaPath,
         schema_literal: &str,
         class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
@@ -880,7 +893,7 @@ impl<'a> Renderer<'a> {
         ) {
             self.record(
                 "inline-object-validation-widened",
-                &format!("{path}/additionalProperties"),
+                &path.child("additionalProperties"),
                 "Pydantic BaseModel extra fields are retained, but their JSON Schema \
                  additionalProperties value schema is not enforced at runtime",
             );
@@ -900,7 +913,7 @@ impl<'a> Renderer<'a> {
                 index += 1;
             }
             seen_fields.insert(field_name.clone(), property.clone());
-            let property_path = format!("{path}/properties/{}", pointer_escape(property));
+            let property_path = path.child("properties").child(property);
             let runtime_type = self.resolve_type(schema, &property_path)?;
             let mut field_args = Vec::new();
             if !required.contains(property.as_str()) {
@@ -955,7 +968,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         class_name: &str,
         definition: &Value,
-        path: &str,
+        path: &SchemaPath,
         schema_literal: &str,
         class_config: Option<&PydanticClassConfig>,
     ) -> Result<String, PydanticError> {
@@ -1017,7 +1030,7 @@ impl<'a> Renderer<'a> {
         Ok(out)
     }
 
-    fn resolve_type(&mut self, schema: &Value, path: &str) -> Result<String, PydanticError> {
+    fn resolve_type(&mut self, schema: &Value, path: &SchemaPath) -> Result<String, PydanticError> {
         match schema {
             Value::Bool(_) => Ok("Any".to_owned()),
             Value::Object(object) => {
@@ -1038,17 +1051,20 @@ impl<'a> Renderer<'a> {
                     (self.resolve_const(value, path)?, true)
                 } else if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
                     (
-                        self.resolve_composed_union(branches, object, &format!("{path}/anyOf"))?,
+                        self.resolve_composed_union(branches, object, &path.child("anyOf"))?,
                         false,
                     )
                 } else if let Some(branches) = object.get("oneOf").and_then(Value::as_array) {
                     (
-                        self.resolve_composed_union(branches, object, &format!("{path}/oneOf"))?,
+                        self.resolve_composed_union(branches, object, &path.child("oneOf"))?,
                         false,
                     )
                 } else if let Some(branches) = object.get("allOf").and_then(Value::as_array) {
                     if let Some(first) = branches.first() {
-                        (self.resolve_type(first, &format!("{path}/allOf/0"))?, false)
+                        (
+                            self.resolve_type(first, &path.child("allOf").child("0"))?,
+                            false,
+                        )
                     } else {
                         ("Any".to_owned(), false)
                     }
@@ -1090,12 +1106,12 @@ impl<'a> Renderer<'a> {
                         && self.negation.supports(&required, self.defs)
                     {
                         for (key, marker) in [
-                            ("allOf", format!("{path}/allOf")),
-                            ("oneOf", format!("{path}/oneOf")),
-                            ("contains", format!("contains:{path}")),
+                            ("allOf", Composition::AllOf),
+                            ("oneOf", Composition::OneOf),
+                            ("contains", Composition::Contains),
                         ] {
                             if object.contains_key(key) {
-                                self.enforced.insert(marker);
+                                self.enforced.insert((marker, path.clone()));
                             }
                         }
                         let required = rewrite_references(&required, self.names)?;
@@ -1118,7 +1134,7 @@ impl<'a> Renderer<'a> {
     fn resolve_declared_type(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<String, PydanticError> {
         let Some(declared) = object.get("type") else {
             if object.contains_key("properties") || object.contains_key("additionalProperties") {
@@ -1156,7 +1172,7 @@ impl<'a> Renderer<'a> {
         &mut self,
         kind: &str,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<String, PydanticError> {
         match kind {
             "null" => Ok("None".to_owned()),
@@ -1174,7 +1190,7 @@ impl<'a> Renderer<'a> {
             "array" => {
                 let always = Value::Bool(true);
                 let items = object.get("items").unwrap_or(&always);
-                let item_type = self.resolve_type(items, &format!("{path}/items"))?;
+                let item_type = self.resolve_type(items, &path.child("items"))?;
                 Ok(format!("list[{item_type}]"))
             }
             "object" => self.resolve_object(object, path),
@@ -1184,7 +1200,11 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn resolve_object(&mut self, object: &Object, path: &str) -> Result<String, PydanticError> {
+    fn resolve_object(
+        &mut self,
+        object: &Object,
+        path: &SchemaPath,
+    ) -> Result<String, PydanticError> {
         let properties = properties(object, path)?;
         if properties.is_empty() {
             return match object.get("additionalProperties") {
@@ -1192,7 +1212,7 @@ impl<'a> Renderer<'a> {
                 Some(Value::Object(schema)) => {
                     let value_type = self.resolve_type(
                         &Value::Object(schema.clone()),
-                        &format!("{path}/additionalProperties"),
+                        &path.child("additionalProperties"),
                     )?;
                     Ok(format!("dict[StrictStr, {value_type}]"))
                 }
@@ -1205,19 +1225,23 @@ impl<'a> Renderer<'a> {
         self.render_typed_dict(object, path)
     }
 
-    fn render_typed_dict(&mut self, object: &Object, path: &str) -> Result<String, PydanticError> {
+    fn render_typed_dict(
+        &mut self,
+        object: &Object,
+        path: &SchemaPath,
+    ) -> Result<String, PydanticError> {
         if let Some(name) = self.helper_by_path.get(path) {
             return Ok(name.clone());
         }
         let name = self.allocate_helper_name(path);
-        self.helper_by_path.insert(path.to_owned(), name.clone());
+        self.helper_by_path.insert(path.clone(), name.clone());
 
         let properties = properties(object, path)?;
         let required = required_names(object, properties, path)?;
         let mut runtime_fields = Vec::with_capacity(properties.len());
         let mut static_fields = Vec::with_capacity(properties.len());
         for (property, schema) in properties {
-            let child_path = format!("{path}/properties/{}", pointer_escape(property));
+            let child_path = path.child("properties").child(property);
             let child_type = self.resolve_type(schema, &child_path)?;
             let marker = if required.contains(property.as_str()) {
                 "Required"
@@ -1238,7 +1262,7 @@ impl<'a> Renderer<'a> {
         if matches!(object.get("additionalProperties"), Some(Value::Object(_))) {
             self.record(
                 "inline-object-validation-widened",
-                &format!("{path}/additionalProperties"),
+                &path.child("additionalProperties"),
                 "A TypedDict with named properties cannot enforce the value schema of arbitrary \
                  additional keys; those keys remain allowed and the exact rule remains on the \
                  JSON-schema surface",
@@ -1267,7 +1291,11 @@ impl<'a> Renderer<'a> {
         Ok(name)
     }
 
-    fn resolve_enum(&mut self, values: &[Value], path: &str) -> Result<String, PydanticError> {
+    fn resolve_enum(
+        &mut self,
+        values: &[Value],
+        path: &SchemaPath,
+    ) -> Result<String, PydanticError> {
         if values.is_empty() {
             return Ok("Never".to_owned());
         }
@@ -1280,13 +1308,14 @@ impl<'a> Renderer<'a> {
                 }
                 Value::Object(member) => {
                     let member_schema = enum_object_schema(member);
-                    variants
-                        .push(self.resolve_type(&member_schema, &format!("{path}/enum/{index}"))?);
+                    variants.push(
+                        self.resolve_type(&member_schema, &path.child("enum").child_index(index))?,
+                    );
                 }
                 Value::Array(_) => {
                     self.record(
                         "keyword-validation-dropped",
-                        &format!("{path}/enum/{index}"),
+                        &path.child("enum").child_index(index),
                         "A JSON array enum member is not a legal Python Literal parameter; the \
                          exact member remains on model_json_schema()",
                     );
@@ -1300,18 +1329,18 @@ impl<'a> Renderer<'a> {
         Ok(join_union(variants))
     }
 
-    fn resolve_const(&mut self, value: &Value, path: &str) -> Result<String, PydanticError> {
+    fn resolve_const(&mut self, value: &Value, path: &SchemaPath) -> Result<String, PydanticError> {
         match value {
             Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
                 Ok(format!("Literal[{}]", python_value(value)))
             }
             Value::Object(member) => {
-                self.resolve_type(&enum_object_schema(member), &format!("{path}/const"))
+                self.resolve_type(&enum_object_schema(member), &path.child("const"))
             }
             Value::Array(_) => {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/const"),
+                    &path.child("const"),
                     "A JSON array const is not a legal Python Literal parameter; runtime \
                      validation retains only the array carrier",
                 );
@@ -1324,11 +1353,11 @@ impl<'a> Renderer<'a> {
         &mut self,
         branches: &[Value],
         parent: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<String, PydanticError> {
         let mut types = Vec::with_capacity(branches.len());
         for (index, branch) in branches.iter().enumerate() {
-            let branch_path = format!("{path}/{index}");
+            let branch_path = path.child_index(index);
             let (augmented, merge_conflict) = branch_with_parent_constraints(branch, parent);
             if merge_conflict {
                 self.record(
@@ -1356,11 +1385,11 @@ impl<'a> Renderer<'a> {
         Ok(join_union(types))
     }
 
-    fn allocate_helper_name(&mut self, path: &str) -> String {
+    fn allocate_helper_name(&mut self, path: &SchemaPath) -> String {
         let raw = format!("Inline {path} Object");
         let mut stem = format!("_{}", python_type_name(&raw, "InlineObject"));
         if stem.len() > 112 {
-            stem = format!("_InlineObject{:016x}", fnv1a64(path.as_bytes()));
+            stem = format!("_InlineObject{:016x}", fnv1a64(path.to_string().as_bytes()));
         }
         let mut candidate = stem.clone();
         let mut suffix = 2_u32;
@@ -1372,7 +1401,7 @@ impl<'a> Renderer<'a> {
         candidate
     }
 
-    fn audit_schema(&mut self, schema: &Value, path: &str) -> Result<(), PydanticError> {
+    fn audit_schema(&mut self, schema: &Value, path: &SchemaPath) -> Result<(), PydanticError> {
         let Value::Object(object) = schema else {
             if schema == &Value::Bool(false) {
                 self.record(
@@ -1388,10 +1417,10 @@ impl<'a> Renderer<'a> {
         if object.contains_key("oneOf") {
             self.pending.push((
                 "one-of-validation-widened",
-                format!("{path}/oneOf"),
+                path.child("oneOf"),
                 "Pydantic's runtime union accepts any matching branch and cannot enforce \
                  exactly-one branch semantics",
-                format!("{path}/oneOf"),
+                (Composition::OneOf, path.clone()),
             ));
         }
         if object.contains_key("anyOf")
@@ -1409,7 +1438,7 @@ impl<'a> Renderer<'a> {
         {
             self.record(
                 "intersection-validation-widened",
-                &format!("{path}/anyOf"),
+                &path.child("anyOf"),
                 "JSON Schema anyOf is conjunctive with its structural siblings; the emitted \
                  Pydantic union cannot prove or enforce that general intersection",
             );
@@ -1417,9 +1446,9 @@ impl<'a> Renderer<'a> {
         if object.contains_key("allOf") {
             self.pending.push((
                 "intersection-validation-widened",
-                format!("{path}/allOf"),
+                path.child("allOf"),
                 "Pydantic annotations cannot express a general JSON Schema intersection",
-                format!("{path}/allOf"),
+                (Composition::AllOf, path.clone()),
             ));
         }
         if let Some(negand) = object.get("not")
@@ -1427,7 +1456,7 @@ impl<'a> Renderer<'a> {
         {
             self.record(
                 "negation-validation-dropped",
-                &format!("{path}/not"),
+                &path.child("not"),
                 "The negated schema uses a keyword outside the runtime negation check's closed \
                  table (a regex-selected key, key names, dependencies, evaluation state, a \
                  format, content, a non-integer multipleOf, or a pattern outside the common \
@@ -1448,9 +1477,9 @@ impl<'a> Renderer<'a> {
         {
             self.pending.push((
                 "array-contains-validation-dropped",
-                path.to_owned(),
+                path.clone(),
                 "Pydantic list annotations cannot enforce JSON Schema contains cardinality",
-                format!("contains:{path}"),
+                (Composition::Contains, path.clone()),
             ));
         }
         if let Some(format) = object.get("format").and_then(Value::as_str) {
@@ -1466,11 +1495,7 @@ impl<'a> Renderer<'a> {
                      runtime carrier is a strict string"
                 )
             };
-            self.record(
-                "format-validation-widened",
-                &format!("{path}/format"),
-                &note,
-            );
+            self.record("format-validation-widened", &path.child("format"), &note);
         }
         if let Some(value) = object.get("pattern") {
             let pattern = value
@@ -1487,7 +1512,7 @@ impl<'a> Renderer<'a> {
                 if object.contains_key(keyword) {
                     self.record(
                         "keyword-validation-dropped",
-                        &format!("{path}/{keyword}"),
+                        &path.child(keyword),
                         "A JSON Schema lexical string assertion cannot run after the generated \
                          Pydantic temporal parser; the exact assertion remains on \
                          model_json_schema()",
@@ -1519,7 +1544,7 @@ impl<'a> Renderer<'a> {
             if !known_schema_keyword(key) && !is_annotation_keyword(key) {
                 self.record(
                     "keyword-validation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &path.child(key),
                     &format!(
                         "JSON Schema assertion keyword {key:?} is preserved on \
                          model_json_schema() but has no emitted runtime validator"
@@ -1531,21 +1556,14 @@ impl<'a> Renderer<'a> {
         for key in schema_map_keywords() {
             if let Some(children) = object.get(key).and_then(Value::as_object) {
                 for (child_key, child) in children {
-                    self.audit_schema(
-                        child,
-                        &format!(
-                            "{path}/{}/{}",
-                            pointer_escape(key),
-                            pointer_escape(child_key)
-                        ),
-                    )?;
+                    self.audit_schema(child, &path.child(key).child(child_key))?;
                 }
             }
         }
         for key in schema_array_keywords() {
             if let Some(children) = object.get(key).and_then(Value::as_array) {
                 for (index, child) in children.iter().enumerate() {
-                    self.audit_schema(child, &format!("{path}/{key}/{index}"))?;
+                    self.audit_schema(child, &path.child(key).child_index(index))?;
                 }
             }
         }
@@ -1556,20 +1574,20 @@ impl<'a> Renderer<'a> {
                 if *key == "additionalProperties" && child.is_boolean() {
                     continue;
                 }
-                self.audit_schema(child, &format!("{path}/{key}"))?;
+                self.audit_schema(child, &path.child(key))?;
             }
         }
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &str, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
         self.ledger.record(LossEntry {
             code: code.to_owned().into(),
             from: "json-schema".into(),
             to: PYDANTIC_DIALECT.into(),
             note: note.to_owned().into(),
             location: Some(Box::new(
-                RdfLocation::logical("pydantic-emitter").with_subject(path),
+                RdfLocation::logical("pydantic-emitter").with_subject(path.to_string()),
             )),
         });
     }
@@ -1653,7 +1671,7 @@ fn append_schema_surface(out: &mut String, schema_literal: &str, routed: bool) {
     out.push_str("        return schema\n");
 }
 
-fn properties<'a>(object: &'a Object, path: &str) -> Result<&'a Object, PydanticError> {
+fn properties<'a>(object: &'a Object, path: &SchemaPath) -> Result<&'a Object, PydanticError> {
     match object.get("properties") {
         Some(Value::Object(properties)) => Ok(properties),
         Some(_) => Err(PydanticError::new(format!(
@@ -1669,7 +1687,7 @@ fn properties<'a>(object: &'a Object, path: &str) -> Result<&'a Object, Pydantic
 fn required_names(
     object: &Object,
     properties: &Object,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<BTreeSet<String>, PydanticError> {
     let mut required = BTreeSet::new();
     let Some(values) = object.get("required") else {
@@ -1692,7 +1710,7 @@ fn required_names(
     Ok(required)
 }
 
-fn extra_policy(object: &Object, path: &str) -> Result<&'static str, PydanticError> {
+fn extra_policy(object: &Object, path: &SchemaPath) -> Result<&'static str, PydanticError> {
     match object.get("additionalProperties") {
         Some(Value::Bool(false)) => Ok("forbid"),
         Some(Value::Bool(true) | Value::Object(_)) | None => Ok("allow"),
