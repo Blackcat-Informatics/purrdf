@@ -9,6 +9,7 @@
 //! drift between five readers. Accepted omissions are always recorded on a
 //! closed source-language → `shacl` loss profile.
 
+use crate::schema_catalog::{SchemaPath, definition_path};
 use purrdf_iri::json_pointer;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -315,7 +316,7 @@ pub(crate) fn import_schema_value_from(
     config: &SchemaImportConfig,
 ) -> Result<ImportedShapes, SchemaImportError> {
     let mut nodes = 0;
-    validate_value_limits(document, 0, &mut nodes, "#")?;
+    validate_value_limits(document, 0, &mut nodes, &SchemaPath::root())?;
     let root = document
         .as_object()
         .ok_or_else(|| SchemaImportError::new("JSON Schema document root must be an object"))?;
@@ -338,7 +339,7 @@ pub(crate) fn import_schema_value_from(
     // document's own size bounds them (QUDT's LinkML pivot has 90,765).
 
     let index = definition_index(definitions);
-    validate_references(document, &index, "#", 0)?;
+    validate_references(document, &index, &SchemaPath::root(), 0)?;
     let generated_envelope = is_generated_envelope(root, definitions, &config.namespaces);
     let mut context = ImportContext::new(source, config, &index, generated_envelope);
     if generated_envelope {
@@ -461,7 +462,7 @@ impl<'a> ImportContext<'a> {
         })
     }
 
-    fn record(&mut self, code: &str, path: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath) {
         let contract = self
             .contract
             .entries()
@@ -474,17 +475,17 @@ impl<'a> ImportContext<'a> {
             to: "shacl".to_owned().into(),
             note: contract.note.to_string().into(),
             location: Some(Box::new(
-                RdfLocation::logical("schema-importer").with_subject(path),
+                RdfLocation::logical("schema-importer").with_subject(path.to_string()),
             )),
         });
     }
 
-    fn nested_shape_id(&mut self, path: &str) -> Term {
+    fn nested_shape_id(&mut self, path: &SchemaPath) -> Term {
         let id = self.nested_shape_counter;
         self.nested_shape_counter += 1;
         Term::blank(format!(
             "schema-import-{id:08x}-{}",
-            fnv1a64(path.as_bytes())
+            fnv1a64(path.to_string().as_bytes())
         ))
     }
 }
@@ -501,18 +502,14 @@ fn validate_absolute_iri(label: &str, value: &str) -> Result<(), SchemaImportErr
     }
 }
 
-fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", json_pointer::escape_token(key))
-}
-
 /// An imported property has no source RDF node. Preserve its source shape and
 /// JSON Pointer as a collision-free blank-node label instead of minting an IRI.
 /// This uses no shared counter, so adding a property does not renumber existing
 /// nested node shapes.
-fn property_shape_id(source: &Term, path: &str) -> Term {
+fn property_shape_id(source: &Term, path: &SchemaPath) -> Term {
     let source = source.to_string();
     let mut label = String::from("schema-property");
-    for part in [source.as_str(), path] {
+    for part in [source, path.to_string()] {
         label.push('-');
         purrdf_hash::hex::encode_into(part.as_bytes(), &mut label);
     }
@@ -526,7 +523,7 @@ impl ImportContext<'_> {
         generated_envelope: bool,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in root {
-            let path = format!("#/{}", json_pointer::escape_token(keyword));
+            let path = SchemaPath::root().child(keyword);
             match keyword.as_str() {
                 "$schema" | "$id" if generated_envelope => {}
                 "$schema" | "$id" | "$anchor" | "$dynamicAnchor" => {
@@ -558,7 +555,7 @@ impl ImportContext<'_> {
         &mut self,
         key: &str,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Shape>, SchemaImportError> {
         if schema.is_boolean() {
             self.record("boolean-schema-dropped", path);
@@ -604,10 +601,10 @@ impl ImportContext<'_> {
     fn audit_non_object_definition(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
+            let location = path.child(keyword);
             match keyword.as_str() {
                 "$ref" => {}
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
@@ -635,15 +632,15 @@ impl ImportContext<'_> {
     fn import_object_shape(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         id: Term,
         targets: Vec<Target>,
     ) -> Result<Shape, SchemaImportError> {
         validate_object_type(object.get("type"), path)?;
         if let Some(kind) = object.get("type")
-            && schema_types(kind, &format!("{path}/type"))?.len() != 1
+            && schema_types(kind, &path.child("type"))?.len() != 1
         {
-            self.record("value-term-kind-widened", &format!("{path}/type"));
+            self.record("value-term-kind-widened", &path.child("type"));
         }
         let properties = optional_object(object, "properties", path)?;
         let required = required_names(object, properties, path)?;
@@ -656,13 +653,13 @@ impl ImportContext<'_> {
                 if !self.generated_envelope {
                     self.record(
                         "value-term-kind-widened",
-                        &format!("{path}/properties/{}", json_pointer::escape_token(key)),
+                        &path.child("properties").child(key),
                     );
                 }
                 continue;
             }
             imported_property_names.insert(key.clone());
-            let property_path = format!("{path}/properties/{}", json_pointer::escape_token(key));
+            let property_path = path.child("properties").child(key);
             let predicate_iri = self.config.namespaces.expand_iri(key).map_err(|error| {
                 SchemaImportError::with_namespace(format!("{property_path}: {error}"), error)
             })?;
@@ -706,14 +703,14 @@ impl ImportContext<'_> {
         for key in required.difference(&imported_property_names) {
             if matches!(key.as_str(), "@id" | "@type" | "@annotation") {
                 if !self.generated_envelope && !properties.contains_key(key) {
-                    self.record("value-term-kind-widened", &format!("{path}/required"));
+                    self.record("value-term-kind-widened", &path.child("required"));
                 }
                 continue;
             }
             let predicate_iri = self.config.namespaces.expand_iri(key).map_err(|error| {
                 SchemaImportError::with_namespace(format!("{path}/required: {error}"), error)
             })?;
-            let required_path = format!("{path}/required");
+            let required_path = path.child("required");
             if let Some(previous) =
                 property_identities.insert(predicate_iri.clone(), required_path.clone())
             {
@@ -722,10 +719,7 @@ impl ImportContext<'_> {
                 )));
             }
             property_shapes.push(PropertyShape {
-                id: property_shape_id(
-                    &id,
-                    &format!("{path}/properties/{}", json_pointer::escape_token(key)),
-                ),
+                id: property_shape_id(&id, &path.child("properties").child(key)),
                 path: Path::Predicate(NamedNode::new_unchecked(predicate_iri)),
                 values: None,
                 default_value: None,
@@ -766,7 +760,7 @@ impl ImportContext<'_> {
                 Value::Bool(true) => {}
                 Value::Object(_) => self.record(
                     "additional-properties-schema-widened",
-                    &format!("{path}/additionalProperties"),
+                    &path.child("additionalProperties"),
                 ),
                 _ => {
                     return Err(SchemaImportError::new(format!(
@@ -796,7 +790,7 @@ impl ImportContext<'_> {
     fn import_object_logic(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         if let Some(branches) = object.get("allOf") {
@@ -805,12 +799,12 @@ impl ImportContext<'_> {
                 .ok_or_else(|| SchemaImportError::new(format!("{path}/allOf must be an array")))?;
             let mut members = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
-                let branch_path = format!("{path}/allOf/{index}");
+                let branch_path = path.child("allOf").child_index(index);
                 if branch.as_object().is_some_and(|object| object.len() == 1)
                     && let Some(reference) = branch.get("$ref").and_then(Value::as_str)
                     && reference_key(reference).is_some_and(|key| self.catalog.contains_key(&key))
                 {
-                    self.import_reference(reference, &format!("{branch_path}/$ref"), constraints)?;
+                    self.import_reference(reference, &branch_path.child("$ref"), constraints)?;
                     continue;
                 }
                 if self.import_node_list(branch, &branch_path, constraints)? {
@@ -821,7 +815,7 @@ impl ImportContext<'_> {
                     .and_then(|map| (map.len() == 1).then(|| map.get("not")).flatten())
                 {
                     if let Some(inner) =
-                        self.import_nested_shape(negand, &format!("{branch_path}/not"))?
+                        self.import_nested_shape(negand, &branch_path.child("not"))?
                     {
                         constraints.push(Constraint::Not(Box::new(inner)));
                     }
@@ -843,7 +837,7 @@ impl ImportContext<'_> {
             let mut members = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
                 if let Some(member) =
-                    self.import_nested_shape(branch, &format!("{path}/{keyword}/{index}"))?
+                    self.import_nested_shape(branch, &path.child(keyword).child_index(index))?
                 {
                     members.push(member);
                 }
@@ -857,7 +851,7 @@ impl ImportContext<'_> {
             }
         }
         if let Some(negand) = object.get("not")
-            && let Some(inner) = self.import_nested_shape(negand, &format!("{path}/not"))?
+            && let Some(inner) = self.import_nested_shape(negand, &path.child("not"))?
         {
             constraints.push(Constraint::Not(Box::new(inner)));
         }
@@ -873,7 +867,7 @@ impl ImportContext<'_> {
         &mut self,
         id: Term,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Shape, SchemaImportError> {
         let mut constraints = Vec::new();
         match list_form(schema) {
@@ -908,7 +902,7 @@ impl ImportContext<'_> {
     fn import_nested_shape(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Shape>, SchemaImportError> {
         if schema.as_object().is_some_and(|object| object.len() == 1)
             && let Some(id) = schema
@@ -956,10 +950,10 @@ impl ImportContext<'_> {
     fn audit_object_keywords(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
+            let location = path.child(keyword);
             match keyword.as_str() {
                 "type"
                 | "properties"
@@ -1007,7 +1001,7 @@ impl ImportContext<'_> {
     fn import_property_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Vec<Constraint>, SchemaImportError> {
         if schema == &Value::Bool(false) {
             return Ok(vec![Constraint::MaxCount(0)]);
@@ -1024,7 +1018,9 @@ impl ImportContext<'_> {
             constraints.push(Constraint::MaxCount(maximum));
         }
         for (index, value) in has_values.iter().enumerate() {
-            if let Some(term) = self.import_term(value, &format!("{path}/contains/{index}"))? {
+            if let Some(term) =
+                self.import_term(value, &path.child("contains").child_index(index))?
+            {
                 constraints.push(Constraint::HasValue(term));
             }
         }
@@ -1039,7 +1035,7 @@ impl ImportContext<'_> {
     fn split_cardinality(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<CardinalitySplit, SchemaImportError> {
         let object = schema.as_object().ok_or_else(|| {
             SchemaImportError::new(format!("{path} must be a boolean or object schema"))
@@ -1057,8 +1053,8 @@ impl ImportContext<'_> {
                 .as_object()
                 .filter(|branch| is_array_schema(branch));
             let (single, array, array_path) = match (left_array, right_array) {
-                (Some(array), None) => (&branches[1], array, format!("{path}/anyOf/0")),
-                (None, Some(array)) => (&branches[0], array, format!("{path}/anyOf/1")),
+                (Some(array), None) => (&branches[1], array, path.child("anyOf").child("0")),
+                (None, Some(array)) => (&branches[0], array, path.child("anyOf").child("1")),
                 _ => return Ok((schema.clone(), None, Some(1), Vec::new())),
             };
             let (items, min_count, max_count, has_values) =
@@ -1076,7 +1072,7 @@ impl ImportContext<'_> {
     fn array_cardinality(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<CardinalitySplit, SchemaImportError> {
         // Omitting `items` is the draft-2020-12 identity schema. Keep the
         // cardinality carrier without inventing an item constraint.
@@ -1086,11 +1082,11 @@ impl ImportContext<'_> {
         let has_values = contained_constants(object);
         let min_count = object
             .get("minItems")
-            .map(|value| nonnegative_integer(value, &format!("{path}/minItems")))
+            .map(|value| nonnegative_integer(value, &path.child("minItems")))
             .transpose()?;
         let max_count = object
             .get("maxItems")
-            .map(|value| nonnegative_integer(value, &format!("{path}/maxItems")))
+            .map(|value| nonnegative_integer(value, &path.child("maxItems")))
             .transpose()?;
         let contains_is_has_value = has_values.is_some();
         let has_values = has_values.unwrap_or_default();
@@ -1104,11 +1100,11 @@ impl ImportContext<'_> {
             ("uniqueItems", "unique-items-validation-dropped"),
         ] {
             if object.contains_key(keyword) && !(contains_is_has_value && keyword == "contains") {
-                self.record(code, &format!("{path}/{keyword}"));
+                self.record(code, &path.child(keyword));
             }
         }
         for (keyword, value) in object {
-            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
+            let location = path.child(keyword);
             match keyword.as_str() {
                 "allOf" if contains_is_has_value => {}
                 "type" | "items" | "minItems" | "maxItems" | "contains" | "minContains"
@@ -1130,7 +1126,7 @@ impl ImportContext<'_> {
     fn import_scalar_schema(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         match schema {
@@ -1162,7 +1158,7 @@ impl ImportContext<'_> {
             let mut handled = BTreeSet::new();
             self.import_value_bounds(object, path, constraints, &mut handled)?;
             if object.contains_key("$comment") {
-                self.record("annotation-dropped", &format!("{path}/$comment"));
+                self.record("annotation-dropped", &path.child("$comment"));
             }
             return Ok(());
         }
@@ -1183,7 +1179,7 @@ impl ImportContext<'_> {
                 constraints.push(Constraint::Class(vec![class]));
             } else {
                 if object.contains_key("$comment") {
-                    self.record("annotation-dropped", &format!("{path}/$comment"));
+                    self.record("annotation-dropped", &path.child("$comment"));
                 }
                 constraints.push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
             }
@@ -1194,7 +1190,7 @@ impl ImportContext<'_> {
             let reference = reference
                 .as_str()
                 .ok_or_else(|| SchemaImportError::new(format!("{path}/$ref must be a string")))?;
-            self.import_reference(reference, &format!("{path}/$ref"), constraints)?;
+            self.import_reference(reference, &path.child("$ref"), constraints)?;
             handled.insert("$ref");
         }
 
@@ -1203,7 +1199,11 @@ impl ImportContext<'_> {
                 .as_array()
                 .ok_or_else(|| SchemaImportError::new(format!("{path}/allOf must be an array")))?;
             for (index, branch) in branches.iter().enumerate() {
-                self.import_scalar_schema(branch, &format!("{path}/allOf/{index}"), constraints)?;
+                self.import_scalar_schema(
+                    branch,
+                    &path.child("allOf").child_index(index),
+                    constraints,
+                )?;
             }
             handled.insert("allOf");
         }
@@ -1212,7 +1212,7 @@ impl ImportContext<'_> {
             let branches = branches
                 .as_array()
                 .ok_or_else(|| SchemaImportError::new(format!("{path}/anyOf must be an array")))?;
-            self.import_scalar_alternatives(branches, &format!("{path}/anyOf"), constraints)?;
+            self.import_scalar_alternatives(branches, &path.child("anyOf"), constraints)?;
             handled.insert("anyOf");
         }
 
@@ -1222,7 +1222,9 @@ impl ImportContext<'_> {
                 .ok_or_else(|| SchemaImportError::new(format!("{path}/enum must be an array")))?;
             let mut terms = Vec::new();
             for (index, value) in enum_values.iter().enumerate() {
-                if let Some(term) = self.import_term(value, &format!("{path}/enum/{index}"))? {
+                if let Some(term) =
+                    self.import_term(value, &path.child("enum").child_index(index))?
+                {
                     terms.push(term);
                 }
             }
@@ -1232,7 +1234,7 @@ impl ImportContext<'_> {
             handled.insert("enum");
         }
         if let Some(value) = object.get("const") {
-            if let Some(term) = self.import_term(value, &format!("{path}/const"))? {
+            if let Some(term) = self.import_term(value, &path.child("const"))? {
                 constraints.push(Constraint::HasValue(term));
             }
             handled.insert("const");
@@ -1245,7 +1247,7 @@ impl ImportContext<'_> {
                 handled.insert("format");
             }
         } else if object.contains_key("format") {
-            self.record("format-validation-widened", &format!("{path}/format"));
+            self.record("format-validation-widened", &path.child("format"));
             handled.insert("format");
         }
 
@@ -1269,17 +1271,14 @@ impl ImportContext<'_> {
             if let Some(value) = object.get(keyword) {
                 constraints.push(constructor(nonnegative_integer(
                     value,
-                    &format!("{path}/{keyword}"),
+                    &path.child(keyword),
                 )?));
                 handled.insert(keyword);
             }
         }
         self.import_value_bounds(object, path, constraints, &mut handled)?;
         if object.contains_key("multipleOf") {
-            self.record(
-                "multiple-of-validation-dropped",
-                &format!("{path}/multipleOf"),
-            );
+            self.record("multiple-of-validation-dropped", &path.child("multipleOf"));
             handled.insert("multipleOf");
         }
 
@@ -1287,7 +1286,7 @@ impl ImportContext<'_> {
             if handled.contains(keyword.as_str()) {
                 continue;
             }
-            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
+            let location = path.child(keyword);
             match keyword.as_str() {
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
                 | "readOnly" | "writeOnly" => {
@@ -1320,7 +1319,7 @@ impl ImportContext<'_> {
     fn import_value_bounds(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
         handled: &mut BTreeSet<&'static str>,
     ) -> Result<(), SchemaImportError> {
@@ -1331,13 +1330,13 @@ impl ImportContext<'_> {
             ("exclusiveMaximum", BoundKind::ExclusiveMaximum),
         ] {
             if let Some(value) = object.get(keyword) {
-                let term = self.numeric_term(value, &format!("{path}/{keyword}"))?;
+                let term = self.numeric_term(value, &path.child(keyword))?;
                 constraints.push(bound_kind.constraint(term));
                 handled.insert(keyword);
             }
         }
         if let Some(negand) = object.get("not") {
-            self.import_rejections(negand, &format!("{path}/not"), constraints)?;
+            self.import_rejections(negand, &path.child("not"), constraints)?;
             handled.insert("not");
         }
         Ok(())
@@ -1348,7 +1347,7 @@ impl ImportContext<'_> {
     fn value_datatype(
         &self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<NamedNode>, SchemaImportError> {
         if let Some(curie) = typed_datatype_constant(schema) {
             return self.expand_datatype(curie, path).map(Some);
@@ -1374,7 +1373,11 @@ impl ImportContext<'_> {
         Ok(None)
     }
 
-    fn expand_datatype(&self, curie: &str, path: &str) -> Result<NamedNode, SchemaImportError> {
+    fn expand_datatype(
+        &self,
+        curie: &str,
+        path: &SchemaPath,
+    ) -> Result<NamedNode, SchemaImportError> {
         self.config
             .namespaces
             .expand_iri(curie)
@@ -1400,14 +1403,14 @@ impl ImportContext<'_> {
     fn import_rejections(
         &mut self,
         negand: &Value,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         let (alternatives, alternative_path) = match negand.get("anyOf").and_then(Value::as_array) {
             Some(branches) if negand.as_object().is_some_and(|object| object.len() == 1) => {
-                (branches.clone(), format!("{path}/anyOf"))
+                (branches.clone(), path.child("anyOf"))
             }
-            _ => (vec![negand.clone()], path.to_owned()),
+            _ => (vec![negand.clone()], path.clone()),
         };
         let lexical = |constraints: &[Constraint]| {
             constraints.iter().any(|constraint| {
@@ -1435,14 +1438,14 @@ impl ImportContext<'_> {
         let mut implied_triple = false;
         let mut implied_bound = false;
         let mut implied_constant = false;
-        let mut typed_bounds: Vec<(String, &Value)> = Vec::new();
+        let mut typed_bounds: Vec<(SchemaPath, &Value)> = Vec::new();
         let mut claimed_bounds: Vec<BoundClaim<'_>> = Vec::new();
-        let mut unread: Vec<String> = Vec::new();
+        let mut unread: Vec<SchemaPath> = Vec::new();
         for (index, alternative) in alternatives.iter().enumerate() {
-            let location = if alternatives.len() == 1 && alternative_path == path {
+            let location = if alternatives.len() == 1 && alternative_path == *path {
                 path.to_owned()
             } else {
-                format!("{alternative_path}/{index}")
+                alternative_path.child_index(index)
             };
             match classify_rejection(alternative) {
                 Some(Rejection::LineBreak) => {
@@ -1510,7 +1513,7 @@ impl ImportContext<'_> {
         constraints.extend(derived);
         self.recover_range_bounds(claimed_bounds, constraints, &mut unread);
         if implied_constant && !has_lexical && !bounded(constraints) {
-            unread.push(path.to_owned());
+            unread.push(path.clone());
         }
         // A typed bound rejection reads back only as exactly the one the bounds
         // already read project to; any other is a negation SHACL cannot state
@@ -1525,13 +1528,13 @@ impl ImportContext<'_> {
             }
         }
         if implied_blank && !has_lexical {
-            unread.push(path.to_owned());
+            unread.push(path.clone());
         }
         if implied_bound && !bounded(constraints) {
-            unread.push(path.to_owned());
+            unread.push(path.clone());
         }
         if implied_triple && !has_lexical && !bounded(constraints) {
-            unread.push(path.to_owned());
+            unread.push(path.clone());
         }
         unread.sort();
         unread.dedup();
@@ -1557,7 +1560,7 @@ impl ImportContext<'_> {
         &self,
         claimed: Vec<BoundClaim<'_>>,
         constraints: &mut Vec<Constraint>,
-        unread: &mut Vec<String>,
+        unread: &mut Vec<SchemaPath>,
     ) {
         if claimed.is_empty() {
             return;
@@ -1574,9 +1577,9 @@ impl ImportContext<'_> {
                 _ => None,
             })
             .reduce(|left, right| left.intersection(&right).cloned().collect());
-        let mut recovered: Vec<(Constraint, Vec<String>)> = Vec::new();
+        let mut recovered: Vec<(Constraint, Vec<SchemaPath>)> = Vec::new();
         for BoundClaim { bound, claims, .. } in claimed {
-            let locations: Vec<String> = claims
+            let locations: Vec<SchemaPath> = claims
                 .iter()
                 .map(|(location, _)| location.clone())
                 .collect();
@@ -1654,7 +1657,7 @@ impl ImportContext<'_> {
     fn import_reference(
         &mut self,
         reference: &str,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         let key = reference_key(reference).ok_or_else(|| {
@@ -1687,9 +1690,10 @@ impl ImportContext<'_> {
         {
             let mut terms = Vec::new();
             for (index, value) in values.iter().enumerate() {
-                if let Some(term) =
-                    self.import_term(value, &format!("{}/enum/{index}", definition_path(&key)))?
-                {
+                if let Some(term) = self.import_term(
+                    value,
+                    &definition_path(&key).child("enum").child_index(index),
+                )? {
                     terms.push(term);
                 }
             }
@@ -1706,7 +1710,7 @@ impl ImportContext<'_> {
     fn import_scalar_alternatives(
         &mut self,
         branches: &[Value],
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         // A node-kind union (SHACL 1.2: a list value is a disjunction).
@@ -1722,7 +1726,7 @@ impl ImportContext<'_> {
         if branches.len() >= 2 {
             let mut datatypes = Vec::new();
             for (index, branch) in branches.iter().enumerate() {
-                match self.value_datatype(branch, &format!("{path}/{index}"))? {
+                match self.value_datatype(branch, &path.child_index(index))? {
                     Some(datatype) => datatypes.push(datatype),
                     None => {
                         datatypes.clear();
@@ -1746,7 +1750,7 @@ impl ImportContext<'_> {
                     self.import_scalar_type(
                         kind,
                         scalar.get("format"),
-                        &format!("{path}/{scalar_index}"),
+                        &path.child_index(scalar_index),
                         constraints,
                     )?;
                     return Ok(());
@@ -1763,7 +1767,7 @@ impl ImportContext<'_> {
                 _ => None,
             };
             if let Some((members, index)) = pair {
-                let members_path = format!("{path}/{index}/properties/@list");
+                let members_path = path.child_index(index).child("properties").child("@list");
                 self.import_list_members(members, &members_path, 0, constraints)?;
                 return Ok(());
             }
@@ -1781,7 +1785,7 @@ impl ImportContext<'_> {
         let mut reference_constraints = Vec::new();
         let mut scalar_constraints = Vec::new();
         for (index, branch) in branches.iter().enumerate() {
-            let branch_path = format!("{path}/{index}");
+            let branch_path = path.child_index(index);
             if branch == &Value::Bool(true) {
                 saw_true = true;
                 continue;
@@ -1802,7 +1806,7 @@ impl ImportContext<'_> {
                     node_constraints.push(Constraint::Class(vec![class]));
                 } else {
                     if object.contains_key("$comment") {
-                        self.record("annotation-dropped", &format!("{branch_path}/$comment"));
+                        self.record("annotation-dropped", &branch_path.child("$comment"));
                     }
                     node_constraints
                         .push(Constraint::NodeKind(vec![NodeKindValue::BlankNodeOrIri]));
@@ -1829,7 +1833,7 @@ impl ImportContext<'_> {
                 reference_branches += 1;
                 self.import_reference(
                     reference,
-                    &format!("{branch_path}/$ref"),
+                    &branch_path.child("$ref"),
                     &mut reference_constraints,
                 )?;
                 continue;
@@ -1908,13 +1912,13 @@ impl ImportContext<'_> {
     fn import_list_members(
         &mut self,
         members: &Object,
-        path: &str,
+        path: &SchemaPath,
         skipped: u64,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         let start = constraints.len();
         for (keyword, value) in members {
-            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
+            let location = path.child(keyword);
             match keyword.as_str() {
                 "type" => {}
                 "minItems" => {
@@ -1949,7 +1953,7 @@ impl ImportContext<'_> {
     fn import_member_shape(
         &mut self,
         schema: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Shape, SchemaImportError> {
         let mut constraints = Vec::new();
         self.import_scalar_schema(schema, path, &mut constraints)?;
@@ -1975,7 +1979,7 @@ impl ImportContext<'_> {
     fn import_node_list(
         &mut self,
         branch: &Value,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<bool, SchemaImportError> {
         let Some(alternatives) = branch
@@ -2026,7 +2030,7 @@ impl ImportContext<'_> {
             None if has_nil => read.push(Constraint::MaxListLength(0)),
             None => return Ok(false),
             Some((index, object)) => {
-                let base = format!("{path}/anyOf/{index}/properties");
+                let base = path.child("anyOf").child_index(index).child("properties");
                 let properties = object
                     .get("properties")
                     .and_then(Value::as_object)
@@ -2061,10 +2065,12 @@ impl ImportContext<'_> {
                 if !is_plain_node_ref(tail_node) {
                     return Ok(false);
                 }
-                let tail_path = format!(
-                    "{base}/{}/anyOf/0/properties/@list",
-                    json_pointer::escape_token(&rest)
-                );
+                let tail_path = base
+                    .child(&rest)
+                    .child("anyOf")
+                    .child_index(0)
+                    .child("properties")
+                    .child("@list");
                 let mut listed = Vec::new();
                 self.import_list_members(members, &tail_path, 1, &mut listed)?;
                 // The tail's own member shape repeats the head's; a lone
@@ -2085,7 +2091,7 @@ impl ImportContext<'_> {
                 if let Some(member) = head {
                     let shape = self.import_member_shape(
                         member,
-                        &format!("{base}/{}/allOf/1", json_pointer::escape_token(&first)),
+                        &base.child(&first).child("allOf").child("1"),
                     )?;
                     listed.push(Constraint::MemberShape(Box::new(shape)));
                 }
@@ -2103,7 +2109,7 @@ impl ImportContext<'_> {
         &mut self,
         value: &Value,
         format: Option<&Value>,
-        path: &str,
+        path: &SchemaPath,
         constraints: &mut Vec<Constraint>,
     ) -> Result<(), SchemaImportError> {
         // Every kind a lone projected value can be, and no array: the compiler's
@@ -2114,7 +2120,7 @@ impl ImportContext<'_> {
         {
             return Ok(());
         }
-        let kinds = schema_types(value, &format!("{path}/type"))?;
+        let kinds = schema_types(value, &path.child("type"))?;
         let format = format
             .map(|value| {
                 value.as_str().ok_or_else(|| {
@@ -2133,12 +2139,12 @@ impl ImportContext<'_> {
                 && format.is_some()
                 && !matches!(format, Some("date-time" | "date" | "time" | "uri"))
             {
-                self.record("format-validation-widened", &format!("{path}/format"));
+                self.record("format-validation-widened", &path.child("format"));
             }
             datatypes.insert(datatype);
         }
         if has_unmapped_kind || datatypes.len() > 1 {
-            self.record("value-term-kind-widened", &format!("{path}/type"));
+            self.record("value-term-kind-widened", &path.child("type"));
         } else if let Some(datatype) = datatypes.into_iter().next() {
             constraints.push(Constraint::Datatype(vec![NamedNode::new_unchecked(
                 datatype,
@@ -2150,7 +2156,7 @@ impl ImportContext<'_> {
     fn import_term(
         &mut self,
         value: &Value,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Term>, SchemaImportError> {
         match value {
             Value::String(value) => Ok(Some(Term::Literal(Literal::new_typed_literal(
@@ -2176,7 +2182,7 @@ impl ImportContext<'_> {
     fn import_term_object(
         &mut self,
         object: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Term>, SchemaImportError> {
         if let Some(id) = object.get("@id") {
             if object.len() != 1 {
@@ -2185,7 +2191,7 @@ impl ImportContext<'_> {
                 )));
             }
             if let Some(embedded) = id.as_object() {
-                return self.import_triple_term(embedded, &format!("{path}/@id"));
+                return self.import_triple_term(embedded, &path.child("@id"));
             }
             let id = id
                 .as_str()
@@ -2257,7 +2263,7 @@ impl ImportContext<'_> {
     fn import_triple_term(
         &mut self,
         embedded: &Object,
-        path: &str,
+        path: &SchemaPath,
     ) -> Result<Option<Term>, SchemaImportError> {
         let [(first_key, first), (second_key, second)] = embedded
             .iter()
@@ -2278,7 +2284,7 @@ impl ImportContext<'_> {
             )));
         };
         let reference = Object::new().with("@id", subject.clone());
-        let Some(subject) = self.import_term_object(&reference, &format!("{path}/@id"))? else {
+        let Some(subject) = self.import_term_object(&reference, &path.child("@id"))? else {
             return Ok(None);
         };
         let predicate = self
@@ -2288,7 +2294,7 @@ impl ImportContext<'_> {
             .map_err(|error| {
                 SchemaImportError::with_namespace(format!("{path} predicate: {error}"), error)
             })?;
-        let object_path = format!("{path}/{}", json_pointer::escape_token(predicate.as_str()));
+        let object_path = path.child(predicate.as_str());
         let Some(object) = self.import_term(object, &object_path)? else {
             return Ok(None);
         };
@@ -2299,7 +2305,7 @@ impl ImportContext<'_> {
         )))))
     }
 
-    fn numeric_term(&self, value: &Value, path: &str) -> Result<Term, SchemaImportError> {
+    fn numeric_term(&self, value: &Value, path: &SchemaPath) -> Result<Term, SchemaImportError> {
         let number = value.as_number().ok_or_else(|| {
             SchemaImportError::new(format!("{path} must be a finite JSON number"))
         })?;
@@ -2341,7 +2347,7 @@ fn validate_value_limits(
     value: &Value,
     depth: usize,
     nodes: &mut usize,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<(), SchemaImportError> {
     if depth > MAX_SCHEMA_DEPTH {
         return Err(SchemaImportError::new(format!(
@@ -2357,7 +2363,7 @@ fn validate_value_limits(
         )),
         Value::Array(values) => {
             for (index, value) in values.iter().enumerate() {
-                validate_value_limits(value, depth + 1, nodes, &format!("{path}/{index}"))?;
+                validate_value_limits(value, depth + 1, nodes, &path.child_index(index))?;
             }
             Ok(())
         }
@@ -2368,12 +2374,7 @@ fn validate_value_limits(
                         "{path} member name exceeds the {MAX_STRING_BYTES}-byte limit"
                     )));
                 }
-                validate_value_limits(
-                    value,
-                    depth + 1,
-                    nodes,
-                    &format!("{path}/{}", json_pointer::escape_token(key)),
-                )?;
+                validate_value_limits(value, depth + 1, nodes, &path.child(key))?;
             }
             Ok(())
         }
@@ -2397,7 +2398,7 @@ fn definition_index(definitions: &Object) -> DefinitionIndex<'_> {
 fn validate_references(
     value: &Value,
     definitions: &DefinitionIndex<'_>,
-    path: &str,
+    path: &SchemaPath,
     depth: usize,
 ) -> Result<(), SchemaImportError> {
     if depth > MAX_SCHEMA_DEPTH {
@@ -2415,11 +2416,7 @@ fn validate_references(
         };
     };
     for (keyword, value) in object {
-        validate_json_keyword_value(
-            keyword,
-            value,
-            &format!("{path}/{}", json_pointer::escape_token(keyword)),
-        )?;
+        validate_json_keyword_value(keyword, value, &path.child(keyword))?;
     }
     for keyword in ["$dynamicRef", "$recursiveRef"] {
         if object.contains_key(keyword) {
@@ -2428,12 +2425,12 @@ fn validate_references(
             )));
         }
     }
-    if path != "#" && object.contains_key("$id") {
+    if *path != SchemaPath::root() && object.contains_key("$id") {
         return Err(SchemaImportError::new(format!(
             "{path}/$id cannot rebase a closed schema import"
         )));
     }
-    if path != "#" && object.contains_key("$schema") {
+    if *path != SchemaPath::root() && object.contains_key("$schema") {
         return Err(SchemaImportError::new(format!(
             "{path}/$schema cannot change the fixed draft-2020-12 dialect"
         )));
@@ -2467,7 +2464,7 @@ fn validate_references(
                 validate_references(
                     child,
                     definitions,
-                    &format!("{path}/{keyword}/{}", json_pointer::escape_token(key)),
+                    &path.child(keyword).child(key),
                     depth + 1,
                 )?;
             }
@@ -2482,7 +2479,7 @@ fn validate_references(
                 validate_references(
                     child,
                     definitions,
-                    &format!("{path}/{keyword}/{index}"),
+                    &path.child(keyword).child_index(index),
                     depth + 1,
                 )?;
             }
@@ -2503,7 +2500,7 @@ fn validate_references(
         "contentSchema",
     ] {
         if let Some(child) = object.get(keyword) {
-            validate_references(child, definitions, &format!("{path}/{keyword}"), depth + 1)?;
+            validate_references(child, definitions, &path.child(keyword), depth + 1)?;
         }
     }
     Ok(())
@@ -2658,7 +2655,7 @@ fn schema_type_contains(value: Option<&Value>, expected: &str) -> bool {
 fn optional_object<'a>(
     object: &'a Object,
     keyword: &str,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<&'a Object, SchemaImportError> {
     static EMPTY: OnceLock<Object> = OnceLock::new();
     object
@@ -2675,7 +2672,7 @@ fn optional_object<'a>(
 fn required_names(
     object: &Object,
     _properties: &Object,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<BTreeSet<String>, SchemaImportError> {
     let Some(required) = object.get("required") else {
         return Ok(BTreeSet::new());
@@ -2697,11 +2694,11 @@ fn required_names(
     Ok(names)
 }
 
-fn validate_object_type(value: Option<&Value>, path: &str) -> Result<(), SchemaImportError> {
+fn validate_object_type(value: Option<&Value>, path: &SchemaPath) -> Result<(), SchemaImportError> {
     let Some(value) = value else {
         return Ok(());
     };
-    let kinds = schema_types(value, &format!("{path}/type"))?;
+    let kinds = schema_types(value, &path.child("type"))?;
     if !kinds.iter().any(|kind| kind == "object") {
         return Err(SchemaImportError::new(format!(
             "{path}/type must include object for an object definition"
@@ -2710,7 +2707,7 @@ fn validate_object_type(value: Option<&Value>, path: &str) -> Result<(), SchemaI
     Ok(())
 }
 
-fn schema_types(value: &Value, path: &str) -> Result<Vec<String>, SchemaImportError> {
+fn schema_types(value: &Value, path: &SchemaPath) -> Result<Vec<String>, SchemaImportError> {
     let mut kinds = match value {
         Value::String(kind) => vec![kind.clone()],
         Value::Array(values) => values
@@ -2747,13 +2744,13 @@ fn schema_types(value: &Value, path: &str) -> Result<Vec<String>, SchemaImportEr
     Ok(kinds)
 }
 
-fn nonnegative_integer(value: &Value, path: &str) -> Result<u64, SchemaImportError> {
+fn nonnegative_integer(value: &Value, path: &SchemaPath) -> Result<u64, SchemaImportError> {
     value
         .as_u64()
         .ok_or_else(|| SchemaImportError::new(format!("{path} must be a non-negative integer")))
 }
 
-fn validate_nonnegative_integer(value: &Value, path: &str) -> Result<(), SchemaImportError> {
+fn validate_nonnegative_integer(value: &Value, path: &SchemaPath) -> Result<(), SchemaImportError> {
     nonnegative_integer(value, path).map(|_| ())
 }
 
@@ -2843,7 +2840,7 @@ fn keyword_integer_bounds(bounds: &[&Constraint]) -> Option<(Option<i128>, Optio
 struct BoundClaim<'v> {
     comment: String,
     bound: Constraint,
-    claims: Vec<(String, &'v Value)>,
+    claims: Vec<(SchemaPath, &'v Value)>,
 }
 
 /// The keywords `ImportContext::import_value_bounds` reads.
@@ -3663,7 +3660,7 @@ fn root_loss_code(keyword: &str) -> &'static str {
 fn validate_json_keyword_value(
     keyword: &str,
     value: &Value,
-    path: &str,
+    path: &SchemaPath,
 ) -> Result<(), SchemaImportError> {
     let invalid =
         |expected: &str| Err(SchemaImportError::new(format!("{path} must be {expected}")));
@@ -3716,10 +3713,7 @@ fn validate_json_keyword_value(
                 return invalid("an object of unique string arrays");
             };
             for (name, names) in entries {
-                validate_unique_string_array(
-                    names,
-                    &format!("{path}/{}", json_pointer::escape_token(name)),
-                )?;
+                validate_unique_string_array(names, &path.child(name))?;
             }
             Ok(())
         }
@@ -3767,7 +3761,7 @@ fn validate_json_keyword_value(
 
 fn validate_array(
     value: &Value,
-    path: &str,
+    path: &SchemaPath,
     require_nonempty: bool,
     require_unique: bool,
 ) -> Result<(), SchemaImportError> {
@@ -3793,7 +3787,7 @@ fn validate_array(
     Ok(())
 }
 
-fn validate_unique_string_array(value: &Value, path: &str) -> Result<(), SchemaImportError> {
+fn validate_unique_string_array(value: &Value, path: &SchemaPath) -> Result<(), SchemaImportError> {
     let values = value
         .as_array()
         .ok_or_else(|| SchemaImportError::new(format!("{path} must be an array of strings")))?;

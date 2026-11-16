@@ -8,6 +8,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed JSON Pointers:** `purrdf_lex::json_pointer::JsonPointer` holds a
+  pointer as its unescaped reference tokens and writes the RFC 6901 spelling
+  only on `Display`, through `escape_token`; `child`, `child_index`, `tokens`
+  and `parse` build and read it, and pointers order by their spelling. The
+  GraphQL, TypeScript, Pydantic, LinkML and JSON Schema importer projections in
+  `purrdf-shapes` carry their schema locations as one instead of joining
+  escaped text, so a member name can no longer reach a location unescaped.
+  Locations, loss entries and emitted schemas are unchanged for every input
+  except one: a LinkML package carrier class (`@id`, typed-literal or
+  language-tagged literal) with a malformed attribute is now reported at its
+  own class, escaped, where the location used a fixed placeholder class name or
+  the class name unescaped.
+
 - **Cheaper SHACL validation over many focus nodes:** a root shape's
   constraints and property shapes are now resolved once per shape instead of
   once per focus node, the `sh:closed` pass no longer re-plans every
