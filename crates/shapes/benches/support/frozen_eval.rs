@@ -911,7 +911,7 @@ fn witness(result: &SparqlResult, detail: Detail) -> Witness {
 fn identity(dataset: &RdfDataset) -> purrdf_hash::hex::Digest32 {
     dataset
         .content_identity()
-        .unwrap_or_else(|never| match never {})
+        .expect("a resident dataset admits its content identity")
 }
 
 fn digest64(identity: purrdf_hash::hex::Digest32) -> u64 {

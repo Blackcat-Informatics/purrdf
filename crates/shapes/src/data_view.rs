@@ -976,7 +976,7 @@ impl purrdf_core::ContentIdentified for ShaclDatasetView {
         let source = match &self.source {
             Source::Native(source) => source
                 .content_identity()
-                .unwrap_or_else(|never| match never {}),
+                .map_err(|error| DataIdentityError::Source(error.into()))?,
             Source::Composite(dense) => dense
                 .source
                 .content_identity()

@@ -167,14 +167,14 @@ pub(crate) trait ViewOp {
 /// Nothing computes that identity unless asked.
 pub(crate) trait InputView:
     DatasetView<ReadError = std::convert::Infallible>
-    + purrdf_core::ContentIdentified<IdentityError = std::convert::Infallible>
+    + purrdf_core::ContentIdentified<IdentityError: std::error::Error + Send + Sync + 'static>
     + Sync
 {
 }
 
 impl<
     D: DatasetView<ReadError = std::convert::Infallible>
-        + purrdf_core::ContentIdentified<IdentityError = std::convert::Infallible>
+        + purrdf_core::ContentIdentified<IdentityError: std::error::Error + Send + Sync + 'static>
         + Sync,
 > InputView for D
 {

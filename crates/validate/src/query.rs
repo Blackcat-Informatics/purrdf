@@ -336,6 +336,8 @@ pub enum ReceiptBindError {
     ContentIdentity,
     /// The receipt's run cannot have an execution identity.
     Refused(purrdf_sparql_eval::ReceiptError),
+    /// The dataset refused to produce its content identity.
+    Identity(purrdf_lex::allocation::StorageError),
 }
 
 impl std::fmt::Display for ReceiptBindError {
@@ -352,6 +354,7 @@ impl std::fmt::Display for ReceiptBindError {
                 f.write_str("the content identity is not 64 lowercase hexadecimal digits")
             }
             Self::Refused(error) => error.fmt(f),
+            Self::Identity(error) => write!(f, "the dataset's content identity: {error}"),
         }
     }
 }
@@ -361,6 +364,7 @@ impl std::error::Error for ReceiptBindError {
         match self {
             Self::Json(error) => Some(error),
             Self::Refused(error) => Some(error),
+            Self::Identity(error) => Some(error),
             Self::NotAReceipt { .. } | Self::ContentIdentity => None,
         }
     }
@@ -372,6 +376,7 @@ impl purrdf_hash::error::StructuredError for ReceiptBindError {
         NotAReceipt { member } => "receipt-bind-not-a-receipt" { "member" => Code(member) },
         ContentIdentity => "receipt-bind-content-identity" {},
         Refused(error) => "receipt-bind-refused" { "cause" => Record(error) },
+        Identity(error) => "receipt-bind-identity" { "cause" => Cause(error) },
     }
 }
 
@@ -381,14 +386,15 @@ impl purrdf_hash::error::StructuredError for ReceiptBindError {
 ///
 /// This is the explicit request every host that hands its caller only receipt
 /// JSON routes through. `content` is called only after the receipt is admitted,
-/// so a refused binding computes no content identity. A host receipt carries no
+/// so a refused binding computes no content identity; a refusal of the identity
+/// itself is returned as [`ReceiptBindError::Identity`]. A host receipt carries no
 /// focus-graph identity, so a run that read a focus graph is refused.
 ///
 /// # Errors
 /// [`ReceiptBindError`].
 pub fn bind_execution_receipt(
     receipt: &str,
-    content: impl FnOnce() -> purrdf_hash::hex::Digest32,
+    content: impl FnOnce() -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError>,
 ) -> Result<String, ReceiptBindError> {
     use purrdf_lex::json::Value;
     use purrdf_sparql_eval::ReceiptError;
@@ -426,7 +432,8 @@ pub fn bind_execution_receipt(
             ReceiptError::FocusGraphIdentityMissing,
         ));
     }
-    let sources = purrdf_sparql_eval::ExecutionSources::new(content());
+    let sources =
+        purrdf_sparql_eval::ExecutionSources::new(content().map_err(ReceiptBindError::Identity)?);
     let execution = sources
         .execution_identity_of(&run, false)
         .map_err(ReceiptBindError::Refused)?;
@@ -450,7 +457,7 @@ pub fn bind_execution_receipt_hex(
 ) -> Result<String, ReceiptBindError> {
     let identity = purrdf_hash::hex::Digest32::from_hex(content_identity)
         .ok_or(ReceiptBindError::ContentIdentity)?;
-    bind_execution_receipt(receipt, || identity)
+    bind_execution_receipt(receipt, || Ok(identity))
 }
 
 /// The actual nested executions of a rule request, beside its supplied scope.
@@ -556,7 +563,7 @@ mod tests {
         let receipt = super::execution_receipt_json(&coordinates);
         assert!(!receipt.contains("contentIdentity"));
         assert_eq!(
-            super::bind_execution_receipt(&receipt, || content).unwrap(),
+            super::bind_execution_receipt(&receipt, || Ok(content)).unwrap(),
             native
         );
         assert_eq!(
@@ -564,7 +571,10 @@ mod tests {
             native
         );
 
-        let unhashed = || -> purrdf_hash::hex::Digest32 { panic!("a refusal hashes nothing") };
+        let unhashed =
+            || -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+                panic!("a refusal hashes nothing")
+            };
         let refused = |text: &str| super::bind_execution_receipt(text, unhashed).unwrap_err();
         assert!(matches!(
             refused(r#"{"state":"not-started"}"#),

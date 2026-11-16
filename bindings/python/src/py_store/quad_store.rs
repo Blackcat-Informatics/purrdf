@@ -954,10 +954,9 @@ impl PyQuadStore {
     /// `ValueError` if the store cannot be frozen.
     fn content_identity(&self, py: Python<'_>) -> PyResult<String> {
         let frozen = self.freeze_snapshot(py)?;
-        Ok(py
-            .detach(|| purrdf_core::ContentIdentified::content_identity(&*frozen))
-            .unwrap_or_else(|never| match never {})
-            .to_string())
+        py.detach(|| purrdf_core::ContentIdentified::content_identity(&*frozen))
+            .map(|identity| identity.to_string())
+            .map_err(|e| PyValueError::new_err(format!("content identity refused: {e}")))
     }
 
     /// Iterate the store's quads (a snapshot taken at iteration time).

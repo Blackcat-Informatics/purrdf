@@ -82,7 +82,7 @@ impl<'a, A: Admission, C: Progress> RetainedParse<'a, A, C> {
         impl purrdf_core::ContentIdentified<
             Id = TermId,
             ReadError = BorrowedReadError,
-            IdentityError = Infallible,
+            IdentityError = purrdf_lex::allocation::StorageError,
         > + '_,
     > {
         self.output.as_ref().ok().map(|output| BorrowedDataset {
@@ -337,7 +337,7 @@ struct BorrowedDataset<'a> {
 
 /// The borrowed dataset's identity: the frozen dataset's, computed on request.
 impl purrdf_core::ContentIdentified for BorrowedDataset<'_> {
-    type IdentityError = Infallible;
+    type IdentityError = purrdf_lex::allocation::StorageError;
 
     fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
         purrdf_core::ContentIdentified::content_identity(self.dataset)

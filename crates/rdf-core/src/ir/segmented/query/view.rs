@@ -597,7 +597,7 @@ impl crate::ContentIdentified for SegmentedStackQuery<'_> {
 
     fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
         self.check_ready()?;
-        Ok(self.snapshot.content_identity())
+        Ok(self.snapshot.content_identity()?)
     }
 }
 

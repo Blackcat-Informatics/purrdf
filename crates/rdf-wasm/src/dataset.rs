@@ -864,7 +864,7 @@ impl Dataset {
     pub fn content_identity(&self) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let identity = purrdf_core::ContentIdentified::content_identity(&*frozen)
-            .unwrap_or_else(|never| match never {});
+            .map_err(|e| diag_to_err(&e.into()))?;
         Ok(identity.to_string())
     }
 

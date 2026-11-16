@@ -93,9 +93,7 @@ fn a_governed_prepared_select_returns_coordinates_without_hashing_the_dataset() 
     };
     assert!(!identity_hashed(&dataset));
     let run = *started(&coordinates).run_identity().unwrap();
-    let content = dataset
-        .content_identity()
-        .unwrap_or_else(|never| match never {});
+    let content = dataset.content_identity().unwrap();
     let execution = coordinates
         .execution_identity(&ExecutionSources::new(content))
         .unwrap();
@@ -142,12 +140,8 @@ fn execution_identity_refuses_sources_that_do_not_match_the_run() {
             .unwrap();
         observer.0.lock().unwrap().remove(0)
     };
-    let content = dataset
-        .content_identity()
-        .unwrap_or_else(|never| match never {});
-    let focus_content = focus
-        .content_identity()
-        .unwrap_or_else(|never| match never {});
+    let content = dataset.content_identity().unwrap();
+    let focus_content = focus.content_identity().unwrap();
     let plain = ExecutionSources::new(content);
     let with_focus = plain.with_focus_graph(focus_content);
 

@@ -300,18 +300,23 @@ impl TripleDataset {
     /// The content identity, computed on the first request and sealed: the same
     /// law, and so the same value, as the graph-free [`RdfDataset`](super::RdfDataset)
     /// with these rows and terms.
-    pub(crate) fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
-        *self.snapshot_identity.get_or_init(|| {
+    ///
+    /// # Errors
+    /// The typed storage refusal of the identity's workspace; a refusal seals
+    /// nothing.
+    pub(crate) fn frozen_snapshot_identity(
+        &self,
+    ) -> Result<purrdf_hash::hex::Digest32, StorageError> {
+        crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
             let mut resident = purrdf_lex::allocation::Resident;
-            crate::source::resident_snapshot(
+            Ok(crate::source::resident_snapshot(
                 self.statistics.source_directory().content_records(),
                 purrdf_hash::multiset::Multiset256::default(),
                 self.dictionary
                     .snapshot_fingerprint(&mut purrdf_lex::allocation::Memory::new(
                         &mut resident,
-                    ))
-                    .expect("validated native identity has no workspace allocation or unbounded population"),
-            )
+                    ))?,
+            ))
         })
     }
 

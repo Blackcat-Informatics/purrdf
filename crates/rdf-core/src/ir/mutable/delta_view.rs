@@ -90,8 +90,8 @@ impl DeltaDatasetView {
             purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
         let mut hash = purrdf_hash::blake3::Hasher::new();
         hash.update(SNAPSHOT.as_bytes());
-        hash.update(self.base.frozen_snapshot_identity().as_bytes());
-        hash.update(self.delta.frozen_snapshot_identity().as_bytes());
+        hash.update(self.base.frozen_snapshot_identity()?.as_bytes());
+        hash.update(self.delta.frozen_snapshot_identity()?.as_bytes());
         let mut resident = purrdf_lex::allocation::Resident;
         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
         for records in [&self.suppressed, &self.converted] {

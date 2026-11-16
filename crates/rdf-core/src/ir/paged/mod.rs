@@ -1196,7 +1196,10 @@ impl PagedDataset {
         }
         // Match query admission: diagnose structural drift first, then refuse
         // remaining content changes even when every summary count is unchanged.
-        if materialization.dataset.frozen_snapshot_identity()
+        if materialization
+            .dataset
+            .frozen_snapshot_identity()
+            .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?
             != slot.translation.summary().snapshot_identity
         {
             return Err(PageFault::invalid_data(

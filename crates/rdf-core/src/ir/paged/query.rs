@@ -808,7 +808,12 @@ impl<'dataset> PagedQueryView<'dataset> {
         }
         // Preserve the specific summary-drift diagnostic before checking the
         // encompassing identity, which also catches changes with equal counts.
-        if materialization.dataset.frozen_snapshot_identity() != sealed.snapshot_identity {
+        if materialization
+            .dataset
+            .frozen_snapshot_identity()
+            .map_err(PagedQueryError::RangeStorage)?
+            != sealed.snapshot_identity
+        {
             return Err(PagedQueryError::InvalidData {
                 page: id,
                 message: "page content identity changed after sealing".to_owned(),

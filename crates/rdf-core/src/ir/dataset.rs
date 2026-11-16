@@ -1191,13 +1191,19 @@ impl RdfDataset {
         })
     }
 
-    /// Frozen content identity, including empty graph declarations.
-    pub(crate) fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
-        *self.snapshot_identity.get_or_init(|| {
+    /// Frozen content identity, including empty graph declarations, computed on
+    /// the first request and sealed.
+    ///
+    /// # Errors
+    /// The typed storage refusal of the identity's workspace; a refusal seals
+    /// nothing.
+    pub(crate) fn frozen_snapshot_identity(
+        &self,
+    ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+        crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
             self.compute_snapshot_identity_with_memory(&mut purrdf_lex::allocation::Memory::new(
                 &mut purrdf_lex::allocation::Resident,
             ))
-            .expect("validated native identity has no workspace allocation or unbounded population")
         })
     }
 

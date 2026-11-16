@@ -194,7 +194,7 @@ pub(crate) fn with_bound_execution_receipt<T, V: source::InputView>(
                 "purrdf-execution {}",
                 purrdf_validate::query::execution_receipt_json(&coordinates)
             );
-            return Err(CliError::ContentIdentityRefused(refusal));
+            return Err(refusal);
         }
         None => eprintln!(
             "purrdf-execution {}",
@@ -209,23 +209,26 @@ pub(crate) fn with_bound_execution_receipt<T, V: source::InputView>(
 fn bound_receipt<V: source::InputView>(
     coordinates: &purrdf_sparql_eval::QueryCoordinates,
     view: &V,
-) -> Result<String, purrdf_sparql_eval::ReceiptError> {
+) -> Result<String, CliError> {
     match coordinates {
         purrdf_sparql_eval::QueryCoordinates::NotStarted => {
-            return Err(purrdf_sparql_eval::ReceiptError::NotStarted);
+            return Err(CliError::ContentIdentityRefused(
+                purrdf_sparql_eval::ReceiptError::NotStarted,
+            ));
         }
         purrdf_sparql_eval::QueryCoordinates::Started(started) => {
-            started.run_identity()?;
+            started
+                .run_identity()
+                .map_err(CliError::ContentIdentityRefused)?;
         }
     }
-    let identity = match purrdf_core::ContentIdentified::content_identity(view) {
-        Ok(identity) => identity,
-        Err(never) => match never {},
-    };
+    let identity = purrdf_core::ContentIdentified::content_identity(view)
+        .map_err(|error| CliError::ContentIdentityFailed(Box::new(error)))?;
     purrdf_validate::query::execution_receipt_json_with_sources(
         coordinates,
         &purrdf_sparql_eval::ExecutionSources::new(identity),
     )
+    .map_err(CliError::ContentIdentityRefused)
 }
 
 /// The generic query operation: evaluate the prepared query over whichever concrete

@@ -1905,10 +1905,10 @@ pub(crate) fn sealed_identity<E>(
 /// The frozen dataset computes its identity on the first request, never in a
 /// freeze, and returns the sealed value afterwards.
 impl ContentIdentified for RdfDataset {
-    type IdentityError = std::convert::Infallible;
+    type IdentityError = purrdf_lex::allocation::StorageError;
 
     fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
-        Ok(self.frozen_snapshot_identity())
+        self.frozen_snapshot_identity()
     }
 }
 

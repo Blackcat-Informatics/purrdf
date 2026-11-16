@@ -1099,7 +1099,7 @@ impl CompositeDatasetView {
             match &source.carrier {
                 Carrier::Native(dataset) => {
                     hash.update(&[0]);
-                    hash.update(dataset.frozen_snapshot_identity().as_bytes());
+                    hash.update(dataset.frozen_snapshot_identity()?.as_bytes());
                 }
                 Carrier::Delta(view) => {
                     hash.update(&[1]);

@@ -345,11 +345,11 @@ pub unsafe extern "C" fn purrdf_execution_receipt_bind(
             })?;
             let bound = purrdf_validate::query::bind_execution_receipt(text, || {
                 purrdf_core::ContentIdentified::content_identity(PurrdfDataset::dataset(dataset))
-                    .unwrap_or_else(|never| match never {})
             })
             .map_err(|error| {
                 let status = match error {
-                    purrdf_validate::query::ReceiptBindError::Refused(_) => {
+                    purrdf_validate::query::ReceiptBindError::Refused(_)
+                    | purrdf_validate::query::ReceiptBindError::Identity(_) => {
                         PurrdfStatus::QueryError
                     }
                     _ => PurrdfStatus::InvalidArgument,

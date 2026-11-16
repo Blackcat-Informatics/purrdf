@@ -341,7 +341,9 @@ impl crate::ContentIdentified for TripleRead<'_> {
         if let Some(error) = self.read_error() {
             return Err(error);
         }
-        Ok(self.dataset.frozen_snapshot_identity())
+        self.dataset
+            .frozen_snapshot_identity()
+            .map_err(TripleReadError::Storage)
     }
 }
 

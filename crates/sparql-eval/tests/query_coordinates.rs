@@ -95,7 +95,7 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
         panic!("sampled context")
     };
     assert!(actual.now().is_none() && actual.entropy_seed().is_none());
-    let source = ExecutionSources::new(dataset.content_identity().unwrap_or_else(|n| match n {}));
+    let source = ExecutionSources::new(dataset.content_identity().unwrap());
     assert!(actual.execution_identity(&source).is_ok());
     let options = QueryOptions::new()
         .with_now(actual.effective_now())
@@ -154,8 +154,7 @@ fn sampled_coordinates_replay_and_bind_query_and_snapshot() {
         panic!("changed source")
     };
     // The same request over changed content: the same run, bound to other content.
-    let changed_content =
-        ExecutionSources::new(dataset.content_identity().unwrap_or_else(|n| match n {}));
+    let changed_content = ExecutionSources::new(dataset.content_identity().unwrap());
     assert_ne!(source, changed_content);
     assert_eq!(actual.run_identity(), changed.run_identity());
     assert_ne!(
@@ -691,7 +690,7 @@ fn content_identity_binds_unused_blank_mint_reservations() {
     let (collision, collision_result) = run(&reserved);
     assert_ne!(ordinary_result, collision_result);
     let identity = |dataset: &purrdf_core::RdfDataset| {
-        ExecutionSources::new(dataset.content_identity().unwrap_or_else(|n| match n {}))
+        ExecutionSources::new(dataset.content_identity().unwrap())
     };
     assert_ne!(identity(&empty), identity(&reserved));
     assert_ne!(
