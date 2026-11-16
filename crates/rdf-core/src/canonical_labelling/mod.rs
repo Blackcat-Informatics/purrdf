@@ -32,6 +32,9 @@
 //! (10.1), with the same result.
 
 mod certificate;
+mod document;
+#[cfg(test)]
+mod document_tests;
 mod lines;
 mod optimised;
 #[cfg(test)]
@@ -44,6 +47,7 @@ mod view;
 mod view_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
+pub use document::{DocumentError, write_document, write_line};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
 pub use view::{
     Comparison, Labelling, Record, Scope, ViewError, compare_view, compare_view_with_memory,
