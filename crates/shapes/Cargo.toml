@@ -265,3 +265,10 @@ harness = false
 # from `make check`.
 name = "frozen_eval_counts"
 harness = false
+
+[[bench]]
+# Allocations, requested and retained bytes per row of the same workload, in one
+# whole-process window per row. Report-only; `make bench` lane only — excluded
+# from `make check`.
+name = "frozen_eval_allocs"
+harness = false

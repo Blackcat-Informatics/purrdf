@@ -32,7 +32,9 @@ use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, Sparql
 use purrdf_iri::vocab::{rdf, sh};
 use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes};
-use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
+use purrdf_sparql_eval::{
+    GovernedOutcome, NativeSparqlEngine, PreparedQuery, QueryGovernors, QueryOptions,
+};
 use purrdf_testkit::rng::SplitMix64;
 use purrdf_xsd::datatype::{XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_NS};
 
@@ -412,10 +414,11 @@ pub(crate) enum Query {
     Q4,
     /// NOT EXISTS with FILTER.
     Q5,
-    /// Two patterns scanned, bound and joined, then only counted. Like every row here
-    /// it runs ungoverned, with no stop signal and no ceiling: the first pattern scans
-    /// into the row sink and the last through the retained cursor. It is not the
-    /// governed run, in which every stage scans into the sink. Many rows are bound and
+    /// Two patterns scanned, bound and joined, then only counted. In the `select/`
+    /// rows it runs ungoverned, with no stop signal and no ceiling: the first pattern
+    /// scans into the row sink and the last through the retained cursor. The
+    /// `select_governed/` rows run it unbounded through the governed entry, which
+    /// returns the run's coordinates. Many rows are bound and
     /// one answer row is returned, so the witness count is always 1 and the check on
     /// this row is agreement between the freeze variants, not a known count.
     Scan,
@@ -601,6 +604,8 @@ pub(crate) enum Spec {
         /// The dataset is frozen inside the sample, so identity and every
         /// once-per-dataset cost lands in the first query.
         fresh_dataset: bool,
+        /// Which entry runs the prepared query.
+        lane: Lane,
     },
     /// A SHACL bind on a freshly frozen dataset.
     Bind {
@@ -624,6 +629,16 @@ impl Spec {
                 | Self::IdentityFirst(Data::Eager)
         )
     }
+}
+
+/// The engine entry a SELECT row runs through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// `query_prepared_view`: no governors, no coordinates returned.
+    Plain,
+    /// `query_prepared_governed_view` under `QueryGovernors::UNBOUNDED`: the outcome
+    /// carries the run's coordinates back to the caller, and no receipt is requested.
+    Governed,
 }
 
 /// One bench row: a stable id and the group whose members must agree.
@@ -714,6 +729,7 @@ pub(crate) fn rows() -> Vec<Row> {
                         data,
                         warm,
                         fresh_dataset: false,
+                        lane: Lane::Plain,
                     },
                 );
             }
@@ -731,6 +747,30 @@ pub(crate) fn rows() -> Vec<Row> {
                     data,
                     warm: false,
                     fresh_dataset: true,
+                    lane: Lane::Plain,
+                },
+            );
+        }
+    }
+    // The governed prepared entry, which returns the run's coordinates: the first
+    // query on a freshly frozen dataset, and the same prepared query again.
+    for query in [Query::Q1, Query::Q3, Query::Q4, Query::Scan] {
+        for (mode, warm, fresh_dataset) in
+            [("first_on_dataset", false, true), ("warm", true, false)]
+        {
+            add(
+                format!(
+                    "select_governed/{}/{mode}/{}",
+                    query.label(),
+                    Data::Ordinary.label()
+                ),
+                &query.group(),
+                Spec::Select {
+                    query,
+                    data: Data::Ordinary,
+                    warm,
+                    fresh_dataset,
+                    lane: Lane::Governed,
                 },
             );
         }
@@ -824,6 +864,26 @@ fn execute(
         .expect("the query completes")
 }
 
+fn execute_governed(
+    engine: &NativeSparqlEngine,
+    dataset: &RdfDataset,
+    prepared: &PreparedQuery,
+) -> SparqlResult {
+    match engine
+        .query_prepared_governed_view(
+            dataset,
+            prepared,
+            &[],
+            &QueryOptions::EMPTY,
+            &QueryGovernors::UNBOUNDED,
+        )
+        .expect("the query completes")
+    {
+        GovernedOutcome::Complete { result, .. } => result,
+        GovernedOutcome::BudgetExhausted(_) => panic!("an unbounded run completes"),
+    }
+}
+
 fn witness(result: &SparqlResult, detail: Detail) -> Witness {
     let SparqlResult::Solutions { rows, .. } = result else {
         panic!("the row is a SELECT");
@@ -896,6 +956,7 @@ pub(crate) fn op(row: &Row, fx: &Fixtures) -> Op {
             data,
             warm: _,
             fresh_dataset,
+            lane,
         } => {
             let dataset = if fresh_dataset {
                 freeze(&layout, data)
@@ -908,7 +969,11 @@ pub(crate) fn op(row: &Row, fx: &Fixtures) -> Op {
                 .expect("the query prepares");
             Op {
                 run: Box::new(move |detail| {
-                    witness(&execute(&engine, &dataset, &prepared), detail)
+                    let result = match lane {
+                        Lane::Plain => execute(&engine, &dataset, &prepared),
+                        Lane::Governed => execute_governed(&engine, &dataset, &prepared),
+                    };
+                    witness(&result, detail)
                 }),
             }
         }
