@@ -66,8 +66,8 @@ pub(crate) struct Options {
     /// Visit the children of a branching call in descending order of source
     /// identifier. The result is the same; only the stops fire elsewhere.
     pub(crate) descending: bool,
-    /// Route (1) between children of equal certificate, and route (5) at the
-    /// top call. Used only with `orbits`.
+    /// Route (1) between children of equal certificate, at every call but the
+    /// top call when `leaves` is on. Used only with `orbits`.
     pub(crate) maps: bool,
     /// Route (4): the twins of the first explored child. Used only with
     /// `orbits`.
@@ -78,7 +78,8 @@ pub(crate) struct Options {
     /// with `orbits`.
     pub(crate) lifting: bool,
     /// Route (5): leaves of the top call keyed by their line sets, in place of
-    /// the certificate key of route (1). Used only with `orbits` and `maps`.
+    /// the certificate key of route (1) at that call. Used only with `orbits`;
+    /// it needs neither `maps` nor any other route.
     pub(crate) leaves: bool,
     /// A shortcut of 10.5 that is wrong, for the tests that show it changes
     /// the result.
@@ -1027,13 +1028,45 @@ pub(crate) struct Audit {
     pub(crate) rejected: u64,
     /// Maps offered unchecked to a call below, by lifting.
     pub(crate) lifted: u64,
+    /// Class joins made by a map that passed its check.
+    pub(crate) joins_checked: u64,
+    /// Class joins made by a lifted map.
+    pub(crate) joins_lifted: u64,
+    /// Class joins made by a twin test.
+    pub(crate) joins_twin: u64,
+    /// Class joins made with no permit: by no checked map, lifted map or twin.
+    pub(crate) joins_unpermitted: u64,
+    /// The permit in force: `PERMIT_*`.
+    permit: u8,
 }
 
 #[cfg(test)]
+impl Audit {
+    const ZERO: Self = Self {
+        discovered: 0,
+        cell_rejected: 0,
+        checked: 0,
+        rejected: 0,
+        lifted: 0,
+        joins_checked: 0,
+        joins_lifted: 0,
+        joins_twin: 0,
+        joins_unpermitted: 0,
+        permit: 0,
+    };
+}
+
+/// A join of classes is made under the permit of what justifies it.
+#[cfg(test)]
+const PERMIT_CHECKED: u8 = 1;
+#[cfg(test)]
+const PERMIT_LIFTED: u8 = 2;
+#[cfg(test)]
+const PERMIT_TWIN: u8 = 3;
+
+#[cfg(test)]
 thread_local! {
-    static AUDIT: std::cell::Cell<Audit> = const { std::cell::Cell::new(Audit {
-        discovered: 0, cell_rejected: 0, checked: 0, rejected: 0, lifted: 0,
-    }) };
+    static AUDIT: std::cell::Cell<Audit> = const { std::cell::Cell::new(Audit::ZERO) };
 }
 
 #[cfg(test)]
@@ -1191,6 +1224,13 @@ pub(crate) fn fresh_node_cells(set: &LineSet, shared: bool) -> Vec<Vec<Vec<Vec<u
 fn join_classes(b: &mut Branch, i: usize, j: usize) {
     let (ri, rj) = (b.classes.find(i), b.classes.find(j));
     if ri != rj {
+        #[cfg(test)]
+        audit(|a| match a.permit {
+            PERMIT_CHECKED => a.joins_checked += 1,
+            PERMIT_LIFTED => a.joins_lifted += 1,
+            PERMIT_TWIN => a.joins_twin += 1,
+            _ => a.joins_unpermitted += 1,
+        });
         b.classes.join(ri, rj);
         b.class_explored[ri] = b.class_explored[ri] || b.class_explored[rj];
     }
@@ -1506,7 +1546,7 @@ impl<'a> Engine<'a> {
     /// A child completed: the best so far, the attaining list, and the checked
     /// map between it and the best when their certificates are equal.
     fn child_done(&mut self, b: &mut Branch, child: Child, target_index: usize) {
-        if b.orbits && self.options.maps {
+        if b.orbits && (self.options.maps || (self.options.leaves && b.p == 0)) {
             self.record_child(b, &child);
         }
         #[cfg(test)]
@@ -1572,8 +1612,11 @@ impl<'a> Engine<'a> {
                 u,
                 b.node_g[b.target[tj]],
             ) {
-                b.classes.join(ru, rj);
-                b.class_explored[ru] = b.class_explored[ru] || b.class_explored[rj];
+                #[cfg(test)]
+                audit(|a| a.permit = PERMIT_TWIN);
+                join_classes(b, target_index, tj);
+                #[cfg(test)]
+                audit(|a| a.permit = 0);
                 if self.options.lifting && self.branch_depth >= 2 {
                     let w = b.node_g[b.target[tj]];
                     self.found.push(vec![(u, w), (w, u)]);
@@ -1697,9 +1740,13 @@ impl<'a> Engine<'a> {
             .enumerate()
             .map(|(ti, &x)| (ti, b.target_index[image[x]]))
             .collect();
+        #[cfg(test)]
+        audit(|a| a.permit = PERMIT_CHECKED);
         for (ti, tj) in joins {
             join_classes(b, ti, tj);
         }
+        #[cfg(test)]
+        audit(|a| a.permit = 0);
         #[cfg(test)]
         if self.options.wrong == Wrong::MapsEverywhere {
             let pairs: Vec<(usize, usize)> = image
@@ -1761,8 +1808,13 @@ impl<'a> Engine<'a> {
             if let Frame::Branch(a) = frame {
                 for pairs in found {
                     #[cfg(test)]
-                    audit(|n| n.lifted += 1);
+                    audit(|n| {
+                        n.lifted += 1;
+                        n.permit = PERMIT_LIFTED;
+                    });
                     join_pairs(a, pairs, false);
+                    #[cfg(test)]
+                    audit(|n| n.permit = 0);
                 }
             }
         }

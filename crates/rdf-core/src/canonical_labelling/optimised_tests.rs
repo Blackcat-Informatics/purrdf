@@ -38,7 +38,8 @@ fn every_option() -> Vec<Options> {
 
 /// Each proved shortcut of 10.1 and 10.4 on its own, with the classes of the
 /// target cell on and the others off, in both visiting orders: the twins of
-/// route (4), the maps of route (1), the leaves of route (5), the exchange of
+/// route (4), the maps of route (1), the leaves of route (5) at the top call
+/// with route (1) off below it, both together, the exchange of
 /// route (2), and lifting with a source of maps to lift (routes (1) and (4)).
 fn alone_options() -> Vec<Options> {
     let off = Options {
@@ -60,6 +61,10 @@ fn alone_options() -> Vec<Options> {
             ..base
         });
         out.push(Options { maps: true, ..base });
+        out.push(Options {
+            leaves: true,
+            ..base
+        });
         out.push(Options {
             maps: true,
             leaves: true,
@@ -603,8 +608,8 @@ fn the_twin_units_are_those_of_the_search_free_run_whatever_the_search_does() {
 }
 
 // ---------------------------------------------------------------------------
-// The enumeration spaces of 13.2, sampled, with their lines in the order of the
-// definition.
+// The enumeration spaces of 13.2, each swept whole, with their lines in the
+// order of the definition.
 
 fn x(i: usize) -> String {
     format!("x{i}")
@@ -1243,9 +1248,16 @@ fn every_map_discovered_is_checked_against_its_calls_own_state() {
             let result = optimised_of(&lines, options);
             let audit = optimised::take_audit();
             assert_eq!(
-                audit.discovered,
-                audit.cell_rejected + audit.checked,
-                "{name} {options:?}: a discovered map that was neither refused nor checked"
+                audit.joins_unpermitted, 0,
+                "{name} {options:?}: classes joined by no checked map, lifted map or twin"
+            );
+            assert!(
+                audit.joins_lifted == 0 || options.lifting,
+                "{name} {options:?}: a join by a lifted map with lifting off"
+            );
+            assert!(
+                audit.joins_twin == 0 || options.twins,
+                "{name} {options:?}: a join by twins with twins off"
             );
             assert!(
                 options.orbits || audit.discovered + audit.lifted == 0,
@@ -1261,9 +1273,15 @@ fn every_map_discovered_is_checked_against_its_calls_own_state() {
             total.rejected += audit.rejected;
             total.cell_rejected += audit.cell_rejected;
             total.lifted += audit.lifted;
+            total.joins_checked += audit.joins_checked;
+            total.joins_lifted += audit.joins_lifted;
+            total.joins_twin += audit.joins_twin;
         }
     }
-    assert!(total.checked > 0 && total.lifted > 0, "{total:?}");
+    assert!(
+        total.joins_checked > 0 && total.joins_lifted > 0 && total.joins_twin > 0,
+        "{total:?}"
+    );
     eprintln!("maps audited: {total:?}");
 }
 
@@ -1285,12 +1303,93 @@ fn a_map_that_is_not_an_automorphism_of_its_call_is_refused() {
         let result = optimised_of(&lines, options);
         let audit = optimised::take_audit();
         assert_same(name, &oracle, &result);
-        assert_eq!(
-            audit.discovered,
-            audit.cell_rejected + audit.checked,
-            "{name}"
-        );
+        assert_eq!(audit.joins_unpermitted, 0, "{name}");
         refused += audit.rejected;
     }
     assert!(refused > 0, "no corrupted map reached the check");
+}
+
+/// The same accounting holds a wrong shortcut to account: the maps of every
+/// call used at every call (10.5(b)) join classes under no permit, which the
+/// audit counts, so an audit that read zero there would be blind.
+#[test]
+fn the_audit_sees_classes_joined_by_no_checked_map() {
+    let _ = optimised::take_audit();
+    let lines = relabel(&z4_z4(), 3);
+    let wrong = Options {
+        wrong: Wrong::MapsEverywhere,
+        ..Options::PRODUCTION
+    };
+    let _ = optimised_of(&lines, wrong);
+    assert!(optimised::take_audit().joins_unpermitted > 0);
+    let _ = optimised_of(&lines, Options::PRODUCTION);
+    assert_eq!(optimised::take_audit().joins_unpermitted, 0);
+}
+
+/// Route (5) alone: the leaves of the top call, with route (1) off below it,
+/// skip children of the top call, in both orders, and the result is the oracle's.
+#[test]
+fn route_five_alone_skips_children_of_the_top_call() {
+    for (name, lines) in [
+        ("COMPL(4,6)", complement_of_cycles(4, 6, false)),
+        ("Z4Z4", z4_z4()),
+    ] {
+        let oracle = reference_of(&lines);
+        for descending in [false, true] {
+            let none = Options {
+                orbits: false,
+                descending,
+                ..Options::PRODUCTION
+            };
+            let leaves = Options {
+                twins: false,
+                maps: false,
+                exchanges: false,
+                lifting: false,
+                leaves: true,
+                descending,
+                ..Options::PRODUCTION
+            };
+            let (a, b) = (optimised_of(&lines, none), optimised_of(&lines, leaves));
+            assert_same(name, &oracle, &b);
+            assert!(
+                b.explored.total() < a.explored.total(),
+                "{name} descending={descending}: {} against {}",
+                b.explored.total(),
+                a.explored.total()
+            );
+        }
+    }
+}
+
+/// 10.5(a), the 2-cycle: with the skip by twins off, the stop on a tie stops the
+/// second child, so the map that would join it to the first is never found, and
+/// the record holds the attaining count `1` and the group order `1` in place of
+/// `2` and `2`. With twins on the same wrong shortcut returns the oracle's
+/// result, as the definition says. The search is forced, since the search-free
+/// run settles the 2-cycle.
+#[test]
+fn the_stop_on_a_tie_fails_on_the_two_cycle_only_with_twins_off() {
+    let lines = vec![quad("a", "<p>", "b"), quad("b", "<p>", "a")];
+    let set = admit(&lines).expect("well formed");
+    let oracle = reference_of(&lines);
+    let run = |twins, wrong| {
+        let options = Options {
+            twins,
+            wrong,
+            ..Options::PRODUCTION
+        };
+        optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options, None).expect("labelled")
+    };
+    assert!(
+        !differs(&oracle, &run(false, Wrong::Sound)),
+        "sound, twins off"
+    );
+    assert!(
+        !differs(&oracle, &run(true, Wrong::StopOnTie)),
+        "wrong, twins on"
+    );
+    let wrong = run(false, Wrong::StopOnTie);
+    assert!(differs(&oracle, &wrong), "wrong, twins off");
+    assert_eq!(wrong.stopped_on_e, 1, "the second child is stopped on E");
 }
