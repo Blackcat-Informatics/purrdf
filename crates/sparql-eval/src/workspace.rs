@@ -914,6 +914,12 @@ impl<T> AdmittedVec<T> {
         self.reserve_additional(1)
     }
 
+    /// Admit exactly `required` slots in total; a no-op when they already exist.
+    pub(crate) fn reserve_total(&mut self, required: usize) -> Result<(), EvalError> {
+        self.workspace
+            .reserve_vec(&mut self.values, &mut self.allocation, required)
+    }
+
     pub(crate) fn push_reserved(&mut self, value: T) {
         assert!(
             self.values.len() < self.values.capacity(),
