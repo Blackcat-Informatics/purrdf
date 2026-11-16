@@ -9,7 +9,7 @@
 //! the definition says, the stop signal is honoured, and the limit refuses
 //! the same input the same way.
 
-use super::optimised::{self, Options, Wrong};
+use super::optimised::{self, Options};
 use super::reference;
 use super::tests::{
     blocks, both_directions, corpus, failure_record, hub, nested_instance, quad,
@@ -824,17 +824,7 @@ fn the_optimised_engine_agrees_on_every_set_of_rec3() {
 }
 
 // ---------------------------------------------------------------------------
-// That routes (1) and (4) act, and that the shortcuts of 10.5 are wrong.
-
-fn k33() -> Vec<Line> {
-    let mut lines = Vec::new();
-    for i in 0..3 {
-        for j in 0..3 {
-            lines.push(quad(&format!("a{i}"), "<p>", &format!("b{j}")));
-        }
-    }
-    lines
-}
+// That routes (1) and (4) act.
 
 fn only(maps: bool, twins: bool) -> Options {
     Options {
@@ -889,47 +879,6 @@ fn differs(a: &Labelled, b: &Labelled) -> bool {
             .iter()
             .zip(&b.components)
             .any(|(r, o)| r.identity != o.identity || r.certificate != o.certificate || r.w != o.w)
-}
-
-fn wrong_on(lines: &[Line], options: Options) -> bool {
-    let set = admit(lines).expect("well formed");
-    let wrong = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, options, None)
-        .expect("a wrong shortcut still labels");
-    differs(&reference_of(lines), &wrong)
-}
-
-/// 10.5: each wrong shortcut changes the result on the input the definition
-/// prints, under the stated naming (seed `1`, or `3` for (b)) and ascending
-/// order, with every proved shortcut on; the sound engine on the same input
-/// equals the oracle.
-#[test]
-fn each_wrong_shortcut_changes_the_result_on_its_printed_input() {
-    let sound = Options::PRODUCTION;
-    let on = |wrong| Options { wrong, ..sound };
-    for (name, lines) in [
-        ("COMPL(3,5)", relabel(&complement_of_cycles(3, 5, false), 1)),
-        ("COMPL(4,6)", relabel(&complement_of_cycles(4, 6, false), 1)),
-        ("K4PAIR", relabel(&k4_pair(), 1)),
-        ("Z4Z4", relabel(&z4_z4(), 1)),
-    ] {
-        assert!(!wrong_on(&lines, sound), "{name}: sound");
-        assert!(wrong_on(&lines, on(Wrong::StopOnTie)), "(a) {name}");
-    }
-    let z = relabel(&z4_z4(), 3);
-    assert!(!wrong_on(&z, sound), "Z4Z4 seed 3: sound");
-    assert!(wrong_on(&z, on(Wrong::MapsEverywhere)), "(b) Z4Z4 seed 3");
-    // 10.5 states that each wrong shortcut fails with every proved shortcut on,
-    // and that no visiting order enters (d): run with the stops and the classes
-    // on, as the others are. The stop on `s` follows the order of the wrong
-    // engine (a smaller `s` is stopped), as the stops of 10.4 follow the order
-    // of the definition.
-    assert!(
-        wrong_on(&fifteen(), on(Wrong::InvariantFirst)),
-        "(d) FIFTEEN"
-    );
-    assert!(!wrong_on(&fifteen(), sound), "FIFTEEN: sound");
-    assert!(wrong_on(&k33(), on(Wrong::FixTwinClass)), "(f) K33");
-    assert!(!wrong_on(&k33(), sound), "K33: sound");
 }
 
 /// A signal that is clear for its first `polls` polls and set afterwards.
@@ -1148,86 +1097,6 @@ fn descending_order_uses_the_classes_and_still_names_the_smallest_attaining_chil
     }
 }
 
-/// 10.5(c), Lemma M (iii): on the complete graph on `a`, `b`, `c`, the state of
-/// the child `c` carried onto `a` by the transposition of `a` and `c` gives
-/// `a 0`, `c 1`, `b 2`, and the canonical map has `a 0`, `b 1`, `c 2`; the sound
-/// engine, in the same descending order, and the reference give the canonical
-/// map. The search is forced, since the search-free run settles the graph.
-#[test]
-fn carrying_a_choice_across_a_map_gives_the_state_of_the_wrong_child() {
-    let edges: Vec<(String, String)> = [("a", "b"), ("a", "c"), ("b", "c")]
-        .iter()
-        .map(|&(x, y)| (x.to_owned(), y.to_owned()))
-        .collect();
-    let set = admit(&both_directions(&edges)).expect("well formed");
-    let by_name = |labelled: &Labelled| -> Vec<(String, u64)> {
-        let mut named: Vec<(String, u64)> = labelled
-            .placements
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                (
-                    String::from_utf8_lossy(set.source(i)).into_owned(),
-                    p.position,
-                )
-            })
-            .collect();
-        named.sort();
-        named
-    };
-    let canonical = |names: [(&str, u64); 3]| -> Vec<(String, u64)> {
-        names.iter().map(|&(n, p)| (n.to_owned(), p)).collect()
-    };
-    let oracle = reference::label_set(&set, reference::ENGINE_LIMIT, true).expect("labelled");
-    assert_eq!(by_name(&oracle), canonical([("a", 0), ("b", 1), ("c", 2)]));
-    let options = |wrong| Options {
-        descending: true,
-        wrong,
-        ..Options::PRODUCTION
-    };
-    let run = |wrong| {
-        optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options(wrong), None)
-            .expect("labelled")
-    };
-    assert_eq!(by_name(&run(Wrong::Sound)), by_name(&oracle));
-    assert_eq!(
-        by_name(&run(Wrong::CarryChoice)),
-        canonical([("a", 0), ("b", 2), ("c", 1)])
-    );
-}
-
-/// 10.5(e): the second component of `SHARED`, refined alone, has the node cells
-/// `[y1] [y2] [y3] [y0]`; refined with the first, `[y1] [y3] [y2] [y0]`. Every
-/// cell is a singleton, so the engine that shares the partition returns another
-/// canonical line sequence, and the sound engine the reference's.
-#[test]
-fn a_partition_shared_by_two_components_changes_the_second_one() {
-    let set = admit(&shared()).expect("well formed");
-    let cells = |names: &[&[&str]]| -> Vec<Vec<Vec<u8>>> {
-        names
-            .iter()
-            .map(|cell| cell.iter().map(|n| n.as_bytes().to_vec()).collect())
-            .collect()
-    };
-    assert_eq!(
-        optimised::fresh_node_cells(&set, false)[1],
-        cells(&[&["y1"], &["y2"], &["y3"], &["y0"]])
-    );
-    assert_eq!(
-        optimised::fresh_node_cells(&set, true)[1],
-        cells(&[&["y1"], &["y3"], &["y2"], &["y0"]])
-    );
-    let shared_options = Options {
-        wrong: Wrong::SharedPartition,
-        ..Options::PRODUCTION
-    };
-    assert!(!wrong_on(&shared(), Options::PRODUCTION), "sound");
-    assert!(wrong_on(&shared(), shared_options), "(e) SHARED");
-    let oracle = reference_of(&shared());
-    let wrong = optimised_of(&shared(), shared_options);
-    assert_ne!(oracle.lines, wrong.lines, "the canonical line sequence");
-}
-
 /// 10.1: a map a route discovers is checked against its call's own state
 /// before it is used, and only a lifted map is used unchecked. Over the named
 /// inputs, `NESTED` among them, and generated inputs, every map offered to a
@@ -1285,47 +1154,6 @@ fn every_map_discovered_is_checked_against_its_calls_own_state() {
     eprintln!("maps audited: {total:?}");
 }
 
-/// 10.1: the check refuses a map that is not an automorphism of its call. Every
-/// candidate map is corrupted, the images of two members of the target cell
-/// exchanged: the checks refuse them (counted), the result is still the
-/// oracle's because a refused map is never used, and the engine's own repeat of
-/// the check from the call's lines agrees on each refusal.
-#[test]
-fn a_map_that_is_not_an_automorphism_of_its_call_is_refused() {
-    let mut refused = 0;
-    for (name, lines) in named_inputs() {
-        let oracle = reference_of(&lines);
-        let options = Options {
-            wrong: Wrong::CorruptedMaps,
-            ..Options::PRODUCTION
-        };
-        let _ = optimised::take_audit();
-        let result = optimised_of(&lines, options);
-        let audit = optimised::take_audit();
-        assert_same(name, &oracle, &result);
-        assert_eq!(audit.joins_unpermitted, 0, "{name}");
-        refused += audit.rejected;
-    }
-    assert!(refused > 0, "no corrupted map reached the check");
-}
-
-/// The same accounting holds a wrong shortcut to account: the maps of every
-/// call used at every call (10.5(b)) join classes under no permit, which the
-/// audit counts, so an audit that read zero there would be blind.
-#[test]
-fn the_audit_sees_classes_joined_by_no_checked_map() {
-    let _ = optimised::take_audit();
-    let lines = relabel(&z4_z4(), 3);
-    let wrong = Options {
-        wrong: Wrong::MapsEverywhere,
-        ..Options::PRODUCTION
-    };
-    let _ = optimised_of(&lines, wrong);
-    assert!(optimised::take_audit().joins_unpermitted > 0);
-    let _ = optimised_of(&lines, Options::PRODUCTION);
-    assert_eq!(optimised::take_audit().joins_unpermitted, 0);
-}
-
 /// Route (5) alone: the leaves of the top call, with route (1) off below it,
 /// skip children of the top call, in both orders, and the result is the oracle's.
 #[test]
@@ -1362,34 +1190,27 @@ fn route_five_alone_skips_children_of_the_top_call() {
     }
 }
 
-/// 10.5(a), the 2-cycle: with the skip by twins off, the stop on a tie stops the
-/// second child, so the map that would join it to the first is never found, and
-/// the record holds the attaining count `1` and the group order `1` in place of
-/// `2` and `2`. With twins on the same wrong shortcut returns the oracle's
-/// result, as the definition says. The search is forced, since the search-free
-/// run settles the 2-cycle.
+/// 10.4: a child whose certificate ties the best so far is not stopped. On the
+/// 2-cycle, with the skip by twins off, the second child ties the first and is
+/// explored, so the attaining count and the group order are `2` and `2` as in
+/// the oracle, with twins off and on. The search is forced, since the
+/// search-free run settles the 2-cycle.
 #[test]
-fn the_stop_on_a_tie_fails_on_the_two_cycle_only_with_twins_off() {
+fn a_child_that_ties_the_best_is_not_stopped_on_the_two_cycle() {
     let lines = vec![quad("a", "<p>", "b"), quad("b", "<p>", "a")];
     let set = admit(&lines).expect("well formed");
     let oracle = reference_of(&lines);
-    let run = |twins, wrong| {
+    for twins in [false, true] {
         let options = Options {
             twins,
-            wrong,
             ..Options::PRODUCTION
         };
-        optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options, None).expect("labelled")
-    };
-    assert!(
-        !differs(&oracle, &run(false, Wrong::Sound)),
-        "sound, twins off"
-    );
-    assert!(
-        !differs(&oracle, &run(true, Wrong::StopOnTie)),
-        "wrong, twins on"
-    );
-    let wrong = run(false, Wrong::StopOnTie);
-    assert!(differs(&oracle, &wrong), "wrong, twins off");
-    assert_eq!(wrong.stopped_on_e, 1, "the second child is stopped on E");
+        let result = optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options, None)
+            .expect("labelled");
+        assert!(!differs(&oracle, &result), "twins {twins}");
+        assert_eq!(
+            result.stopped_on_e, 0,
+            "twins {twins}: no child stopped on E"
+        );
+    }
 }

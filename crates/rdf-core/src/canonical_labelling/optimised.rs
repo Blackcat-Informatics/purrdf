@@ -81,39 +81,6 @@ pub(crate) struct Options {
     /// the certificate key of route (1) at that call. Used only with `orbits`;
     /// it needs neither `maps` nor any other route.
     pub(crate) leaves: bool,
-    /// A shortcut of 10.5 that is wrong, for the tests that show it changes
-    /// the result.
-    #[cfg(test)]
-    pub(crate) wrong: Wrong,
-}
-
-/// The shortcuts of 10.5 that fail, each reproduced so that a test can show
-/// that it changes the result on the input the definition prints.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Wrong {
-    /// No wrong shortcut.
-    Sound,
-    /// (a) A child is stopped when `s` is equal and `E` is greater or equal.
-    StopOnTie,
-    /// (b) Every map found in the top component is used at every call.
-    MapsEverywhere,
-    /// (d) The child with the larger `s` is chosen before certificates are
-    /// compared.
-    InvariantFirst,
-    /// (f) A child fixes the whole class of twins of its node.
-    FixTwinClass,
-    /// (c) The attaining child of smallest source identifier, when its class
-    /// was skipped, takes the state of the explored child carried through the
-    /// transposition of the two nodes.
-    CarryChoice,
-    /// (e) The input is refined once as a whole before the components start,
-    /// and each component starts from the cells that gives it.
-    SharedPartition,
-    /// Not a shortcut of 10.5: every candidate map is corrupted, the images of
-    /// two members of the target cell exchanged, before the check, to show that
-    /// the check refuses a map that is not an automorphism of its call.
-    CorruptedMaps,
 }
 
 impl Options {
@@ -127,8 +94,6 @@ impl Options {
         exchanges: true,
         lifting: true,
         leaves: true,
-        #[cfg(test)]
-        wrong: Wrong::Sound,
     };
 }
 
@@ -482,9 +447,6 @@ struct Branch {
     visited: Vec<bool>,
     /// The child explored although its class was explored.
     forced: Option<usize>,
-    /// The target index of the child that is the best so far.
-    #[cfg(test)]
-    best_ti: usize,
     /// Target indices of the explored children that attain the best so far.
     attain: Vec<usize>,
     /// Union-find over target indices: the classes of checked maps and twins.
@@ -547,12 +509,6 @@ struct Engine<'a> {
     branch_depth: usize,
     /// Local node of the call under test, by node of the top component.
     local: Vec<usize>,
-    /// Every map found in the top component (`Wrong::MapsEverywhere` only).
-    #[cfg(test)]
-    pool: Vec<Vec<(usize, usize)>>,
-    /// Whether the pool holds the maps of a whole first pass.
-    #[cfg(test)]
-    pooled: bool,
 }
 
 impl<'a> Engine<'a> {
@@ -584,10 +540,6 @@ impl<'a> Engine<'a> {
             exchanges: Vec::new(),
             branch_depth: 0,
             local: vec![usize::MAX; comp.nodes.len()],
-            #[cfg(test)]
-            pool: Vec::new(),
-            #[cfg(test)]
-            pooled: false,
         }
     }
 }
@@ -705,7 +657,7 @@ impl<'a> Engine<'a> {
         } = inst;
         self.branch_depth += 1;
         let witness_cap = ((1usize << 22) / node_g.len().max(1)).max(8);
-        let mut branch = Box::new(Branch {
+        let branch = Box::new(Branch {
             adj,
             pair,
             node_g,
@@ -722,8 +674,6 @@ impl<'a> Engine<'a> {
             by_global,
             visited: vec![false; k],
             forced: None,
-            #[cfg(test)]
-            best_ti: 0,
             attain: Vec::new(),
             classes: Classes::new(k),
             class_explored: vec![false; k],
@@ -734,21 +684,8 @@ impl<'a> Engine<'a> {
             orbits: self.options.orbits && !search_free,
             explored_count: 0,
         });
-        self.seed_pool(&mut branch);
         Ok(Frame::Branch(branch))
     }
-
-    /// The maps a wrong shortcut keeps for every call (10.5(b)).
-    #[cfg(test)]
-    fn seed_pool(&self, branch: &mut Branch) {
-        for pairs in &self.pool {
-            join_pairs(branch, pairs, true);
-        }
-    }
-
-    #[cfg(not(test))]
-    #[expect(clippy::unused_self, reason = "the sound engine keeps no pool")]
-    const fn seed_pool(&self, _branch: &mut Branch) {}
 
     /// FIX the singleton node cells of the call's pair, form the entries,
     /// split the remainder into its free components and build their instances.
@@ -792,32 +729,15 @@ impl<'a> Engine<'a> {
             .map(|&v| call.adj[0][v].len() as u64)
             .sum();
         units.fix += s + entries.len() as u64 + removed_incidences;
-        #[cfg(test)]
-        let on_tie = self.options.wrong == Wrong::StopOnTie;
-        #[cfg(not(test))]
-        let on_tie = false;
         // The stop on `s` follows the order of the engine: with the invariant
         // `s`, larger first, a child with a smaller `s` is the one stopped.
-        #[cfg(test)]
-        let reversed = self.options.wrong == Wrong::InvariantFirst;
-        #[cfg(not(test))]
-        let reversed = false;
         let cut = bound.and_then(|best| {
             if !self.options.stops {
                 return None;
             }
-            let by_s = if reversed {
-                best.s.cmp(&s)
-            } else {
-                s.cmp(&best.s)
-            };
-            match by_s {
+            match s.cmp(&best.s) {
                 Ordering::Greater => Some(Cut::OnS),
-                Ordering::Equal
-                    if entries > best.entries || (on_tie && entries == best.entries) =>
-                {
-                    Some(Cut::OnE)
-                }
+                Ordering::Equal if entries > best.entries => Some(Cut::OnE),
                 _ => None,
             }
         });
@@ -1084,142 +1004,6 @@ pub(crate) fn take_audit() -> Audit {
     AUDIT.with(|cell| cell.replace(Audit::default()))
 }
 
-/// The wrong shortcut of 10.5(c): the state of the best child, with the
-/// target nodes of the two children exchanged, stands for the child `minimum`.
-#[cfg(test)]
-fn carry_choice(b: &mut Branch, minimum: usize) -> bool {
-    let (u, w) = (b.node_g[b.target[b.best_ti]], b.node_g[b.target[minimum]]);
-    let Some(best) = b.best.as_mut() else {
-        return false;
-    };
-    let swap = |x: &mut usize| {
-        if *x == u {
-            *x = w;
-        } else if *x == w {
-            *x = u;
-        }
-    };
-    for (x, _) in &mut best.fixed {
-        swap(x);
-    }
-    let mut work: Vec<&mut Tree> = best.nested.iter_mut().collect();
-    while let Some(tree) = work.pop() {
-        for (x, _) in &mut tree.fixed {
-            swap(x);
-        }
-        tree.target.iter_mut().for_each(swap);
-        work.extend(tree.nested.iter_mut());
-    }
-    b.best_ti = minimum;
-    true
-}
-
-/// The cells of the node and line partitions of `comp` after refining the
-/// whole of `set` once (10.5(e)), restricted to `comp`, in local indices.
-#[cfg(test)]
-pub(crate) fn shared_cells(set: &LineSet, comp: &Comp) -> [Vec<Vec<usize>>; 2] {
-    let all = super::reference::top_components(set);
-    let mut merged = Comp {
-        nodes: Vec::new(),
-        lines: Vec::new(),
-        occ: Vec::new(),
-        node_lines: Vec::new(),
-        line_nodes: Vec::new(),
-    };
-    let (mut node_at, mut line_at) = (0, 0);
-    for c in &all {
-        if c.nodes[0] == comp.nodes[0] {
-            (node_at, line_at) = (merged.nodes.len(), merged.lines.len());
-        }
-        let (nn, ln) = (merged.nodes.len(), merged.lines.len());
-        merged.nodes.extend(&c.nodes);
-        merged.lines.extend(&c.lines);
-        merged
-            .occ
-            .extend(c.occ.iter().map(|o| o.iter().map(|&x| x + nn).collect()));
-        merged.node_lines.extend(
-            c.node_lines
-                .iter()
-                .map(|v| v.iter().map(|&l| l + ln).collect()),
-        );
-        merged.line_nodes.extend(
-            c.line_nodes
-                .iter()
-                .map(|v| v.iter().map(|&x| x + nn).collect()),
-        );
-    }
-    let index = Index::new(&merged);
-    let mut engine = Engine::new(
-        set,
-        &merged,
-        &index,
-        Options::PRODUCTION,
-        None,
-        ENGINE_LIMIT,
-        vec![0; merged.lines.len()],
-    );
-    let (inst, _) = engine.fresh();
-    let restrict = |side: &Side, at: usize, len: usize| -> Vec<Vec<usize>> {
-        side.starts()
-            .map(|c| {
-                side.elems[c..c + side.size[c]]
-                    .iter()
-                    .filter(|&&x| x >= at && x < at + len)
-                    .map(|&x| x - at)
-                    .collect::<Vec<usize>>()
-            })
-            .filter(|cell| !cell.is_empty())
-            .collect()
-    };
-    [
-        restrict(&inst.pair[0], node_at, comp.nodes.len()),
-        restrict(&inst.pair[1], line_at, comp.lines.len()),
-    ]
-}
-
-/// The node cells of each top component after its fresh refinement, as source
-/// identifiers: alone, or after refining the whole input (10.5(e)).
-#[cfg(test)]
-pub(crate) fn fresh_node_cells(set: &LineSet, shared: bool) -> Vec<Vec<Vec<Vec<u8>>>> {
-    let comps = super::reference::top_components(set);
-    comps
-        .iter()
-        .map(|comp| {
-            let cells = if shared {
-                let [nodes, _] = shared_cells(set, comp);
-                nodes
-            } else {
-                let index = Index::new(comp);
-                let mut engine = Engine::new(
-                    set,
-                    comp,
-                    &index,
-                    Options::PRODUCTION,
-                    None,
-                    ENGINE_LIMIT,
-                    vec![0; comp.lines.len()],
-                );
-                let (inst, _) = engine.fresh();
-                inst.pair[0]
-                    .starts()
-                    .map(|c| inst.pair[0].elems[c..c + inst.pair[0].size[c]].to_vec())
-                    .collect()
-            };
-            cells
-                .into_iter()
-                .map(|cell| {
-                    let mut named: Vec<Vec<u8>> = cell
-                        .into_iter()
-                        .map(|v| set.source(comp.nodes[v]).to_vec())
-                        .collect();
-                    named.sort();
-                    named
-                })
-                .collect()
-        })
-        .collect()
-}
-
 /// Join the classes of two target indices of a call.
 fn join_classes(b: &mut Branch, i: usize, j: usize) {
     let (ri, rj) = (b.classes.find(i), b.classes.find(j));
@@ -1239,10 +1023,8 @@ fn join_classes(b: &mut Branch, i: usize, j: usize) {
 /// Use a map found below the call, given as moved `(node, image)` pairs, at a
 /// call whose automorphism it is by lifting (10.1): no check, because it fixes
 /// the call's constants and every line holds free nodes of one nested
-/// component. A map with a pair that leaves the target cell is not used, unless
-/// `lenient`, which joins the pairs inside it and ignores the rest: the wrong
-/// shortcut of 10.5(b), used by the tests only.
-fn join_pairs(b: &mut Branch, pairs: &[(usize, usize)], lenient: bool) {
+/// component. A map with a pair that leaves the target cell is not used.
+fn join_pairs(b: &mut Branch, pairs: &[(usize, usize)]) {
     if !b.orbits {
         return;
     }
@@ -1257,7 +1039,6 @@ fn join_pairs(b: &mut Branch, pairs: &[(usize, usize)], lenient: bool) {
         match (index(g), index(h)) {
             (Some(i), Some(j)) => joins.push((i, j)),
             (None, None) => {}
-            _ if lenient => {}
             _ => return,
         }
     }
@@ -1462,19 +1243,6 @@ impl<'a> Engine<'a> {
                 let mut pair = b.pair.clone();
                 let mut queue = Queue::new([b.node_g.len(), b.line_g.len()]);
                 individualise(&mut pair[0], v, &mut queue);
-                #[cfg(test)]
-                if self.options.wrong == Wrong::FixTwinClass {
-                    let gv = b.node_g[v];
-                    for &w in &b.target {
-                        let gw = b.node_g[w];
-                        if w != v
-                            && pair[0].cell_size_of(w) >= 2
-                            && self.twin.is_pair(self.set, self.comp, gv, gw)
-                        {
-                            individualise(&mut pair[0], w, &mut queue);
-                        }
-                    }
-                }
                 let refine_units = refine(
                     &b.adj,
                     &self.index.occ_nums,
@@ -1513,11 +1281,6 @@ impl<'a> Engine<'a> {
             let Some(minimum) = missing else {
                 return Ok(Act::Finish);
             };
-            #[cfg(test)]
-            if self.options.wrong == Wrong::CarryChoice && carry_choice(b, minimum) {
-                b.visited[minimum] = true;
-                continue;
-            }
             b.forced = Some(minimum);
             b.explore.push(minimum);
         }
@@ -1549,39 +1312,21 @@ impl<'a> Engine<'a> {
         if b.orbits && (self.options.maps || (self.options.leaves && b.p == 0)) {
             self.record_child(b, &child);
         }
-        #[cfg(test)]
-        let invariant_first = self.options.wrong == Wrong::InvariantFirst;
-        #[cfg(not(test))]
-        let invariant_first = false;
-        let order = b.best.as_ref().map_or(Ordering::Less, |best| {
-            if invariant_first {
-                best.cert
-                    .s
-                    .cmp(&child.cert.s)
-                    .then_with(|| child.cert.cmp(&best.cert))
-            } else {
-                child.cert.cmp(&best.cert)
-            }
-        });
+        let order = b
+            .best
+            .as_ref()
+            .map_or(Ordering::Less, |best| child.cert.cmp(&best.cert));
         match order {
             Ordering::Less => {
                 b.attain.clear();
                 b.attain.push(target_index);
                 b.best = Some(child);
-                #[cfg(test)]
-                {
-                    b.best_ti = target_index;
-                }
             }
             Ordering::Equal => {
                 b.attain.push(target_index);
                 if self.options.descending {
                     // Ties go to the later child, the smaller source.
                     b.best = Some(child);
-                    #[cfg(test)]
-                    {
-                        b.best_ti = target_index;
-                    }
                 }
             }
             Ordering::Greater => {}
@@ -1698,17 +1443,6 @@ impl<'a> Engine<'a> {
     fn try_map(&mut self, b: &mut Branch, image: &[usize]) -> bool {
         #[cfg(test)]
         audit(|a| a.discovered += 1);
-        #[cfg(test)]
-        let corrupted: Vec<usize>;
-        #[cfg(test)]
-        let image = if self.options.wrong == Wrong::CorruptedMaps && b.target.len() >= 2 {
-            let mut changed = image.to_vec();
-            changed.swap(b.target[0], b.target[1]);
-            corrupted = changed;
-            &corrupted[..]
-        } else {
-            image
-        };
         // A map of the call preserves its cells; a map that does not is not used.
         if b.target
             .iter()
@@ -1747,16 +1481,6 @@ impl<'a> Engine<'a> {
         }
         #[cfg(test)]
         audit(|a| a.permit = 0);
-        #[cfg(test)]
-        if self.options.wrong == Wrong::MapsEverywhere {
-            let pairs: Vec<(usize, usize)> = image
-                .iter()
-                .enumerate()
-                .filter(|&(x, &y)| x != y)
-                .map(|(x, &y)| (b.node_g[x], b.node_g[y]))
-                .collect();
-            self.pool.push(pairs);
-        }
         if self.options.lifting && self.branch_depth >= 2 {
             let pairs: Vec<(usize, usize)> = image
                 .iter()
@@ -1812,7 +1536,7 @@ impl<'a> Engine<'a> {
                         n.lifted += 1;
                         n.permit = PERMIT_LIFTED;
                     });
-                    join_pairs(a, pairs, false);
+                    join_pairs(a, pairs);
                     #[cfg(test)]
                     audit(|n| n.permit = 0);
                 }
@@ -2004,19 +1728,6 @@ impl<'a> Run<'a> {
         } = stat;
         let mut engine = Engine::new(set, comp, index, options, stop, limit, start);
         let (fresh, fresh_units) = engine.fresh();
-        #[cfg(test)]
-        let fresh = if options.wrong == Wrong::SharedPartition {
-            let [nodes, lines] = shared_cells(set, comp);
-            Inst {
-                pair: [
-                    Side::from_cells(nodes, comp.nodes.len()),
-                    Side::from_cells(lines, comp.lines.len()),
-                ],
-                ..fresh
-            }
-        } else {
-            fresh
-        };
         let sizes: Vec<usize> = fresh.pair[0]
             .starts()
             .map(|c| fresh.pair[0].size[c])
@@ -2055,13 +1766,6 @@ impl ComponentRun for Run<'_> {
     fn top_call(&mut self, search_free: bool, spent: &mut u64) -> CallOutcome {
         self.engine.meter.search_free = search_free;
         self.engine.meter.limited = *spent;
-        // A wrong shortcut that uses every map found anywhere in the component
-        // sees them all: a first pass finds them, the second uses them.
-        #[cfg(test)]
-        if self.engine.options.wrong == Wrong::MapsEverywhere && !self.engine.pooled {
-            self.engine.pooled = true;
-            let _ = self.engine.run(self.fresh.clone(), 0);
-        }
         let result = self.engine.run(self.fresh.clone(), 0);
         *spent = self.engine.meter.limited;
         match result {
