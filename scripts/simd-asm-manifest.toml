@@ -3037,7 +3037,7 @@ summary = "`Relation::contains`, the galloping batch probe plus the tail's dupli
 
 [[site]]
 id = "datalog.gallop-leapfrog"
-summary = "`gallop_lower_bound` (in `Batch::subject_run`) and the owned `cycle::Cursor::seek`"
+summary = "`purrdf_core::gallop::run_end` (inlined into `Batch::subject_run`) and the owned `cycle::Cursor::seek`"
 
   [[site.measure]]
   label = "gallop"
