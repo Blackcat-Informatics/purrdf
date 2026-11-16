@@ -51,7 +51,6 @@ fn alone_options() -> Vec<Options> {
         exchanges: false,
         lifting: false,
         leaves: false,
-        ..Options::PRODUCTION
     };
     let mut out = Vec::new();
     for descending in [false, true] {

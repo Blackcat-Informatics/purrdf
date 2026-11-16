@@ -25,7 +25,7 @@
 //! certificate encoding, positions follow from the structure of the calls, and
 //! no hash enters the search itself.
 //!
-//! [`reference`] is written for clarity and explores every child of every
+//! [`mod@reference`] is written for clarity and explores every child of every
 //! branching call it searches; it is the oracle the optimised engine is held to.
 //! The entries of this module run the optimised engine: dense arrays, an
 //! explicit stack of calls, the strict stops of 10.4 and checked automorphisms
