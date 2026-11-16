@@ -433,7 +433,9 @@ pub struct Labelled {
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.
     pub explored: Units,
-    /// Engine figure: twin units of the search-free run (8.1(f)).
+    /// Engine figure: twin units of the search-free run (8.1(f)). The twin
+    /// tests a search makes (route (4) of the optimised engine) spend limited
+    /// units and are not counted here, so every engine reports the same figure.
     /// NOT a property of the dataset and NOT part of the structural record: an
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.

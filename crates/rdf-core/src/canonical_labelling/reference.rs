@@ -855,7 +855,11 @@ impl TwinTest {
         holding.sort_unstable();
         holding.dedup();
         let charge: u64 = holding.iter().map(|&l| self.start_charge[l]).sum();
-        meter.twin_units += charge;
+        // The figure is that of the search-free run (8.1(f)): the tests an
+        // engine makes during a search spend limited units and no more.
+        if meter.search_free {
+            meter.twin_units += charge;
+        }
         meter.limited += charge;
         self.is_pair(set, comp, u, w)
     }
