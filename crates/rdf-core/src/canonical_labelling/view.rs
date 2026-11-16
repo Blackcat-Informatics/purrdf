@@ -41,8 +41,8 @@ use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
 
 use crate::{
-    CanonError, CanonHash, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
-    StopSignal, TermLookupError, TermValue, try_canonical_sha256_view,
+    BlankScope, CanonError, CanonHash, CanonicalizationControl, ContentDigest, DatasetView,
+    RdfTextDirection, StopSignal, TermLookupError, TermValue, try_canonical_sha256_view,
 };
 
 /// A caller's record beside a view: an opaque payload, compared whole and never
@@ -142,8 +142,39 @@ const fn variant_of(value: &TermValue) -> GraphTerm {
     }
 }
 
+/// Which statements of a view become lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// Every statement and every named graph of the view.
+    Dataset,
+    /// The statements asserted in the named graph with this IRI, each lowered
+    /// with its graph slot absent. A reifier or annotation row belongs to the
+    /// graph its own graph slot names. A graph the view does not use names no
+    /// rows: the result is the labelling of no line. No `empty-graph` line is
+    /// produced, because the graph is not a graph of the lines.
+    Graph(&'a str),
+}
+
+/// A [`Scope`] resolved against a view.
+#[derive(Clone, Copy)]
+enum Selection<Id> {
+    Dataset,
+    /// The id of the selected graph, or none when the view holds no such term.
+    Graph(Option<Id>),
+}
+
+/// What a selection does with a row.
+#[derive(Clone, Copy)]
+enum Slot<Id> {
+    /// The row is lowered with this graph slot.
+    Kept(Option<Id>),
+    /// The row is not of the selection.
+    Left,
+}
+
 struct Lowering<'a, 's, D: DatasetView> {
     view: &'a D,
+    selection: Selection<D::Id>,
     stop: Option<&'s dyn StopSignal>,
     admitter: Admitter,
     /// The graphs carried by a statement line, by view identifier.
@@ -265,32 +296,48 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         Ok(())
     }
 
+    /// The graph slot a row of graph `g` is lowered with, or [`Slot::Left`]
+    /// when the selection leaves the row out.
+    fn slot(&self, g: Option<D::Id>) -> Slot<D::Id> {
+        match self.selection {
+            Selection::Dataset => Slot::Kept(g),
+            Selection::Graph(Some(selected)) if g == Some(selected) => Slot::Kept(None),
+            Selection::Graph(_) => Slot::Left,
+        }
+    }
+
     fn lower(&mut self, records: &[Record<'_>]) -> Result<(), ViewError<D::ReadError>> {
         let view = self.view;
         for q in view.quads() {
-            self.row(Kind::Quad, None, &[q.s, q.p, q.o], GraphTerm::Iri, q.g)?;
+            if let Slot::Kept(g) = self.slot(q.g) {
+                self.row(Kind::Quad, None, &[q.s, q.p, q.o], GraphTerm::Iri, g)?;
+            }
         }
         // A reifier row is `(reifier, rdf:reifies, triple term, graph)`.
         for q in view.reifier_quads() {
-            self.row(
-                Kind::ReifierBinding,
-                None,
-                &[q.s, q.o],
-                GraphTerm::Triple,
-                q.g,
-            )?;
+            if let Slot::Kept(g) = self.slot(q.g) {
+                self.row(
+                    Kind::ReifierBinding,
+                    None,
+                    &[q.s, q.o],
+                    GraphTerm::Triple,
+                    g,
+                )?;
+            }
         }
         // One line per distinct annotation row, its count the row's multiplicity.
         let mut annotations: BTreeMap<_, u64> = BTreeMap::new();
         for q in view.annotation_quads() {
-            let rows = annotations.entry((q.s, q.p, q.o, q.g)).or_default();
-            *rows = rows.saturating_add(1);
+            if let Slot::Kept(g) = self.slot(q.g) {
+                let rows = annotations.entry((q.s, q.p, q.o, g)).or_default();
+                *rows = rows.saturating_add(1);
+            }
         }
         for ((s, p, o, g), count) in annotations {
             self.row(Kind::Annotation, Some(count), &[s, p, o], GraphTerm::Iri, g)?;
         }
         for g in view.named_graphs() {
-            if self.carried.contains(&g) {
+            if matches!(self.selection, Selection::Graph(_)) || self.carried.contains(&g) {
                 continue;
             }
             self.poll()?;
@@ -333,11 +380,20 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
 /// The lowered lines of `view` and `records`, before admission.
 fn lowered<D: DatasetView>(
     view: &D,
+    scope: Scope<'_>,
     records: &[Record<'_>],
     stop: Option<&dyn StopSignal>,
 ) -> Result<Admission, ViewError<D::ReadError>> {
+    let selection = match scope {
+        Scope::Dataset => Selection::Dataset,
+        Scope::Graph(iri) => Selection::Graph(
+            view.term_id_by_value(&TermValue::Iri(iri.to_owned()))
+                .map_err(ViewError::Read)?,
+        ),
+    };
     let mut lowering = Lowering {
         view,
+        selection,
         stop,
         admitter: Admitter::default(),
         carried: BTreeSet::new(),
@@ -365,7 +421,7 @@ pub fn lines_of_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
 ) -> Result<LineSet, ViewError<D::ReadError>> {
-    lowered(view, records, None)?
+    lowered(view, Scope::Dataset, records, None)?
         .into_result()
         .map_err(ViewError::Refused)
 }
@@ -422,7 +478,7 @@ pub fn compare_view<D: DatasetView>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, records, stop)?
+    let lines = lowered(view, Scope::Dataset, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
     let labelled = label_lines(&lines, limit, stop)?;
@@ -480,7 +536,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, records, stop)?
+    let lines = lowered(view, Scope::Dataset, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
     let bytes = lines
@@ -507,4 +563,91 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
             Err(error)
         }
     }
+}
+
+/// A labelled view: the admitted lines, their labelling, and the view's own
+/// identifier of each blank node.
+#[derive(Clone, Debug)]
+pub struct Labelling<Id> {
+    lines: LineSet,
+    labelled: Labelled,
+    blanks: Vec<Option<Id>>,
+}
+
+impl<Id: Copy> Labelling<Id> {
+    /// The admitted lines the labelling was computed over.
+    #[must_use]
+    pub const fn lines(&self) -> &LineSet {
+        &self.lines
+    }
+
+    /// The labelling of [`Self::lines`]: positions, identities, the canonical
+    /// line sequence, its digest and the structural record.
+    #[must_use]
+    pub const fn labelled(&self) -> &Labelled {
+        &self.labelled
+    }
+
+    /// The view's identifier of the blank node with index `node` in
+    /// [`Self::lines`] (index `i` of [`Labelled::placements`]). `None` for a
+    /// blank node that only a [`Record`] mentions: the view does not hold it.
+    #[must_use]
+    pub fn blank_id(&self, node: usize) -> Option<Id> {
+        self.blanks.get(node).copied().flatten()
+    }
+
+    /// Every blank node of the view that occurs in a line, as
+    /// `(view identifier, position)` in node order.
+    pub fn view_positions(&self) -> impl Iterator<Item = (Id, u64)> + '_ {
+        self.blanks
+            .iter()
+            .zip(&self.labelled.placements)
+            .filter_map(|(id, placement)| id.map(|id| (id, placement.position)))
+    }
+}
+
+/// Label the lines of `view` and `records` within `scope`, with the engine's
+/// own `limit` and the caller's `stop` signal (polled while the rows are
+/// lowered and at every call of the engine).
+///
+/// Positions are those of the lines of this scope and records together; they
+/// are never mixed with the positions of another scope or record set.
+///
+/// # Errors
+/// As [`lines_of_view`], and [`ViewError::Stopped`] when `stop` is set. A
+/// refusal is [`ViewError::Refused`] with the typed refusal of the
+/// definition, [`Refusal::Limit`] included.
+pub fn label_view<D: DatasetView>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let lines = lowered(view, scope, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    let labelled = label_lines(&lines, limit, stop)?;
+    let mut blanks = Vec::with_capacity(lines.blank_nodes());
+    for node in 0..lines.blank_nodes() {
+        let source = lines.source(node);
+        let id = match source.split_first_chunk::<4>() {
+            Some((ordinal, label)) => match std::str::from_utf8(label) {
+                Ok(label) => view
+                    .term_id_by_value(&TermValue::Blank {
+                        label: label.to_owned(),
+                        scope: BlankScope(u32::from_be_bytes(*ordinal)),
+                    })
+                    .map_err(ViewError::Read)?,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        blanks.push(id);
+    }
+    Ok(Labelling {
+        lines,
+        labelled,
+        blanks,
+    })
 }

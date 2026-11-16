@@ -46,7 +46,8 @@ mod view_tests;
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
 pub use view::{
-    Comparison, Record, ViewError, compare_view, compare_view_with_memory, lines_of_view,
+    Comparison, Labelling, Record, Scope, ViewError, compare_view, compare_view_with_memory,
+    label_view, lines_of_view,
 };
 
 use purrdf_hash::Domain;
