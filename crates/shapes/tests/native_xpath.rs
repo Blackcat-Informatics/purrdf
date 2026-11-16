@@ -1178,7 +1178,6 @@ fn a_rules_resource_refusal_aborts_and_the_neighbour_runs() {
             assert!(matches!(*cause, XPathValidationError::Query(diagnostic)
                 if diagnostic.code == Resource::PatternBytes.code()));
             assert!(coordinates.program_identity().is_some());
-            assert!(coordinates.snapshot_identity().is_some());
         }
         // A condition shape's sh:pattern is refused by the native compiler.
         let triple = rule_shapes(&over, false);
@@ -1192,7 +1191,6 @@ fn a_rules_resource_refusal_aborts_and_the_neighbour_runs() {
             if refusal.resource == Resource::PatternBytes)
         );
         assert!(coordinates.program_identity().is_some());
-        assert!(coordinates.snapshot_identity().is_some());
         // The pattern exactly at the bound is admitted, and matches nothing.
         let sparql = rule_shapes(&at, true);
         let triple = rule_shapes(&at, false);

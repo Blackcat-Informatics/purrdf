@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The frozen dataset's content identity: its value is a persisted law.
+//! The content identity: its value is a persisted law, and nothing computes it
+//! until a caller asks for it.
 
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CompositeDatasetView, DatasetMut, DatasetView, MutableDataset, QuadValues,
+    BlankScope, CompositeDatasetView, ContentIdentified, DatasetMut, MutableDataset, QuadValues,
     RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue, ViewLimits,
 };
 use purrdf_lex::allocation::{Memory, Resident};
@@ -56,18 +57,29 @@ fn builder() -> RdfDatasetBuilder {
 /// The identity this fixture had when the identity law was last changed. A
 /// change here changes every persisted identity of every dataset.
 const GOLDEN: &str = "23989607954605f059ee12b49ab3b2a45f55a6b4971cc56eeb05c4b99ec6739c";
+const COMPOSITE_GOLDEN: &str = "34840a0e7c474035c77265a5de3deef0b4f3484cb4e18f3333d438daba732c7b";
+const DELTA_GOLDEN: &str = "a658f81754da777a81137e8c8665035993e77b75634a2f5dac322f3b2500e9e4";
 
-fn identity(dataset: &RdfDataset) -> String {
-    DatasetView::snapshot_identity(dataset)
-        .unwrap()
-        .expect("a frozen dataset has an identity")
-        .to_string()
+/// Every identity is sealed behind a once-lock the first time it is asked for, so
+/// an unset lock in a carrier's `Debug` is exactly "no identity was computed".
+const UNSEALED: &str = "snapshot_identity: OnceLock(<uninit>)";
+
+fn sealed(carrier: &impl std::fmt::Debug) -> bool {
+    !format!("{carrier:?}").contains(UNSEALED)
 }
 
-/// Both freezes produce the same, frozen identity value: the resident freeze
-/// reads every row, the admitted freeze reads its eager statistics' records.
+fn identity<V: ContentIdentified>(view: &V) -> String
+where
+    V::IdentityError: std::fmt::Debug,
+{
+    view.content_identity().unwrap().to_string()
+}
+
+/// Neither freeze computes the identity; asked for, both produce the same, frozen
+/// value: the resident freeze reads every row, the admitted freeze its eager
+/// statistics' records.
 #[test]
-fn the_content_identity_value_is_frozen_for_both_freezes() {
+fn both_freezes_leave_the_identity_unsealed_and_compute_the_frozen_value_on_request() {
     let resident: Arc<RdfDataset> = builder().freeze().unwrap();
     let mut admission = Resident;
     let admitted = builder();
@@ -75,8 +87,10 @@ fn the_content_identity_value_is_frozen_for_both_freezes() {
     let admitted = admitted
         .freeze_with_memory(&mut Memory::resume(&mut admission, admitted_bytes))
         .unwrap();
+    assert!(!sealed(&resident) && !sealed(&admitted));
     assert_eq!(identity(&resident), GOLDEN);
     assert_eq!(identity(&admitted), GOLDEN);
+    assert!(sealed(&resident) && sealed(&admitted));
 }
 
 /// One more quad in its own graph, for the composed views.
@@ -89,54 +103,42 @@ fn other() -> Arc<RdfDataset> {
     b.freeze().unwrap()
 }
 
-fn iri(local: &str) -> TermValue {
-    TermValue::Iri(format!("{EX}{local}"))
-}
-
-/// The composite's identity, which binds its sources' identities and how it
-/// composes them, is a persisted law too.
-#[test]
-fn the_composite_identity_value_is_frozen() {
-    let composite = CompositeDatasetView::new(
-        vec![builder().freeze().unwrap(), other()],
-        ViewLimits::default(),
-    )
-    .unwrap();
-    let identity = DatasetView::snapshot_identity(&composite)
-        .unwrap()
-        .expect("a composite has an identity")
-        .to_string();
-    assert_eq!(identity, COMPOSITE_GOLDEN);
-}
-
-/// The mutation snapshot's identity binds the base, the delta and the
-/// suppressed rows.
-#[test]
-fn the_delta_identity_value_is_frozen() {
-    let mut mutation = MutableDataset::new(builder().freeze().unwrap());
-    assert!(mutation.remove(&QuadValues {
-        s: iri("alice"),
-        p: iri("name"),
-        o: TermValue::simple_literal("Alice"),
+/// A default-graph quad over `example.org` names.
+fn quad(subject: &str, predicate: &str, object: TermValue) -> QuadValues {
+    QuadValues {
+        s: TermValue::Iri(format!("{EX}{subject}")),
+        p: TermValue::Iri(format!("{EX}{predicate}")),
+        o: object,
         g: None,
-    }));
-    assert!(
-        mutation
-            .insert(QuadValues {
-                s: iri("carol"),
-                p: iri("knows"),
-                o: iri("alice"),
-                g: None,
-            })
-            .unwrap()
-    );
-    let delta = mutation.snapshot_view().unwrap();
-    let identity = DatasetView::snapshot_identity(&delta)
-        .unwrap()
-        .expect("a mutation snapshot has an identity")
-        .to_string();
-    assert_eq!(identity, DELTA_GOLDEN);
+    }
 }
 
-const COMPOSITE_GOLDEN: &str = "34840a0e7c474035c77265a5de3deef0b4f3484cb4e18f3333d438daba732c7b";
-const DELTA_GOLDEN: &str = "a658f81754da777a81137e8c8665035993e77b75634a2f5dac322f3b2500e9e4";
+/// Building a composite hashes neither it nor its sources; its identity, which
+/// binds its sources' identities and how it composes them, is computed on the
+/// first request, shared by clones, and keeps its frozen value.
+#[test]
+fn a_composite_hashes_nothing_until_its_identity_is_asked_for() {
+    let base = builder().freeze().unwrap();
+    let composite =
+        CompositeDatasetView::new(vec![Arc::clone(&base), other()], ViewLimits::default()).unwrap();
+    let clone = composite.clone();
+    assert!(!sealed(&composite) && !sealed(&base));
+    assert_eq!(identity(&clone), COMPOSITE_GOLDEN);
+    assert!(sealed(&composite) && sealed(&base));
+    assert_eq!(identity(&composite), COMPOSITE_GOLDEN);
+}
+
+/// A mutation snapshot hashes nothing at construction; its identity binds the
+/// base, the delta and the suppressed rows when asked for.
+#[test]
+fn a_mutation_snapshot_hashes_nothing_until_its_identity_is_asked_for() {
+    let base = builder().freeze().unwrap();
+    let mut mutation = MutableDataset::new(Arc::clone(&base));
+    assert!(mutation.remove(&quad("alice", "name", TermValue::simple_literal("Alice"))));
+    let alice = TermValue::Iri(format!("{EX}alice"));
+    assert!(mutation.insert(quad("carol", "knows", alice)).unwrap());
+    let delta = mutation.snapshot_view().unwrap();
+    assert!(!sealed(&delta) && !sealed(&base));
+    assert_eq!(identity(&delta), DELTA_GOLDEN);
+    assert!(sealed(&delta) && sealed(&base));
+}

@@ -448,7 +448,8 @@ impl TryFrom<RdfDataset> for super::triple::TripleDataset {
                     .into_owned(),
             ),
         };
-        let snapshot_identity = dataset.frozen_snapshot_identity();
+        // A sealed identity carries over; an unsealed one stays unsealed.
+        let snapshot_identity = dataset.snapshot_identity;
         let triples = memory.collect(dataset.quads.iter().map(|row| TripleIds {
             s: row.s,
             p: row.p,
@@ -1122,10 +1123,6 @@ impl RdfDataset {
             predecessor_index: OnceLock::new(),
             statement_graph_rows: OnceLock::new(),
         };
-        if eager_statistics {
-            let identity = dataset.compute_snapshot_identity_with_memory(memory)?;
-            let _ = dataset.snapshot_identity.set(identity);
-        }
         Ok(dataset)
     }
 
@@ -1133,8 +1130,8 @@ impl RdfDataset {
         &self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
-        // Explicit-memory freeze seals before publication. Ordinary freeze
-        // seals on first use, then caches only this fixed-size content identity.
+        // No freeze computes this: the first request seals it, and only this
+        // fixed-size content identity is cached.
         let graphs = memory.try_scope(|memory| {
             let mut graphs = purrdf_hash::multiset::Multiset256::default();
             let mut pending = Vec::new();

@@ -74,10 +74,15 @@ impl<'a, A: Admission, C: Progress> RetainedParse<'a, A, C> {
     }
 
     /// Borrow the frozen dataset without detaching its concrete native owner.
-    /// No query workspace authority is supplied by source acquisition.
+    /// No query workspace authority is supplied by source acquisition. Its content
+    /// identity is the frozen dataset's, computed only when asked for.
     pub fn dataset(
         &self,
-    ) -> Option<impl DatasetView<Id = TermId, ReadError = BorrowedReadError> + '_> {
+    ) -> Option<
+        impl DatasetView<Id = TermId, ReadError = BorrowedReadError>
+        + purrdf_core::ContentIdentified<IdentityError = Infallible>
+        + '_,
+    > {
         self.output.as_ref().ok().map(|output| BorrowedDataset {
             dataset: &output.dataset,
         })
@@ -328,6 +333,15 @@ struct BorrowedDataset<'a> {
     dataset: &'a RdfDataset,
 }
 
+/// The borrowed dataset's identity: the frozen dataset's, computed on request.
+impl purrdf_core::ContentIdentified for BorrowedDataset<'_> {
+    type IdentityError = Infallible;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        purrdf_core::ContentIdentified::content_identity(self.dataset)
+    }
+}
+
 impl DatasetView for BorrowedDataset<'_> {
     type Id = TermId;
     type ReadError = BorrowedReadError;
@@ -430,10 +444,6 @@ impl DatasetView for BorrowedDataset<'_> {
 
     fn stats_fingerprint(&self) -> u64 {
         self.dataset.stats_fingerprint()
-    }
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        DatasetView::snapshot_identity(self.dataset).map_err(BorrowedReadError::from)
     }
 
     fn statistics(&self) -> Option<&dyn SnapshotStatistics<TermId>> {

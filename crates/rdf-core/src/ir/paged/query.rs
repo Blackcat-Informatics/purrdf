@@ -926,6 +926,18 @@ impl PagedQueryView<'_> {
     }
 }
 
+/// The paged dataset's sealed identity; a view whose reads already failed refuses.
+impl crate::ContentIdentified for PagedQueryView<'_> {
+    type IdentityError = PagedQueryError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        Ok(self.dataset.statistics.snapshot_identity)
+    }
+}
+
 impl DatasetView for PagedQueryView<'_> {
     type Id = GlobalTermId;
     type ReadError = PagedQueryError;
@@ -934,13 +946,6 @@ impl DatasetView for PagedQueryView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        if let Some(error) = self.read_error() {
-            return Err(error);
-        }
-        Ok(Some(self.dataset.statistics.snapshot_identity))
-    }
 
     fn read_error(&self) -> Option<Self::ReadError> {
         let mut state = lock_read_state(&self.state);

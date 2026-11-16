@@ -63,7 +63,8 @@ impl ViewTermId for DeltaViewId {
 /// with a generic RDF importer does not transfer those sidecars automatically.
 #[derive(Debug, Clone)]
 pub struct DeltaDatasetView {
-    snapshot_identity: purrdf_hash::hex::Digest32,
+    /// Sealed on the first identity request; clones share the cell.
+    snapshot_identity: Arc<std::sync::OnceLock<purrdf_hash::hex::Digest32>>,
     base: DatasetHandle,
     delta: Arc<RdfDataset>,
     suppressed: Arc<FastSet<(RecordKind, QuadIds)>>,
@@ -84,10 +85,6 @@ pub struct DeltaDatasetView {
 }
 
 impl DeltaDatasetView {
-    pub(crate) const fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
-        self.snapshot_identity
-    }
-
     fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
         const SNAPSHOT: purrdf_hash::Domain =
             purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
@@ -185,7 +182,7 @@ impl DeltaDatasetView {
             }
         }
         let mut view = Self {
-            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
+            snapshot_identity: Arc::default(),
             base,
             delta,
             suppressed: Arc::new(suppressed),
@@ -245,7 +242,6 @@ impl DeltaDatasetView {
                 * size_of::<(RecordKind, QuadIds)>(),
             ..Default::default()
         });
-        view.snapshot_identity = view.seal_content_identity()?;
         Ok(view)
     }
 
@@ -646,6 +642,18 @@ struct Pattern {
     g: GraphMatch,
 }
 
+/// The identity binds the base and delta identities and the suppressed and
+/// converted records; it is sealed on the first request.
+impl crate::ContentIdentified for DeltaDatasetView {
+    type IdentityError = crate::RdfDiagnostic;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
+        crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
+            self.seal_content_identity()
+        })
+    }
+}
+
 impl DatasetView for DeltaDatasetView {
     fn retained_view_stats(&self) -> Option<crate::ViewStats> {
         Some(self.stats())
@@ -657,10 +665,6 @@ impl DatasetView for DeltaDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(Some(self.snapshot_identity))
-    }
 
     fn reserve_owned_workspace(
         &self,

@@ -285,7 +285,8 @@ impl Iterator for TripleRows<'_> {
 pub struct TripleDataset {
     pub(super) dictionary: FrozenTerms,
     pub(super) statistics: super::statistics::LocalStatistics,
-    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
+    /// Sealed on the first identity request; no freeze or conversion computes it.
+    pub(super) snapshot_identity: OnceLock<purrdf_hash::hex::Digest32>,
     pub(super) triples: TripleTable,
     pub(super) reifiers: Box<[TripleReifierRow]>,
     pub(super) reifier_targets: OnceLock<Box<[u32]>>,
@@ -296,6 +297,24 @@ pub struct TripleDataset {
 }
 
 impl TripleDataset {
+    /// The content identity, computed on the first request and sealed: the same
+    /// law, and so the same value, as the graph-free [`RdfDataset`](super::RdfDataset)
+    /// with these rows and terms.
+    pub(crate) fn frozen_snapshot_identity(&self) -> purrdf_hash::hex::Digest32 {
+        *self.snapshot_identity.get_or_init(|| {
+            let mut resident = purrdf_lex::allocation::Resident;
+            crate::source::resident_snapshot(
+                self.statistics.source_directory().content_records(),
+                purrdf_hash::multiset::Multiset256::default(),
+                self.dictionary
+                    .snapshot_fingerprint(&mut purrdf_lex::allocation::Memory::new(
+                        &mut resident,
+                    ))
+                    .expect("validated native identity has no workspace allocation or unbounded population"),
+            )
+        })
+    }
+
     /// Inspect concrete immutable row and currently populated permutation slices.
     #[must_use]
     pub fn storage_layout(&self) -> TripleStorageLayout {

@@ -125,8 +125,8 @@ pub use pydantic::{
 pub use report::ConformanceError;
 pub use rules::{
     LimitKnobs, RuleCoordinates, RuleLimit, RuleLimitExceeded, RuleLimits, RuleOptions,
-    RuleProcessor, RuleSource, apply_rules, entail_dataset, infer, run_rules,
-    run_rules_with_options,
+    RuleProcessor, RuleReceiptError, RuleSource, RuleSources, apply_rules, entail_dataset, infer,
+    run_rules, run_rules_with_options,
 };
 pub use schema_import::{
     ImportedShapes, SchemaDatatypeMap, SchemaImportConfig, SchemaImportError,

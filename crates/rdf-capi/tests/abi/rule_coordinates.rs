@@ -159,7 +159,7 @@ fn execute(
     assert!(error.is_null());
     unsafe {
         let receipt = String::from_utf8(buffer_bytes(receipt.0)).unwrap();
-        assert!(receipt.contains("executionIdentity"));
+        assert!(receipt.contains("programIdentity"));
         if let Some(time) = time {
             assert!(receipt.contains(time.to_str().unwrap()));
         }

@@ -491,8 +491,7 @@ fn a_rules_or_expression_resource_refusal_answers_nothing_and_the_neighbour_answ
                     Err(XPathValidationError::RuleExecution { cause, coordinates })
                         if matches!(cause.as_ref(), XPathValidationError::Query(diagnostic)
                             if diagnostic.code == Resource::PatternBytes.code())
-                            && coordinates.program_identity().is_some()
-                            && coordinates.snapshot_identity().is_some()),
+                            && coordinates.program_identity().is_some()),
                 "{refused:?}"
             );
         }

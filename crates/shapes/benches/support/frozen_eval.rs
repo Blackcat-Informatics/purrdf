@@ -28,7 +28,9 @@
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
 
-use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId};
+use purrdf_core::{
+    ContentIdentified as _, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId,
+};
 use purrdf_iri::vocab::{rdf, sh};
 use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_shapes::engine::{PreparedShapes, PreparedValidator, parse_shapes};
@@ -592,7 +594,7 @@ impl ShapeSet {
 pub(crate) enum Spec {
     /// Builder to frozen dataset, builder construction outside the counted window.
     Freeze(Data),
-    /// A `snapshot_identity()` call on a freshly frozen dataset.
+    /// A `content_identity()` request on a freshly frozen dataset.
     IdentityFirst(Data),
     /// A second call on the same dataset.
     IdentitySecond,
@@ -841,7 +843,7 @@ impl Fixtures {
                 self.layout.quads,
                 "the layout is exact"
             );
-            let _ = DatasetView::snapshot_identity(&*dataset);
+            let _ = identity(&dataset);
             let engine = NativeSparqlEngine::new();
             for query in Query::ALL {
                 let prepared = engine
@@ -905,8 +907,14 @@ fn witness(result: &SparqlResult, detail: Detail) -> Witness {
     }
 }
 
-fn digest64(identity: Option<purrdf_hash::hex::Digest32>) -> u64 {
-    let identity = identity.expect("an RdfDataset reports an identity");
+/// The dataset's content identity, computed on this request unless already sealed.
+fn identity(dataset: &RdfDataset) -> purrdf_hash::hex::Digest32 {
+    dataset
+        .content_identity()
+        .unwrap_or_else(|never| match never {})
+}
+
+fn digest64(identity: purrdf_hash::hex::Digest32) -> u64 {
     u64::from_le_bytes(identity.as_bytes()[..8].try_into().expect("32 bytes"))
 }
 
@@ -934,19 +942,17 @@ pub(crate) fn op(row: &Row, fx: &Fixtures) -> Op {
             let dataset = freeze(&layout, how);
             Op {
                 run: Box::new(move |_| {
-                    let digest =
-                        digest64(DatasetView::snapshot_identity(&*dataset).expect("reads"));
+                    let digest = digest64(identity(&dataset));
                     Witness { count: 1, digest }
                 }),
             }
         }
         Spec::IdentitySecond => {
             let dataset = freeze(&layout, Data::Ordinary);
-            let _ = DatasetView::snapshot_identity(&*dataset);
+            let _ = identity(&dataset);
             Op {
                 run: Box::new(move |_| {
-                    let digest =
-                        digest64(DatasetView::snapshot_identity(&*dataset).expect("reads"));
+                    let digest = digest64(identity(&dataset));
                     Witness { count: 1, digest }
                 }),
             }
@@ -984,7 +990,7 @@ pub(crate) fn op(row: &Row, fx: &Fixtures) -> Op {
         } => {
             let dataset = freeze(&layout, data);
             if identity_warm {
-                let _ = DatasetView::snapshot_identity(&*dataset);
+                let _ = identity(&dataset);
             }
             let prepared = prepared_shapes(shapes, &layout);
             Op {

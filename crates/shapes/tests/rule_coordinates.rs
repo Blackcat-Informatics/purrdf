@@ -202,11 +202,14 @@ fn parsed_rl_keeps_coordinates_on_both_carriers_and_restores_after_refusal() {
         );
         assert_eq!(actual.entropy_seed(), first.entropy_seed());
         assert_eq!(actual.program_identity(), first.program_identity());
-        assert_eq!(actual.snapshot_identity(), first.snapshot_identity());
         assert_eq!(actual.executions(), first.executions());
         // Three-position and four-position clause stores have different compiled
         // contracts, even though their query contexts and inferred facts agree.
-        assert_ne!(actual.execution_identity(), first.execution_identity());
+        let sources = purrdf_shapes::RuleSources::new([1; 32].into(), [2; 32].into());
+        assert_ne!(
+            actual.execution_identity(&sources),
+            first.execution_identity(&sources)
+        );
     }
     assert!(replace_ambient_context(AmbientContext::default()).is_idle());
 }

@@ -710,12 +710,6 @@ pub trait DatasetView {
     fn retained_view_stats(&self) -> Option<crate::ViewStats> {
         None
     }
-    /// Immutable snapshot identity when the view carries a certified content or
-    /// representation binding. Unknown identity is explicit, never an address,
-    /// statistics fingerprint or session-local term identifier.
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(None)
-    }
     /// The dataset-local id type this view mints and reads in (C0.8). For the
     /// production [`RdfDataset`] this is [`TermId`]; a paged/global backend supplies
     /// its own id, which is meaningful only within this view.
@@ -1871,6 +1865,61 @@ pub trait FallibleDatasetView: DatasetView<ReadError = Self::Error> {
     fn operation_status(&self) -> ViewOperationStatus<Self::Error, Self::Evidence>;
 }
 
+/// A view that can report a certified content identity: a digest of exactly the
+/// RDF it serves (and, for composed views, of how it composes its sources), never
+/// an address, statistics fingerprint or session-local term identifier.
+///
+/// This is a capability, not part of reading: evaluating a query never asks for
+/// it, so a view pays for its identity only when a caller requests one, for a
+/// receipt or a content-addressed record. A view that cannot bind its content
+/// does not implement this trait. An implementation may seal the identity once
+/// and return the sealed value on later requests, but no implementation computes
+/// it in a freeze, a seal, a construction or a query: a single use with no later
+/// reader of the identity never pays for it. Any future identity law keeps that
+/// property; the method is fallible and computed when asked so it can.
+pub trait ContentIdentified: DatasetView {
+    /// Why this view's identity cannot be produced. Resident carriers use
+    /// [`Infallible`](std::convert::Infallible).
+    type IdentityError;
+
+    /// The view's content identity, computed on this request unless already sealed.
+    ///
+    /// # Errors
+    /// The view's typed failure to read or seal its content.
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError>;
+}
+
+/// The identity sealed in `cell`, computing it with `seal` on the first request.
+/// A failed computation seals nothing, so a later request computes again.
+pub(crate) fn sealed_identity<E>(
+    cell: &std::sync::OnceLock<purrdf_hash::hex::Digest32>,
+    seal: impl FnOnce() -> Result<purrdf_hash::hex::Digest32, E>,
+) -> Result<purrdf_hash::hex::Digest32, E> {
+    if let Some(identity) = cell.get() {
+        return Ok(*identity);
+    }
+    let identity = seal()?;
+    Ok(*cell.get_or_init(|| identity))
+}
+
+/// The frozen dataset computes its identity on the first request, never in a
+/// freeze, and returns the sealed value afterwards.
+impl ContentIdentified for RdfDataset {
+    type IdentityError = std::convert::Infallible;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        Ok(self.frozen_snapshot_identity())
+    }
+}
+
+impl<T: ContentIdentified> ContentIdentified for Arc<T> {
+    type IdentityError = T::IdentityError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        (**self).content_identity()
+    }
+}
+
 /// The frozen dataset never faults: its rows, terms and side tables are already
 /// resident and validated, so every read is total and `operation_status` is
 /// [`Ready`](ViewOperationStatus::Ready) at every checkpoint, before and after
@@ -2080,10 +2129,6 @@ impl DatasetView for RdfDataset {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(Some(self.frozen_snapshot_identity()))
-    }
 
     #[inline]
     fn statement_layer_is_empty(&self) -> bool {
@@ -2335,9 +2380,6 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
     fn retained_view_stats(&self) -> Option<crate::ViewStats> {
         (**self).retained_view_stats()
-    }
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        (**self).snapshot_identity()
     }
 
     fn annotation_quads_for_range<'a>(

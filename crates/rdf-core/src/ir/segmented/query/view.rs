@@ -591,6 +591,16 @@ impl SegmentedStackQuery<'_> {
     }
 }
 
+/// The stack snapshot's identity, computed on each request from its layers.
+impl crate::ContentIdentified for SegmentedStackQuery<'_> {
+    type IdentityError = SegmentedError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        self.check_ready()?;
+        Ok(self.snapshot.content_identity())
+    }
+}
+
 impl DatasetView for SegmentedStackQuery<'_> {
     type Id = GlobalTermId;
     type ReadError = SegmentedError;
@@ -599,11 +609,6 @@ impl DatasetView for SegmentedStackQuery<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        self.check_ready()?;
-        Ok(Some(self.snapshot.content_identity()))
-    }
 
     fn source_version(&self) -> Result<Option<crate::source::SourceVersion>, Self::ReadError> {
         self.capture_source_version()
