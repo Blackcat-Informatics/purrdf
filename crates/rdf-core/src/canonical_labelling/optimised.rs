@@ -729,8 +729,8 @@ impl<'a> Engine<'a> {
             .map(|&v| call.adj[0][v].len() as u64)
             .sum();
         units.fix += s + entries.len() as u64 + removed_incidences;
-        // The stop on `s` follows the order of the engine: with the invariant
-        // `s`, larger first, a child with a smaller `s` is the one stopped.
+        // A child is stopped when its `s` is greater than the best's, or when
+        // its `s` is equal and it has more entries (10.4).
         let cut = bound.and_then(|best| {
             if !self.options.stops {
                 return None;

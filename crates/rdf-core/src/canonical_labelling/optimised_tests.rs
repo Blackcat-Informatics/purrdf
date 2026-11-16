@@ -1193,7 +1193,8 @@ fn route_five_alone_skips_children_of_the_top_call() {
 /// 10.4: a child whose certificate ties the best so far is not stopped. On the
 /// 2-cycle, with the skip by twins off, the second child ties the first and is
 /// explored, so the attaining count and the group order are `2` and `2` as in
-/// the oracle, with twins off and on. The search is forced, since the
+/// the oracle. With twins on the result is the same, the second child being
+/// either explored or skipped by its class. The search is forced, since the
 /// search-free run settles the 2-cycle.
 #[test]
 fn a_child_that_ties_the_best_is_not_stopped_on_the_two_cycle() {
