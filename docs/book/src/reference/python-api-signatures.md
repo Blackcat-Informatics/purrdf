@@ -674,6 +674,9 @@ class _QuadStore:
     def __len__(self) -> int:
         ...
 
+    def content_identity(self) -> str:
+        ...
+
     def _store_capsule(self) -> CapsuleType:
         ...
 
@@ -760,6 +763,9 @@ class Dataset:
         ...
 
 def parse(input: bytes | str, format: RdfFormat, *, base: str | None=..., input_options: str | None=...) -> list[Quad]:
+    ...
+
+def bind_execution_receipt(receipt_json: str, content_identity: str) -> str:
     ...
 
 @overload
@@ -1153,17 +1159,20 @@ def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy) ->
     ...
 
 class YamlSourceExport:
-    @property
-    def root(self) -> str: ...
-    @property
-    def dataset(self) -> RdfDataset: ...
 
-def yaml_source_export(
-    source: bytes, *, source_iri: str, profile_json: bytes
-) -> YamlSourceExport: ...
-def yaml_source_reconstruct(
-    dataset: RdfDataset, *, root: str, profile_json: bytes
-) -> bytes: ...
+    @property
+    def root(self) -> str:
+        ...
+
+    @property
+    def dataset(self) -> RdfDataset:
+        ...
+
+def yaml_source_export(source: bytes, *, source_iri: str, profile_json: bytes) -> YamlSourceExport:
+    ...
+
+def yaml_source_reconstruct(dataset: RdfDataset, *, root: str, profile_json: bytes) -> bytes:
+    ...
 
 class RdfDataset:
 

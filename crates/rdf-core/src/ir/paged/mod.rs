@@ -1196,7 +1196,10 @@ impl PagedDataset {
         }
         // Match query admission: diagnose structural drift first, then refuse
         // remaining content changes even when every summary count is unchanged.
-        if materialization.dataset.frozen_snapshot_identity()
+        if materialization
+            .dataset
+            .frozen_snapshot_identity()
+            .map_err(|defect| PageFault::invalid_data(id, defect.to_string()))?
             != slot.translation.summary().snapshot_identity
         {
             return Err(PageFault::invalid_data(
@@ -1366,6 +1369,15 @@ impl PagedDataset {
     }
 }
 
+/// The identity combined from the page identities sealed with each page summary.
+impl crate::ContentIdentified for PagedDataset {
+    type IdentityError = std::convert::Infallible;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        Ok(self.statistics.snapshot_identity)
+    }
+}
+
 impl DatasetView for PagedDataset {
     type Id = GlobalTermId;
     type ReadError = std::convert::Infallible;
@@ -1374,10 +1386,6 @@ impl DatasetView for PagedDataset {
     where
         Self: 'a;
     type ProbePlan = ();
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(Some(self.statistics.snapshot_identity))
-    }
 
     fn reserve_owned_workspace(
         &self,

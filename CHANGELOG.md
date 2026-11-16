@@ -23,6 +23,39 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   at all: its floor is the requested size below where it starts, so it is
   measured even when the system call fails.
 
+- **Breaking: no query computes a content identity.** A dataset's content
+  identity (a digest of every row) is now computed only when a caller asks for
+  it, through the new `purrdf_core::ContentIdentified` trait. No freeze
+  (`freeze_with_memory` included), view construction (composite, mutation
+  snapshot, paged stack, pack view, triple carrier) or query computes it, so the
+  first governed query on a fresh dataset no longer pays for hashing it.
+  On the frozen-eval measurement (22,000 quads) the governed prepared
+  first query drops from 224.2 to 62.7 million instructions (`q1`), 262.3 to
+  97.1 (`q3`), 212.1 to 50.3 (`q4`) and 209.7 to 47.2 (two-pattern scan), level
+  with the ungoverned first query; allocation counts are unchanged on every
+  row. Identity values are unchanged. Query coordinates now carry a run identity
+  (`SuppliedQueryCoordinates::run_identity`, law `execution-run/v1`); the
+  execution identity is computed from caller-supplied source identities by
+  `execution_identity(&ExecutionSources)` under the new
+  `execution-coordinates/v2` law, and refuses with the typed `ReceiptError`.
+  Rule coordinates follow (`RuleCoordinates::execution_identity(&RuleSources)`,
+  `rule-execution/v2`, `RuleReceiptError`). Host receipts carry `runIdentity`
+  and `readsFocusGraph` and no longer carry `executionIdentity` or
+  `snapshotIdentity` (rule receipts: `snapshotIdentity`, `shapesIdentity`,
+  `executionIdentity`). The explicit request: the CLI's
+  `query --content-identity`; `purrdf_execution_receipt_bind` in the C ABI;
+  `Dataset#contentIdentity()` and `bindExecutionReceipt` in the wasm package;
+  `QuadStore.content_identity()` and `purrdf.bind_execution_receipt` in Python;
+  `purrdf_validate::query::{execution_receipt_json_with_sources,
+  bind_execution_receipt, bind_execution_receipt_hex,
+  rule_execution_receipt_value_with_sources}` in Rust. Migration: replace
+  `DatasetView::snapshot_identity` with `ContentIdentified::content_identity`
+  (an `Err`, not `Ok(None)`, where a view cannot certify its content, and no
+  method at all on a view that never can); replace
+  `SuppliedQueryCoordinates::{snapshot_identity, execution_identity}` with
+  `run_identity` and `execution_identity(&ExecutionSources::new(view.content_identity()?))`;
+  stored execution identities change value under the v2 law.
+
 - **Typed JSON Pointers:** `purrdf_lex::json_pointer::JsonPointer` holds a
   pointer as its unescaped reference tokens and writes the RFC 6901 spelling
   only on `Display`, through `escape_token`; `child`, `child_index`, `tokens`

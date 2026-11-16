@@ -61,6 +61,7 @@ import init, {
   AsyncJob,
   AsyncJobOptions,
   AsyncOperationKind,
+  bindExecutionReceipt,
   CancellationToken,
   CanonicalCause,
   CanonicalResult,
@@ -1711,6 +1712,7 @@ export async function streamToDataset(quadStream) {
 
 export {
   asyncStackRegionBytes,
+  bindExecutionReceipt,
   CancellationToken,
   CanonicalCause,
   CanonicalResult,

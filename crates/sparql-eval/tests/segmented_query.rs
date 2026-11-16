@@ -2254,11 +2254,11 @@ fn authenticated_annotation_ranges_reduce_cold_reads_and_keep_exact_filter() {
         )
         .unwrap();
         let before = source.evidence();
-        assert!(source.snapshot_identity().unwrap().is_some());
+        purrdf_core::ContentIdentified::content_identity(&source).unwrap();
         assert_eq!(
             source.evidence().request_count(),
             before.request_count(),
-            "snapshot identity is a certified descriptor lookup"
+            "content identity is a certified descriptor lookup"
         );
         let result = engine
             .query_fallible_view(

@@ -1071,6 +1071,34 @@ fn persisted_certification_reopens_only_with_retained_authority() {
     ));
 }
 
+/// The full-certification receipt a downstream store persists and reopens layers by
+/// (`SegmentedReceipt::snapshot`, `encode`) is a representation identity of the
+/// image, apart from any dataset content identity: its bytes are a persisted law,
+/// and a session over the image reports exactly that snapshot as its identity.
+fn certification_receipt_bytes_are_frozen() {
+    let (image, _) = build(
+        &[
+            TermValue::iri("http://example.org/receipt"),
+            TermValue::iri("http://example.org/layer"),
+        ],
+        0,
+    );
+    let receipt = image.receipt();
+    assert_eq!(
+        purrdf_hash::hex::encode(&receipt.encode()),
+        CERTIFICATION_RECEIPT_GOLDEN
+    );
+    let identity = purrdf_core::ContentIdentified::content_identity(&session(&image, 2)).unwrap();
+    assert_eq!(identity.as_bytes(), receipt.snapshot().as_bytes());
+}
+
+const CERTIFICATION_RECEIPT_GOLDEN: &str = concat!(
+    "5055525243525431eb49938ee70cde50968362f20238d3044b86b98543fa3111",
+    "cba95634c31bf1a1f3fa463e45698b7b0d52baeabf9943295980006b363ba50a",
+    "bad3d1c7db2f58d0000400000b00000000000000100000000000000000300000",
+    "0000000001000000",
+);
+
 fn snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids() {
     let (first, ids) = build(&[TermValue::iri("http://example.org/first")], 0);
     let (second, second_ids) = build(&[TermValue::iri("http://example.org/second")], 0);
@@ -1249,6 +1277,7 @@ purrdf_testkit::harness_main!(
     rdf12_references_empty_graphs_and_streamed_lines_survive,
     retained_v1_pack_reader_migrates_into_the_versioned_representation,
     persisted_certification_reopens_only_with_retained_authority,
+    certification_receipt_bytes_are_frozen,
     snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids,
     cancellation_retains_the_exact_failed_request_and_refuses_partial_drains,
     charged_read_peak_covers_measured_allocations_including_streamed_output,

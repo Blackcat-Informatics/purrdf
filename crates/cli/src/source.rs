@@ -155,11 +155,29 @@ pub(crate) trait ViewOp {
     type Output;
 
     /// Run the operation over a borrowed concrete view.
-    fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+    fn run<D: InputView>(
         self,
         view: &D,
         canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError>;
+}
+
+/// Every view an input resolves to: resident and never failing, and able to state
+/// its content identity when an operation is asked for one (`--content-identity`).
+/// Nothing computes that identity unless asked.
+pub(crate) trait InputView:
+    DatasetView<ReadError = std::convert::Infallible>
+    + purrdf_core::ContentIdentified<IdentityError: std::error::Error + Send + Sync + 'static>
+    + Sync
+{
+}
+
+impl<
+    D: DatasetView<ReadError = std::convert::Infallible>
+        + purrdf_core::ContentIdentified<IdentityError: std::error::Error + Send + Sync + 'static>
+        + Sync,
+> InputView for D
+{
 }
 
 /// Read every byte of a path, or of stdin when `path` is `-`, WITHOUT decoding.
@@ -850,7 +868,7 @@ pub(crate) fn serialize_input_to_nquads(
     impl ViewOp for NQuadsOp {
         type Output = SerializeOutcome;
 
-        fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+        fn run<D: InputView>(
             self,
             view: &D,
             _canonical: &mut crate::canonical::Request,

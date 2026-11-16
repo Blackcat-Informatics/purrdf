@@ -242,9 +242,16 @@ pub fn provenance(namespace: Option<&ProvenanceNamespace>, query: &str) -> Resul
 }
 
 /// Render an actual native execution receipt without reconstructing it from inputs.
-/// Exact timestamp spelling and the initial unsigned seed survive every host's
-/// number representation. A missing identity is explicit, never inferred from a
-/// query string or from the result rows.
+///
+/// The receipt carries the run's coordinates and its run identity, which binds the
+/// request, the clock, the seed and the environment. It carries no source content
+/// identity: computing one hashes the whole dataset, so a host never pays for it on
+/// a caller's behalf. A Rust caller that wants the execution identity supplies the
+/// sources' identities to `SuppliedQueryCoordinates::execution_identity`. Exact
+/// timestamp spelling and the initial unsigned seed survive every host's number
+/// representation. A run without a run identity (external code without a certified
+/// implementation identity) renders `null`, never an identity inferred from the
+/// query string or the result rows.
 #[must_use]
 pub fn execution_receipt_value(
     coordinates: &purrdf_sparql_eval::QueryCoordinates,
@@ -261,17 +268,12 @@ pub fn execution_receipt_value(
             .with("suppliedNow", started.now().is_some())
             .with("suppliedEntropySeed", started.entropy_seed().is_some())
             .with(
-                "executionIdentity",
+                "runIdentity",
                 started
-                    .execution_identity()
+                    .run_identity()
                     .map_or(Value::Null, |identity| Value::from(identity.to_string())),
             )
-            .with(
-                "snapshotIdentity",
-                started
-                    .snapshot_identity()
-                    .map_or(Value::Null, |identity| Value::from(identity.to_string())),
-            )
+            .with("readsFocusGraph", started.reads_focus_graph())
             .into(),
     }
 }
@@ -282,35 +284,201 @@ pub fn execution_receipt_json(coordinates: &purrdf_sparql_eval::QueryCoordinates
     purrdf_lex::json::write_compact(&execution_receipt_value(coordinates))
 }
 
+/// The receipt of `coordinates` bound to the content of the sources its run read:
+/// [`execution_receipt_value`] with `contentIdentity` (and `focusGraphIdentity`
+/// when supplied) and `executionIdentity` added.
+///
+/// # Errors
+/// [`ReceiptError`](purrdf_sparql_eval::ReceiptError) when the run has no execution
+/// identity: it never started, it called extension code without a certified
+/// implementation identity, or the focus-graph identity is missing or unused.
+pub fn execution_receipt_value_with_sources(
+    coordinates: &purrdf_sparql_eval::QueryCoordinates,
+    sources: &purrdf_sparql_eval::ExecutionSources,
+) -> Result<purrdf_lex::json::Value, purrdf_sparql_eval::ReceiptError> {
+    let execution = coordinates.execution_identity(sources)?;
+    let mut value = execution_receipt_value(coordinates);
+    let Some(object) = value.as_object_mut() else {
+        return Err(purrdf_sparql_eval::ReceiptError::NotStarted);
+    };
+    object.insert("contentIdentity", sources.dataset().to_string());
+    if let Some(focus) = sources.focus_graph() {
+        object.insert("focusGraphIdentity", focus.to_string());
+    }
+    object.insert("executionIdentity", execution.to_string());
+    Ok(value)
+}
+
+/// [`execution_receipt_value_with_sources`] as compact JSON.
+///
+/// # Errors
+/// As [`execution_receipt_value_with_sources`].
+pub fn execution_receipt_json_with_sources(
+    coordinates: &purrdf_sparql_eval::QueryCoordinates,
+    sources: &purrdf_sparql_eval::ExecutionSources,
+) -> Result<String, purrdf_sparql_eval::ReceiptError> {
+    execution_receipt_value_with_sources(coordinates, sources)
+        .map(|value| purrdf_lex::json::write_compact(&value))
+}
+
+/// Why a host receipt could not be bound to a content identity.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ReceiptBindError {
+    /// The receipt text is not JSON.
+    Json(purrdf_lex::json::Error),
+    /// The JSON is not an execution receipt: this member is missing or ill-typed.
+    NotAReceipt {
+        /// The receipt member that is missing or ill-typed.
+        member: &'static str,
+    },
+    /// The content identity is not 64 lowercase hexadecimal digits.
+    ContentIdentity,
+    /// The receipt's run cannot have an execution identity.
+    Refused(purrdf_sparql_eval::ReceiptError),
+    /// The dataset refused to produce its content identity.
+    Identity(purrdf_lex::allocation::StorageError),
+}
+
+impl std::fmt::Display for ReceiptBindError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(error) => write!(f, "the execution receipt is not JSON: {error}"),
+            Self::NotAReceipt { member } => {
+                write!(
+                    f,
+                    "not an execution receipt: `{member}` is missing or ill-typed"
+                )
+            }
+            Self::ContentIdentity => {
+                f.write_str("the content identity is not 64 lowercase hexadecimal digits")
+            }
+            Self::Refused(error) => error.fmt(f),
+            Self::Identity(error) => write!(f, "the dataset's content identity: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ReceiptBindError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Json(error) => Some(error),
+            Self::Refused(error) => Some(error),
+            Self::Identity(error) => Some(error),
+            Self::NotAReceipt { .. } | Self::ContentIdentity => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ReceiptBindError {
+    purrdf_hash::error_visit! {
+        Json(error) => "receipt-bind-json" { "cause" => Record(error) },
+        NotAReceipt { member } => "receipt-bind-not-a-receipt" { "member" => Code(member) },
+        ContentIdentity => "receipt-bind-content-identity" {},
+        Refused(error) => "receipt-bind-refused" { "cause" => Record(error) },
+        Identity(error) => "receipt-bind-identity" { "cause" => Cause(error) },
+    }
+}
+
+/// Bind a host's execution receipt JSON to the content identity of the dataset
+/// its run read: the receipt with `contentIdentity` and `executionIdentity` added,
+/// under the same law as [`execution_receipt_value_with_sources`].
+///
+/// This is the explicit request every host that hands its caller only receipt
+/// JSON routes through. `content` is called only after the receipt is admitted,
+/// so a refused binding computes no content identity; a refusal of the identity
+/// itself is returned as [`ReceiptBindError::Identity`]. A host receipt carries no
+/// focus-graph identity, so a run that read a focus graph is refused.
+///
+/// # Errors
+/// [`ReceiptBindError`].
+pub fn bind_execution_receipt(
+    receipt: &str,
+    content: impl FnOnce() -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError>,
+) -> Result<String, ReceiptBindError> {
+    use purrdf_lex::json::Value;
+    use purrdf_sparql_eval::ReceiptError;
+    let mut value = purrdf_lex::json::read(receipt).map_err(ReceiptBindError::Json)?;
+    match value.get("state").and_then(Value::as_str) {
+        Some("started") => {}
+        Some("not-started") => return Err(ReceiptBindError::Refused(ReceiptError::NotStarted)),
+        _ => return Err(ReceiptBindError::NotAReceipt { member: "state" }),
+    }
+    let run = match value.get("runIdentity") {
+        Some(Value::Null) => {
+            return Err(ReceiptBindError::Refused(
+                ReceiptError::OpaqueImplementation,
+            ));
+        }
+        Some(Value::String(text)) => {
+            purrdf_hash::hex::Digest32::from_hex(text).ok_or(ReceiptBindError::NotAReceipt {
+                member: "runIdentity",
+            })?
+        }
+        _ => {
+            return Err(ReceiptBindError::NotAReceipt {
+                member: "runIdentity",
+            });
+        }
+    };
+    let reads_focus_graph = value
+        .get("readsFocusGraph")
+        .and_then(Value::as_bool)
+        .ok_or(ReceiptBindError::NotAReceipt {
+            member: "readsFocusGraph",
+        })?;
+    if reads_focus_graph {
+        return Err(ReceiptBindError::Refused(
+            ReceiptError::FocusGraphIdentityMissing,
+        ));
+    }
+    let sources =
+        purrdf_sparql_eval::ExecutionSources::new(content().map_err(ReceiptBindError::Identity)?);
+    let execution = sources
+        .execution_identity_of(&run, false)
+        .map_err(ReceiptBindError::Refused)?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(ReceiptBindError::NotAReceipt { member: "state" });
+    };
+    object.insert("contentIdentity", sources.dataset().to_string());
+    object.insert("executionIdentity", execution.to_string());
+    Ok(purrdf_lex::json::write_compact(&value))
+}
+
+/// [`bind_execution_receipt`] for a host that holds the content identity as the
+/// 64-hex text a dataset handle returned.
+///
+/// # Errors
+/// [`ReceiptBindError::ContentIdentity`] for text that is not a content identity;
+/// otherwise as [`bind_execution_receipt`].
+pub fn bind_execution_receipt_hex(
+    receipt: &str,
+    content_identity: &str,
+) -> Result<String, ReceiptBindError> {
+    let identity = purrdf_hash::hex::Digest32::from_hex(content_identity)
+        .ok_or(ReceiptBindError::ContentIdentity)?;
+    bind_execution_receipt(receipt, || Ok(identity))
+}
+
 /// The actual nested executions of a rule request, beside its supplied scope.
+///
+/// Like [`execution_receipt_value`], it carries no content identity of the data or
+/// shapes graph; `RuleCoordinates::execution_identity` takes them from a caller
+/// that wants the execution identity.
 #[must_use]
 pub fn rule_execution_receipt_value(
     coordinates: &purrdf_shapes::RuleCoordinates,
 ) -> purrdf_lex::json::Value {
+    rule_receipt_object(coordinates).into()
+}
+
+fn rule_receipt_object(coordinates: &purrdf_shapes::RuleCoordinates) -> purrdf_lex::json::Object {
     use purrdf_lex::json::{Object, Value};
     Object::new()
         .with(
             "programIdentity",
             coordinates
                 .program_identity()
-                .map_or(Value::Null, |value| Value::from(value.to_string())),
-        )
-        .with(
-            "snapshotIdentity",
-            coordinates
-                .snapshot_identity()
-                .map_or(Value::Null, |value| Value::from(value.to_string())),
-        )
-        .with(
-            "shapesIdentity",
-            coordinates
-                .shapes_identity()
-                .map_or(Value::Null, |value| Value::from(value.to_string())),
-        )
-        .with(
-            "executionIdentity",
-            coordinates
-                .execution_identity()
                 .map_or(Value::Null, |value| Value::from(value.to_string())),
         )
         .with(
@@ -333,7 +501,6 @@ pub fn rule_execution_receipt_value(
                 .map(execution_receipt_value)
                 .collect::<Vec<_>>(),
         )
-        .into()
 }
 
 /// Shared JSON transport for successful and refused rule execution receipts.
@@ -342,10 +509,99 @@ pub fn rule_execution_receipt_json(coordinates: &purrdf_shapes::RuleCoordinates)
     purrdf_lex::json::write_compact(&rule_execution_receipt_value(coordinates))
 }
 
+/// The rule receipt bound to the data and shapes graphs the inference read:
+/// [`rule_execution_receipt_value`] with `dataIdentity`, `shapesIdentity` and
+/// `executionIdentity` added.
+///
+/// # Errors
+/// [`RuleReceiptError`](purrdf_shapes::RuleReceiptError) when the inference has no
+/// execution identity.
+pub fn rule_execution_receipt_value_with_sources(
+    coordinates: &purrdf_shapes::RuleCoordinates,
+    sources: &purrdf_shapes::RuleSources,
+) -> Result<purrdf_lex::json::Value, purrdf_shapes::RuleReceiptError> {
+    let execution = coordinates.execution_identity(sources)?;
+    Ok(rule_receipt_object(coordinates)
+        .with("dataIdentity", sources.data().to_string())
+        .with("shapesIdentity", sources.shapes().to_string())
+        .with("executionIdentity", execution.to_string())
+        .into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ENGINE_LABEL, provenance};
     use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
+
+    /// A host binding a receipt's JSON reaches exactly the execution identity the
+    /// native coordinates compute for the same content; every receipt the binding
+    /// refuses computes no content identity, and its neighbour binds.
+    #[test]
+    fn a_host_receipt_binds_to_the_native_execution_identity_and_refusals_hash_nothing() {
+        use purrdf_sparql_eval::{ExecutionSources, ReceiptError};
+        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
+        let capture = super::ExecutionReceiptCapture::default();
+        engine
+            .query_with_options_view(
+                &dataset,
+                purrdf_core::SparqlRequest {
+                    query: "SELECT (1 AS ?one) WHERE {}",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &purrdf_sparql_eval::QueryOptions::new().with_coordinate_observer(&capture),
+            )
+            .unwrap();
+        let coordinates = capture.into_coordinates().unwrap();
+        let content = purrdf_hash::hex::Digest32::new([7; 32]);
+        let native = super::execution_receipt_json_with_sources(
+            &coordinates,
+            &ExecutionSources::new(content),
+        )
+        .unwrap();
+        let receipt = super::execution_receipt_json(&coordinates);
+        assert!(!receipt.contains("contentIdentity"));
+        assert_eq!(
+            super::bind_execution_receipt(&receipt, || Ok(content)).unwrap(),
+            native
+        );
+        assert_eq!(
+            super::bind_execution_receipt_hex(&receipt, &content.to_string()).unwrap(),
+            native
+        );
+
+        let unhashed =
+            || -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+                panic!("a refusal hashes nothing")
+            };
+        let refused = |text: &str| super::bind_execution_receipt(text, unhashed).unwrap_err();
+        assert!(matches!(
+            refused(r#"{"state":"not-started"}"#),
+            super::ReceiptBindError::Refused(ReceiptError::NotStarted)
+        ));
+        let opaque = receipt.replacen("\"runIdentity\":\"", "\"runIdentity\":null,\"x\":\"", 1);
+        assert!(matches!(
+            refused(&opaque),
+            super::ReceiptBindError::Refused(ReceiptError::OpaqueImplementation)
+        ));
+        let focused = receipt.replace("\"readsFocusGraph\":false", "\"readsFocusGraph\":true");
+        assert!(matches!(
+            refused(&focused),
+            super::ReceiptBindError::Refused(ReceiptError::FocusGraphIdentityMissing)
+        ));
+        assert!(matches!(refused("{"), super::ReceiptBindError::Json(_)));
+        assert!(matches!(
+            refused(r#"{"state":"started"}"#),
+            super::ReceiptBindError::NotAReceipt {
+                member: "runIdentity"
+            }
+        ));
+        assert!(matches!(
+            super::bind_execution_receipt_hex(&receipt, "not hex"),
+            Err(super::ReceiptBindError::ContentIdentity)
+        ));
+    }
 
     /// Replacing a prior request must not retain its time or seed by accident.
     #[test]

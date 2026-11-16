@@ -285,7 +285,8 @@ impl Iterator for TripleRows<'_> {
 pub struct TripleDataset {
     pub(super) dictionary: FrozenTerms,
     pub(super) statistics: super::statistics::LocalStatistics,
-    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
+    /// Sealed on the first identity request; no freeze or conversion computes it.
+    pub(super) snapshot_identity: OnceLock<purrdf_hash::hex::Digest32>,
     pub(super) triples: TripleTable,
     pub(super) reifiers: Box<[TripleReifierRow]>,
     pub(super) reifier_targets: OnceLock<Box<[u32]>>,
@@ -296,6 +297,29 @@ pub struct TripleDataset {
 }
 
 impl TripleDataset {
+    /// The content identity, computed on the first request and sealed: the same
+    /// law, and so the same value, as the graph-free [`RdfDataset`](super::RdfDataset)
+    /// with these rows and terms.
+    ///
+    /// # Errors
+    /// The typed storage refusal of the identity's workspace; a refusal seals
+    /// nothing.
+    pub(crate) fn frozen_snapshot_identity(
+        &self,
+    ) -> Result<purrdf_hash::hex::Digest32, StorageError> {
+        crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
+            let mut resident = purrdf_lex::allocation::Resident;
+            Ok(crate::source::resident_snapshot(
+                self.statistics.source_directory().content_records(),
+                purrdf_hash::multiset::Multiset256::default(),
+                self.dictionary
+                    .snapshot_fingerprint(&mut purrdf_lex::allocation::Memory::new(
+                        &mut resident,
+                    ))?,
+            ))
+        })
+    }
+
     /// Inspect concrete immutable row and currently populated permutation slices.
     #[must_use]
     pub fn storage_layout(&self) -> TripleStorageLayout {

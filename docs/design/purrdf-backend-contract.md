@@ -225,12 +225,14 @@ including its context's fixed `NOW()` value, and retains the exact FILTER as the
 final semantic decision. Graph selection, reifier ownership and ordinary asserted
 triples keep their existing semantics.
 
-`snapshot_identity` names immutable carrier content and graph declarations.
-Resident and pack carriers seal the identity when published or opened; paged and
-segmented compositions bind certified layers, chronology, removals and the visible
-head. Reading this identity does not enumerate payload pages. A custom carrier
-that cannot certify content returns `None`; statistics and process-local IDs are
-never substituted for a content identity.
+`ContentIdentified::content_identity` names immutable carrier content and graph
+declarations. It is a capability apart from reading: no query, freeze or view
+construction computes it. A carrier computes it on the first request and may seal
+it for later ones; paged and segmented compositions bind certified layers,
+chronology, removals and the visible head, and reading their identity does not
+enumerate payload pages. A custom carrier that cannot certify content does not
+implement the trait; statistics and process-local IDs are never substituted for
+a content identity.
 
 ### C4 — `DatasetMut` mutates by value, not by id
 

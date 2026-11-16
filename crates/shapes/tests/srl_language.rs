@@ -726,7 +726,6 @@ fn a_non_rdf_head_instantiation_is_refused() {
         "{error}"
     );
     assert!(execution.coordinates.program_identity().is_some());
-    assert!(execution.coordinates.snapshot_identity().is_some());
     assert_eq!(
         infer(rule, ":a :p :b .").expect("ok"),
         [[iri("b"), iri("inverse"), iri("a")]]

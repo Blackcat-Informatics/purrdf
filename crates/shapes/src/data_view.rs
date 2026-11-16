@@ -921,22 +921,70 @@ impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Either<A, B> 
     }
 }
 
-impl DatasetView for ShaclDatasetView {
-    type Id = TermId;
-    type ReadError = Infallible;
-    type TermGuard<'a>
-        = TermRef<'a, Self::Id>
-    where
-        Self: 'a;
-    type ProbePlan = QuadProbePlan;
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Infallible> {
+/// Why a SHACL data view cannot report a content identity.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum DataIdentityError {
+    /// The view selects its graph by a literal or triple term, which names no graph.
+    SelectedGraphNotAName,
+    /// The composed source could not seal its own identity.
+    Source(purrdf_core::RdfDiagnostic),
+}
+
+impl std::fmt::Display for DataIdentityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SelectedGraphNotAName => {
+                f.write_str("the view selects its graph by a term that names no graph")
+            }
+            Self::Source(error) => write!(f, "source content identity: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for DataIdentityError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Source(error) => Some(error),
+            Self::SelectedGraphNotAName => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for DataIdentityError {
+    purrdf_hash::error_visit! {
+        SelectedGraphNotAName => "shacl-data-identity-selected-graph-not-a-name" {},
+        Source(error) => "shacl-data-identity-source" { "cause" => Record(error) },
+    }
+}
+
+/// The view's identity binds its source's content identity, the projection flags
+/// and the selected graph name; it is computed on each request.
+impl purrdf_core::ContentIdentified for ShaclDatasetView {
+    type IdentityError = DataIdentityError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, DataIdentityError> {
+        // Refuse before hashing the source: a refused request computes nothing.
+        if let Some(graph) = self.selected_graph
+            && matches!(
+                self.resolve_term(graph),
+                TermRef::Literal { .. } | TermRef::Triple { .. }
+            )
+        {
+            return Err(DataIdentityError::SelectedGraphNotAName);
+        }
         let source = match &self.source {
-            Source::Native(source) => source.snapshot_identity()?,
-            Source::Composite(dense) => dense.source.snapshot_identity()?,
-            Source::Delta(dense) => dense.source.snapshot_identity()?,
-        };
-        let Some(source) = source else {
-            return Ok(None);
+            Source::Native(source) => source
+                .content_identity()
+                .map_err(|error| DataIdentityError::Source(error.into()))?,
+            Source::Composite(dense) => dense
+                .source
+                .content_identity()
+                .map_err(DataIdentityError::Source)?,
+            Source::Delta(dense) => dense
+                .source
+                .content_identity()
+                .map_err(DataIdentityError::Source)?,
         };
         const DOMAIN: purrdf_hash::Domain =
             purrdf_hash::Domain::new(b"purrdf-shapes/data-view-snapshot/v1");
@@ -967,13 +1015,23 @@ impl DatasetView for ShaclDatasetView {
                 }
                 // RDF graph names have exactly these two native representations.
                 // A caller selecting another term has not supplied a graph identity.
-                TermRef::Literal { .. } | TermRef::Triple { .. } => return Ok(None),
+                TermRef::Literal { .. } | TermRef::Triple { .. } => {
+                    return Err(DataIdentityError::SelectedGraphNotAName);
+                }
             },
         }
-        Ok(Some(purrdf_hash::hex::Digest32::new(
-            *hash.finalize().as_bytes(),
-        )))
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
     }
+}
+
+impl DatasetView for ShaclDatasetView {
+    type Id = TermId;
+    type ReadError = Infallible;
+    type TermGuard<'a>
+        = TermRef<'a, Self::Id>
+    where
+        Self: 'a;
+    type ProbePlan = QuadProbePlan;
     fn reserve_owned_workspace(
         &self,
         bytes: u64,

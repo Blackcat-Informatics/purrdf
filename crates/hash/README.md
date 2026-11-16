@@ -684,7 +684,7 @@ source on every run.
 | `b"purrdf-shapes/class-membership-snapshot/v1"` | `(inline)` | `crates/shapes/src/class_membership.rs` |
 | `b"purrdf-shapes/data-view-snapshot/v1"` | `(inline)` | `crates/shapes/src/data_view.rs` |
 | `b"purrdf-shapes/product/class-catalog"` | `CLASS_CATALOG_DOMAIN` | `crates/shapes/src/product/identity.rs` |
-| `b"purrdf-shapes/rule-execution/v1"` | `(inline)` | `crates/shapes/src/sparql/coordinates.rs` |
+| `b"purrdf-shapes/rule-execution/v2"` | `(inline)` | `crates/shapes/src/sparql/coordinates.rs` |
 | `b"purrdf-shapes/rule-program/v1"` | `(inline)` | `crates/shapes/src/srl/identity.rs` |
 | `b"purrdf-shapes/schema-compilation-key/v1"` | `SCHEMA_KEY_SALT` | `crates/shapes/src/json_schema.rs` |
 | `b"purrdf-sparql-algebra/node-identity/v1"` | `NODE` | `crates/sparql-algebra/src/identity.rs` |
@@ -694,7 +694,8 @@ source on every run.
 | `b"purrdf-sparql-eval/bound-request/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/embedding-space-generation/v1"` | `SPACE_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
 | `b"purrdf-sparql-eval/embedding-space-vectors-generation/v1"` | `VECTORS_GENERATION_DOMAIN` | `crates/sparql-eval/src/knn/mod.rs` |
-| `b"purrdf-sparql-eval/execution-coordinates/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
+| `b"purrdf-sparql-eval/execution-coordinates/v2"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
+| `b"purrdf-sparql-eval/execution-run/v1"` | `(inline)` | `crates/sparql-eval/src/engine/coordinates.rs` |
 | `b"purrdf-sparql-eval/extension-env"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/extension_env.rs` |
 | `b"purrdf-sparql-eval/numeric-forecast-key/v1"` | `(inline)` | `crates/sparql-eval/src/bgp/forecast.rs` |
 | `b"purrdf-sparql-eval/property-function-registry"` | `CONTENT_DOMAIN` | `crates/sparql-eval/src/property_fn_plan.rs` |

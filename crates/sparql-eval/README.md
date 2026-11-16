@@ -35,22 +35,28 @@ receipt before evaluation, including on a later failure. Governed outcomes and
 EXPLAIN also retain it directly; UPDATE retains its first WHERE context, while
 observers receive every WHERE context.
 
-An execution identity binds the full typed query or ordered UPDATE program,
-parameters, immutable snapshot, effective coordinates and declared environment.
-Prepared queries cache their immutable algebra identity. Source identities are
-sealed by the carrier, so obtaining a receipt does not scan query payload pages.
-A custom `DatasetView` without a certified snapshot reports absent snapshot and
-execution identities explicitly. Opaque callbacks and external producers likewise
-have no complete execution digest unless the caller supplies
-`with_implementation_identity`, certifying both their implementations and captured
-source snapshots. Declaration fingerprints alone cannot certify callback behavior.
-Typed rule programs supply that certificate for their generated scalar bodies;
-remote response bytes still require the caller's own certification.
+A run identity binds the full typed query or ordered UPDATE program,
+parameters, effective coordinates and declared environment; prepared queries
+cache their immutable algebra identity. No query hashes the dataset it reads: a
+caller that wants an execution identity asks the view for its content identity
+(`purrdf_core::ContentIdentified`) and passes it to
+`SuppliedQueryCoordinates::execution_identity`, which binds the run to it under
+the `execution-coordinates/v2` law. A view that cannot certify its content does
+not implement `ContentIdentified`. Opaque callbacks and external producers have
+no run identity, and so no execution identity (`ReceiptError`), unless the
+caller supplies `with_implementation_identity`, certifying both their
+implementations and captured source snapshots. Declaration fingerprints alone
+cannot certify callback behavior. Typed rule programs supply that certificate
+for their generated scalar bodies; remote response bytes still require the
+caller's own certification.
 
 The host receipt JSON carries exact time text, a decimal-string `entropySeed`,
-supplied-input flags, and hexadecimal execution and snapshot identities. CLI
-receipts go to stderr alongside the existing result stream. Language bindings
-retain receipts on result objects and execution failures.
+supplied-input flags, the hexadecimal run identity and whether a focus graph
+was read. A host adds `contentIdentity` and `executionIdentity` only on an
+explicit request: the CLI's `--content-identity`, and elsewhere a call that
+binds a receipt to the content identity of the dataset it read. CLI receipts go
+to stderr alongside the existing result stream. Language bindings retain
+receipts on result objects and execution failures.
 
 For repeated work, retain an `Arc<PreparedQuery>` from `prepare_query` or
 `prepare_algebra` and pass data through substitutions. Compiler-produced algebra

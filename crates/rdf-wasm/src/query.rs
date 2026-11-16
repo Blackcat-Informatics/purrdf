@@ -236,6 +236,38 @@ enum QueryResultValue {
     Graph(Box<Dataset>),
 }
 
+/// `bindExecutionReceipt(receiptJson, contentIdentity)` → the receipt with
+/// `contentIdentity` and `executionIdentity` added.
+///
+/// A query's receipt carries the run identity only: no query hashes its dataset.
+/// `contentIdentity` is the value `Dataset.contentIdentity()` returned for the
+/// dataset the query read; binding it is the explicit request for an execution
+/// identity.
+///
+/// # Errors
+///
+/// `purrdf-wasm-options` for a receipt that is not an execution receipt or an
+/// identity that is not 64 hexadecimal digits; `purrdf-wasm-receipt` for a run
+/// that cannot have an execution identity (it never started, or called extension
+/// code without a certified implementation identity).
+#[wasm_bindgen(js_name = bindExecutionReceipt)]
+pub fn bind_execution_receipt(
+    receipt_json: &str,
+    content_identity: &str,
+) -> Result<String, JsValue> {
+    purrdf_validate::query::bind_execution_receipt_hex(receipt_json, content_identity).map_err(
+        |error| {
+            let code = match error {
+                purrdf_validate::query::ReceiptBindError::Refused(_) => {
+                    crate::operation::RECEIPT_CODE
+                }
+                _ => OPTIONS_CODE,
+            };
+            coded_error(&error.to_string(), code)
+        },
+    )
+}
+
 /// A serialized query document beside the native execution that produced it.
 #[wasm_bindgen]
 #[derive(Debug)]
