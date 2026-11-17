@@ -851,12 +851,13 @@ export class Dataset implements Iterable<Quad> {
    */
   snapshot(): Dataset;
   /**
-   * Canonical N-Quads of the flat assertion projection (RDFC-1.0 over the
-   * RDF 1.2 abstract syntax).
+   * Canonical N-Quads of the flat assertion projection (the canonical line
+   * sequence of the nested-refinement labelling, with decimal blank-node
+   * labels).
    *
-   * Throws when canonicalization refuses the dataset — a reserved
-   * `urn:purrdf:rdfc:` IRI in a non-foldable position, or the n-degree
-   * call budget exhausted by a pathologically symmetric blank graph. The
+   * Throws when canonicalization refuses the dataset — the labelling's typed
+   * `input`, `graph`, `width` or `limit` refusal, the last when the caller's
+   * finite bound is exhausted by a pathologically symmetric blank graph. The
    * refusal is a thrown `Error` naming the cause; it never aborts the
    * module.
    */
@@ -2505,7 +2506,7 @@ export function entailProfile(document: string): ReasoningAnswer;
 
 /**
  * `entailExtractModule(document, signature, method)` → the locality module of the
- * ontology for a seed signature, as canonical (RDFC-1.0) N-Quads.
+ * ontology for a seed signature, as canonical line-sequence N-Quads.
  *
  * `signature` is one N-Triples term per line (blank lines ignored). `method` is
  * `bot`, `top` or `star`; an unknown spelling throws with the accepted set named.

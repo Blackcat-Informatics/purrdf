@@ -5,12 +5,30 @@
 
 mod support;
 
+/// The 13-node circulant of quadratic residues, in both directions, as
+/// N-Triples. The labelling cannot finish it without a search, so a bound of
+/// zero trips the engine's limit, while a two-node cycle needs none.
+fn residue_circulant() -> String {
+    let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
+    let mut lines = Vec::new();
+    for u in 0..13 {
+        for v in u + 1..13 {
+            if squares.contains(&((v - u) % 13)) {
+                lines.push(format!("_:v{u} <http://example.org/p> _:v{v} .\n"));
+                lines.push(format!("_:v{v} <http://example.org/p> _:v{u} .\n"));
+            }
+        }
+    }
+    lines.concat()
+}
+
 #[test]
 fn finite_refusal_and_unlimited_neighbor_publish_separate_receipts_before_output() {
     let directory = purrdf_testkit::temp_dir!().expect("temporary directory");
     let evidence = directory.path().join("receipts.json");
     let evidence = evidence.to_str().expect("UTF-8 temporary path");
-    let input = "_:a <http://example.org/p> _:b .\n_:b <http://example.org/p> _:a .\n";
+    let input = residue_circulant();
+    let input = input.as_str();
     let refused = support::pipe(
         &[
             "--canonical-search",
@@ -54,13 +72,34 @@ fn finite_refusal_and_unlimited_neighbor_publish_separate_receipts_before_output
         input,
     );
     assert!(accepted.status.success(), "{}", support::stderr(&accepted));
-    assert!(support::stdout(&accepted).starts_with("_:c14n"));
+    assert!(
+        support::stdout(&accepted).starts_with("_:0 "),
+        "{}",
+        support::stdout(&accepted)
+    );
     let unlimited = std::fs::read_to_string(evidence).expect("success receipts");
     assert!(
         unlimited.contains("unlimited") && unlimited.contains("\"completed\":true"),
         "{unlimited}"
     );
     assert_ne!(finite, unlimited, "evidence belongs to one request");
+    let cycle = "_:a <http://example.org/p> _:b .\n_:b <http://example.org/p> _:a .\n";
+    let neighbor = support::pipe(
+        &[
+            "--canonical-search",
+            "0",
+            "--canonicalization-receipts",
+            evidence,
+            "convert",
+            "--from",
+            "ntriples",
+            "--canonical",
+            "-",
+            "-",
+        ],
+        cycle,
+    );
+    assert!(neighbor.status.success(), "{}", support::stderr(&neighbor));
     let directory_destination = directory.path().to_str().expect("UTF-8 temporary path");
     let failed_evidence = support::pipe(
         &[

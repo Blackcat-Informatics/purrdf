@@ -61,7 +61,7 @@ fn rdf_gts_loss_matrix_json() -> String {
 ///
 /// `extra_prefixes` is the project's standard prefix set; only prefixes the
 /// document actually uses appear in the header. The output is a pure function of
-/// the graph (RDFC-aware blank handling), so re-running is idempotent.
+/// the graph (canonical blank-node handling), so re-running is idempotent.
 #[pyfunction]
 #[pyo3(signature = (turtle_bytes, extra_prefixes=Vec::new()))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values

@@ -10,70 +10,52 @@ and finalized receipt JSON when their caller-supplied content is refused.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import purrdf
 from purrdf import RdfDataset, RdfFormat
 
-# `<urn:purrdf:rdfc:reifies>` as a predicate whose OBJECT is a plain IRI (not a
-# quoted triple term) is not one of the two exact shapes the canonicalization
-# overlay itself lowers, so it is refused rather than silently accepted — accepting
-# it would let a structurally different graph canonicalize to the exact bytes a
-# genuine reifier binding would.
-RESERVED_PREDICATE_PLAIN_OBJECT = (
-    "<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n"
+# The 13-node circulant of quadratic residues, in both directions. The labelling
+# cannot finish it without a search, so a finite bound of "0" trips the engine's
+# typed `limit` refusal; "unlimited" completes it. The two-node cycle below needs
+# no search, so the same bound "0" admits it: the refusal is the input's, not the
+# bound's.
+CIRCULANT = "".join(
+    f"_:v{u} <https://example.org/p> _:v{v} .\n_:v{v} <https://example.org/p> _:v{u} .\n"
+    for u in range(13)
+    for v in range(u + 1, 13)
+    if (v - u) % 13 in {1, 3, 4, 9, 10, 12}
 )
-
-# The valid neighbour: an ORDINARY predicate adjacent to the reserved namespace (a
-# DIFFERENT `urn:purrdf:` sub-namespace, not `urn:purrdf:rdfc:`) in the exact same
-# shape. Over-refusal is the mirror bug of silent acceptance, so this must still
-# serialize, with the IRI surviving byte-for-byte into the output.
-NEIGHBOURING_ORDINARY_PREDICATE = (
-    "<http://example.org/r> <urn:purrdf:other:annotation> <http://example.org/o> .\n"
-)
+TWO_CYCLE = "_:a <https://example.org/p> _:b .\n_:b <https://example.org/p> _:a .\n"
 
 
-def test_to_nquads_raises_value_error_naming_the_reserved_iri() -> None:
-    dataset = RdfDataset(RESERVED_PREDICATE_PLAIN_OBJECT, RdfFormat.N_TRIPLES)
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies") as failure:
-        dataset.to_nquads(canonical_search="1000000").value
+def test_to_nquads_raises_value_error_on_the_labelling_limit() -> None:
+    dataset = RdfDataset(CIRCULANT, RdfFormat.N_TRIPLES)
+    with pytest.raises(ValueError, match="labelling refused") as failure:
+        dataset.to_nquads(canonical_search="0").value
     del dataset
     assert failure.value.native_cause.json == failure.value.native_cause_json
 
 
-def test_to_nquads_still_serializes_an_ordinary_neighbouring_iri() -> None:
-    """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
-    dataset = RdfDataset(NEIGHBOURING_ORDINARY_PREDICATE, RdfFormat.N_TRIPLES)
-    out = dataset.to_nquads(canonical_search="1000000").value
-    assert "urn:purrdf:other:annotation" in out, out
+def test_to_nquads_still_serializes_inputs_the_bound_admits() -> None:
+    """The neighbours of the refusal above: the same bound admits a search-free input,
+    and the same input completes under another bound."""
+    cycle = RdfDataset(TWO_CYCLE, RdfFormat.N_TRIPLES).to_nquads(canonical_search="0").value
+    assert cycle.startswith("_:0 "), cycle
+    unlimited = RdfDataset(CIRCULANT, RdfFormat.N_TRIPLES).to_nquads(canonical_search="unlimited").value
+    assert unlimited.startswith("_:0 "), unlimited
 
 
-def _quad(subject: str, predicate: str, obj: str) -> purrdf.Quad:
-    return purrdf.Quad(
-        purrdf.NamedNode(subject), purrdf.NamedNode(predicate), purrdf.NamedNode(obj)
-    )
-
-
-def test_dataset_canonicalize_raises_value_error_naming_the_reserved_iri() -> None:
-    """`Dataset.canonicalize()`'s content is wholly caller-supplied too."""
-    dataset = purrdf.Dataset(
-        [_quad("http://example.org/r", "urn:purrdf:rdfc:reifies", "http://example.org/o")]
-    )
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
-        dataset.canonicalize(canonical_search="1000000").value
-
-
-def test_dataset_canonicalize_still_admits_an_ordinary_neighbouring_dataset() -> None:
-    """The refusal above is not an over-refusal of an ordinary, unrelated IRI.
-
-    The dataset is left USABLE after the refusal above, too: this neighbour reuses
-    the same object under construction, one canonicalization call each.
-    """
-    dataset = purrdf.Dataset(
-        [_quad("http://example.org/r", "urn:purrdf:other:annotation", "http://example.org/o")]
-    )
-    dataset.canonicalize(canonical_search="1000000").value
-    assert len(dataset) == 1
+def test_dataset_canonicalize_raises_value_error_on_the_labelling_limit() -> None:
+    dataset = purrdf.Dataset(purrdf.parse(CIRCULANT, RdfFormat.N_TRIPLES))
+    original = tuple(str(quad) for quad in dataset)
+    with pytest.raises(ValueError, match="labelling refused"):
+        dataset.canonicalize(canonical_search="0").value
+    assert tuple(str(quad) for quad in dataset) == original, "a refusal leaves the dataset unchanged"
+    dataset.canonicalize(canonical_search="unlimited").value
+    assert len(dataset) == len(original)
 
 
 # ── determinism: what canonicalization is FOR ───────────────────────────────────
@@ -110,10 +92,10 @@ def _canonical_rows(document: str, canonical_search: str) -> list[str]:
     return sorted(f"{quad.subject} <{quad.predicate}> {quad.object}" for quad in dataset)
 
 
-def test_two_isomorphic_graphs_canonicalize_to_one_form_under_rdfc_1_0() -> None:
+def test_two_isomorphic_graphs_canonicalize_to_one_form_under_the_canonical_labelling() -> None:
     """Different blank labels, same graph, same canonical bytes.
 
-    This is the property RDFC-1.0 exists to provide and the only one a consumer
+    This is the property canonicalization exists to provide and the only one a consumer
     can build on: a digest, a diff or a signature over a graph is meaningless
     unless relabelling the blanks leaves it alone. The canonical labels appear in
     the output too, because a form that kept the document's own labels would be
@@ -123,8 +105,8 @@ def test_two_isomorphic_graphs_canonicalize_to_one_form_under_rdfc_1_0() -> None
     second = _canonical_rows(ISOMORPHIC_B, "1000000")
 
     assert first == second, "isomorphic graphs canonicalize identically"
-    assert all("_:c14n" in row for row in first), (
-        f"every blank carries a canonical label, not the document's: {first}"
+    assert all(re.search(r"_:\d+ ", row) for row in first), (
+        f"every blank carries a decimal canonical label, not the document's: {first}"
     )
     for original in ("_:a", "_:b", "_:x", "_:y"):
         assert not any(f"{original} " in row for row in first), (

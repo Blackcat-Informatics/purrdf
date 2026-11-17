@@ -147,7 +147,7 @@ Transcode a source into a target syntax or the pack container.
 - `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` of the premise
   (the merged sources) to a local document, exactly as on [`reason`](#reason), so
   `--entailment` closes the whole imports closure. Requires `--entailment`.
-- `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
+- `--canonical` — emit the canonical line-sequence N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
 
@@ -164,7 +164,7 @@ cat people.jsonld | purrdf convert --from jsonld --to turtle - -
 purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.ttl people.purrpck
 purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.purrpck restored.trig
 
-# Emit RDFC-1.0 canonical N-Quads (no `--to` needed; canonical is always N-Quads).
+# Emit canonical line-sequence N-Quads (no `--to` needed; canonical is always N-Quads).
 purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert --canonical people.ttl people.nq
 
 # Materialize the RDFS closure, then canonicalize it.

@@ -344,7 +344,7 @@ fn refuse_inapplicable_combinations(
     // could mistake for a format that was honored.
     if options.canonical && options.to.is_some() {
         return Err(CliError::Usage(
-            "--canonical emits RDFC-1.0 canonical N-Quads unconditionally, so a --to \
+            "--canonical emits canonical line-sequence N-Quads unconditionally, so a --to \
              naming a different target format would be accepted and never read: drop \
              one of the two"
                 .to_owned(),

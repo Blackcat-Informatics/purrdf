@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 """Graph comparison for the purrdf compat shim (RDFLib ``rdflib.compare``).
 
-Isomorphism and canonicalization route through the native RDFC-1.0 surface
+Isomorphism and canonicalization route through the native canonical surface
 (:class:`purrdf.Dataset` with an explicit ``canonical_search`` policy), which is
 RDF-1.2-safe — unlike RDFLib's blank-node comparison.
 """
@@ -17,7 +17,7 @@ _NT = purrdf.RdfFormat.N_TRIPLES
 
 
 def _canonical_quads(graph: Graph, canonical_search: str) -> list[str]:
-    """Return the graph's RDFC-1.0-canonical N-Triples lines, sorted."""
+    """Return the graph's canonical N-Triples lines, sorted."""
     nt = graph.serialize(format="nt", encoding="utf-8")
     dataset = purrdf.Dataset(purrdf.parse(nt, format=_NT))
     dataset.canonicalize(canonical_search=canonical_search).value
@@ -29,17 +29,17 @@ def _canonical_quads(graph: Graph, canonical_search: str) -> list[str]:
 
 
 def isomorphic(graph1: Graph, graph2: Graph, *, canonical_search: str) -> bool:
-    """Return whether two graphs are isomorphic (RDF-1.2-safe, RDFC-1.0)."""
+    """Return whether two graphs are isomorphic (RDF-1.2-safe)."""
     return _canonical_quads(graph1, canonical_search) == _canonical_quads(graph2, canonical_search)
 
 
 def to_isomorphic(graph: Graph, *, canonical_search: str) -> Graph:
-    """Return an RDFC-1.0-canonicalized copy of ``graph`` (RDFLib parity name)."""
+    """Return a canonicalized copy of ``graph`` (RDFLib parity name)."""
     return to_canonical_graph(graph, canonical_search=canonical_search)
 
 
 def to_canonical_graph(graph: Graph, *, canonical_search: str) -> Graph:
-    """Return a copy of ``graph`` with RDFC-1.0-canonical blank-node labels."""
+    """Return a copy of ``graph`` with canonical blank-node labels."""
     nt = graph.serialize(format="nt", encoding="utf-8")
     dataset = purrdf.Dataset(purrdf.parse(nt, format=_NT))
     dataset.canonicalize(canonical_search=canonical_search).value

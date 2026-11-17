@@ -782,7 +782,7 @@ fn compile_gts_core(
 /// The full statement-complete compiler, mirroring `gts_producer.compile_gts`.
 ///
 /// `base_data` is the canonicalized RDF 1.1 base graph as RDF bytes (the caller
-/// canonicalizes blank-node labels with RDFC-1.0 before serializing, exactly as
+/// canonicalizes blank-node labels before serializing, exactly as
 /// the Python `compile_gts` does via `to_canonical_graph`). It is parsed leniently
 /// HERE so private-use language tags survive. `rdf12_data` is the RDF 1.2 statement
 /// layer's bytes. `named_graphs` carries the alignment graph and any extra named
