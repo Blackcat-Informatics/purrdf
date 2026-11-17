@@ -189,10 +189,11 @@ which is cheap and unambiguous, rather than to reason about which rows survived.
 
 ## 4. Digest identity and exact invalidation
 
-`digest()` keeps its four-part SHA-256 fold, but its value changes for every
-dataset: section 1 is now the default canonical output (the line-sequence
-canonical document) in place of the 4.x RDFC-1.0 N-Quads, so the bytes it
-absorbs differ. The fold runs over, in a fixed order:
+`digest()` keeps its four-part SHA-256 fold. Section 1 is the text of the
+default canonical document (the line-sequence document) in place of the 4.x
+RDFC-1.0 N-Quads, so the value changes wherever that text differs from the 4.x
+text, and is unchanged where the two texts agree, for example for an empty
+dataset. The fold runs over, in a fixed order:
 
 1. the canonical line-sequence document of the RDF surface,
 2. each lookaside resource's content digest, collected and sorted,
