@@ -7,11 +7,14 @@
 //!
 //! # The contract
 //!
-//! This is the canonical term form of RDF 1.2 N-Triples (N-Triples 1.2 §4
-//! "Canonical N-Triples"), which Turtle, TriG, N-Quads and SPARQL all accept
-//! for a term:
+//! This is the canonical term form of RDF 1.2 N-Quads (section 3, "A Canonical
+//! form of N-Quads") and RDF 1.2 N-Triples (section 3), which Turtle, TriG
+//! and SPARQL all accept for a term:
 //!
-//! * an IRI is `<` + its body through [`crate::iri_escape`] + `>`;
+//! * an IRI is `<` + its body through the
+//!   [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier of
+//!   [`crate::iri_escape`] + `>`: escaped exactly where the `IRIREF`
+//!   production forbids a scalar;
 //! * a literal is `"` + its lexical form through the
 //!   [`Canonical`](Carrier::Canonical) carrier of [`crate::literal_escape`] +
 //!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`. A literal whose
@@ -44,7 +47,8 @@ pub const TRIPLE_TERM_CLOSE: &str = ")>>";
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Append `iri` as an `IRIREF`: `<`, the body escaped by
-/// [`crate::iri_escape::push_escaped`], `>`.
+/// [`crate::iri_escape::push_escaped_for`] with the
+/// [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier, `>`.
 ///
 /// ```
 /// use purrdf_lex::term_syntax::write_iri;
@@ -55,7 +59,7 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// ```
 pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
     out.push('<');
-    crate::iri_escape::push_escaped(iri, out);
+    crate::iri_escape::push_escaped_for(iri, crate::iri_escape::Carrier::Canonical, out);
     out.push('>');
 }
 
@@ -182,6 +186,18 @@ mod tests {
             literal("a\"b\\\u{8}\u{85}", &format!("{XSD}string"), None, None),
             "\"a\\\"b\\\\\\b\u{85}\""
         );
+        // A scalar outside XML 1.1 `Char` is a UCHAR.
+        assert_eq!(
+            literal("a\u{fffe}\u{ffff}b", &format!("{XSD}string"), None, None),
+            "\"a\\uFFFE\\uFFFFb\""
+        );
+    }
+
+    #[test]
+    fn an_iri_escapes_what_the_production_forbids_and_keeps_del_and_c1_raw() {
+        let mut out = String::new();
+        write_iri("urn:ex:a\u{7f}\u{85}\u{a0}b c", &mut out);
+        assert_eq!(out, "<urn:ex:a\u{7f}\u{85}\u{a0}b\\u0020c>");
     }
 
     #[test]

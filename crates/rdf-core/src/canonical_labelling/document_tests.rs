@@ -112,3 +112,29 @@ fn bytes_that_are_not_a_line_encoding_are_refused_and_the_whole_encoding_is_not(
         Err(DocumentError::Tag(0x04))
     );
 }
+
+/// N-Quads 1.2 section 3 writes a character outside XML 1.1 `Char` as `UCHAR`,
+/// so the document spells U+FFFE and U+FFFF in a literal as escapes while the
+/// line encoding, which is what the digest covers, keeps their UTF-8 bytes.
+/// The neighbours U+FFFD and the C1 control U+0085 stay raw in the document.
+#[test]
+fn the_document_escapes_noncharacters_and_the_digest_input_does_not() {
+    let lexical = "a\u{fffe}b\u{ffff}c\u{fffd}d\u{85}e";
+    let sequence = [Line::Quad {
+        subject: iri("s"),
+        predicate: iri("p"),
+        object: Term::typed(lexical.as_bytes(), XSD_STRING),
+        graph: None,
+    }];
+    let (_, labelled) = label(&sequence).expect("labelled");
+    let mut document = String::new();
+    write_document(&labelled.lines, &mut document).expect("spelled");
+    assert_eq!(
+        document,
+        "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\u{fffd}d\u{85}e\" .\n"
+    );
+    let encoding = labelled.lines.iter().next().expect("one line");
+    let holds = |needle: &[u8]| encoding.windows(needle.len()).any(|w| w == needle);
+    assert!(holds("\u{fffe}".as_bytes()) && holds("\u{ffff}".as_bytes()));
+    assert!(!holds(b"\\uFFFE"));
+}

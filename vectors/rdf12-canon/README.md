@@ -105,6 +105,7 @@ Correctness evidence lives elsewhere and is deliberately not duplicated:
 | Case | Covers |
 |---|---|
 | `literal-forms` | `"0.70"` ≠ `"0.7"`; lexical forms never normalized |
+| `literal-noncharacters` | U+FFFE and U+FFFF in a lexical form are written as `\uFFFE` and `\uFFFF`; the C1 control U+0085 and U+FFFD stay raw |
 | `directional-literals` | `@en--ltr` ≠ `@en--rtl` ≠ `@en` |
 | `unicode-lexical-forms` | NFC vs NFD are distinct; astral planes survive |
 
