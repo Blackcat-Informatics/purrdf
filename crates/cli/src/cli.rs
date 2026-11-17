@@ -202,7 +202,7 @@ pub(crate) struct Cli {
     /// The subcommand to run.
     #[command(subcommand)]
     pub(crate) cmd: Command,
-    /// Exact RDFC search policy: unlimited or canonical unsigned decimal u64, with no default.
+    /// Exact canonical search policy (a bound on the labelling engine's work): unlimited or canonical unsigned decimal u64, with no default.
     #[arg(long, global = true, requires = "canonicalization_receipts")]
     pub(crate) canonical_search: Option<String>,
     /// Required canonical-search evidence destination; '-' writes stderr.

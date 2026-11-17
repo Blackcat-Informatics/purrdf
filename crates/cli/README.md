@@ -1451,7 +1451,7 @@ For syntax conversion, the ledger records both the **contract** losses inherent
 to a `(source-codec → target-codec)` pair and the **realized** counts the
 serializer actually dropped. Projection ledgers use the same versioned schema
 but add stable source locations for graph/tabular semantic lowering. A pack
-target, a `pack → pack` passthrough, RDFC-1.0 canonical N-Quads, and
+target, a `pack → pack` passthrough, canonical line-sequence N-Quads, and
 `csvw-exact` are lossless, so their ledgers are empty.
 
 ```sh

@@ -10,17 +10,19 @@ Byte-deterministic serialization ([Codecs & Determinism](codecs.md)) means the
 property: two *different in-memory datasets that are isomorphic* — the same
 graph up to blank-node relabeling — canonicalize to the same bytes.
 
-## RDFC-1.0
+## The canonical line sequence
 
-PurRDF implements W3C
-[RDF Dataset Canonicalization (RDFC-1.0)](https://www.w3.org/TR/rdf-canon/)
-natively in the kernel, tested against the W3C `rdf-canon` fixture suite
-(65 vectors — 64 eval plus 1 negative — all green; see
-[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)).
+The default canonical output is the canonical line sequence of the
+nested-refinement labelling (`CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION`),
+spelled as N-Quads 1.2. Blank nodes are labelled `_:0`, `_:1`, and so on, in
+decimal, and the identity of a dataset is the 32-byte BLAKE3 digest of the line
+sequence. Reifiers, annotations, triple terms, composite literals that name blank
+nodes and declared empty graphs all take part, and no vocabulary is reserved.
+[Migrating to PurRDF 5.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/MIGRATION-5.0.md)
+states the lowering exactly.
 
-The entry point is `try_canonicalize` (with a `try_canonicalize_with` variant for
-choosing the hash), producing canonical blank-node labels and, one layer up in
-`purrdf-rdf`, canonical flat N-Quads over the frozen IR:
+The entry point is `try_canonicalize`, producing canonical blank-node labels and,
+one layer up in `purrdf-rdf`, canonical N-Quads over the frozen IR:
 
 ```rust
 use purrdf::{try_canonicalize, parse_dataset, CanonicalizationControl, SearchPolicy};
@@ -46,8 +48,8 @@ signing, deduplication, or comparing datasets produced by different writers.
 Every operation requires an explicit finite or unlimited search policy and accepts
 an optional caller stop signal through its control. Each constituent run records
 its own effective policy, configuration and charged work; the receipt array is
-not an aggregate ceiling. Profile version three preserves successful canonical
-bytes while making search policy explicit.
+not an aggregate ceiling. A finite policy bounds the labelling engine's own
+work, and a run that exceeds it is refused with the `limit` outcome.
 
 ## Native relabeling with source attribution
 
@@ -87,29 +89,21 @@ or proof certificate: persist resolved RDF identities with authenticated input
 and output receipts, never raw `TermId` values. Source roles and standpoint
 ownership remain the caller's metadata, not consequences of canonical labels.
 
-## Over RDF 1.2 constructs: two forms, named apart
+## W3C RDFC-1.0 by name
 
-RDFC-1.0 has no notion of reifiers, annotations or triple terms. A dataset that
-is plain RDF 1.1 canonicalizes identically everywhere in PurRDF; one that
-carries those constructs canonicalizes in one of two forms, and which one you
-are holding is part of the identity:
-
-- **The flat form** — `canonical_flat_nquads` in `purrdf-rdf` rewrites the
-  statement layer to plain `rdf:reifies` / annotation triples first and
-  canonicalizes *that* triple set under conformant RDFC-1.0. This is what the
-  CLI's `convert --canonical`, the wasm `Dataset.canonicalize("unlimited")` and the W3C
-  conformance gate run.
-- **The `purrdf-rdfc12` v3 profile** — `try_canonicalize` in `purrdf-core` keeps
-  the statement layer and lowers it into a reserved `urn:purrdf:rdfc:`
-  namespace instead (any input already carrying that namespace is refused,
-  unless it is written in one of the two shapes the profile itself emits —
-  those fold back into the statement layer, which is what makes
-  canonicalization idempotent over its own output).
-  It agrees with RDFC-1.0 byte for byte only on the RDF 1.1 subset, and a
-  digest taken over its output **must not be labelled RDFC-1.0**;
-  `CANON_PROFILE_ID` / `CANON_PROFILE_VERSION` name the profile at runtime.
-  The normative text is
-  [`docs/RDF12-CANON-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RDF12-CANON-PROFILE.md).
+PurRDF also implements W3C
+[RDF Dataset Canonicalization (RDFC-1.0)](https://www.w3.org/TR/rdf-canon/)
+natively, tested against the W3C `rdf-canon` fixture suite (65 vectors — 64 eval
+plus 1 negative — all green; see
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md)).
+It lives under `purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`) and is not the
+default output: its labels are `c14nN` and its digest is SHA-256 or SHA-384 of
+N-Quads text. Use it to run the W3C algorithm by name, or to recompute a digest
+that PurRDF 4.x recorded. Over reifiers and annotations it has two 4.x forms, the
+flat form (`canonical_flat_nquads_with`) and the `purrdf-rdfc12` overlay, which
+agree with RDFC-1.0 byte for byte only on the RDF 1.1 subset; a digest over
+either must not be labelled RDFC-1.0. The normative text of the overlay is
+[`docs/RDF12-CANON-PROFILE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RDF12-CANON-PROFILE.md).
 
 ## Isomorphism
 
@@ -119,7 +113,7 @@ under a single blank-node bijection.
 Canonicalization gives the equivalent verdict — two datasets are isomorphic
 iff their canonicalizations are equal — but the direct check is the
 convenient form for tests and harnesses. PurRDF's own conformance harnesses
-use RDFC-1.0 isomorphism to compare, for example, SHACL Rules output graphs
+use graph isomorphism to compare, for example, SHACL Rules output graphs
 against expected inferred graphs.
 
 ## Diff
@@ -135,8 +129,8 @@ like a code change.
 | Need | Use |
 | --- | --- |
 | Same dataset → same bytes | any native serializer (always true) |
-| Same *graph* (up to blank nodes) → same bytes, RDF 1.1 subset | RDFC-1.0 (`try_canonicalize` or `canonical_flat_nquads`, identical here) |
-| Same *graph* with reifiers/annotations → same bytes | `canonical_flat_nquads` (RDFC-1.0 over the flattened layer) or `try_canonicalize` (`purrdf-rdfc12` profile) — not interchangeable |
+| Same *graph* (up to blank nodes) → same bytes, with or without reifiers and annotations | `try_canonicalize` or `canonical_flat_nquads` (the canonical line sequence) |
+| The W3C RDFC-1.0 document, or a 4.x digest recomputed | `purrdf_core::rdfc12` |
 | "Are these two datasets the same graph?" | `datasets_isomorphic` |
 | "What changed between these datasets?" | `dataset_diff` + describe/normalize |
 | Content-addressed transport of a graph | [GTS](../gts.md) (BLAKE3 content ids) |

@@ -11,7 +11,7 @@ declaration (including empty graphs), and the three separate sets of ordinary,
 native reifier and native annotation rows. A row present in two roles contributes
 twice, once in each role. Repeated rows within one role contribute once.
 
-The construction is additive. RDFC-1.0 canonical documents, the RDF 1.2
+The construction is additive. Canonical documents, the RDFC-1.0 and RDF 1.2
 canonicalization profiles, graph/row digests, PACK certificates and serializer
 bytes retain their own definitions. A complete-state digest does not substitute
 for one of those identities.

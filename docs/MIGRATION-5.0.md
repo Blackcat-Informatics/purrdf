@@ -143,16 +143,53 @@ dataset. To check one, recompute it with the 4.x function:
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
   `purrdf_rdf::canonical_flat_nquads_with` for the flat document.
-- The profile constants (`CANON_PROFILE_ID`, `CANON_PROFILE_VERSION`, the
-  presentation identifiers, `CANON_CORPUS_DIGEST`, `RDFC_V2_CORPUS_POLICY`,
-  `RESERVED_NAMESPACE`) and the 4.x search types are under `purrdf_core::rdfc12`
-  and are no longer re-exported at the crate root.
+- Every other 4.x item is under `purrdf_core::rdfc12`, also reachable as
+  `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
+  root. See "Items that left the crate root".
 
 The 4.x path behaves as it always did: labels are `c14nN`, the hash is the
 caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
 them.
+
+## Items that left the crate root
+
+These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
+or `purrdf`. Each keeps its name, signature and 4.x behaviour under
+`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`). A caller that wants the 5.0
+canonical output uses the default-family item in the third column, which is
+exported from the crate root. Two of the functions below keep the name of a
+default-family function: `purrdf_core::try_canonicalize` and
+`purrdf_core::ir::try_canonicalize` run the labelling, while
+`purrdf_core::rdfc12::try_canonicalize` (and `purrdf_core::ir::canon::try_canonicalize`)
+runs RDFC-1.0.
+
+| 4.x item | Returned | Default family (5.0) |
+|---|---|---|
+| `try_canonicalize_with(ds, hash, control)` | `Canonicalized` | `try_canonicalize(ds, control)`; the hash argument is gone |
+| `try_canonical_sha256_view(view, hash, control)` | SHA-256 `ContentDigest` | `try_canonical_digest_view(view, control)`, a 32-byte BLAKE3 digest |
+| `try_canonical_blake3_view(view, hash, control)` | 32-byte digest | `try_canonical_digest_view(view, control)` |
+| `try_canonicalize_sha256_view(view, hash, control)` | document and digest | `try_canonicalize_digest_view(view, control)` |
+| `try_canonicalize_flat_view(view, hash, control)` | flat document | `try_canonicalize_checked_view(view, control)` |
+| `try_canonicalize_flat_graph_view(view, graph, hash, control)` | flat document of one graph | `try_canonicalize_checked_graph_view(view, graph, control)` |
+| `check_admissible_flat_view(view)` | admission check | `check_admissible_checked_view(view)` |
+| `try_flat_digest_view(view, hash, control)` | flat SHA-256 digest | `try_canonical_digest_checked_view(view, control)` |
+| `try_flat_blake3_view(view, hash, control)` | flat 32-byte digest | `try_canonical_digest_checked_view(view, control)` |
+| `RDFC_V2_CORPUS_POLICY` | `SearchPolicy::Finite(1_000_000)` | `CANON_CORPUS_POLICY`, the same bound for the engine's work units |
+| `CANON_PROFILE_ID`, `CANON_PROFILE_VERSION` | the 4.x profile name and version | `CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION` |
+| `CANON_PRESENTATION_OVERLAY_ID`, `CANON_PRESENTATION_OVERLAY_VERSION`, `CANON_PRESENTATION_FLAT_ASSERTION_ID`, `CANON_PRESENTATION_FLAT_ASSERTION_VERSION` | the 4.x presentation names | `CANON_PRESENTATION_LINES_ID`, `CANON_PRESENTATION_LINES_VERSION` |
+| `CanonHash` | the hash choice | none: the default digest is always BLAKE3 over the line sequence |
+| `CanonPresentation` | overlay or flat form | none: there is one line-sequence presentation |
+| `ReservedVocabulary`, `RESERVED_NAMESPACE` | the refused reserved vocabulary | none: the default entry points do not refuse it |
+| `CANON_CORPUS_DIGEST` | digest of the 4.x corpus | none |
+| `RdfcActiveGroup`, `RdfcActivePath`, `RdfcCandidateProgress`, `RdfcGroupLabels`, `RdfcGroupObservation`, `RdfcGroupObservations`, `RdfcGroupStats`, `RdfcRefusalObservation`, `RdfcRootProgress`, `RdfcSearchContext` | the 4.x search types | none: the labelling reports its work through `SearchWork` and `SearchReceipt` |
+
+The functions that kept their root names (`try_canonicalize`,
+`try_canonicalize_view`, `try_canonicalize_graph_view`, `try_graph_digest_view`,
+`check_admissible`, `check_admissible_view`, `canonical_relabel` and
+`canonical_relabel_with_mapping`) now run the labelling. Their RDFC-1.0
+counterparts of the same names are under `rdfc12`.
 
 ## Containers
 
@@ -220,7 +257,8 @@ them.
   (`input`, `graph`, `width` or `limit`). The new constants are
   `CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION`,
   `CANON_PRESENTATION_LINES_ID`, `CANON_PRESENTATION_LINES_VERSION` and
-  `CANON_CORPUS_POLICY`.
+  `CANON_CORPUS_POLICY`. The 4.x items that left the crate root are listed in
+  "Items that left the crate root".
 - **Flat presentation.** `canonical_flat_nquads` returns the line-sequence
   document. The identifier `flat-assertion`, version `1`, now names only the 4.x
   flat form reached through `rdfc12`; the default flat document reports
