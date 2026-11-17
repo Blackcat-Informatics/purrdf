@@ -152,6 +152,16 @@ impl<E: std::error::Error + 'static> std::error::Error for ViewError<E> {
     }
 }
 
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for ViewError<E> {
+    purrdf_hash::error_visit! {
+        Read(cause) => "labelling-view-read" { "cause" => Cause(cause) },
+        ForeignId => "labelling-view-foreign-id" {},
+        Refused(refusal) => "labelling-view-refused" { "code" => Unsigned(u128::from(refusal.code())) },
+        Stopped => "labelling-view-stopped" {},
+        Storage(cause) => "labelling-view-storage" { "cause" => Cause(cause) },
+    }
+}
+
 /// The variant of a term value.
 const fn variant_of(value: &TermValue) -> GraphTerm {
     match value {
@@ -408,6 +418,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         // One line per distinct annotation row, its count the row's multiplicity.
         let mut annotations: BTreeMap<_, u64> = BTreeMap::new();
         for q in view.annotation_quads() {
+            self.poll()?;
             if let Slot::Kept(g) = self.slot(q.g) {
                 let rows = annotations.entry((q.s, q.p, q.o, g)).or_default();
                 *rows = rows.saturating_add(1);
@@ -618,6 +629,11 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     limit: Limit,
     memory: &mut Memory<'_, S>,
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
+    // The account is polled before any row is read or lowered.
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
     let lines = lowered(view, Scope::Dataset, records, stop)?
@@ -628,10 +644,6 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
         .zip(optimised::working_bytes(&lines))
         .and_then(|(held, working)| held.checked_add(working))
         .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
-    memory
-        .admission_mut()
-        .checkpoint(0)
-        .map_err(ViewError::Storage)?;
     memory.add_bytes(bytes).map_err(ViewError::Storage)?;
     match label_lines(&lines, limit, stop) {
         Ok(labelled) => Ok(Comparison {
@@ -641,8 +653,10 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
             admitted_bytes: bytes,
         }),
         Err(error) => {
-            // A refusal of the refund cannot replace the error that ended the
+            // The lines the grant covers are destroyed before it is refunded. A
+            // refusal of the refund cannot replace the error that ended the
             // run: the grant stays outstanding with the caller's account.
+            drop(lines);
             let _ = memory.release_bytes(bytes);
             Err(error)
         }
@@ -781,6 +795,11 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     stop: Option<&dyn StopSignal>,
     memory: &mut Memory<'_, S>,
 ) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
+    // The account is polled before any row is read or lowered.
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
     let lines = lowered(view, scope, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
@@ -789,10 +808,6 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
         .zip(optimised::working_bytes(&lines))
         .and_then(|(held, working)| held.checked_add(working))
         .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
-    memory
-        .admission_mut()
-        .checkpoint(0)
-        .map_err(ViewError::Storage)?;
     memory.add_bytes(bytes).map_err(ViewError::Storage)?;
     match labelling_of(view, lines, limit, stop) {
         Ok(labelling) => Ok((labelling, bytes)),

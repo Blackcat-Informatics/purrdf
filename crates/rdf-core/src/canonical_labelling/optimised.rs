@@ -39,10 +39,10 @@ use super::certificate::{Certificate, Entry, entry_of};
 use super::lines::{Leaf, LineSet, Tok};
 use super::reference::{
     CallOutcome, Child, Classes, Comp, ComponentRun, Labelling, LabellingParts, Meter, Prepared,
-    Static, Stop, Tree, TwinTest, drive, failure_diagnostics, finish_labelling, fragments_to_queue,
-    positions, prepare,
+    Static, Stop, Tree, TwinTest, component_count, drive, failure_diagnostics, finish_labelling,
+    fragments_to_queue, prepare,
 };
-use super::{ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
+use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
 #[cfg(test)]
 use crate::FastMap;
 use crate::StopSignal;
@@ -719,7 +719,7 @@ impl<'a> Engine<'a> {
                 .collect();
             if let Some(positions) = positions {
                 let entry = entry_of(self.set, self.comp.lines[lg], &positions);
-                units.entries += 1 + (entry.encoding.len() as u64).div_ceil(8);
+                units.entries += 1 + (entry.encoding().len() as u64).div_ceil(8);
                 entries.push(entry);
             }
         }
@@ -1377,10 +1377,22 @@ impl<'a> Engine<'a> {
             self.lambda[v] = q - b.p;
         }
         let s = child.fixed.len() as u64;
+        let mut work = Vec::new();
         let mut t = 0;
         for nested in &child.nested {
-            positions(nested, s + t, &mut self.lambda);
+            work.push((nested, s + t));
             t += nested.n_k;
+        }
+        while let Some((tree, o)) = work.pop() {
+            for &(v, q) in &tree.fixed {
+                self.lambda[v] = o + (q - tree.p);
+            }
+            let s = tree.fixed.len() as u64;
+            let mut t = 0;
+            for nested in &tree.nested {
+                work.push((nested, o + s + t));
+                t += nested.n_k;
+            }
         }
         b.node_g
             .iter()
@@ -1866,7 +1878,8 @@ pub(crate) fn label_set(
 /// labels, the partitions, the line index of the twin test and the encodings
 /// of the lines with every leaf free, proportional to the blank occurrences
 /// (each one counted, so a record that repeats a node is charged for every
-/// repetition), the line tokens and the vertices (7.12). It is the admission
+/// repetition), the line tokens and the vertices (7.12), and the structs each top
+/// component holds. It is the admission
 /// of [`compare_view_with_memory`](super::compare_view_with_memory); the
 /// certificates and nested instances held while a search runs are not metered
 /// beyond it. `None` when the bound passes the word.
@@ -1885,11 +1898,20 @@ pub(crate) fn working_bytes(set: &LineSet) -> Option<usize> {
     // number and the copies a call and a child keep (sixteen words in all);
     // per token: the line as a key of the twin test (four words); per vertex:
     // the two partitions, the maps and the queue (thirty-two words).
+    // Per top component: the structs held for it while the engine runs.
+    let per_component = size_of::<Comp>()
+        .checked_add(size_of::<Index>())?
+        .checked_add(size_of::<Run<'static>>())?
+        .checked_add(size_of::<Static>())?
+        .checked_add(size_of::<Labelling>())?
+        .checked_add(size_of::<Component>())?;
+    let structs = component_count(set).checked_mul(per_component)?;
     let words = occurrences
         .checked_mul(16)?
         .checked_add(tokens.checked_mul(4)?)?
         .checked_add(vertices.checked_mul(32)?)?;
     words
         .checked_mul(word)?
-        .checked_add(encoded.checked_mul(4)?)
+        .checked_add(encoded.checked_mul(4)?)?
+        .checked_add(structs)
 }

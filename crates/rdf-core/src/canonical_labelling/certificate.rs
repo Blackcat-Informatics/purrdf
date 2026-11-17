@@ -24,14 +24,35 @@ pub enum EntryToken {
 
 /// An entry `(m, line)`: a fully fixed masked line and the largest path
 /// position among its blank occurrences.
+///
+/// The encoding and the typed tokens are two spellings of one line, and `m`
+/// is read off the same walk: an entry is built from a line and its positions
+/// only, so the three never disagree.
 #[derive(Clone, Debug)]
 pub struct Entry {
+    m: u64,
+    encoding: Box<[u8]>,
+    tokens: Box<[EntryToken]>,
+}
+
+impl Entry {
     /// The largest path position among the line's blank occurrences.
-    pub m: u64,
+    #[must_use]
+    pub const fn m(&self) -> u64 {
+        self.m
+    }
+
     /// The encoding of the fully fixed masked line.
-    pub encoding: Box<[u8]>,
+    #[must_use]
+    pub fn encoding(&self) -> &[u8] {
+        &self.encoding
+    }
+
     /// The same line as typed tokens.
-    pub tokens: Box<[EntryToken]>,
+    #[must_use]
+    pub fn tokens(&self) -> &[EntryToken] {
+        &self.tokens
+    }
 }
 
 impl PartialEq for Entry {
