@@ -231,7 +231,7 @@ A method whose return type changed:
 
 | Method | 4.x return | 5.0 return | A 4.x caller |
 |---|---|---|---|
-| `Canonicalized::presentation` | `CanonPresentation` | `Option<CanonPresentation>` | Handle `None`, which a result of the default family returns because its line sequence has one presentation (`CANON_PRESENTATION_LINES_ID`). A result of an `rdfc12` function returns `Some` with the 4.x value |
+| `Canonicalized::presentation` | `CanonPresentation` | `Option<rdfc12::CanonPresentation>` | Handle `None`, which a result of the default family returns because its line sequence has one presentation (`CANON_PRESENTATION_LINES_ID`). A result of an `rdfc12` function returns `Some` with the 4.x value |
 
 Variants added to enums that were already `#[non_exhaustive]` (no change
 needed where a wildcard arm exists): `CanonError::Refused` and
