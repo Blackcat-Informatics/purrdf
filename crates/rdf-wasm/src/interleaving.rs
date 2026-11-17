@@ -157,6 +157,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         safety: Safety::Swapped,
         reason: STACK_CONTEXT,
     },
+    ThreadLocal {
+        file: "crates/stack/src/lib.rs",
+        name: "READ_FAILS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
     // ── purrdf-shapes: the SHACL engine's ambient scopes and caches ─────────────────
     ThreadLocal {
         file: "crates/shapes/src/sparql.rs",
