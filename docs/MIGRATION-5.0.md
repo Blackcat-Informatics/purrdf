@@ -203,6 +203,40 @@ signature, and one relaxed a bound:
 `canonical_relabel_with_mapping` keep their signatures and change only what they
 compute.
 
+## Public types that changed shape
+
+A comparison of every public enum and every public struct with public fields
+in the crates this release touches, at `rust-v4.0.2` and now, found these
+changes. Enums marked `#[non_exhaustive]` already require a wildcard arm in a
+`match`, so an added variant there compiles unchanged; those are listed last.
+
+Exhaustive enums that gained variants. A 4.x `match` on one of them stops
+compiling until it handles the new variant. The enums themselves keep their
+4.x variants and payloads.
+
+| Enum (`purrdf_core`) | New variant | A 4.x caller |
+|---|---|---|
+| `CanonOutput` | `LinesDigest`, `DocumentLinesDigest` | Add arms for both. They are the digest of the canonical line sequence, alone and together with the document and label table; the 4.x arms keep their meaning |
+| `SearchConfiguration` | `Labelling { version, selection, output }` | Add an arm. It names the labelling run, where `Rdfc { .. }` names an RDFC-1.0 run; a caller that only inspects 4.x runs can bind it with a wildcard |
+| `SearchEvent` | `LabellingUnit` | Add an arm, or read the count through `SearchWork::count(SearchEvent::LabellingUnit)`. It counts the limited units of the labelling |
+
+A variant payload that changed. `CanonError` is `#[non_exhaustive]`, but a
+payload is matched by shape:
+
+| Variant | 4.x payload | 5.0 payload | A 4.x caller |
+|---|---|---|---|
+| `CanonError::BudgetExceeded` | `BudgetExceeded` | `Box<BudgetExceeded>` | Field and method access through the binding still compiles by auto-dereference; where the value is moved or named by type, write `*budget` |
+
+Variants added to enums that were already `#[non_exhaustive]` (no change
+needed where a wildcard arm exists): `CanonError::Refused` and
+`CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;
+`purrdf_rdf::gts_certify::CertificateCborError::UnknownCanon` and `UnexpectedCanon`;
+`purrdf_sparql_eval::EvalError::HostSourceMissing`.
+
+No public struct with public fields gained, lost or retyped a public field,
+and no exhaustive enum lost a variant. `purrdf_sparql_eval::EvalCtx` gained a
+private field, which no caller can name.
+
 ## Containers
 
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format

@@ -457,7 +457,7 @@ def test_dataset_add_refuses_a_relative_iri_like_store_add_does() -> None:
     absoluteness invariant. `Dataset` is a plain quad list with set semantics and no
     term table, so it inherited nothing: `Dataset().add(Quad(NamedNode("rel"), ...))`
     was accepted, and `Dataset.canonicalize` would then hash it and hand back a
-    stable RDFC-1.0 label for a term whose identity is unknowable.
+    stable canonical label for a term whose identity is unknowable.
 
     "Nothing invalid escapes, because a Dataset has no serializer" is not the
     invariant the rest of the toolkit states. Unrepresentable from EVERY ingress is.

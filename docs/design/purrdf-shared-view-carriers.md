@@ -189,10 +189,12 @@ which is cheap and unambiguous, rather than to reason about which rows survived.
 
 ## 4. Digest identity and exact invalidation
 
-`digest()` is unchanged. It is the same four-part SHA-256 fold it always was,
-over, in a fixed order:
+`digest()` keeps its four-part SHA-256 fold, but its value changes for every
+dataset: section 1 is now the default canonical output (the line-sequence
+canonical document) in place of the 4.x RDFC-1.0 N-Quads, so the bytes it
+absorbs differ. The fold runs over, in a fixed order:
 
-1. the canonical N-Quads hash of the RDF surface,
+1. the canonical line-sequence document of the RDF surface,
 2. each lookaside resource's content digest, collected and sorted,
 3. each blob's content digest in the store, sorted,
 4. the provenance sidecar's runtime-id-free public projection.
