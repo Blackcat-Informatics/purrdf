@@ -30,9 +30,34 @@
 //! multi-hop compaction pipelines, and [`CompactionCertificate`]'s canonical
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
+//!
+//! # The refold canonicalization
+//!
+//! A certificate's refold digests are recorded under one canonicalization, a
+//! [`RefoldCanon`], named by the `refold_canon` text field of its CBOR map:
+//! `rdfc10-sha256` (the SHA-256 of the RDFC-1.0 flat N-Quads) or
+//! `nrl1-lines-sha256` (the SHA-256 of the canonical document of the
+//! nested-refinement labelling, version 1, in its line-sequence
+//! presentation). A certificate without the field records `rdfc10-sha256`, so
+//! every certificate written before the field existed keeps its meaning; an
+//! `rdfc10-sha256` certificate is written without it. Any other value is
+//! refused, never read as another canonicalization.
+//!
+//! [`CompactionCertificate`] is the `rdfc10-sha256` certificate, and
+//! [`compact_and_certify`], [`verify_compaction`], [`refold_digest`],
+//! [`effective_digest`] and [`compose`] keep working on it.
+//! [`VersionedCertificate`] carries its canonicalization:
+//! [`compact_and_certify_versioned`] writes `nrl1-lines-sha256`,
+//! [`verify_compaction_with`] recomputes both digests (refold and effective)
+//! with the canonicalization it is given, and [`compose_versioned`] refuses to
+//! chain two certificates of different canonicalizations. The embedded
+//! `stream:contentRefoldDigest` of a pack stays the RDFC-1.0 digest the GTS
+//! vocabulary defines, whichever canonicalization the certificate records.
 
 mod error;
 pub use error::{CertificateCborError, CertificateFieldType, CertifyError};
+
+use purrdf_core::ContentDigest;
 
 use purrdf_lex::cbor::{Integer, Value};
 
@@ -89,6 +114,54 @@ pub fn content_projection(g: &Graph) -> Graph {
     }
 }
 
+/// The canonicalization a certificate's refold digests are recorded under, the
+/// value of its `refold_canon` field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum RefoldCanon {
+    /// `rdfc10-sha256`, code 1: the SHA-256 of the RDFC-1.0 flat N-Quads of
+    /// the projection. A certificate without a `refold_canon` field records
+    /// it.
+    Rdfc10Sha256,
+    /// `nrl1-lines-sha256`, code 2: the SHA-256 of the canonical document of
+    /// the projection, the canonical line sequence of the nested-refinement
+    /// labelling, version 1, spelled as N-Quads 1.2
+    /// ([`purrdf_core::try_canonicalize_view`]).
+    Nrl1LinesSha256,
+}
+
+impl RefoldCanon {
+    /// The `refold_canon` field value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rdfc10Sha256 => "rdfc10-sha256",
+            Self::Nrl1LinesSha256 => "nrl1-lines-sha256",
+        }
+    }
+
+    /// The numeric code of the canonicalization, for an encoding that records
+    /// it as a number.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Rdfc10Sha256 => 1,
+            Self::Nrl1LinesSha256 => 2,
+        }
+    }
+
+    /// The canonicalization a `refold_canon` field value names, or `None` for
+    /// a value this build does not know.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "rdfc10-sha256" => Some(Self::Rdfc10Sha256),
+            "nrl1-lines-sha256" => Some(Self::Nrl1LinesSha256),
+            _ => None,
+        }
+    }
+}
+
 /// The RDFC-1.0 (SHA-256) digest of `g`'s content projection, as lowercase hex.
 ///
 /// This is the "content-refold digest": two folded graphs — one straight from
@@ -106,13 +179,25 @@ pub fn refold_digest(
     g: &Graph,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, CertifyError> {
-    canonical_digest(&content_projection(g), control)
+    refold_digest_with(g, RefoldCanon::Rdfc10Sha256, control)
 }
 
-/// The RDFC-1.0 (SHA-256) digest of an already-projected graph, as lowercase hex.
+/// The digest of `g`'s content projection under `canon`, as lowercase hex.
 ///
-/// Shared by [`refold_digest`] (over [`content_projection`]) and
-/// [`effective_digest`] (over [`effective_projection`]) — the two digest
+/// # Errors
+/// As [`refold_digest`].
+pub fn refold_digest_with(
+    g: &Graph,
+    canon: RefoldCanon,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&content_projection(g), canon, control)
+}
+
+/// The digest of an already-projected graph under `canon`, as lowercase hex.
+///
+/// Shared by [`refold_digest_with`] (over [`content_projection`]) and
+/// [`effective_digest_with`] (over [`effective_projection`]) — the two digest
 /// domains differ only in which projection feeds this canonicalize+hash step.
 ///
 /// # Errors
@@ -121,12 +206,19 @@ pub fn refold_digest(
 /// cause when canonicalization refuses under the caller's control.
 fn canonical_digest(
     projected: &Graph,
+    canon: RefoldCanon,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, CertifyError> {
     let dataset = dataset_from_gts_graph(projected)?;
-    let canonical = try_canonical_sha256_view(&*dataset, CanonHash::Sha256, control)
-        .map_err(CertifyError::CanonRefused)?;
-    Ok(canonical.to_hex())
+    let digest = match canon {
+        RefoldCanon::Rdfc10Sha256 => {
+            try_canonical_sha256_view(&*dataset, CanonHash::Sha256, control)
+        }
+        RefoldCanon::Nrl1LinesSha256 => purrdf_core::try_canonicalize_view(&*dataset, control)
+            .map(|document| ContentDigest::of(document.nquads().as_bytes())),
+    }
+    .map_err(CertifyError::CanonRefused)?;
+    Ok(digest.to_hex())
 }
 
 /// A term-id resolved to its own `value` string, or `None` when the id is
@@ -282,7 +374,19 @@ pub fn effective_digest(
     g: &Graph,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, CertifyError> {
-    canonical_digest(&effective_projection(g), control)
+    effective_digest_with(g, RefoldCanon::Rdfc10Sha256, control)
+}
+
+/// The digest of `g`'s effective projection under `canon`, as lowercase hex.
+///
+/// # Errors
+/// As [`effective_digest`].
+pub fn effective_digest_with(
+    g: &Graph,
+    canon: RefoldCanon,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, CertifyError> {
+    canonical_digest(&effective_projection(g), canon, control)
 }
 
 // ---------------------------------------------------------------------------
@@ -539,10 +643,12 @@ fn suppression_retention_ok(pre: &Graph, post: &Graph) -> bool {
 fn suppressions_ok(
     pre: &Graph,
     post: &Graph,
+    canon: RefoldCanon,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<bool, CertifyError> {
     let retained = suppression_retention_ok(pre, post);
-    let effective_equivalent = effective_digest(pre, control)? == effective_digest(post, control)?;
+    let effective_equivalent =
+        effective_digest_with(pre, canon, control)? == effective_digest_with(post, canon, control)?;
     Ok(retained && effective_equivalent)
 }
 
@@ -576,15 +682,38 @@ pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     keyring: &K,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<CompactionReport, CertifyError> {
+    verify_compaction_with(
+        pre_bytes,
+        post_bytes,
+        RefoldCanon::Rdfc10Sha256,
+        keyring,
+        control,
+    )
+}
+
+/// [`verify_compaction`] with the refold and effective digests recomputed
+/// under `canon`, the canonicalization the certificate being checked names
+/// ([`VersionedCertificate::canon`]).
+///
+/// # Errors
+/// As [`verify_compaction`].
+pub fn verify_compaction_with<K: SignatureKeyring + ?Sized>(
+    pre_bytes: &[u8],
+    post_bytes: &[u8],
+    canon: RefoldCanon,
+    keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);
 
-    let refold_equivalent = refold_digest(&pre, control)? == refold_digest(&post, control)?;
+    let refold_equivalent =
+        refold_digest_with(&pre, canon, control)? == refold_digest_with(&post, canon, control)?;
     let seam_chain_ok = post.diagnostics.is_empty();
     let signatures_bound = signatures_bound_ok(&pre, &post);
     let signatures_verify = signatures_verify_ok(&post, keyring);
     let packaging_sig_ok = packaging_signature_ok(post_bytes, &post, keyring);
-    let suppressions_ok = suppressions_ok(&pre, &post, control)?;
+    let suppressions_ok = suppressions_ok(&pre, &post, canon, control)?;
 
     Ok(CompactionReport {
         refold_equivalent,
@@ -604,15 +733,19 @@ const FIELD_PRE: &str = "pre_refold_digest";
 const FIELD_POST: &str = "post_refold_digest";
 const FIELD_ROOTS: &str = "detached_sig_roots";
 const FIELD_KIDS: &str = "packaging_kids";
+const FIELD_CANON: &str = "refold_canon";
 
 /// A portable, independently-checkable claim that a streamable compaction
 /// preserved content (§10.1/§10.2): the pre/post content-refold digests, the
 /// accreted detached-signature MMR roots, and the packaging key ids involved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompactionCertificate {
-    /// RDFC-1.0 digest of the pre-compaction content projection.
+    /// Digest of the pre-compaction content projection: RDFC-1.0 for a
+    /// certificate on its own, and under [`VersionedCertificate::canon`]
+    /// inside a [`VersionedCertificate`].
     pub pre_refold_digest: String,
-    /// RDFC-1.0 digest of the post-compaction content projection.
+    /// Digest of the post-compaction content projection, under the same
+    /// canonicalization as `pre_refold_digest`.
     pub post_refold_digest: String,
     /// Hex `stream:detachedSignatureRoot` value(s) bound by the compaction(s)
     /// this certificate covers (a `Vec` so [`compose`] can accrete them).
@@ -672,13 +805,38 @@ fn text_array_field(
         .collect()
 }
 
+/// The `refold_canon` field of a decoded certificate map: absent is
+/// `rdfc10-sha256`, a known name is its canonicalization, and anything else is
+/// refused.
+fn canon_field(entries: &mut [(Value, Value)]) -> Result<RefoldCanon, CertificateCborError> {
+    let value = match take_field(entries, FIELD_CANON) {
+        Ok(value) => value,
+        Err(CertificateCborError::MissingField { .. }) => return Ok(RefoldCanon::Rdfc10Sha256),
+        Err(error) => return Err(error),
+    };
+    let name = value
+        .into_text()
+        .map_err(|actual| CertificateCborError::FieldType {
+            field: FIELD_CANON,
+            expected: CertificateFieldType::Text,
+            actual,
+        })?;
+    RefoldCanon::from_name(&name).ok_or(CertificateCborError::UnknownCanon { value: name })
+}
+
 impl CompactionCertificate {
     /// Encode as deterministic CBOR (RFC 8949 §4.2 canonical map ordering via
     /// `purrdf_gts::wire::canonical`) — byte-identical across repeated calls
-    /// on an equal certificate.
+    /// on an equal certificate. The map has no `refold_canon` field: the
+    /// certificate records `rdfc10-sha256`.
     #[must_use]
     pub fn to_canonical_cbor(&self) -> Vec<u8> {
-        let value = Value::Map(vec![
+        wire::canonical(&Value::Map(self.cbor_entries()))
+    }
+
+    /// The four fields of the certificate's CBOR map.
+    fn cbor_entries(&self) -> Vec<(Value, Value)> {
+        vec![
             (
                 FIELD_PRE.into(),
                 Value::Text(self.pre_refold_digest.clone()),
@@ -707,8 +865,7 @@ impl CompactionCertificate {
                         .collect(),
                 ),
             ),
-        ]);
-        wire::canonical(&value)
+        ]
     }
 
     /// Decode the form written by [`Self::to_canonical_cbor`].
@@ -716,18 +873,67 @@ impl CompactionCertificate {
     /// # Errors
     /// Returns [`CertifyError::Cbor`] when `bytes` is not exactly one
     /// well-formed CBOR item (trailing bytes included), is not a map, or is
-    /// missing/misshapes a required field.
+    /// missing/misshapes a required field, and
+    /// [`CertificateCborError::UnexpectedCanon`] for a certificate whose
+    /// `refold_canon` is not `rdfc10-sha256` (read it with
+    /// [`VersionedCertificate::from_canonical_cbor`]).
+    pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
+        let VersionedCertificate { canon, certificate } =
+            VersionedCertificate::from_canonical_cbor(bytes)?;
+        match canon {
+            RefoldCanon::Rdfc10Sha256 => Ok(certificate),
+            canon => Err(CertificateCborError::UnexpectedCanon { canon }.into()),
+        }
+    }
+}
+
+/// A compaction certificate with the canonicalization its refold digests are
+/// recorded under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VersionedCertificate {
+    /// The canonicalization of `certificate`'s digests: its `refold_canon`.
+    pub canon: RefoldCanon,
+    /// The digests, roots and key ids, as a [`CompactionCertificate`] carries
+    /// them.
+    pub certificate: CompactionCertificate,
+}
+
+impl VersionedCertificate {
+    /// Encode as deterministic CBOR, the map of [`CompactionCertificate`] with
+    /// the `refold_canon` field added unless the canonicalization is
+    /// `rdfc10-sha256`, which is written without it. An `rdfc10-sha256`
+    /// certificate therefore encodes to the bytes its [`CompactionCertificate`]
+    /// does.
+    #[must_use]
+    pub fn to_canonical_cbor(&self) -> Vec<u8> {
+        let mut entries = self.certificate.cbor_entries();
+        if self.canon != RefoldCanon::Rdfc10Sha256 {
+            entries.push((FIELD_CANON.into(), Value::Text(self.canon.as_str().into())));
+        }
+        wire::canonical(&Value::Map(entries))
+    }
+
+    /// Decode a certificate, with or without a `refold_canon` field.
+    ///
+    /// # Errors
+    /// As [`CompactionCertificate::from_canonical_cbor`], and
+    /// [`CertificateCborError::UnknownCanon`] when `refold_canon` names a
+    /// canonicalization this build does not know.
     pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
         let value = purrdf_lex::cbor::decode(bytes, purrdf_lex::cbor::Limits::DEFAULT)
             .map_err(CertificateCborError::Decode)?;
         let mut entries = value
             .into_map()
             .map_err(|actual| CertificateCborError::RootType { actual })?;
-        Ok(Self {
+        let certificate = CompactionCertificate {
             pre_refold_digest: text_field(&mut entries, FIELD_PRE)?,
             post_refold_digest: text_field(&mut entries, FIELD_POST)?,
             detached_sig_roots: text_array_field(&mut entries, FIELD_ROOTS)?,
             packaging_kids: text_array_field(&mut entries, FIELD_KIDS)?,
+        };
+        Ok(Self {
+            canon: canon_field(&mut entries)?,
+            certificate,
         })
     }
 }
@@ -764,6 +970,31 @@ pub fn compose(
         detached_sig_roots,
         packaging_kids,
     })
+}
+
+/// [`compose`] over versioned certificates: `Ok(None)` when `a`'s post digest
+/// is not `b`'s pre digest, and the chained certificate, of the same
+/// canonicalization, otherwise.
+///
+/// # Errors
+/// [`CertifyError::CanonMismatch`] when `a` and `b` record different
+/// canonicalizations, whose digests are not comparable.
+pub fn compose_versioned(
+    a: &VersionedCertificate,
+    b: &VersionedCertificate,
+) -> Result<Option<VersionedCertificate>, CertifyError> {
+    if a.canon != b.canon {
+        return Err(CertifyError::CanonMismatch {
+            first: a.canon,
+            second: b.canon,
+        });
+    }
+    Ok(
+        compose(&a.certificate, &b.certificate).map(|certificate| VersionedCertificate {
+            canon: a.canon,
+            certificate,
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -819,11 +1050,64 @@ pub fn compact_and_certify<S: PackagingSigner>(
     packaging_signer: S,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
+    certify(
+        pre_bytes,
+        plan,
+        timestamp,
+        seal_original,
+        packaging_signer,
+        RefoldCanon::Rdfc10Sha256,
+        control,
+    )
+    .map(|(pack, certified)| (pack, certified.certificate))
+}
+
+/// [`compact_and_certify`] with the certificate's refold digests recorded
+/// under `nrl1-lines-sha256` ([`RefoldCanon::Nrl1LinesSha256`]): the writer of
+/// new certificates. The pack it authors is the pack [`compact_and_certify`]
+/// authors, its embedded `stream:contentRefoldDigest` the RDFC-1.0 digest.
+///
+/// # Errors
+/// As [`compact_and_certify`].
+pub fn compact_and_certify_versioned<S: PackagingSigner>(
+    pre_bytes: &[u8],
+    plan: DictPlan,
+    timestamp: &str,
+    seal_original: bool,
+    packaging_signer: S,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(Vec<u8>, VersionedCertificate), CertifyError> {
+    certify(
+        pre_bytes,
+        plan,
+        timestamp,
+        seal_original,
+        packaging_signer,
+        RefoldCanon::Nrl1LinesSha256,
+        control,
+    )
+}
+
+/// Compact `pre_bytes` and certify the rewrite under `canon`.
+fn certify<S: PackagingSigner>(
+    pre_bytes: &[u8],
+    plan: DictPlan,
+    timestamp: &str,
+    seal_original: bool,
+    packaging_signer: S,
+    canon: RefoldCanon,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(Vec<u8>, VersionedCertificate), CertifyError> {
     let pre_fold = read(pre_bytes, true, None);
     if !pre_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&pre_fold).into());
     }
-    let digest = refold_digest(&pre_fold, control)?;
+    // The pack embeds the RDFC-1.0 digest the GTS vocabulary defines.
+    let embedded = refold_digest(&pre_fold, control)?;
+    let digest = match canon {
+        RefoldCanon::Rdfc10Sha256 => embedded.clone(),
+        canon => refold_digest_with(&pre_fold, canon, control)?,
+    };
 
     let kid = packaging_signer.kid().to_string();
     let post_bytes = compact::compact_streamable(
@@ -832,7 +1116,7 @@ pub fn compact_and_certify<S: PackagingSigner>(
             timestamp,
             seal_original,
             plan,
-            content_digest: Some(&digest),
+            content_digest: Some(&embedded),
             packaging_signer,
         },
     )?;
@@ -841,7 +1125,7 @@ pub fn compact_and_certify<S: PackagingSigner>(
     if !post_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&post_fold).into());
     }
-    let post_digest = refold_digest(&post_fold, control)?;
+    let post_digest = refold_digest_with(&post_fold, canon, control)?;
     if post_digest != digest {
         return Err(CertifyError::Invariant {
             pre_refold_digest: digest,
@@ -854,11 +1138,14 @@ pub fn compact_and_certify<S: PackagingSigner>(
 
     Ok((
         post_bytes,
-        CompactionCertificate {
-            pre_refold_digest: digest,
-            post_refold_digest: post_digest,
-            detached_sig_roots,
-            packaging_kids: vec![kid],
+        VersionedCertificate {
+            canon,
+            certificate: CompactionCertificate {
+                pre_refold_digest: digest,
+                post_refold_digest: post_digest,
+                detached_sig_roots,
+                packaging_kids: vec![kid],
+            },
         },
     ))
 }

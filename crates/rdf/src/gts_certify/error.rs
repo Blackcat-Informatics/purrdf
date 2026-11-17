@@ -9,6 +9,7 @@ use purrdf_gts::compact::CompactRefusedError;
 use purrdf_hash::error::StructuredError;
 use purrdf_lex::cbor::{DecodeError, Value};
 
+use super::RefoldCanon;
 use crate::{CanonError, RdfDiagnostic};
 
 /// The required shape of a certificate field.
@@ -54,6 +55,19 @@ pub enum CertificateCborError {
         /// Original decoded element.
         actual: Value,
     },
+    /// The `refold_canon` field names a canonicalization this build does not
+    /// know; it is never read as another one.
+    UnknownCanon {
+        /// The field's text, as decoded.
+        value: String,
+    },
+    /// The certificate records a canonicalization the decoding type cannot
+    /// carry: a [`CompactionCertificate`](super::CompactionCertificate) is
+    /// always `rdfc10-sha256`.
+    UnexpectedCanon {
+        /// The canonicalization the certificate records.
+        canon: RefoldCanon,
+    },
 }
 
 impl fmt::Display for CertificateCborError {
@@ -74,6 +88,14 @@ impl fmt::Display for CertificateCborError {
             Self::ArrayElementType { field, .. } => {
                 write!(f, "{field:?} must be an array of text strings")
             }
+            Self::UnknownCanon { value } => {
+                write!(f, "unknown refold canonicalization {value:?}")
+            }
+            Self::UnexpectedCanon { canon } => write!(
+                f,
+                "the certificate records the refold canonicalization {:?}, not rdfc10-sha256",
+                canon.as_str()
+            ),
         }
     }
 }
@@ -100,6 +122,12 @@ impl StructuredError for CertificateCborError {
             "field" => Code(field), "index" => Unsigned(*index as u128),
             "expected" => Code("text"), "actual" => Record(actual),
         },
+        UnknownCanon { value } => "rdf-certificate-cbor-unknown-canon" {
+            "value" => Text(value),
+        },
+        UnexpectedCanon { canon } => "rdf-certificate-cbor-unexpected-canon" {
+            "canon" => Code(canon.as_str()),
+        },
     }
 }
 
@@ -122,6 +150,14 @@ pub enum CertifyError {
         /// Original post-compaction digest.
         post_refold_digest: String,
     },
+    /// Two certificates of different refold canonicalizations cannot be
+    /// chained: their digests are not comparable.
+    CanonMismatch {
+        /// The first certificate's canonicalization.
+        first: RefoldCanon,
+        /// The second certificate's canonicalization.
+        second: RefoldCanon,
+    },
 }
 
 impl fmt::Display for CertifyError {
@@ -137,6 +173,12 @@ impl fmt::Display for CertifyError {
             } => write!(
                 f,
                 "compaction certificate invariant violated: compaction changed the content-refold digest: pre={pre_refold_digest} post={post_refold_digest}"
+            ),
+            Self::CanonMismatch { first, second } => write!(
+                f,
+                "cannot compose a {} certificate with a {} certificate",
+                first.as_str(),
+                second.as_str()
             ),
         }
     }
@@ -156,6 +198,9 @@ impl StructuredError for CertifyError {
         Invariant { pre_refold_digest, post_refold_digest } => "rdf-certificate-content-changed" {
             "pre_refold_digest" => Text(pre_refold_digest),
             "post_refold_digest" => Text(post_refold_digest),
+        },
+        CanonMismatch { first, second } => "rdf-certificate-canon-mismatch" {
+            "first" => Code(first.as_str()), "second" => Code(second.as_str()),
         },
     }
 }

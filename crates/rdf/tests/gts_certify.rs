@@ -24,8 +24,9 @@ use purrdf_gts::writer::{Writer, term_to_wire};
 use purrdf_lex::cbor::Value;
 use purrdf_rdf::CanonError;
 use purrdf_rdf::gts_certify::{
-    CertificateCborError, CertifyError, CompactionCertificate, compact_and_certify, compose,
-    effective_digest, refold_digest, verify_compaction,
+    CertificateCborError, CertifyError, CompactionCertificate, RefoldCanon, VersionedCertificate,
+    compact_and_certify, compact_and_certify_versioned, compose, compose_versioned,
+    effective_digest, refold_digest, refold_digest_with, verify_compaction, verify_compaction_with,
 };
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -1477,4 +1478,206 @@ fn verify_compaction_accepts_large_non_symmetric_content() {
         cert.pre_refold_digest, cert.post_refold_digest,
         "the large non-symmetric content graph must refold to equal pre/post digests"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The refold canonicalization a certificate records
+// ---------------------------------------------------------------------------
+
+/// A signed source whose content holds blank nodes, so its RDFC-1.0 and
+/// labelling documents spell different labels: `<s> <p> _:a`, `_:a <p> "x"`,
+/// `_:b <p> "y"`.
+fn source_with_blanks(byte: u8, kid: &str) -> Vec<u8> {
+    let mut w = Writer::new("purrdf.gts");
+    w.sign_with(fixed_key(byte), kid);
+    let terms = vec![
+        Term::iri("https://example.org/p".to_string()),
+        Term::iri("https://example.org/s".to_string()),
+        Term::blank("a"),
+        Term::blank("b"),
+        Term::literal("x", None),
+        Term::literal("y", None),
+    ];
+    w.add_terms(&terms);
+    w.add_quads(&[(1, 0, 2, None), (2, 0, 4, None), (3, 0, 5, None)]);
+    w.into_bytes()
+}
+
+/// The 5.0 writer records `nrl1-lines-sha256`: the certificate verifies when
+/// the digests are recomputed with the labelling and not with RDFC-1.0, its
+/// bytes carry the `refold_canon` field (pinned byte for byte), and the
+/// `rdfc10-sha256` type refuses to read it while reading the certificate of
+/// the 4.x writer.
+#[test]
+fn an_nrl1_certificate_is_verified_with_the_canonicalization_it_names() {
+    let source = source_with_blanks(1, "author");
+    let control =
+        || purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+    let (pack, versioned) = compact_and_certify_versioned(
+        &source,
+        DictPlan::undicted(),
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+        &mut control(),
+    )
+    .expect("compact_and_certify_versioned succeeds on a clean signed source");
+    assert_eq!(versioned.canon, RefoldCanon::Nrl1LinesSha256);
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let report =
+        verify_compaction_with(&source, &pack, versioned.canon, &ring, &mut control()).unwrap();
+    assert!(report.all_ok(), "{report:?}");
+    assert_eq!(
+        versioned.certificate.pre_refold_digest,
+        versioned.certificate.post_refold_digest
+    );
+    assert_eq!(
+        versioned.certificate.pre_refold_digest,
+        refold_digest_with(
+            &read(&source, true, None),
+            RefoldCanon::Nrl1LinesSha256,
+            &mut control()
+        )
+        .unwrap()
+    );
+
+    // The 4.x writer authors the same pack and records the RDFC-1.0 digest,
+    // which is not the labelling's.
+    let (rdfc_pack, rdfc) = compact_and_certify(
+        &source,
+        DictPlan::undicted(),
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+        &mut control(),
+    )
+    .unwrap();
+    assert_eq!(rdfc_pack, pack);
+    assert_ne!(
+        rdfc.pre_refold_digest,
+        versioned.certificate.pre_refold_digest
+    );
+    assert_eq!(
+        rdfc.detached_sig_roots,
+        versioned.certificate.detached_sig_roots
+    );
+
+    let bytes = versioned.to_canonical_cbor();
+    let hex = bytes.iter().fold(String::new(), |mut hex, b| {
+        use std::fmt::Write as _;
+        write!(hex, "{b:02x}").expect("a string accepts a write");
+        hex
+    });
+    purrdf_testkit::assert_golden!(
+        "certificate_nrl1_lines_sha256.cbor.hex",
+        &format!("{hex}\n")
+    );
+    assert_eq!(
+        VersionedCertificate::from_canonical_cbor(&bytes).unwrap(),
+        versioned
+    );
+    assert!(matches!(
+        CompactionCertificate::from_canonical_cbor(&bytes),
+        Err(CertifyError::Cbor(CertificateCborError::UnexpectedCanon {
+            canon: RefoldCanon::Nrl1LinesSha256
+        }))
+    ));
+    // The neighbour: an `rdfc10-sha256` certificate is written without the
+    // field, to the 4.x bytes, and both types read it.
+    let as_versioned = VersionedCertificate {
+        canon: RefoldCanon::Rdfc10Sha256,
+        certificate: rdfc.clone(),
+    };
+    assert_eq!(as_versioned.to_canonical_cbor(), rdfc.to_canonical_cbor());
+    assert_eq!(
+        CompactionCertificate::from_canonical_cbor(&rdfc.to_canonical_cbor()).unwrap(),
+        rdfc
+    );
+}
+
+/// A certificate map with fixed digests and the given `refold_canon` value.
+fn certificate_map(canon: Option<Value>) -> Vec<u8> {
+    let mut entries: Vec<(Value, Value)> = vec![
+        ("pre_refold_digest".into(), Value::Text("aa".into())),
+        ("post_refold_digest".into(), Value::Text("aa".into())),
+        ("detached_sig_roots".into(), Value::Array(Vec::new())),
+        ("packaging_kids".into(), Value::Array(Vec::new())),
+    ];
+    if let Some(canon) = canon {
+        entries.push(("refold_canon".into(), canon));
+    }
+    wire::canonical(&Value::Map(entries))
+}
+
+/// An unknown `refold_canon` is refused and never read as another
+/// canonicalization; each known name, and the absent field, is read.
+#[test]
+fn an_unknown_refold_canon_is_refused_and_each_known_one_is_read() {
+    #[allow(
+        clippy::result_large_err,
+        reason = "a test closure returns the library's own error type unchanged"
+    )]
+    let read_canon = |canon: Option<Value>| {
+        VersionedCertificate::from_canonical_cbor(&certificate_map(canon)).map(|c| c.canon)
+    };
+    match read_canon(Some(Value::Text("rdfc11-sha256".into()))) {
+        Err(CertifyError::Cbor(CertificateCborError::UnknownCanon { value })) => {
+            assert_eq!(value, "rdfc11-sha256");
+        }
+        other => panic!("an unknown canonicalization must be refused: {other:?}"),
+    }
+    assert!(matches!(
+        read_canon(Some(Value::Bool(true))),
+        Err(CertifyError::Cbor(CertificateCborError::FieldType {
+            field: "refold_canon",
+            ..
+        }))
+    ));
+    for (canon, expected) in [
+        (None, RefoldCanon::Rdfc10Sha256),
+        (
+            Some(Value::Text("rdfc10-sha256".into())),
+            RefoldCanon::Rdfc10Sha256,
+        ),
+        (
+            Some(Value::Text("nrl1-lines-sha256".into())),
+            RefoldCanon::Nrl1LinesSha256,
+        ),
+    ] {
+        assert_eq!(read_canon(canon).unwrap(), expected);
+    }
+    assert_eq!(RefoldCanon::Rdfc10Sha256.code(), 1);
+    assert_eq!(RefoldCanon::Nrl1LinesSha256.code(), 2);
+}
+
+/// Two certificates of different canonicalizations do not chain, though their
+/// digests line up; two of the same canonicalization do.
+#[test]
+fn compose_refuses_certificates_of_different_canonicalizations() {
+    let certificate = |canon, pre: &str, post: &str| VersionedCertificate {
+        canon,
+        certificate: CompactionCertificate {
+            pre_refold_digest: pre.into(),
+            post_refold_digest: post.into(),
+            detached_sig_roots: vec![format!("{pre}{post}")],
+            packaging_kids: vec!["pack".into()],
+        },
+    };
+    let first = certificate(RefoldCanon::Nrl1LinesSha256, "x", "y");
+    let other = certificate(RefoldCanon::Rdfc10Sha256, "y", "z");
+    assert!(matches!(
+        compose_versioned(&first, &other),
+        Err(CertifyError::CanonMismatch {
+            first: RefoldCanon::Nrl1LinesSha256,
+            second: RefoldCanon::Rdfc10Sha256,
+        })
+    ));
+    let same = certificate(RefoldCanon::Nrl1LinesSha256, "y", "z");
+    let chained = compose_versioned(&first, &same)
+        .unwrap()
+        .expect("the digests chain");
+    assert_eq!(chained.canon, RefoldCanon::Nrl1LinesSha256);
+    assert_eq!(chained.certificate.pre_refold_digest, "x");
+    assert_eq!(chained.certificate.post_refold_digest, "z");
+    assert!(compose_versioned(&same, &first).unwrap().is_none());
 }
