@@ -16,7 +16,9 @@ SPARQL parser, `purrdf-sparql-algebra`, does not recurse on a request's nesting
 and needs no such check.) This crate is that measurement, in one place:
 
 * `remaining` — the bytes left below the calling frame before the thread's
-  stack floor.
+  stack floor, or `0` while the floor is unknown.
+* `try_remaining` — the same measurement, returning the typed `FloorError`
+  when the floor cannot be read.
 * `is_low` — whether fewer than `MARGIN_BYTES` are left: one thread-local load,
   one subtraction and one comparison on the hot path.
 * `replace_floor` — install the floor of a stack a host has switched onto, and
@@ -33,17 +35,26 @@ and needs no such check.) This crate is that measurement, in one place:
   they are derived from in their documentation.
 
 Natively the floor is the thread's stack limit as the operating system reports
-it, read once per thread through a small platform module in this crate: on
-Linux, Android and NetBSD, `pthread_getattr_np`; on FreeBSD and DragonFly BSD,
+it, read through a small platform module in this crate: on Linux, Android and
+NetBSD, `pthread_getattr_np`; on FreeBSD and DragonFly BSD,
 `pthread_attr_get_np`; on OpenBSD, `pthread_stackseg_np`; on macOS and iOS,
 `pthread_get_stackaddr_np` and `pthread_get_stacksize_np`; on Windows,
 `GetCurrentThreadStackLimits`. Each is a raw `libc` (or, on Windows,
 `windows-sys`) declaration resolved against the target's own C library at link
 time — no bundled C source and no build-time C toolchain, so this crate stays a
-cross-compilable leaf. On any other target — a `libc` this module has no call
-for, or a target this crate has not been ported to — the bound cannot be read,
-and the guard this crate backs stays inactive there, exactly as it does before
-the first successful read on a supported target.
+cross-compilable leaf. A successful read is cached per thread. A failed read is
+not cached and is retried by the next check. A thread started by `on_stack`
+never reads the operating system: its floor comes from the request.
+
+While the floor is unknown the guards refuse: `remaining` is `0` and `is_low`
+is `true`. `try_remaining` returns the typed `FloorError` instead, either
+`Unsupported` or `Read`. On a target with no stack-bounds call — a `libc` this
+module has no call for, or a target this crate has not been ported to — the
+bound can never be read, so on every thread not started by `on_stack` each
+guarded call refuses and returns its stack-exhaustion error (the evaluator's
+`StackExhausted`, for one), rather than the guard switching off. A thread
+started by `on_stack` is still served there, because it takes its floor from the
+request.
 
 On `wasm32` the floor is the low end of the shadow stack. That path never links
 `libc` or `windows-sys` at all, and builds for `wasm32-unknown-unknown` like
