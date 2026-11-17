@@ -49,6 +49,8 @@ explicit (never silent) exclusions.
 
 ## Gates
 
-`make pytest` (and its CI job) is **separate** from `make check`. `make check` is
+`make pytest` is **separate** from `make check`; the CI job runs only
+`make pytest-load`, which builds the module and checks that it imports and
+exposes the Rust functions. `make check` is
 the Rust gate (fmt/clippy/build/tests/hygiene) and must stay runnable without a
 Python toolchain; the Python suite is its own gate.

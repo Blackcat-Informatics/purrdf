@@ -1181,8 +1181,9 @@ use the same caller-owned SHACL import configuration. Migration adapters should
 pass `CompiledSchema` unchanged, configure exact re-homes, and consume
 `slot_renames`; rewriting shared property/required keys is unnecessary.
 
-The Rust production path has no LinkML-toolkit dependency. CI uses the locked
-official LinkML 1.11.1 Python packages only as a differential oracle. It loads
+The Rust production path has no LinkML-toolkit dependency. `make linkml-oracle`
+uses the locked official LinkML 1.11.1 Python packages only as a differential
+oracle. It loads
 safe, lossy, and renamed fixtures through `SchemaDefinition` and `SchemaView`,
 regenerates JSON Schema, and verifies reverse predicates:
 
