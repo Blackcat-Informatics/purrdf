@@ -14,7 +14,8 @@ use purrdf_core::embedding::{
     AppliedStage, ChunkingContractId, CorpusTarget, DocumentTarget, EmbeddingError, TargetId,
     derive_chunking_contract_id,
 };
-use purrdf_core::{BaseIri, CanonHash, ContentDigest, parse_iri, try_canonicalize_with};
+use purrdf_core::rdfc12::{CanonHash, try_canonicalize_with};
+use purrdf_core::{BaseIri, ContentDigest, parse_iri};
 use purrdf_markdown::{
     CONTEXT_BYTES, Claim, ClaimKind, DIGEST_ALGORITHM, Document, MIN_MAX_BYTES, MarkdownError,
     PURREMB_PARAMETER_ENCODING, Profile, RowDefect, STANDARD_NAMESPACE, SourceDocument, Span,
@@ -1700,7 +1701,7 @@ fn every_claim_parses_as_turtle_and_canonicalizes_under_purrdf() {
                 &dataset,
                 CanonHash::Sha256,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -4879,7 +4880,7 @@ fn the_designated_heading_and_lineage_literals_carry_their_own_datatypes() {
             &dataset,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )

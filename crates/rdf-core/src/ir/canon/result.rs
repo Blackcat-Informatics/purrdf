@@ -60,7 +60,7 @@ impl<Id: ViewTermId> Canonicalized<Id> {
     /// Which RDFC-1.0 [`CanonPresentation`] produced [`Self::nquads`], or `None`
     /// when the document is the canonical line sequence of the
     /// nested-refinement labelling, which has one presentation
-    /// ([`CANON_PRESENTATION_LINES_ID`](super::CANON_PRESENTATION_LINES_ID)).
+    /// ([`CANON_PRESENTATION_LINES_ID`](crate::ir::CANON_PRESENTATION_LINES_ID)).
     /// Only the functions of [`crate::rdfc12`] report a presentation. Where
     /// present, it is the fourth of the legacy consumer pin's four coordinates
     /// `(profile, version, presentation, hash)`. [`try_canonicalize`](super::try_canonicalize), [`try_canonicalize_view`](super::try_canonicalize_view),

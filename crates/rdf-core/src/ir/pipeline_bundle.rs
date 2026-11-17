@@ -1609,7 +1609,7 @@ impl<H> PipelineViewBundle<H> {
     ///
     /// Answered from, in order: this carrier's own memo; the SHARED ledger memo, when
     /// one frozen base is the SOLE source answering for the whole graph; otherwise
-    /// [`try_graph_digest_view`] on the composite itself, which reads the composed
+    /// `try_graph_digest_view` on the composite itself, which reads the composed
     /// rows in place and materializes nothing.
     ///
     /// # Errors

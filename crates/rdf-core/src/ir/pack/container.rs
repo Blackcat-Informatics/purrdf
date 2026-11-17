@@ -313,7 +313,7 @@ pub enum PackError<E = core::convert::Infallible> {
         /// The mismatched section's directory tag.
         kind: u32,
     },
-    /// [`crate::try_canonicalize_with`] REFUSED to compute the dataset's canonical
+    /// [`crate::rdfc12::try_canonicalize_with`] (a version 1 pack) or [`crate::try_canonicalize_view`] (a version 2 pack) REFUSED to compute the dataset's canonical
     /// digest. The typed [`CanonError`] says which refusal it was, and the
     /// distinction matters to whoever is holding the pack: a
     /// [`CanonError::BudgetExceeded`] dataset is well-formed but pathologically

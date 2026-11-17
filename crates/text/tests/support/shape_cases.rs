@@ -1970,7 +1970,7 @@ pub(crate) fn prepared_and_query_forms() {
                 purrdf_core::ir::canon::try_canonicalize(
                     &a,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -1979,7 +1979,7 @@ pub(crate) fn prepared_and_query_forms() {
                 purrdf_core::ir::canon::try_canonicalize(
                     &b,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -2674,19 +2674,13 @@ pub(crate) fn scoped_streams_and_update_where() {
     assert_eq!(
         purrdf_core::ir::canon::try_canonicalize(
             &literal,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         purrdf_core::ir::canon::try_canonicalize(
             &shaped,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
