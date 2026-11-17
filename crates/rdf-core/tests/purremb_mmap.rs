@@ -57,7 +57,7 @@ const SECTION_ALIGN: usize = 64;
 /// The golden PURREMB file's bytes.
 fn golden() -> Vec<u8> {
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v1.bin");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v2.bin");
     std::fs::read(path).expect("golden bytes")
 }
 

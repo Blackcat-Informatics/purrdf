@@ -27,10 +27,10 @@ use super::target::{TargetKind, validate_target_identity as validate_canonical_t
 use super::wire::{
     PURREMB_DIRECTORY_ENTRY_LENGTH, PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC,
     PURREMB_MAX_SECTION_COUNT, PURREMB_TRAILER_LENGTH, PURREMB_TRAILER_MAGIC, PURREMB_VERSION,
-    SECTION_CONTRACTS, SECTION_CRITICAL, SECTION_DERIVED, SECTION_EXTENSION_MIN,
-    SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, SECTION_MATRICES,
-    SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS, SECTION_TARGETS,
-    SECTION_TOKEN_SPANS, SectionKey,
+    PURREMB_VERSION_LABELLING, SECTION_CONTRACTS, SECTION_CRITICAL, SECTION_DERIVED,
+    SECTION_EXTENSION_MIN, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
+    SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS,
+    SECTION_TARGETS, SECTION_TOKEN_SPANS, SectionKey,
 };
 
 const SOURCE_LENGTH: usize = 128;
@@ -1459,6 +1459,7 @@ struct IndexGuardsView<'a> {
 #[derive(Debug)]
 pub struct EmbeddingView<'a> {
     bytes: &'a [u8],
+    format_version: u32,
     root: ArtifactRoot,
     source: SourceView,
     directory: DirectoryView<'a>,
@@ -1476,7 +1477,7 @@ pub struct EmbeddingView<'a> {
 impl<'a> EmbeddingView<'a> {
     /// Performs a structural, allocation-free open over immutable bytes.
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, EmbeddingError> {
-        let (directory, root) = open_framing(bytes)?;
+        let (directory, root, format_version) = open_framing(bytes)?;
         let source_section = required_section(directory, SECTION_SOURCE, 0)?;
         let source = parse_source(source_section.bytes, bytes)?;
         let contracts = parse_contracts(required_section(directory, SECTION_CONTRACTS, 0)?.bytes)?;
@@ -1495,6 +1496,7 @@ impl<'a> EmbeddingView<'a> {
 
         let view = Self {
             bytes,
+            format_version,
             root,
             source,
             directory,
@@ -1516,6 +1518,16 @@ impl<'a> EmbeddingView<'a> {
     #[must_use]
     pub const fn bytes(&self) -> &'a [u8] {
         self.bytes
+    }
+
+    /// The header's format version: [`PURREMB_VERSION`] for an artifact whose
+    /// certified RDF digest and blank-node labels come from the 4.x RDFC-1.0
+    /// run, [`PURREMB_VERSION_LABELLING`] for one that comes from the canonical
+    /// labelling. Source verification recomputes each by the function that
+    /// recorded it.
+    #[must_use]
+    pub const fn format_version(&self) -> u32 {
+        self.format_version
     }
 
     /// Stored whole-artifact integrity root.
@@ -2427,7 +2439,7 @@ impl<'a> IndexGuardsView<'a> {
     }
 }
 
-fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), EmbeddingError> {
+fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot, u32), EmbeddingError> {
     if bytes.len() < PURREMB_HEADER_LENGTH as usize {
         return Err(EmbeddingError::Truncated);
     }
@@ -2435,7 +2447,7 @@ fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), Embed
         return Err(EmbeddingError::BadMagic);
     }
     let version = read_u32(bytes, 8)?;
-    if version != PURREMB_VERSION {
+    if version != PURREMB_VERSION && version != PURREMB_VERSION_LABELLING {
         return Err(EmbeddingError::UnsupportedVersion(version));
     }
     require_u32(bytes, 12, PURREMB_HEADER_LENGTH, "header length")?;
@@ -2499,7 +2511,7 @@ fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), Embed
         entries,
     };
     validate_directory(directory, first_section_offset, trailer_offset)?;
-    validate_trailer(bytes, trailer_offset, file_length)?;
+    validate_trailer(bytes, trailer_offset, file_length, version)?;
     let root = ArtifactRoot::from_raw(array32(bytes, 64));
     if array32(
         bytes,
@@ -2510,7 +2522,7 @@ fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), Embed
     {
         return Err(EmbeddingError::Malformed("header and trailer roots differ"));
     }
-    Ok((directory, root))
+    Ok((directory, root, version))
 }
 
 fn validate_directory(
@@ -2630,13 +2642,18 @@ fn validate_directory(
     Ok(())
 }
 
-fn validate_trailer(bytes: &[u8], offset: u64, file_length: u64) -> Result<(), EmbeddingError> {
+fn validate_trailer(
+    bytes: &[u8],
+    offset: u64,
+    file_length: u64,
+    header_version: u32,
+) -> Result<(), EmbeddingError> {
     let trailer = borrowed_span(bytes, offset, u64::from(PURREMB_TRAILER_LENGTH), "trailer")?;
     if trailer.get(..8) != Some(PURREMB_TRAILER_MAGIC.as_slice()) {
         return Err(EmbeddingError::BadTrailerMagic);
     }
     let version = read_u32(trailer, 8)?;
-    if version != PURREMB_VERSION {
+    if version != header_version {
         return Err(EmbeddingError::UnsupportedVersion(version));
     }
     require_u32(trailer, 12, PURREMB_TRAILER_LENGTH, "trailer length")?;

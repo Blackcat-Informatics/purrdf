@@ -22,10 +22,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   vocabulary. A finite search bound maps onto the engine's limit and a refusal
   is the typed `limit` outcome (`CanonError::Refused`). PACK writes format
   version 2 with the line-sequence digest and still reads version 1;
-  `verify_pack` recomputes each version with the function that recorded it. The
-  PURREMB reference file, the entail goldens and the proof, product and
-  regime vectors move with the digest; GTS compaction certificates stay on
-  RDFC-1.0 and columnar files record no canonical digest. See the
+  `verify_pack` recomputes each version with the function that recorded it.
+  PURREMB writes format version 2, whose certified RDF digest and blank-node
+  target labels come from the labelling, and still reads version 1, which is
+  recomputed with the 4.x function; a 4.x reader refuses a version-2 file as an
+  unsupported version. The 4.x PURREMB reference file stays as `purremb_v1.bin`
+  beside a new `purremb_v2.bin`, and the entail goldens and the proof, product
+  and regime vectors move with the digest. Columnar files record no canonical
+  digest. GTS compaction certificates still record the 4.x refold digest; that
+  is an open item in the migration guide and not part of this change. See the
   [5.0 migration guide](docs/MIGRATION-5.0.md).
 
 - **Typed JSON Pointers:** `purrdf_lex::json_pointer::JsonPointer` holds a

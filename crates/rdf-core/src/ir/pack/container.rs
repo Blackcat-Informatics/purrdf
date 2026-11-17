@@ -818,7 +818,8 @@ impl<'a> PackView<'a> {
 
     /// Whether the header's digest is the RDFC-1.0 SHA-256 of a pack written
     /// before the canonical line sequence.
-    pub(super) const fn is_rdfc12(&self) -> bool {
+    #[must_use]
+    pub const fn is_rdfc12(&self) -> bool {
         self.format_version == FORMAT_VERSION_RDFC12
     }
 

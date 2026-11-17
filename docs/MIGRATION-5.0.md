@@ -24,7 +24,8 @@ digests before opening a 4.x artifact.
 - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
   read-side recompute of stored 4.x digests. No writer records a 4.x digest in a
-  new artifact, with the two exceptions in "Containers".
+  new artifact, with the one exception in "Containers" (the GTS compaction
+  certificate, an open item).
 - The search bound is a limit on the engine's own work. Refusal is the labelling's
   typed `limit` outcome.
 - `DatasetStateDigest` is a separate algorithm and is unchanged.
@@ -136,14 +137,41 @@ them.
   hex strings with no algorithm field, and the GTS wire format is governed in
   `gmeow-gts`. They stay on the RDFC-1.0 flat form, so certificates written by 4.x
   and 5.0 agree. This is the one place 5.0 writes a 4.x-style digest; moving it
-  needs a versioned certificate in `gmeow-gts`.
+  needs a versioned certificate in `gmeow-gts` (see the open item below).
 - **Columnar.** The five-table Parquet files record no canonical digest, only
   content digests of blobs and of the manifest. They are unchanged.
-- **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest and
-  blank-node target identities derived from canonical labels. 5.0 computes both
-  with the labelling under the unchanged PURREMB version `1`; a 4.x embedding is
-  therefore not accepted by the 5.0 verifier, and the embedding version for the
-  new digest has not been decided.
+- **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
+  and the blank-node target identities carry canonical labels. Format version `1`
+  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels. The 5.0
+  writer emits format version `2`, whose digest is the line-sequence digest and
+  whose labels are the labelling's decimal labels. Nothing else in the framing or
+  the sections changes. The reader accepts both versions and refuses any other,
+  and a file whose header and trailer name different versions. Source
+  verification recomputes the digest and the labels with the run the version
+  names, so a 4.x embedding keeps verifying against the pack or Columnar files it
+  was written for. The same file with its version byte changed to `2` is refused
+  as a certified-RDF digest mismatch. A newly written artifact differs from the
+  4.x artifact of the same inputs in the header and trailer version fields, the
+  source digest, the dataset target identity, every blank-node target identity
+  and everything sealed over them. The 4.x reference file `purremb_v1.bin` is
+  kept as the 4.x evidence beside the new `purremb_v2.bin`. A 4.x reader
+  (checked against `EmbeddingView::from_bytes` at the `rust-v4.0.2`
+  tag, which compares the header version with the constant `1` before it reads
+  any other field) refuses a version-`2` file with `UnsupportedVersion(2)`
+  (`purremb-unsupported-version`, "unsupported PURREMB version 2"); it does not
+  misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
+  a 5.0 file is not readable by 4.x.
+
+### Open item: GTS compaction certificates
+
+Status: open, with the scope decision undecided. The refold digest of a GTS
+compaction certificate is still recorded under the 4.x labelling (the RDFC-1.0
+flat form). The digest is a bare hex string with no algorithm field and the wire
+form is governed in `gmeow-gts`, so moving it onto the canonical line sequence
+needs a versioned certificate there. Until that is decided, whether to carry the
+change or to cut it from this release, the acceptance line that every recorded
+canonical digest moves to the new output is not met for compaction certificates.
+No code in this repository changes for it.
 
 ## Hosts
 

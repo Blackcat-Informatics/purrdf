@@ -14,9 +14,16 @@ use purrdf_core::{
 
 const DIRECTORY_ENTRY_LENGTH: usize = PURREMB_DIRECTORY_ENTRY_LENGTH as usize;
 
+/// The golden of the version the writer emits (format version 2).
 fn golden() -> Vec<u8> {
+    read_golden("purremb_v2.bin")
+}
+
+fn read_golden(name: &str) -> Vec<u8> {
     std::fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v1.bin"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/goldens")
+            .join(name),
     )
     .expect("checked-in PURREMB golden")
 }
@@ -41,9 +48,17 @@ fn framing_corruptions_fail_closed() {
 
     let mut cases = Vec::new();
 
-    let mut unsupported_version = original.clone();
-    put_u32(&mut unsupported_version, 8, 2);
-    cases.push(unsupported_version);
+    for version in [0, 3, u32::MAX] {
+        let mut unsupported_version = original.clone();
+        put_u32(&mut unsupported_version, 8, version);
+        cases.push(unsupported_version);
+    }
+
+    // The header and the trailer must name one version.
+    let mut split_version = original.clone();
+    let trailer_start = usize::try_from(read_u64(&split_version, 48)).expect("trailer offset");
+    put_u32(&mut split_version, trailer_start + 8, 1);
+    cases.push(split_version);
 
     for code in [0, 3, u32::MAX] {
         let mut unsupported_source = original.clone();
@@ -120,6 +135,27 @@ fn framing_corruptions_fail_closed() {
     }
     for length in [0, 1, 7, 8, 64, 127, original.len() - 1] {
         assert_structural_error(&original[..length]);
+    }
+}
+
+/// The version byte admits exactly the two formats that exist: the 4.x artifact
+/// (version 1) and the one the writer emits (version 2) both open and verify whole,
+/// while their neighbours 0 and 3 are refused with the version named.
+#[test]
+fn the_version_byte_admits_versions_one_and_two_and_refuses_the_neighbours() {
+    for (name, version) in [("purremb_v1.bin", 1), ("purremb_v2.bin", 2)] {
+        let bytes = read_golden(name);
+        let mut view = EmbeddingView::from_bytes(&bytes).expect("a supported version opens");
+        assert_eq!(view.format_version(), version);
+        verify_embedding(&mut view).expect("a supported version verifies");
+    }
+    for version in [0, 3] {
+        let mut bytes = golden();
+        put_u32(&mut bytes, 8, version);
+        assert!(matches!(
+            EmbeddingView::from_bytes(&bytes),
+            Err(EmbeddingError::UnsupportedVersion(found)) if found == version
+        ));
     }
 }
 

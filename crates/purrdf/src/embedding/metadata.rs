@@ -4,7 +4,7 @@
 //! Typed canonical encoders for PURREMB metadata sections.
 
 use super::error::SourceAttachmentError;
-use super::source::{EmbeddingSource, canonical_source};
+use super::source::{EmbeddingSource, canonical_source, pack_rdf_digest};
 use super::writer::CanonicalMetadataSections;
 use purrdf_core::embedding::{
     DerivedIndex, EmbeddingError, EmbeddingFamilyContract, EmbeddingSourceFormat, EmbeddingTarget,
@@ -12,7 +12,9 @@ use purrdf_core::embedding::{
     RdfcDigest, TargetId, TargetRelation, TargetSet, TokenSpan,
 };
 use purrdf_core::embedding::{put_u32, put_u64};
-use purrdf_core::{ContentDigest, PackBuilder, RdfDataset, verify_pack_bytes};
+use purrdf_core::{
+    ContentDigest, PURREMB_VERSION_LABELLING, PackBuilder, RdfDataset, verify_pack_bytes,
+};
 
 const SOURCE_LENGTH: usize = 128;
 
@@ -45,13 +47,14 @@ impl CertifiedEmbeddingSource {
                     u64::try_from(bytes.len())
                         .map_err(|_| EmbeddingError::ArithmeticOverflow("source byte length"))?,
                     proof.exact_digest(),
-                    RdfcDigest::from_raw(*proof.rdf_digest().as_bytes()),
+                    pack_rdf_digest(proof, PURREMB_VERSION_LABELLING, control)?,
                 )
             }
             EmbeddingSource::Columnar(files) => {
                 // A certificate is constructed only after every table and blob passed.
                 let read = purrdf_columnar::read(files)?;
-                let (rdf_digest, _) = canonical_source(&read.dataset, control)?;
+                let (rdf_digest, _) =
+                    canonical_source(&read.dataset, PURREMB_VERSION_LABELLING, control)?;
                 let manifest = purrdf_columnar::source_manifest(files)?;
                 (
                     EmbeddingSourceFormat::ColumnarV1,

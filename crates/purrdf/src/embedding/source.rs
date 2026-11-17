@@ -12,8 +12,9 @@ use purrdf_core::embedding::{
     TargetView, term_value_target_id, verify_embedding_dataset_target, verify_external_artifact,
 };
 use purrdf_core::{
-    Canonicalized, ContentDigest, DatasetView, PackId, PackView, QuadIds, RdfDataset, TermId,
-    TermRef, dataset_from_view, try_canonicalize, verify_pack_bytes,
+    CanonError, Canonicalized, ContentDigest, DatasetView, PURREMB_VERSION, PackId, PackView,
+    QuadIds, RdfDataset, TermId, TermRef, VerifiedPack, dataset_from_view, rdfc12,
+    try_canonicalize, verify_pack_bytes,
 };
 
 /// Actual untrusted bytes supplied for one of the two closed native carriers.
@@ -88,7 +89,7 @@ pub fn verify_embedding_source(
         EmbeddingSource::Purrpck(bytes) => {
             let exact = verify_exact_source(embedding, bytes)?;
             let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::source_pack)?;
-            let rdf = RdfcDigest::from_raw(*proof.rdf_digest().as_bytes());
+            let rdf = pack_rdf_digest(proof, embedding.format_version(), control)?;
             verify_rdf_source(embedding, rdf)?;
             let checked = verify_pack_ordinals(embedding, bytes, control)?;
             (exact, rdf, checked)
@@ -108,7 +109,7 @@ pub fn verify_embedding_source(
             // only requested original row evidence bound to its actual dataset.
             let read = purrdf_columnar::read_with_ordinals(files, &requested)?;
             let dataset = &read.read().dataset;
-            let (rdf, canonical) = canonical_source(dataset, control)?;
+            let (rdf, canonical) = canonical_source(dataset, embedding.format_version(), control)?;
             verify_rdf_source(embedding, rdf)?;
             let checked = verify_ordinals(embedding, |target, ordinal| {
                 columnar_target_id(
@@ -159,13 +160,52 @@ fn verify_rdf_source(
     verify_embedding_dataset_target(embedding)
 }
 
+/// The canonical run that recorded the identities of a PURREMB file of
+/// `format_version`: the 4.x RDFC-1.0 run for version 1, the labelling for every
+/// later version. The digest and the blank-node labels come from the same run.
 pub(super) fn canonical_source(
     dataset: &RdfDataset,
+    format_version: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(RdfcDigest, Canonicalized), SourceAttachmentError> {
-    let (canonical, digest) = purrdf_core::try_canonicalize_digest_view(dataset, control)?;
+    let (canonical, digest) = if format_version == PURREMB_VERSION {
+        rdfc12::try_canonicalize_sha256_view(dataset, rdfc12::CanonHash::Sha256, control)?
+    } else {
+        let (canonical, digest) = purrdf_core::try_canonicalize_digest_view(dataset, control)?;
+        (canonical, ContentDigest::from_raw(*digest.as_bytes()))
+    };
     let digest = RdfcDigest::from_raw(*digest.as_bytes());
     Ok((digest, canonical))
+}
+
+/// The labels of the run that recorded a PURREMB file of `format_version`.
+fn canonical_labels(
+    dataset: &RdfDataset,
+    format_version: u32,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Canonicalized, CanonError> {
+    if format_version == PURREMB_VERSION {
+        rdfc12::try_canonicalize(dataset, control)
+    } else {
+        try_canonicalize(dataset, control)
+    }
+}
+
+/// The certified RDF digest of a verified pack under the law of `format_version`.
+/// A pack records its digest under one law (see [`PackView::is_rdfc12`]); when
+/// that is the law the embedding needs, the pack's own verified digest is the
+/// answer, and otherwise the digest is recomputed from the reconstructed dataset.
+pub(super) fn pack_rdf_digest(
+    proof: VerifiedPack<'_>,
+    format_version: u32,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<RdfcDigest, SourceAttachmentError> {
+    let pack = PackView::from_bytes(proof.bytes()).map_err(EmbeddingError::source_pack)?;
+    if pack.is_rdfc12() == (format_version == PURREMB_VERSION) {
+        return Ok(RdfcDigest::from_raw(*proof.rdf_digest().as_bytes()));
+    }
+    let dataset = dataset_from_view(&pack).map_err(EmbeddingError::source_pack)?;
+    Ok(canonical_source(&dataset, format_version, control)?.0)
 }
 
 fn verify_pack_ordinals(
@@ -181,7 +221,8 @@ fn verify_pack_ordinals(
     }
     let pack = PackView::from_bytes(bytes).map_err(EmbeddingError::source_pack)?;
     let dataset = dataset_from_view(&pack).map_err(EmbeddingError::source_pack)?;
-    let canonical = try_canonicalize(&dataset, control).map_err(EmbeddingError::source_pack)?;
+    let canonical = canonical_labels(&dataset, embedding.format_version(), control)
+        .map_err(EmbeddingError::source_pack)?;
     verify_ordinals(embedding, |target, ordinal| {
         pack_target_id(
             target,
@@ -498,4 +539,32 @@ pub fn verify_external_pack(
     let certified = proof.rdf_digest();
     DigestKind::CertifiedRdf.verify(&expected, certified.as_bytes())?;
     Ok(RdfcDigest::from_raw(*certified.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_core::{BlankScope, PURREMB_VERSION_LABELLING, RdfDatasetBuilder};
+
+    /// The format version selects the canonical run, so the blank-node label a
+    /// target identity carries is the 4.x `c14nN` label under version 1 and the
+    /// labelling's decimal label under version 2, and the digests differ.
+    #[test]
+    fn format_version_selects_the_blank_label_and_the_digest() {
+        let mut builder = RdfDatasetBuilder::new();
+        let blank = builder.intern_blank("b", BlankScope::DEFAULT).unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder.intern_iri("https://example.org/o").unwrap();
+        builder.push_quad(blank, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let id = blank;
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+        let (old_digest, old) = canonical_source(&dataset, PURREMB_VERSION, &mut control).unwrap();
+        let (new_digest, new) =
+            canonical_source(&dataset, PURREMB_VERSION_LABELLING, &mut control).unwrap();
+        assert_eq!(old.label(&id), Some("c14n0"));
+        assert_eq!(new.label(&id), Some("0"));
+        assert_ne!(old_digest, new_digest);
+    }
 }

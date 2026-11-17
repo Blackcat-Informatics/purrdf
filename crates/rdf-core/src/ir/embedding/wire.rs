@@ -7,8 +7,16 @@
 pub const PURREMB_MAGIC: [u8; 8] = *b"PURREMB1";
 /// PURREMB v1 trailer magic.
 pub const PURREMB_TRAILER_MAGIC: [u8; 8] = *b"PURREND1";
-/// PURREMB v1 format version.
+/// PURREMB format version 1: the version PurRDF 4.x wrote. Its certified RDF
+/// digest is the RDFC-1.0 SHA-256 of the source, and its blank-node target
+/// identities carry the `c14nN` labels of that run. The reader still accepts it
+/// and recomputes both with the 4.x function; no writer emits it.
 pub const PURREMB_VERSION: u32 = 1;
+/// PURREMB format version 2: the version the writer emits. Its certified RDF
+/// digest is the digest of the canonical line sequence of the source, and its
+/// blank-node target identities carry the labelling's decimal labels. The framing
+/// and every section layout are those of version 1.
+pub const PURREMB_VERSION_LABELLING: u32 = 2;
 /// Fixed PURREMB v1 header size.
 pub const PURREMB_HEADER_LENGTH: u32 = 128;
 /// Fixed PURREMB v1 directory-entry size.
