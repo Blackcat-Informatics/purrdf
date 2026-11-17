@@ -62,12 +62,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use purrdf_core::InMemoryPageProvider;
+use purrdf_rdf::rdfc12::{
+    CanonHash, try_canonicalize_flat_view, try_canonicalize_with, try_flat_digest_view,
+};
 use purrdf_rdf::{
-    BlankScope, CanonHash, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView,
-    DeltaDatasetView, FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits,
-    QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits,
-    dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
-    try_canonicalize_flat_view, try_canonicalize_with, try_flat_digest_view,
+    BlankScope, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView, DeltaDatasetView,
+    FallibleDatasetView, MutableDataset, PagedDataset, PagedQueryLimits, QuadValues, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermValue, ViewLimits, dataset_from_view,
+    flat_dataset_from_quads, flat_rdf_quads_from_dataset,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
@@ -199,7 +201,10 @@ fn owned_route(dataset: &RdfDataset, hash: CanonHash) -> Canonicalized {
     try_canonicalize_with(
         &refrozen,
         hash,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .unwrap()
 }
@@ -219,7 +224,10 @@ fn borrowed_route<D: FallibleDatasetView>(view: &D, hash: CanonHash) -> Canonica
     try_canonicalize_flat_view(
         view,
         hash,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("the view admits under the flat presentation")
 }
@@ -412,7 +420,7 @@ fn load_benches(c: &mut Bench) {
             &*ds,
             hash,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
@@ -433,7 +441,7 @@ fn load_benches(c: &mut Bench) {
                         &*ds,
                         hash,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                             None,
                         ),
                     )

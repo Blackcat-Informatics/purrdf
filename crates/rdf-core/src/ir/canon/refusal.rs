@@ -3,7 +3,7 @@
 
 //! Original admission ownership for a reserved-vocabulary refusal.
 
-use purrdf_lex::allocation::{Admission, Memory, Shared, SharedOwned, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, SharedOwned, StorageError};
 
 use super::ownership::SourceGrant;
 use super::{CanonError, TermPosition};
@@ -46,25 +46,11 @@ impl Fields {
         }
         Ok(())
     }
-
-    pub(super) fn finish_with_memory<S: Admission + ?Sized>(
-        self,
-        memory: &mut Memory<'_, S>,
-    ) -> Result<ReservedVocabulary, StorageError> {
-        memory.add_bytes(Shared::<Self>::allocation_layout().size())?;
-        Shared::try_new(self)
-            .map(|payload| ReservedVocabulary {
-                payload: Payload::Caller(payload),
-            })
-            .map_err(|_| StorageError::AllocationFailed)
-    }
 }
 
 #[derive(Clone)]
 enum Payload {
     Owned(SharedOwned<Fields>),
-    // Memory's caller retains this original grant through every escaped clone.
-    Caller(Shared<Fields>),
 }
 
 impl core::fmt::Debug for Payload {
@@ -78,7 +64,6 @@ impl core::ops::Deref for Payload {
     fn deref(&self) -> &Fields {
         match self {
             Self::Owned(fields) => fields,
-            Self::Caller(fields) => fields,
         }
     }
 }
@@ -91,9 +76,8 @@ impl core::ops::Deref for Payload {
 /// for both parts of that rule.
 ///
 /// The original IRI and position remain immutable under their original admission.
-/// Native dataset refusals retain their grant in the payload. Borrowed Memory
-/// callers retain the original account and its [`Self::retained_bytes`] through
-/// every escaped clone. Cloning shares the payload without copying the IRI.
+/// The refusal retains its grant in the payload. Cloning shares the payload
+/// without copying the IRI.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReservedVocabulary {
@@ -114,16 +98,12 @@ impl ReservedVocabulary {
     }
 
     /// Heap layouts retained under a borrowed caller's original Memory account.
-    /// Independently owned native grants are excluded. The caller keeps these
-    /// bytes admitted until every clone dies, then releases them through that account.
+    /// A refusal owns its payload under an independent native grant, so no
+    /// caller account holds bytes for it and this is `Some(0)`.
     #[must_use]
     pub fn retained_bytes(&self) -> Option<usize> {
         match &self.payload {
             Payload::Owned(_) => Some(0),
-            Payload::Caller(fields) => fields
-                .iri
-                .capacity()
-                .checked_add(Shared::<Fields>::allocation_layout().size()),
         }
     }
 }
@@ -209,8 +189,9 @@ impl<E: Send + Sync + 'static> RefusalBuilder<E> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use crate::rdfc12::CanonHash;
     use crate::{
-        CanonHash, GraphMatch, NoopReservation, OwnedWorkspaceReservation, QuadIds, RdfDataset,
+        GraphMatch, NoopReservation, OwnedWorkspaceReservation, QuadIds, RdfDataset,
         RdfDatasetBuilder, RdfStoreCapabilities, TermId, TermRef, TermValue, WorkspaceReservation,
     };
     use purrdf_testkit::error_capture::{CallerRefusal, Capture};
@@ -335,7 +316,7 @@ mod tests {
             let error = super::super::try_canonicalize_view(
                 &source,
                 CanonHash::Sha256,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
             )
             .unwrap_err();
             drop(source);
@@ -385,7 +366,7 @@ mod tests {
                 let output = super::super::try_canonicalize_view(
                     &healthy,
                     CanonHash::Sha256,
-                    &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+                    &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
                 );
                 drop(healthy);
                 match capability {

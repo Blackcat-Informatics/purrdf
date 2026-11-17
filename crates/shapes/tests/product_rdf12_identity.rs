@@ -91,10 +91,7 @@ fn round_trip(shapes_body: &str, data_body: &str) -> RoundTrip {
     let bytes = parsed
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable as a product");
     let restored = ShapesProduct::open(&bytes)

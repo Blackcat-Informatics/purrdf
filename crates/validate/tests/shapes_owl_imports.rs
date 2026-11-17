@@ -256,7 +256,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         None,
         DATA,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect_err("entailment refuses");
     assert_unresolved(&refused, "entail_to_ntriples_string");
@@ -265,7 +265,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         None,
         DATA,
         TABLE,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("entails");
     let entailed = entailed_owner.nquads();
@@ -323,7 +323,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         IMPORTER,
         None,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect_err("pack refuses");
     assert_eq!(refusal.import_error(), Some(&unresolved()));
@@ -338,7 +338,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         IMPORTER,
         None,
         TABLE,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("packs the closure");
     let sarif = validate_with_shapes_product(&product, DATA, &options).expect("restores");

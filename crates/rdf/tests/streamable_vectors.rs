@@ -64,7 +64,7 @@ fn frozen_vector_is_byte_identical_to_a_fresh_regeneration() {
         TIMESTAMP,
         false,
         (streamable_packaging_key(), "pack".to_string()),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("streamable compaction over the frozen source succeeds");
 
@@ -98,7 +98,7 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
         &source,
         &frozen,
         &keyring,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("verify_compaction succeeds");
     assert!(

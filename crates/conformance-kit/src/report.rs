@@ -181,11 +181,9 @@ fn canonical_equality(
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
     let expected =
-        purrdf_core::try_canonicalize_flat_view(expected, purrdf_core::CanonHash::Sha256, control)
-            .map_err(GradeError::from)?;
+        purrdf_core::try_canonicalize_checked_view(expected, control).map_err(GradeError::from)?;
     let actual =
-        purrdf_core::try_canonicalize_flat_view(actual, purrdf_core::CanonHash::Sha256, control)
-            .map_err(GradeError::from)?;
+        purrdf_core::try_canonicalize_checked_view(actual, control).map_err(GradeError::from)?;
     if expected.nquads() == actual.nquads() {
         Ok(())
     } else {

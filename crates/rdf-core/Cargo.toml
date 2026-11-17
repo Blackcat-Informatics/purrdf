@@ -141,6 +141,12 @@ name = "freeze"
 harness = false
 
 [[bench]]
+# Canonical labelling work counters (explored units against the reference
+# tree, stops, allocations) over named shapes. Counts only; no clock is read.
+name = "canonical_labelling"
+harness = false
+
+[[bench]]
 # Separate allocator instrumentation for freeze, materialization and build costs.
 name = "freeze_alloc"
 harness = false
@@ -203,7 +209,7 @@ harness = false
 # Succinct `pack` codec end-to-end harness: `PackBuilder::build_bytes`
 # (encode), `PackView::from_bytes` (open), `quads_for_pattern` over a
 # `PackView` for subject/predicate/object-bound and full-scan shapes, and
-# `verify_pack` (the certified-projection RDFC-1.0 recompute). Report-only —
+# `verify_pack` (the certified-projection canonical recompute). Report-only —
 # no timing/speedup assertions. `make bench` lane only — excluded from
 # `make check`.
 name = "pack_query"

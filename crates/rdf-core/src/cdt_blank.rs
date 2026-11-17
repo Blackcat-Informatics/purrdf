@@ -8,8 +8,8 @@
 //! `BLANK_NODE_LABEL` tokens, and those tokens **denote blank nodes in the same
 //! scope as the surrounding document** — exactly as a bare `_:b` written in a
 //! subject or object position does. This module is the one place that fact is
-//! implemented, and every ingress path, the RDFC-1.0 canonicalizer and the
-//! whole-dataset rewriters route through it.
+//! implemented, and every ingress path, the canonical labelling's lowering, the
+//! RDFC-1.0 family and the whole-dataset rewriters route through it.
 //!
 //! # The scoping rule
 //!
@@ -619,7 +619,7 @@ pub fn rewrite_cdt_terms_with_memory<'a, S: Admission + ?Sized>(
 /// returns the full replacement element text — `_:other` to rename it, or
 /// `<iri>` to skolemize it away.
 ///
-/// Used by the whole-dataset rewriters (RDFC-1.0 relabeling, skolemization and
+/// Used by the whole-dataset rewriters (canonical relabeling, skolemization and
 /// its inverse) so a blank node embedded in a composite literal is rewritten in
 /// lockstep with the same node written as a term. A rewriter that skipped this
 /// would leave the embedded occurrence DANGLING: pointing at a label the
@@ -696,6 +696,61 @@ pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
     }
     release_spans(spans, memory)?;
     Ok(blanks)
+}
+
+/// A composite lexical form cut at its embedded blank-node tokens: the form is
+/// `segments[0]`, token 0, `segments[1]`, ..., token `k - 1`, `segments[k]`,
+/// and `blanks[i]` is the `(label, scope)` token `i` names.
+pub(crate) struct CdtBlankSegments<'a> {
+    /// The text around the tokens, one more than there are tokens.
+    pub(crate) segments: Vec<&'a str>,
+    /// The blank node each token names, in order; repeats kept.
+    pub(crate) blanks: Vec<(String, BlankScope)>,
+}
+
+/// Cut an ALREADY-BOUND composite lexical form at the `BLANK_NODE_LABEL`
+/// tokens a whole-dataset rewrite replaces ([`rewrite_cdt_blank_terms`]): the
+/// same tokens, in the same order, at every nesting depth. The canonical
+/// labelling's lowering reads a composite literal through this, so the blank
+/// nodes it names take part in the labelling.
+///
+/// One segment and no blank for a non-composite datatype or a form that names
+/// no blank node.
+///
+/// # Errors
+/// The scanner's storage refusal.
+pub(crate) fn cdt_blank_segments<'a>(
+    lexical: &'a str,
+    datatype: &str,
+) -> Result<CdtBlankSegments<'a>, StorageError> {
+    let mut segments = Vec::new();
+    let mut blanks = Vec::new();
+    if !is_cdt_datatype(datatype) {
+        segments.push(lexical);
+        return Ok(CdtBlankSegments { segments, blanks });
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let spans = scan_tokens_with_memory(lexical, &mut memory)?;
+    let mut cursor = 0usize;
+    for span in &spans {
+        // As `splice_with_memory`: a token inside text already replaced is
+        // not a token of its own.
+        if span.start < cursor {
+            continue;
+        }
+        let TokenKind::Blank(token) = &span.kind else {
+            continue;
+        };
+        let (label, scope) =
+            decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, &mut memory)?;
+        segments.push(&lexical[cursor..span.start]);
+        blanks.push((label.into_owned(), scope));
+        cursor = span.end;
+    }
+    segments.push(&lexical[cursor..]);
+    release_spans(spans, &mut memory)?;
+    Ok(CdtBlankSegments { segments, blanks })
 }
 
 /// Parse `lexical` as a value of the composite `datatype`, mapping every

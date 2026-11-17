@@ -413,7 +413,7 @@ fn main() -> ExitCode {
         [
             Trial::test(format!("{CASE_PREFIX}{}", manifest.relative), move || {
                 let mut control = purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 );
                 run_manifest_case(&manifest.path, &label, &mut control)

@@ -1,0 +1,98 @@
+top component 0 (offset 0): nodes a1 a2 b1 b2
+  start line cells, encodings with every leaf free, in colour order:
+    4004010000000000000001700420
+  refinement of the fresh start:
+    start N=[a1,a2,b1,b2] L=[L1,L2,L3,L4] Q=(0,0)(1,0)
+    pop(0,0) N=[a1,a2,b1,b2] L=[L1,L2,L3,L4] Q=(1,0)
+    pop(1,0) N=[a1,a2][b1,b2] L=[L1,L2,L3,L4] Q=(0,2)
+    pop(0,2) N=[a1,a2][b1,b2] L=[L1,L2,L3,L4] Q=-
+  call structure:
+    call: rule 3, p 0, target cell a1 a2, attaining 2, one twin class true
+      child a1:
+          indiv(a1) N=[a1][a2][b1,b2] L=[L1,L2,L3,L4] Q=(0,1)
+          pop(0,1) N=[a1][a2][b1,b2] L=[L1,L2][L3,L4] Q=(1,2)
+          pop(1,2) N=[a1][a2][b1,b2] L=[L1,L2][L3,L4] Q=-
+        certificate 000000000000000200000000000000000000000000000002000000000000000100000000000000020000000000000002
+                    400500000000000000000100000000000000017005000000000000000220000000000000000240050000000000000001
+                    010000000000000001700500000000000000022000000000000000000000000000000001000000000000000200000000
+                    000000024005000000000000000001000000000000000170050000000000000002200000000000000002400500000000
+                    0000000101000000000000000170050000000000000002200000000000000000
+        rule 2, p 0, s 2, fixes a1 0, a2 1; units REFINE 6, FIX 9, ENTRIES 0
+          nested call, certificate 000000000000000100000000000000020000000000000002400500000000000000000100000000000000017005000000
+                                   000000000220000000000000000240050000000000000001010000000000000001700500000000000000022000000000
+                                   00000000
+            rule 1, p 2, s 1, fixes b1 2; units REFINE 0, FIX 5, ENTRIES 10
+              entry m 2: 400500000000000000000100000000000000017005000000000000000220
+              entry m 2: 400500000000000000010100000000000000017005000000000000000220
+          nested call, certificate 000000000000000100000000000000020000000000000002400500000000000000000100000000000000017005000000
+                                   000000000220000000000000000240050000000000000001010000000000000001700500000000000000022000000000
+                                   00000000
+            rule 1, p 2, s 1, fixes b2 2; units REFINE 0, FIX 5, ENTRIES 10
+              entry m 2: 400500000000000000000100000000000000017005000000000000000220
+              entry m 2: 400500000000000000010100000000000000017005000000000000000220
+      child a2:
+          indiv(a2) N=[a2][a1][b1,b2] L=[L1,L2,L3,L4] Q=(0,1)
+          pop(0,1) N=[a2][a1][b1,b2] L=[L3,L4][L1,L2] Q=(1,2)
+          pop(1,2) N=[a2][a1][b1,b2] L=[L3,L4][L1,L2] Q=-
+        certificate equal to that of child a1; fixes a2 0, a1 1
+  certificate 000000000000000200000000000000000000000000000002000000000000000100000000000000020000000000000002
+              400500000000000000000100000000000000017005000000000000000220000000000000000240050000000000000001
+              010000000000000001700500000000000000022000000000000000000000000000000001000000000000000200000000
+              000000024005000000000000000001000000000000000170050000000000000002200000000000000002400500000000
+              0000000101000000000000000170050000000000000002200000000000000000
+  identity    317cfcc5349aad5e59854af7992d2355d81d3661a4ff5fd8baf3157b092c9cd1
+  copy index  0
+  allowance   S 12, O 8, M 8, V 8, W 24, A 232
+  twin units  12
+  record:
+    blank_nodes 4
+    lines 4
+    label_elements 8
+    incidences 8
+    line_bytes 56
+    singled_out 0
+    unsettled 4
+    largest_cell present(2)
+    forest false
+    calls [2, 0, 1]
+    chosen_children [0, 1]
+    target_sizes [2]
+    attaining [2]
+    nestings [[2]]
+    nesting_depth 1
+    branching_depth 1
+    units [12, 26, 19, 20]
+    allowance 232
+    group_order [(attain, 2, 1), (sym, 2, 1)]
+positions and stable identities (top component, local position, copy index):
+  a1  position 0  (0, 0, 0)
+  a2  position 1  (0, 1, 0)
+  b1  position 2  (0, 2, 0)
+  b2  position 3  (0, 3, 0)
+canonical line sequence:
+  0  400500000000000000000100000000000000017005000000000000000220
+  1  400500000000000000000100000000000000017005000000000000000320
+  2  400500000000000000010100000000000000017005000000000000000220
+  3  400500000000000000010100000000000000017005000000000000000320
+digest c43f6553b89c4b7f1b23be4d94203d0d1571f0a197e373aeb413af87c1b2953b
+record of the whole input:
+  top_components 1
+  size_histogram [(2, 1)]
+  single_node_components 0
+  blank_nodes 4
+  label_elements 8
+  incidences 8
+  singled_out 0
+  unsettled 4
+  blank_bearing_lines 4
+  blank_bearing_bytes 56
+  calls [2, 0, 1]
+  chosen_children [0, 1]
+  units [12, 26, 19, 20]
+  allowance 232
+  top_multiplicities [1]
+  group_order [(attain, 2, 1), (sym, 2, 1)]
+  broken_by []
+  guaranteed true
+diagnostic []
+units over the reference tree: START 12, REFINE 32, FIX 38, ENTRIES 40; comparison units 40

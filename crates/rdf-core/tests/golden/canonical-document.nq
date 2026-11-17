@@ -1,0 +1,5 @@
+<http://example.org/s> <http://example.org/p> "plain" .
+_:1 <http://example.org/p> _:2 .
+_:2 <http://example.org/p> "1"^^<http://www.w3.org/2001/XMLSchema#integer> <http://example.org/g> .
+_:0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:1 <http://example.org/p> _:2 )>> .
+_:0 <http://example.org/q> "v"@en--ltr .

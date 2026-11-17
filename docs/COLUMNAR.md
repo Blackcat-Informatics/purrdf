@@ -37,7 +37,7 @@ empty table.
 `source_manifest` computes these bytes from `ParquetFiles`; it does not validate
 Parquet or certify RDF. Certification completes the strict native reader,
 including every blob digest, then independently canonicalizes the reconstructed
-RDF dataset using the `purrdf-rdfc12` profile. PURREMB stores the manifest byte
+RDF dataset using the default canonical line sequence. PURREMB stores the manifest byte
 length and `SHA256(manifest bytes)`, separately from that certified RDF digest.
 
 `read_with_ordinals` completes the same strict read as `read` while retaining

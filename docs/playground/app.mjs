@@ -424,10 +424,10 @@ async function doSerializeAll() {
       ]);
       grid.append(el("div", { class: "ser-card" }, [header, pre]));
     }
-    // Canonical form (RDFC-1.0) — the graph's deterministic identity.
+    // Canonical form (the canonical line sequence) — the graph's deterministic identity.
     const canonCard = el("div", { class: "ser-card" }, [
       el("div", { class: "ser-head" }, [
-        el("h4", { text: "canonical (RDFC-1.0 N-Quads)", class: "ser-title" }),
+        el("h4", { text: "canonical (line-sequence N-Quads)", class: "ser-title" }),
         el("span", { class: "badge badge-ok", text: "identity" }),
       ]),
       el("pre", { id: "ser-canonical", class: "code-out", text: res.canonical }),
@@ -450,13 +450,13 @@ async function doSerializeAll() {
         (degraders.length
           ? `These text formats round-trip lossily: ${degraders.join(", ")}. `
           : "") +
-        `N-Quads and the canonical RDFC-1.0 form are the reliable identity reference; ` +
+        `N-Quads and the canonical line-sequence form are the reliable identity reference; ` +
         `round-tripping formats here: ${survivors.join(", ")}.`;
       note.hidden = false;
     } else {
       note.textContent =
         "No object-position quoted triple in this graph. N-Quads and the canonical " +
-        "RDFC-1.0 form remain the deterministic identity reference." +
+        "line-sequence form remain the deterministic identity reference." +
         (failedFormats.length ? ` Formats that hard-failed: ${failedFormats.join(", ")}.` : "");
       note.hidden = false;
     }

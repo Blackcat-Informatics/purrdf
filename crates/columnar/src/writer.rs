@@ -1179,10 +1179,7 @@ mod tests {
         let blobs = ContentStore::new();
         let pack_bytes = PackBuilder::build_bytes(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let pack = PackView::from_bytes(&pack_bytes).unwrap();

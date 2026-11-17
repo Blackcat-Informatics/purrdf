@@ -259,12 +259,12 @@ fn gts_ingest(c: &mut Bench) {
     let (_, flat_bytes) = run_flat(
         issue,
         limits,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let (_, view_bytes) = run_view(
         issue,
         limits,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_eq!(
         flat_bytes, view_bytes,
@@ -279,10 +279,7 @@ fn gts_ingest(c: &mut Bench) {
         let (observed, bytes) = run_flat(
             shape,
             limits,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} flat emitted no bytes", shape.name);
@@ -292,10 +289,7 @@ fn gts_ingest(c: &mut Bench) {
         let (observed, bytes) = run_view(
             shape,
             limits,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} view emitted no bytes", shape.name);
@@ -305,10 +299,7 @@ fn gts_ingest(c: &mut Bench) {
         let (observed, bytes) = run_delta(
             shape,
             limits,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let elapsed = start.elapsed();
         assert!(!bytes.is_empty(), "{} delta emitted no bytes", shape.name);
@@ -323,7 +314,7 @@ fn gts_ingest(c: &mut Bench) {
                     shape,
                     limits,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 ))
@@ -335,7 +326,7 @@ fn gts_ingest(c: &mut Bench) {
                     shape,
                     limits,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 ))
@@ -347,7 +338,7 @@ fn gts_ingest(c: &mut Bench) {
                     shape,
                     limits,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 ))

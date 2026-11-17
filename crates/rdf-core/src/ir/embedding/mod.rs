@@ -5,7 +5,7 @@
 //!
 //! PURREMB keeps model-specific, lossy vector projections separate from RDF
 //! canonical identity while binding them to both the exact source pack and its
-//! independently certified RDFC digest. The reader borrows caller-owned bytes;
+//! independently certified RDF digest. The reader borrows caller-owned bytes;
 //! heap buffers, immutable memory maps, and WebAssembly linear memory therefore
 //! use one format and one validation path.
 

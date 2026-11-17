@@ -1,0 +1,83 @@
+top component 0 (offset 0): nodes h l1 l2 l3
+  start line cells, encodings with every leaf free, in colour order:
+    4004010000000000000001700420
+    400401000000000000000171030401000000000000000172042104
+  refinement of the fresh start:
+    start N=[h,l1,l2,l3] L=[L1,L2,L3][L4] Q=(0,0)(1,0)(1,3)
+    pop(0,0) N=[h,l1,l2,l3] L=[L1,L2,L3][L4] Q=(1,0)(1,3)
+    pop(1,0) N=[h][l1,l2,l3] L=[L1,L2,L3][L4] Q=(0,0)(1,3)
+    pop(0,0) N=[h][l1,l2,l3] L=[L1,L2,L3][L4] Q=(1,3)
+    pop(1,3) N=[h][l3][l1][l2] L=[L1,L2,L3][L4] Q=(0,2)(0,3)
+    pop(0,2) N=[h][l3][l1][l2] L=[L2,L3][L1][L4] Q=(0,3)(1,2)
+    pop(0,3) N=[h][l3][l1][l2] L=[L3][L2][L1][L4] Q=(1,1)(1,2)
+    pop(1,1) N=[h][l3][l1][l2] L=[L3][L2][L1][L4] Q=(1,2)
+    pop(1,2) N=[h][l3][l1][l2] L=[L3][L2][L1][L4] Q=-
+  call structure:
+    rule 1, p 0, s 4, fixes h 0, l3 1, l1 2, l2 3; units REFINE 0, FIX 17, ENTRIES 24
+      entry m 1: 400500000000000000000100000000000000017005000000000000000120
+      entry m 2: 400500000000000000000100000000000000017005000000000000000220
+      entry m 3: 400500000000000000000100000000000000017005000000000000000320
+      entry m 3: 400500000000000000020100000000000000017103050000000000000003010000000000000001720500000000000000
+                 0221050000000000000000
+  certificate 000000000000000400000000000000040000000000000001400500000000000000000100000000000000017005000000
+              000000000120000000000000000240050000000000000000010000000000000001700500000000000000022000000000
+              000000034005000000000000000001000000000000000170050000000000000003200000000000000003400500000000
+              000000020100000000000000017103050000000000000003010000000000000001720500000000000000022105000000
+              00000000000000000000000000
+  identity    924860dc504ac19d10307ba797bd7bf0e2e34bff148e6e058e38737cc0b78e3e
+  copy index  0
+  allowance   S 14, O 10, M 9, V 8, W 33, A 291
+  twin units  0
+  record:
+    blank_nodes 4
+    lines 4
+    label_elements 10
+    incidences 9
+    line_bytes 69
+    singled_out 4
+    unsettled 0
+    largest_cell absent
+    forest false
+    calls [1, 0, 0]
+    chosen_children [0, 0]
+    target_sizes []
+    attaining []
+    nestings []
+    nesting_depth 0
+    branching_depth 0
+    units [14, 33, 17, 24]
+    allowance 291
+    group_order []
+positions and stable identities (top component, local position, copy index):
+  h  position 0  (0, 0, 0)
+  l3  position 1  (0, 1, 0)
+  l1  position 2  (0, 2, 0)
+  l2  position 3  (0, 3, 0)
+canonical line sequence:
+  0  400500000000000000000100000000000000017005000000000000000120
+  1  400500000000000000000100000000000000017005000000000000000220
+  2  400500000000000000000100000000000000017005000000000000000320
+  3  400500000000000000020100000000000000017103050000000000000003010000000000000001720500000000000000
+     0221050000000000000000
+digest 90940e33e204957fe06d351c05295cd38e29c136643bed970bf0518d8cea3687
+record of the whole input:
+  top_components 1
+  size_histogram [(2, 1)]
+  single_node_components 0
+  blank_nodes 4
+  label_elements 10
+  incidences 9
+  singled_out 4
+  unsettled 0
+  blank_bearing_lines 4
+  blank_bearing_bytes 69
+  calls [1, 0, 0]
+  chosen_children [0, 0]
+  units [14, 33, 17, 24]
+  allowance 291
+  top_multiplicities [1]
+  group_order []
+  broken_by []
+  guaranteed true
+diagnostic []
+units over the reference tree: START 14, REFINE 33, FIX 17, ENTRIES 24; comparison units 0

@@ -87,7 +87,7 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
         assert!(names.insert(*name), "duplicate frozen state vector");
         let dataset = fixture(name);
         let mut reservation = dataset.reserve_workspace(0).unwrap();
-        let run = SearchRun::new(crate::RDFC_V2_CORPUS_POLICY, None);
+        let run = SearchRun::new(crate::CANON_CORPUS_POLICY, None);
         let mut captured = Captured::new(&*dataset, &mut reservation, &run).unwrap();
         captured.collect().unwrap();
         let actual = captured.canonical_bytes().unwrap();
@@ -105,7 +105,7 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
         assert_eq!(
             DatasetStateDigest::from_view(
                 &dataset,
-                &mut CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .as_bytes(),

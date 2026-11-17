@@ -475,7 +475,7 @@ fn eval_forced(
 /// variant carries: SELECT compares `(variables, rows)` (rows in the exact
 /// row order the engine returned — this is the whole point, since fork-join
 /// order-stability is the property under test), ASK compares the bare bool,
-/// and CONSTRUCT/DESCRIBE compare canonical N-Quads (RDFC-1.0 blank-node
+/// and CONSTRUCT/DESCRIBE compare canonical N-Quads (canonical blank-node
 /// canonicalization; `TermId`s from the two independently-evaluated queries
 /// are never expected to match, only the abstract graph they denote).
 #[derive(Debug)]
@@ -548,17 +548,11 @@ fn parallel_paths_are_byte_identical_across_the_corpus() {
 
         let parallel_cmp = comparable(
             &parallel,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let sequential_cmp = comparable(
             &sequential,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
 
         assert_eq!(
@@ -781,14 +775,14 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
             comparable(
                 &parallel,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
             comparable(
                 &sequential,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
@@ -941,17 +935,11 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
     assert_eq!(
         comparable(
             &parallel,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         comparable(
             &sequential,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         ),
         "custom aggregate diverged between forced-parallel and forced-sequential evaluation"
     );

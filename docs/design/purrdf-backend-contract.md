@@ -903,19 +903,22 @@ opened `PackView` therefore never panics on a later query.
 
 ### P1 — the certified-projection digest (`verify_pack`)
 
-A pack's header stores a SHA-256 digest of the source dataset's RDFC-1.0
-canonical N-Quads, computed once at build time. That value alone is trusted
+A pack's header stores a canonical-identity digest of the source dataset, computed
+once at build time. The format version names the function that computed it. Version
+`2`, which the writer emits, stores the 32-byte BLAKE3 digest of the dataset's canonical
+line sequence, and that sequence holds a line for each declared empty graph, so a
+declared empty graph changes this digest. Version `1`, which the reader still
+accepts, stores the SHA-256 of the 4.x `purrdf-rdfc12` canonical N-Quads, which
+cannot spell an empty graph. That value alone is trusted
 data — nothing re-derives it from the pack's own sections when the file is
 merely opened. `verify_pack(&[u8]) -> Result<PackDigest, PackError>` closes
 that gap: it walks the opened `PackView` through the `DatasetView` seam,
 RE-INTERNS every quad and every RDF 1.2 side-table row (reifier bindings,
 statement annotations) into a fresh dataset, canonicalizes that
-reconstruction with the SAME RDFC-1.0 procedure `PackBuilder::build_bytes`
-used, and compares the two digests. Only a pack whose stored digest agrees
+reconstruction with the function the pack's format version names, and compares the
+two digests. Only a pack whose stored digest agrees
 with its own independently-recomputed contents is a **certified read-only
-projection** of its source dataset (canonical N-Quads cannot spell an empty
-graph, so declared empty graphs leave this digest unchanged; they change only the
-pack bytes) — this catches a tampered digest header
+projection** of its source dataset — this catches a tampered digest header
 field that per-section SHA-256 integrity alone cannot see (the digest field
 sits outside the section directory's coverage). `pack_digest` reads the
 stored (unverified) header value only, for a caller that wants the claimed
@@ -949,9 +952,9 @@ unchanged.
 ### E0 — source attachment is exact and independently certifiable
 
 Every companion names both the complete source-pack SHA-256 and the pack's
-independently recomputed RDFC digest. Exact verification checks the source byte
+independently recomputed certified RDF digest. Exact verification checks the source byte
 length, digest, and pack structure. Certified verification additionally calls
-the pack verifier, compares the RDFC digest, checks the dataset target, and
+the pack verifier, compares the certified RDF digest, checks the dataset target, and
 validates every recognized source-local ordinal. Failure in either mode is a
 hard mismatch. Equal RDF content never substitutes for unequal source bytes
 because ordinals and byte attachment belong to the exact pack.

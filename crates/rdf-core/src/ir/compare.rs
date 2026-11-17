@@ -32,17 +32,19 @@
 //!   only in how many reifiers bind one triple term, or in an annotation triple,
 //!   compare UNEQUAL.
 //!
-//! ## Implementation: full RDFC-1.0 (no false negatives)
+//! ## Implementation: the canonical labelling (no false negatives)
 //!
-//! The verdict is computed by the native full W3C RDFC-1.0 canonicalizer
-//! ([`super::canon::try_canonicalize`]): two datasets are isomorphic **iff** their
-//! canonical N-Quads strings are byte-equal. RDFC-1.0 resolves blank-node
-//! automorphisms via hash-partition + permutation backtracking, so — unlike the
-//! simplified FNV signature refinement this comparator used to carry — the
-//! oracle is **exact**: never a false positive *and* never a false negative, even on
-//! pathologically symmetric blank graphs. The canonicalizer folds the RDF-1.2
-//! reifier/annotation overlay and triple terms into the canonical form, so reifier
-//! count and annotation presence remain part of the compared structure.
+//! The verdict is computed by the nested-refinement labelling
+//! ([`super::canon::labelled::try_canonicalize`]): two datasets are isomorphic
+//! **iff** their canonical documents are byte-equal. The labelling resolves
+//! blank-node automorphisms exactly, so the oracle never reports a false
+//! positive and never a false negative, even on pathologically symmetric blank
+//! graphs. The canonical line sequence folds the RDF-1.2 reifier/annotation
+//! layer and triple terms into the canonical form, so reifier count and
+//! annotation presence remain part of the compared structure. A blank node
+//! named inside a composite (`cdt:List` / `cdt:Map`) literal is a blank node of
+//! the graph ([`crate::cdt_blank`]): it counts as a blank node and takes part
+//! in a renaming like a blank node in any other position.
 
 use super::canon;
 use crate::dataset_view::DatasetView;
@@ -51,15 +53,15 @@ use crate::dataset_view::DatasetView;
 /// RDF-structurally isomorphic: the same quads (under a blank-node bijection), the
 /// same reifier bindings, and the same annotations.
 ///
-/// Backed by full RDFC-1.0 canonicalization, this is an **exact** oracle: it never
-/// reports a false positive *or* a false negative (the simplified comparator's
-/// pathological-symmetry false negative is gone).
+/// Backed by the canonical labelling, this is an **exact** oracle: it never
+/// reports a false positive *or* a false negative, blank nodes named inside
+/// composite literals included.
 ///
 /// The two sides are **independently** typed, so a composite view, a delta view and a
 /// frozen [`RdfDataset`](super::dataset::RdfDataset) are all comparable against each
 /// other, in any combination, without materializing either side: identity is decided
 /// from the canonical bytes, which carry no view-local ids (see
-/// [`canon::try_canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
+/// [`canon::labelled::try_canonicalize_view`]). `&RdfDataset` call sites are the `RdfDataset`
 /// instantiation.
 ///
 /// # Errors
@@ -137,10 +139,8 @@ fn canonical_equal<
     control: &mut canon::CanonicalizationControl<'_>,
 ) -> Result<bool, canon::CanonError> {
     // The exact oracle: byte-equal canonical N-Quads ⇔ RDF isomorphism.
-    Ok(
-        canon::try_canonicalize_view(a, canon::CanonHash::Sha256, control)?.nquads()
-            == canon::try_canonicalize_view(b, canon::CanonHash::Sha256, control)?.nquads(),
-    )
+    Ok(canon::labelled::try_canonicalize_view(a, control)?.nquads()
+        == canon::labelled::try_canonicalize_view(b, control)?.nquads())
 }
 
 /// A structural diff between two datasets, for test diagnostics. Counts only; the
@@ -224,30 +224,92 @@ mod tests {
         b.freeze().expect("valid")
     }
 
-    /// Refusal is neither an equality verdict nor a published structural diff.
+    /// A latched stop signal.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl crate::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// Refusal is neither an equality verdict nor a published structural diff;
+    /// the same dataset compares equal to itself when not stopped.
     #[test]
-    fn reserved_vocabulary_comparison_returns_the_native_refusal() {
-        let mut builder = RdfDatasetBuilder::new();
-        let node = iri(&mut builder, "node");
-        let reserved = builder.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
-        builder.push_quad(node, reserved, node, None).unwrap();
-        let dataset = builder.freeze().unwrap();
+    fn stopped_comparison_returns_the_native_refusal() {
+        let dataset = ground_triple();
+        let stop = Latched;
         assert!(matches!(
             datasets_isomorphic(
                 &dataset,
                 &dataset,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&stop))
             ),
-            Err(canon::CanonError::ReservedVocabulary(_))
+            Err(canon::CanonError::Stopped)
         ));
         assert!(matches!(
             dataset_diff(
                 &dataset,
                 &dataset,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&stop))
             ),
-            Err(canon::CanonError::ReservedVocabulary(_))
+            Err(canon::CanonError::Stopped)
         ));
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &dataset,
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
+            )
+            .unwrap()
+        );
+    }
+
+    /// A blank label written inside a composite (`cdt:List`) literal names a
+    /// blank node of the graph (`bnodes-turtle-05`): the literal that names the
+    /// subject's node and the literal that names another node are different
+    /// datasets, and a consistent renaming across the literal boundary is a
+    /// renaming, both ways and with the digest equal.
+    #[test]
+    fn a_composite_literal_blank_label_names_a_graph_node() {
+        use super::super::term::BlankScope;
+        const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
+        let build = |graph_blank: &str, composite: &str| -> Arc<RdfDataset> {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, q, o) = (
+                iri(&mut b, "s"),
+                iri(&mut b, "p"),
+                iri(&mut b, "q"),
+                iri(&mut b, "o"),
+            );
+            let node = b.intern_blank(graph_blank, BlankScope::DEFAULT).unwrap();
+            let list = b
+                .intern_literal(RdfLiteral::typed(format!("[{composite}]"), LIST))
+                .unwrap();
+            b.push_quad(node, p, o, None).unwrap();
+            b.push_quad(s, q, list, None).unwrap();
+            b.freeze().expect("valid")
+        };
+        let control = || crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
+        let shared = build("x", "_:x");
+        let split = build("x", "_:y");
+        assert!(!datasets_isomorphic(&shared, &split, &mut control()).unwrap());
+        assert!(!datasets_isomorphic(&split, &shared, &mut control()).unwrap());
+        assert_ne!(
+            crate::try_canonical_digest_view(&*shared, &mut control()).unwrap(),
+            crate::try_canonical_digest_view(&*split, &mut control()).unwrap(),
+        );
+        // The neighbours: consistent renamings of each are isomorphic to it and
+        // digest equally.
+        for (a, b) in [(&shared, build("y", "_:y")), (&split, build("y", "_:x"))] {
+            assert!(datasets_isomorphic(a, &b, &mut control()).unwrap());
+            assert!(datasets_isomorphic(&b, a, &mut control()).unwrap());
+            assert_eq!(
+                crate::try_canonical_digest_view(&**a, &mut control()).unwrap(),
+                crate::try_canonical_digest_view(&*b, &mut control()).unwrap(),
+            );
+        }
     }
 
     #[test]
@@ -258,7 +320,7 @@ mod tests {
             datasets_isomorphic(
                 &a,
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -279,7 +341,7 @@ mod tests {
             !datasets_isomorphic(
                 &a,
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -306,7 +368,7 @@ mod tests {
             !datasets_isomorphic(
                 &one,
                 &two,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "TWO reifiers vs ONE must compare unequal"
@@ -317,7 +379,7 @@ mod tests {
             datasets_isomorphic(
                 &one,
                 &one_again,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -343,7 +405,7 @@ mod tests {
             !datasets_isomorphic(
                 &build(true),
                 &build(false),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -351,7 +413,7 @@ mod tests {
             datasets_isomorphic(
                 &build(true),
                 &build(true),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -378,7 +440,7 @@ mod tests {
             !datasets_isomorphic(
                 &build(Some(RdfTextDirection::Ltr)),
                 &build(Some(RdfTextDirection::Rtl)),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -386,7 +448,7 @@ mod tests {
             datasets_isomorphic(
                 &build(Some(RdfTextDirection::Ltr)),
                 &build(Some(RdfTextDirection::Ltr)),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -409,7 +471,7 @@ mod tests {
             datasets_isomorphic(
                 &a,
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap(),
             "blanks differ only by label/scope; structure is identical"
@@ -434,7 +496,7 @@ mod tests {
             !datasets_isomorphic(
                 &build("o1"),
                 &build("o2"),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -463,7 +525,7 @@ mod tests {
             datasets_isomorphic(
                 &a,
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -471,7 +533,7 @@ mod tests {
 
     /// The classic symmetric blank ring (`_:x p _:y ; _:y p _:x`): a pure-hash
     /// refinement could not split this automorphism and the old comparator conceded a
-    /// false negative; full RDFC-1.0 proves the two relabelings isomorphic.
+    /// false negative; the canonical labelling proves the two relabelings isomorphic.
     #[test]
     fn symmetric_ring_relabeled_is_isomorphic() {
         use super::super::term::BlankScope;
@@ -488,7 +550,7 @@ mod tests {
             datasets_isomorphic(
                 &build("x", "y"),
                 &build("m", "n"),
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
         );
@@ -501,7 +563,7 @@ mod tests {
         let diff = dataset_diff(
             &a,
             &b,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(diff.quad_counts, (1, 1));

@@ -23,8 +23,8 @@
 # fixture: prp_subproperty_and_equivalent
 # canonical N-Triples input fed to the owlrl reference engine.
 <http://example.org/bob> <http://example.org/name> "Bob" .
-<http://example.org/carol> <http://example.org/parentOf> <http://example.org/dave> .
 <http://example.org/name> <http://www.w3.org/2002/07/owl#equivalentProperty> <http://example.org/fullName> .
+<http://example.org/carol> <http://example.org/parentOf> <http://example.org/dave> .
 <http://example.org/parentOf> <http://www.w3.org/2000/01/rdf-schema#subPropertyOf> <http://example.org/ancestorOf> .
 --- owlrl closure ---
 "Bob" <http://www.w3.org/2002/07/owl#sameAs> "Bob" .

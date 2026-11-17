@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! A blank node written inside a `cdt:List` / `cdt:Map` literal is a blank node
-//! OF THE GRAPH, so it must participate in RDFC-1.0 canonicalization, in the
-//! isomorphism oracle built on it, and in every whole-dataset term rewrite.
+//! OF THE GRAPH, so it must participate in canonicalization (the canonical
+//! labelling), in the isomorphism oracle built on it, and in every
+//! whole-dataset term rewrite.
 //!
 //! These tests exercise that from the public surface, in both directions: a
 //! consistent renaming of an embedded blank node must compare isomorphic, and a
@@ -53,10 +54,7 @@ fn a_consistent_renaming_inside_a_composite_literal_is_isomorphic() {
         datasets_isomorphic(
             &a,
             &b,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -64,10 +62,7 @@ fn a_consistent_renaming_inside_a_composite_literal_is_isomorphic() {
         datasets_isomorphic(
             &b,
             &a,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -83,10 +78,7 @@ fn a_consistent_renaming_holds_across_repeats_and_nesting() {
         datasets_isomorphic(
             &a,
             &b,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -102,10 +94,7 @@ fn a_renaming_spanning_the_literal_boundary_is_isomorphic() {
         datasets_isomorphic(
             &a,
             &b,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -124,10 +113,7 @@ fn splitting_an_embedded_blank_node_is_not_isomorphic() {
         !datasets_isomorphic(
             &one,
             &two,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -135,10 +121,7 @@ fn splitting_an_embedded_blank_node_is_not_isomorphic() {
         !datasets_isomorphic(
             &two,
             &one,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -156,10 +139,7 @@ fn conflating_across_the_literal_boundary_is_not_isomorphic() {
         !datasets_isomorphic(
             &shared,
             &split,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -167,10 +147,7 @@ fn conflating_across_the_literal_boundary_is_not_isomorphic() {
         !datasets_isomorphic(
             &split,
             &shared,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -184,10 +161,7 @@ fn ground_content_still_counts() {
         !datasets_isomorphic(
             &list_object("[_:x, 42]"),
             &list_object("[_:x, 43]"),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -201,10 +175,7 @@ fn an_embedded_blank_node_counts_as_a_blank_node() {
         !datasets_isomorphic(
             &list_object("[42]"),
             &list_object("[_:x]"),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -218,18 +189,25 @@ fn an_embedded_blank_node_counts_as_a_blank_node() {
 fn the_canonical_form_carries_issued_labels_inside_the_literal() {
     let a_owner = try_canonicalize(
         &list_object("[_:x, 42]"),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let a = a_owner.nquads();
     let b_owner = try_canonicalize(
         &list_object("[_:y, 42]"),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let b = b_owner.nquads();
     assert_eq!(a, b);
-    assert!(a.contains("c14n0"), "canonical N-Quads: {a}");
+    let embedded = a
+        .split_once("\"[_:")
+        .map(|(_, rest)| rest)
+        .expect("the literal names a blank node");
+    assert!(
+        embedded.starts_with(|c: char| c.is_ascii_digit()),
+        "the embedded label is a position: {a}"
+    );
     assert!(
         !a.contains("_:x") && !a.contains("_:y"),
         "leaked input: {a}"
@@ -243,7 +221,7 @@ fn the_canonical_form_carries_issued_labels_inside_the_literal() {
 fn canonical_relabel_leaves_no_dangling_embedded_label() {
     let relabeled = canonical_relabel(
         &blank_subject_list("x", "[_:x, 42, _:x]"),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("an admissible dataset");
     let lexical = sole_literal(&relabeled);
@@ -255,7 +233,7 @@ fn canonical_relabel_leaves_no_dangling_embedded_label() {
             "embedded label {label:?} dangles in {lexical}"
         );
         assert!(
-            label.starts_with("c14n"),
+            label.parse::<u64>().is_ok(),
             "input label leaked into {lexical}"
         );
     }
@@ -274,12 +252,12 @@ fn canonical_relabel_is_idempotent_over_embedded_blanks() {
     let source = list_object("[_:x, 42, [_:x], _:y]");
     let once = canonical_relabel(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
     let twice = canonical_relabel(
         &once,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
     assert_eq!(sole_literal(&once), sole_literal(&twice));
@@ -287,10 +265,7 @@ fn canonical_relabel_is_idempotent_over_embedded_blanks() {
         datasets_isomorphic(
             &source,
             &once,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -319,10 +294,7 @@ fn skolemization_round_trips_over_an_embedded_blank() {
         datasets_isomorphic(
             &source,
             &back,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "skolemize/deskolemize is not the identity over composite literals"

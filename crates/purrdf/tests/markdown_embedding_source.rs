@@ -46,7 +46,7 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
 
     let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("certified source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");
@@ -90,7 +90,7 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
     let report = verify_embedding_source(
         &embedding,
         EmbeddingSource::Purrpck(&source_bytes),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("a multi-anchor citation is a valid certified RDF 1.2 source");
     assert_eq!(

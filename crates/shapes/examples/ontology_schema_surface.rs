@@ -74,7 +74,7 @@ ex:resentMessageId a owl:DatatypeProperty ;
             ontology.as_ref(),
             SchemaSurfaceMode::ShapedOnly,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )?;
     let complete = compile_schema(
         &SchemaCompileRequest::new(
@@ -83,7 +83,7 @@ ex:resentMessageId a owl:DatatypeProperty ;
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )?;
     let shaped_defs = definition_keys(&shaped.compiled.schema_json)?;
     let complete_defs = definition_keys(&complete.compiled.schema_json)?;

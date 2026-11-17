@@ -109,7 +109,8 @@ impl PyArtifactRecord {
         self.inner.raw_digest.clone()
     }
 
-    /// SHA-256 hex of the canonical N-Triples (RDF artifacts only).
+    /// Lowercase hex of the BLAKE3 digest of the canonical line sequence (RDF
+    /// artifacts only).
     #[getter]
     fn semantic_digest(&self) -> Option<String> {
         self.inner.semantic_digest.clone()

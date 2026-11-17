@@ -23,7 +23,7 @@
 //! * `project` — materialize a deterministic graph/tabular carrier archive;
 //! * `lift` — reconstruct RDF from a strict bidirectional carrier;
 //! * `pack` — operate on the binary pack container directly; its `verify` verb runs
-//!   the full canonical (RDFC-1.0) integrity check over a pack and prints the pack's
+//!   the full canonical-identity integrity check over a pack and prints the pack's
 //!   digest. This is the SAME unconditional verification every read/reason path
 //!   already performs when it opens a pack, surfaced as an explicit standalone verb —
 //!   additive, never a substitute for that on-open check.

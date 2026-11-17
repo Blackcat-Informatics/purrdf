@@ -3,9 +3,15 @@
 
 //! Shared explicit canonical-search policy and exact host execution evidence.
 
+use purrdf_core::rdfc12::{
+    CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
+    CANON_PRESENTATION_OVERLAY_ID, CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CanonHash,
+    CanonPresentation,
+};
 use purrdf_core::{
-    CanonError, CanonOutput, CanonPhase, CanonPresentation, CanonSelection, SearchConfiguration,
-    SearchEvent, SearchPolicy, SearchReceipt, SearchRefusal,
+    CANON_LABELLING_NAME, CANON_PRESENTATION_LINES_ID, CANON_PRESENTATION_LINES_VERSION,
+    CanonError, CanonOutput, CanonPhase, CanonSelection, SearchConfiguration, SearchEvent,
+    SearchPolicy, SearchReceipt, SearchRefusal,
 };
 use purrdf_lex::json::Value;
 
@@ -122,6 +128,29 @@ pub fn receipts_json(receipts: &[SearchReceipt]) -> Value {
     Value::Array(receipts.iter().map(receipt_json).collect())
 }
 
+fn selection_json(selection: &CanonSelection) -> Value {
+    match selection {
+        CanonSelection::Dataset => Value::object([("kind", Value::from("dataset"))]),
+        CanonSelection::NamedGraph(iri) => Value::object([
+            ("kind", Value::from("named-graph")),
+            ("iri", Value::from(iri.clone())),
+        ]),
+    }
+}
+
+const fn output_name(output: CanonOutput) -> &'static str {
+    match output {
+        CanonOutput::Document => "document",
+        CanonOutput::RelabeledDataset => "relabeled-dataset",
+        CanonOutput::RelabeledMapping => "relabeled-mapping",
+        CanonOutput::Sha256Digest => "sha256-digest",
+        CanonOutput::Blake3Digest => "blake3-digest",
+        CanonOutput::DocumentSha256Digest => "document-sha256-digest",
+        CanonOutput::LinesDigest => "lines-digest",
+        CanonOutput::DocumentLinesDigest => "document-lines-digest",
+    }
+}
+
 fn receipt_json(receipt: &SearchReceipt) -> Value {
     let configuration = match &receipt.configuration {
         SearchConfiguration::Rdfc {
@@ -133,22 +162,22 @@ fn receipt_json(receipt: &SearchReceipt) -> Value {
         } => {
             let (presentation_id, presentation_version) = match presentation {
                 CanonPresentation::Overlay => (
-                    purrdf_core::CANON_PRESENTATION_OVERLAY_ID,
-                    purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION,
+                    CANON_PRESENTATION_OVERLAY_ID,
+                    CANON_PRESENTATION_OVERLAY_VERSION,
                 ),
                 CanonPresentation::FlatAssertion => (
-                    purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID,
-                    purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
+                    CANON_PRESENTATION_FLAT_ASSERTION_ID,
+                    CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
                 ),
             };
             Value::object([
-                ("algorithm", Value::from(purrdf_core::CANON_PROFILE_ID)),
+                ("algorithm", Value::from(CANON_PROFILE_ID)),
                 ("version", Value::from(profile_version.to_string())),
                 (
                     "label_hash",
                     Value::from(match hash {
-                        purrdf_core::CanonHash::Sha256 => "sha256",
-                        purrdf_core::CanonHash::Sha384 => "sha384",
+                        CanonHash::Sha256 => "sha256",
+                        CanonHash::Sha384 => "sha384",
                     }),
                 ),
                 ("presentation", Value::from(presentation_id)),
@@ -156,31 +185,25 @@ fn receipt_json(receipt: &SearchReceipt) -> Value {
                     "presentation_version",
                     Value::from(presentation_version.to_string()),
                 ),
-                (
-                    "selection",
-                    match selection {
-                        CanonSelection::Dataset => {
-                            Value::object([("kind", Value::from("dataset"))])
-                        }
-                        CanonSelection::NamedGraph(iri) => Value::object([
-                            ("kind", Value::from("named-graph")),
-                            ("iri", Value::from(iri.clone())),
-                        ]),
-                    },
-                ),
-                (
-                    "output",
-                    Value::from(match output {
-                        CanonOutput::Document => "document",
-                        CanonOutput::RelabeledDataset => "relabeled-dataset",
-                        CanonOutput::RelabeledMapping => "relabeled-mapping",
-                        CanonOutput::Sha256Digest => "sha256-digest",
-                        CanonOutput::Blake3Digest => "blake3-digest",
-                        CanonOutput::DocumentSha256Digest => "document-sha256-digest",
-                    }),
-                ),
+                ("selection", selection_json(selection)),
+                ("output", Value::from(output_name(*output))),
             ])
         }
+        SearchConfiguration::Labelling {
+            version,
+            selection,
+            output,
+        } => Value::object([
+            ("algorithm", Value::from(CANON_LABELLING_NAME)),
+            ("version", Value::from(version.to_string())),
+            ("presentation", Value::from(CANON_PRESENTATION_LINES_ID)),
+            (
+                "presentation_version",
+                Value::from(CANON_PRESENTATION_LINES_VERSION.to_string()),
+            ),
+            ("selection", selection_json(selection)),
+            ("output", Value::from(output_name(*output))),
+        ]),
         SearchConfiguration::DatasetStateV1 => {
             Value::object([("algorithm", Value::from("dataset-state-v1"))])
         }
@@ -235,6 +258,10 @@ fn receipt_json(receipt: &SearchReceipt) -> Value {
                             .count(SearchEvent::StateAutomorphism)
                             .to_string(),
                     ),
+                ),
+                (
+                    "labelling_unit",
+                    Value::from(receipt.work.count(SearchEvent::LabellingUnit).to_string()),
                 ),
             ]),
         ),
@@ -326,6 +353,11 @@ mod tests {
                 "{encoded}"
             );
             assert!(encoded.contains("\"charged_work\":\"0\""), "{encoded}");
+            assert!(
+                encoded.contains("\"algorithm\":\"nested-refinement-labelling\""),
+                "{encoded}"
+            );
+            assert!(encoded.contains("\"labelling_unit\":\"0\""), "{encoded}");
         }
     }
 }

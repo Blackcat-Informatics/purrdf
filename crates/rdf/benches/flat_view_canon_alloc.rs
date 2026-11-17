@@ -24,12 +24,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
-use purrdf_core::{CanonPhase, CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
-use purrdf_rdf::{
-    CanonHash, ContentDigest, RdfDataset, StopSignal, try_canonical_sha256_view,
-    try_canonicalize_flat_view, try_canonicalize_sha256_view, try_flat_blake3_view,
-    try_flat_digest_view,
+use purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY;
+use purrdf_core::{CanonPhase, CanonicalizationControl};
+use purrdf_rdf::rdfc12::{
+    CanonHash, try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_sha256_view,
+    try_flat_blake3_view, try_flat_digest_view,
 };
+use purrdf_rdf::{ContentDigest, RdfDataset, StopSignal};
 
 #[path = "support/canon_load.rs"]
 mod load;

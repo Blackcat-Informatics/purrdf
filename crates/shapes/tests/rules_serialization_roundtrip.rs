@@ -55,7 +55,7 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
 
     let canonical_entailed_owner = try_canonicalize(
         entailed.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
 
@@ -70,7 +70,7 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
             try_canonicalize(
                 reparsed.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

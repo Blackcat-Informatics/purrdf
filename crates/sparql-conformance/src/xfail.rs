@@ -147,7 +147,7 @@ pub const XFAIL: &[Xfail] = &[
     // The update groups (add/basic-update/clear/copy/delete*/drop/move/
     // update-silent) run through the UpdateEval harness path and all pass
     // natively (including per-operation blank-node scoping, compared by
-    // RDFC-1.0 canonical N-Quads).
+    // canonical N-Quads).
 
     // === W3C sparql11 entailment-regime group (commit 426c7df) ================
     //
@@ -168,7 +168,7 @@ pub const XFAIL: &[Xfail] = &[
     // passes the full triple-term/reifier/annotation surface — including the
     // graph-scoped `eval-triple-terms` cases (`graphs-1`, `graphs-2`, `expr-1`): the
     // RDF 1.2 reifier/annotation side-tables carry a graph dimension end-to-end
-    // (parse fold, IR storage, RDFC-1.0 canonicalization, the GTS reader/writer, the
+    // (parse fold, IR storage, canonicalization, the GTS reader/writer, the
     // N-Quads/TriG serializer, and the BGP virtual-candidate match), so a reifier
     // declared inside `GRAPH g { << s p o >> … }` binds `?g` under `GRAPH ?g`.
 ];

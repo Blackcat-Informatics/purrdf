@@ -247,19 +247,17 @@ pub fn flat_dataset_from_quads(quads: &[RdfQuad]) -> Result<Arc<RdfDataset>, Rdf
     flat_dataset_from_quad_sources(&[quads])
 }
 
-/// The RDFC-1.0 canonical N-Quads document of `dataset`, **flattened**: the RDF 1.2
-/// statement overlay (reifier bindings + annotations) is re-materialized to plain
-/// `rdf:reifies` / annotation triples BEFORE canonicalizing, with no overlay re-fold.
+/// The canonical document of `dataset`, **flattened**: the RDF 1.2 statement
+/// overlay (reifier bindings + annotations) is read as the plain statements the
+/// canonical line sequence spells, with no overlay re-fold.
 ///
-/// Canonicalizes the flat triple set under conformant SHA-256 RDFC-1.0, so every
-/// committed digest/comparison keyed on this string is preserved. The native folded
-/// [`crate::try_canonicalize`] would instead emit the reserved overlay sentinels.
+/// The document is the canonical line sequence of the nested-refinement
+/// labelling ([`CANON_LABELLING_NAME`](crate::CANON_LABELLING_NAME)), spelled as
+/// N-Quads 1.2 with decimal blank-node labels. Two datasets are isomorphic iff
+/// their documents are byte-equal.
 ///
-/// Delegates straight to [`purrdf_core::try_canonicalize_flat_view`] over the frozen
-/// `dataset` view itself — the flat-assertion presentation
-/// ([`CANON_PRESENTATION_FLAT_ASSERTION_ID`](crate::CANON_PRESENTATION_FLAT_ASSERTION_ID))
-/// the canonicalizer core now offers as a presentation axis, not a shape this wrapper
-/// has to re-freeze on the caller's behalf.
+/// Delegates straight to [`purrdf_core::try_canonicalize_checked_view`] over the frozen
+/// `dataset` view itself.
 ///
 /// # Errors
 /// Returns the original canonicalization refusal. No partial document is returned.
@@ -267,25 +265,35 @@ pub fn canonical_flat_nquads(
     dataset: &RdfDataset,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<crate::Canonicalized, crate::CanonError> {
-    canonical_flat_nquads_with(dataset, crate::CanonHash::Sha256, control)
+    match purrdf_core::try_canonicalize_checked_view(dataset, control) {
+        Ok(canonicalized) => Ok(canonicalized),
+        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(err),
+        Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
+            // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
+            // frozen dataset never faults, so this arm is unreachable by construction
+            // and needs no runtime check to prove it.
+        },
+    }
 }
 
-/// [`canonical_flat_nquads`] with an explicit RDFC-1.0 hash algorithm
-/// ([`CanonHash::Sha384`](crate::CanonHash) selects the SHA-384 variant). Used by the
-/// W3C RDFC-1.0 conformance gate, whose `test075` vector pins SHA-384.
+/// The RDFC-1.0 canonical N-Quads document of `dataset`, flattened, with an
+/// explicit hash algorithm ([`CanonHash::Sha384`](crate::rdfc12::CanonHash)
+/// selects the SHA-384 variant). This is the W3C algorithm by name, and the
+/// function that recomputes a digest recorded under the earlier profile. Used by
+/// the W3C RDFC-1.0 conformance gate, whose `test075` vector pins SHA-384.
 ///
-/// Delegates to [`purrdf_core::try_canonicalize_flat_view`] over `dataset` directly (no
-/// re-freeze through [`flat_dataset_from_quads`]/[`flat_rdf_quads_from_dataset`]).
+/// Delegates to [`purrdf_core::rdfc12::try_canonicalize_flat_view`] over `dataset`
+/// directly.
 ///
 /// # Errors
 /// Returns the original canonicalization refusal, including reserved vocabulary
 /// and search-budget exhaustion.
 pub fn canonical_flat_nquads_with(
     dataset: &RdfDataset,
-    hash: crate::CanonHash,
+    hash: crate::rdfc12::CanonHash,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<crate::Canonicalized, crate::CanonError> {
-    match purrdf_core::try_canonicalize_flat_view(dataset, hash, control) {
+    match purrdf_core::rdfc12::try_canonicalize_flat_view(dataset, hash, control) {
         Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => Err(err),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
@@ -420,10 +428,7 @@ ex:g {
         let ir = crate::parse_dataset(TRIG.as_bytes(), "application/trig", None).expect("parse");
         let canon_owner = canonical_flat_nquads(
             &ir,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("native flat canon");
         let canon = canon_owner.nquads();
@@ -461,10 +466,7 @@ ex:g {
             crate::parse_dataset(TRIG_ISO.as_bytes(), "application/trig", None).expect("parse iso");
         let canon_iso_owner = canonical_flat_nquads(
             &ir_iso,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("native flat canon iso");
         let canon_iso = canon_iso_owner.nquads();
@@ -591,19 +593,13 @@ ex:g {
 
         let canon_single_owner = canonical_flat_nquads(
             &via_single,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("canon single");
         let canon_single = canon_single_owner.nquads();
         let canon_sources_owner = canonical_flat_nquads(
             &via_sources,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("canon sources");
         let canon_sources = canon_sources_owner.nquads();
@@ -613,81 +609,56 @@ ex:g {
         );
     }
 
-    /// A dataset carrying a reserved-vocabulary IRI ([`crate::RESERVED_NAMESPACE`]).
+    /// A dataset carrying a reserved-vocabulary IRI ([`crate::rdfc12::RESERVED_NAMESPACE`]).
     fn reserved_vocabulary_dataset() -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri("https://example.org/s").unwrap();
         let p = b.intern_iri("https://example.org/p").unwrap();
-        let bad = b.intern_iri(crate::RESERVED_NAMESPACE).unwrap();
+        let bad = b.intern_iri(crate::rdfc12::RESERVED_NAMESPACE).unwrap();
         b.push_quad(s, p, bad, None).unwrap();
         b.freeze().expect("valid")
     }
 
-    /// Both public presentations return the same original refusal for this input.
+    /// The RDFC-1.0 entry refuses the reserved vocabulary with the original typed
+    /// refusal, and the default entry reads the same IRI as ordinary data.
     #[test]
     fn canonical_flat_nquads_with_returns_the_original_refusal() {
         let ds = reserved_vocabulary_dataset();
         let flat = canonical_flat_nquads_with(
             &ds,
-            crate::CanonHash::Sha256,
+            crate::rdfc12::CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
-        )
-        .unwrap_err();
-        let overlay = crate::try_canonicalize_with(
-            &ds,
-            crate::CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                crate::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
         .unwrap_err();
         assert!(matches!(&flat, crate::CanonError::ReservedVocabulary(_)));
-        assert_eq!(flat, overlay);
+        let document = canonical_flat_nquads(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
+        )
+        .expect("the default entry labels the dataset");
+        assert!(
+            document
+                .nquads()
+                .contains(crate::rdfc12::RESERVED_NAMESPACE)
+        );
     }
 
-    /// The direct flat-view entry point retains the same reserved-vocabulary
-    /// refusal as the public N-Quads wrapper. Host surfaces share this typed path.
+    /// An ordinary dataset canonicalizes through the typed
+    /// [`purrdf_core::try_canonicalize_checked_view`] path.
     #[test]
-    fn try_canonicalize_flat_view_refuses_reserved_vocabulary_as_a_value() {
-        let ds = reserved_vocabulary_dataset();
-        match purrdf_core::try_canonicalize_flat_view(
-            &*ds,
-            crate::CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
-        ) {
-            Err(purrdf_core::ViewCanonError::Refused(
-                purrdf_core::CanonError::ReservedVocabulary(_),
-            )) => {}
-            other => panic!("expected a typed reserved-vocabulary refusal; got {other:?}"),
-        }
-    }
-
-    /// Neighbouring-valid check: an ORDINARY dataset carrying no reserved vocabulary
-    /// still canonicalizes successfully through the same typed
-    /// [`purrdf_core::try_canonicalize_flat_view`] path the refusal test above
-    /// exercises — the tightened refusal above does not widen to reject valid input.
-    #[test]
-    fn try_canonicalize_flat_view_admits_an_ordinary_dataset() {
+    fn try_canonicalize_checked_view_admits_an_ordinary_dataset() {
         let quads = vec![RdfQuad::new(
             RdfTerm::iri("https://e/s"),
             "https://e/p",
             RdfTerm::iri("https://e/o"),
         )];
         let ds = dataset_from_quads(&quads).expect("freeze");
-        let canonicalized = purrdf_core::try_canonicalize_flat_view(
+        let canonicalized = purrdf_core::try_canonicalize_checked_view(
             &*ds,
-            crate::CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("an ordinary dataset must canonicalize, not refuse");
         assert!(

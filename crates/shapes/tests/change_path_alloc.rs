@@ -2519,10 +2519,7 @@ fn admit_allocation_is_independent_of_dataset_size() {
     let product = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the seam shapes graph encodes as a product");
     let host = HostBindings::empty();

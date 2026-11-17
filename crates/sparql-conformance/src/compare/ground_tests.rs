@@ -14,7 +14,7 @@ use purrdf_core::{
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn control() -> CanonicalizationControl<'static> {
-    CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
+    CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
 }
 
 fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
@@ -248,94 +248,37 @@ fn malformed_shapes_refuse_at_case_reduced_and_trace_boundaries() {
 }
 
 #[test]
-fn reserved_refusal_preserves_the_original_borrowed_admission() {
+fn screening_admits_an_iri_of_the_retired_reserved_namespace_without_retaining_it() {
     use purrdf_lex::allocation::Ceiling;
-    let iri = format!("{}{}", purrdf_core::RESERVED_NAMESPACE, "z".repeat(4096));
+    let iri = format!(
+        "{}{}",
+        purrdf_core::rdfc12::RESERVED_NAMESPACE,
+        "z".repeat(4096)
+    );
     let value = TermValue::iri(&iri);
-    for limit in [0, iri.len()] {
+    for limit in [0, usize::MAX] {
         let mut ceiling = Ceiling(limit);
         let mut memory = Memory::new(&mut ceiling);
-        let refusal = purrdf_core::ir::canon::screen_comparison_terms_with_memory(
+        let blanks = purrdf_core::ir::canon::screen_comparison_terms_with_memory(
             [&value],
             None,
             &mut memory,
         )
-        .unwrap_err();
-        assert_eq!(refusal, CanonError::Storage(StorageError::AdmissionFailed));
+        .unwrap();
+        assert!(!blanks, "an IRI holds no blank node");
         assert_eq!(memory.admitted_bytes(), 0);
     }
-    let variables = vec!["x".into()];
-    let least = format!("{}a", purrdf_core::RESERVED_NAMESPACE);
-    let rows = vec![vec![Some(value)], vec![Some(TermValue::iri(&least))]];
-    let view = SolutionRows {
-        variables: &variables,
-        rows: &rows,
-    };
+    // The neighbour that does hold a blank node is reported as such.
     let mut ceiling = Ceiling(usize::MAX);
     let mut memory = Memory::new(&mut ceiling);
-    let error = bag::compare_ground_with_memory(
-        view,
-        view,
-        ComparisonLaw {
-            headers: HeaderLaw::ByName,
-            rows: RowLaw::Multiset,
-            literals: LiteralLaw::ByValue,
-        },
-        &mut comparison_lexical_with_memory,
-        &mut memory,
-        &mut control(),
-    )
-    .unwrap_err();
-    let purrdf_conformance_kit::GradeError::Canonicalization(CanonError::ReservedVocabulary(
-        refusal,
-    )) = error
-    else {
-        panic!("expected reserved vocabulary refusal, received {error:?}");
-    };
-    assert_eq!(refusal.iri(), least);
-    let retained = refusal.retained_bytes().unwrap();
-    assert_eq!(memory.admitted_bytes(), retained);
-    assert!(retained > least.len(), "the shared header is admitted too");
     assert!(
-        retained < iri.len(),
-        "the superseded witness scratch is released"
+        purrdf_core::ir::canon::screen_comparison_terms_with_memory(
+            [&value, &blank("b")],
+            None,
+            &mut memory,
+        )
+        .unwrap()
     );
-    let clone = refusal.clone();
-    assert_eq!(refusal.iri().as_ptr(), clone.iri().as_ptr());
-    drop(refusal);
-    assert_eq!(memory.admitted_bytes(), retained);
-    assert_eq!(clone.iri(), least);
-    drop(clone);
-    memory.release_bytes(retained).unwrap();
-    assert_eq!(memory.admitted_bytes(), 0);
-}
-
-#[test]
-fn nested_reserved_witness_keeps_native_first_depth_first_candidate() {
-    let reserved = purrdf_core::RESERVED_NAMESPACE;
-    let value = triple(
-        TermValue::iri(format!("{reserved}z")),
-        TermValue::iri("https://example.org/p"),
-        lit("value", &format!("{reserved}a")),
-    );
-    let variables = vec!["x".into()];
-    let rows = vec![vec![Some(value)]];
-    let original = canonical_solutions(&variables, &rows, false, &mut control()).unwrap_err();
-    assert!(matches!(
-        original,
-        CompareError::Canonicalization(CanonError::ReservedVocabulary(_))
-    ));
-    let borrowed = compare_solutions(
-        &variables,
-        &rows,
-        &parsed(&variables, rows.clone()),
-        false,
-        &mut control(),
-    )
-    .unwrap_err();
-    assert_eq!(borrowed, original);
-    assert_eq!(borrowed.to_string(), original.to_string());
-    assert_eq!(format!("{borrowed:?}"), format!("{original:?}"));
 }
 
 #[test]

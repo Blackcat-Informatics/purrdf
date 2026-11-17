@@ -278,10 +278,7 @@ mod tests {
         let dataset = shared_schema(1, 0, true);
         let mut producer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.class_satisfiability(&term("A")).unwrap();
@@ -299,10 +296,7 @@ mod tests {
         )];
         let context = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .proof_context()
@@ -315,7 +309,7 @@ mod tests {
                     None,
                     &context,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -332,10 +326,7 @@ mod tests {
         };
         let mut producer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.entails(&axiom).unwrap();
@@ -366,10 +357,7 @@ mod tests {
         )];
         let mut checker = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         checker.prepare(&question).expect("query preparation");
@@ -381,7 +369,7 @@ mod tests {
                     None,
                     &checker.proof_context().unwrap(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

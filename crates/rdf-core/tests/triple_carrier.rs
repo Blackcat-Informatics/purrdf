@@ -4,11 +4,11 @@
 //! The public compact carrier, original canonical home and operational boundary.
 
 use purrdf_core::{
-    BlankScope, CanonHash, ContentIdScheme, DatasetView, FallibleDatasetView, GraphMatch,
-    GraphSelector, QuadHandle, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLocation, RdfTerm,
-    RdfTextDirection, TermId, TermRef, TermValue, TripleDataset, TripleDatasetBuilder, TripleIds,
-    TripleReadError, TripleReifierRow, ViewOperationStatus, WorkspaceReservation,
-    try_canonicalize_flat_view, try_flat_digest_view,
+    BlankScope, ContentIdScheme, DatasetView, FallibleDatasetView, GraphMatch, GraphSelector,
+    QuadHandle, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLocation, RdfTerm, RdfTextDirection,
+    TermId, TermRef, TermValue, TripleDataset, TripleDatasetBuilder, TripleIds, TripleReadError,
+    TripleReifierRow, ViewOperationStatus, WorkspaceReservation, try_canonical_digest_checked_view,
+    try_canonicalize_checked_view,
 };
 use std::sync::Arc;
 
@@ -223,16 +223,14 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     let (quad, [s, p, o, reifier]) = statement_fixture("claim", BlankScope(71));
     let nesting_bound = quad.triple_term_nesting_bound();
     assert_eq!(nesting_bound, None);
-    let before = try_canonicalize_flat_view(
+    let before = try_canonicalize_checked_view(
         &quad,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
-    let digest = try_flat_digest_view(
+    let digest = try_canonical_digest_checked_view(
         &quad,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let TermRef::Iri(iri) = quad.resolve(p) else {
@@ -289,26 +287,18 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     let materialized = purrdf_core::dataset_from_view(&read)
         .expect("scoped triple read materializes before retaining canonical output");
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             &*materialized,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         before.nquads()
     );
     assert_eq!(
-        try_flat_digest_view(
+        try_canonical_digest_checked_view(
             &*materialized,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         digest
@@ -324,26 +314,18 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
         }
     ));
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             &relabeled,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         before.nquads()
     );
     assert_eq!(
-        try_flat_digest_view(
+        try_canonical_digest_checked_view(
             &relabeled,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         digest
@@ -353,26 +335,18 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     let relabeled_materialized = purrdf_core::dataset_from_view(&relabeled_read)
         .expect("relabeled triple read materializes before retaining canonical output");
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             &*relabeled_materialized,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
         before.nquads()
     );
     assert_eq!(
-        try_flat_digest_view(
+        try_canonical_digest_checked_view(
             &*relabeled_materialized,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         digest

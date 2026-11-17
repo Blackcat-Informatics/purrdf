@@ -5764,7 +5764,7 @@ fn closure_lines(name: &str, plan: Materialization<'_>) -> BTreeSet<String> {
     let (closed, _report) = materialize(&ds, plan).expect("the five oracle lanes run");
     try_canonicalize(
         &closed,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .nquads()
@@ -6001,10 +6001,7 @@ fn render_golden(fixture: &Fixture) -> String {
         "input",
         try_canonicalize(
             &ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .nquads(),
@@ -6026,7 +6023,7 @@ fn render_golden(fixture: &Fixture) -> String {
                     try_canonicalize(
                         &closed,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -7504,7 +7501,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                         try_canonicalize(
                             &closed,
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None
                             )
                         )
@@ -7753,10 +7750,7 @@ fn a_named_graph_is_closed_and_its_conclusions_land_in_it() {
         );
         let lines_owner = try_canonicalize(
             &closed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let lines = lines_owner.nquads();
@@ -7808,10 +7802,7 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
             &materialize(&build(fixture("named_graph_closure")), plan)
                 .expect("runnable regime")
                 .0,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let positive = positive_owner.nquads();
@@ -7833,10 +7824,7 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
             &materialize(&build(fixture("named_graph_closure_near_miss")), plan)
                 .expect("runnable regime")
                 .0,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let near_miss = near_miss_owner.nquads();
@@ -8100,7 +8088,7 @@ fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
     );
     for line in try_canonicalize(
         &closed,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .nquads()
@@ -8123,7 +8111,7 @@ fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
 /// caller's data would vanish the moment they asked for entailment, and no assertion about
 /// the quads would notice.
 ///
-/// Every term here is an IRI on purpose: RDFC-1.0 assigns blank-node labels itself, so a
+/// Every term here is an IRI on purpose: the canonicalization assigns blank-node labels itself, so a
 /// blank reifier would make this a test of the canonicalizer's labelling under a changed
 /// quad set rather than of the side table surviving. The COUNTS are checked for a blank
 /// reifier too, below, which is the part that does not depend on labelling.
@@ -8143,21 +8131,20 @@ fn a_reifier_side_table_round_trips_through_materialize() {
     b.push_annotation(reifier, says, x).unwrap();
     let ds = b.freeze().expect("freeze");
 
-    /// The sentinel rows `purrdf_core::try_canonicalize` writes for the two side tables.
+    /// The rows `purrdf_core::try_canonicalize` writes for the two side tables: the
+    /// reifier binding (`rdf:reifies`) and the annotation of the reifier.
     fn overlay(nquads: &str) -> Vec<String> {
+        let annotation = format!("<{EX_SAYS}> <{EX_X}> .");
         nquads
             .lines()
-            .filter(|line| line.contains("urn:purrdf:rdfc:"))
+            .filter(|line| line.contains("#reifies> <<(") || line.ends_with(&annotation))
             .map(ToOwned::to_owned)
             .collect()
     }
     let before = overlay(
         try_canonicalize(
             &ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .nquads(),
@@ -8175,7 +8162,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
                 try_canonicalize(
                     &closed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -8215,7 +8202,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
                 try_canonicalize(
                     &closed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -8265,10 +8252,7 @@ fn a_derived_triple_term_object_is_carried_through_not_folded() {
         );
         let lines_owner = try_canonicalize(
             &closed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let lines = lines_owner.nquads();
@@ -8332,7 +8316,7 @@ fn a_shared_conclusion_is_credited_once() {
             try_canonicalize(
                 &closed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -8373,10 +8357,7 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
         let (closed, report) = materialize(&ds, plan).expect("runnable regime");
         let nquads_owner = try_canonicalize(
             &closed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let nquads = nquads_owner.nquads();

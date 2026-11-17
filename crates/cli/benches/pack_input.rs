@@ -68,7 +68,7 @@ fn verification(c: &mut Bench) {
                 verify_pack(
                     black_box(&bytes),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

@@ -43,6 +43,12 @@ pub enum CanonOutput {
     Blake3Digest,
     /// The canonical document, label table and its SHA-256 identity together.
     DocumentSha256Digest,
+    /// The digest of the canonical line sequence of the nested-refinement
+    /// labelling.
+    LinesDigest,
+    /// The canonical document, label table and the digest of the canonical
+    /// line sequence together.
+    DocumentLinesDigest,
 }
 
 /// Exact algorithm coordinates, separate from the canonical content identity.
@@ -61,6 +67,16 @@ pub enum SearchConfiguration {
         /// The output operation performed within the measured run.
         output: CanonOutput,
     },
+    /// The nested-refinement labelling (`CANON_LABELLING_NAME` at
+    /// `CANON_LABELLING_VERSION`).
+    Labelling {
+        /// The version of the labelling.
+        version: u64,
+        /// The selected statement layer.
+        selection: CanonSelection,
+        /// The output operation performed within the measured run.
+        output: CanonOutput,
+    },
     /// Complete typed dataset state, with unchanged version-one content preimages.
     DatasetStateV1,
     /// Structural comparison preparation, including cancellable exact counts.
@@ -68,6 +84,16 @@ pub enum SearchConfiguration {
 }
 
 impl SearchConfiguration {
+    pub(super) fn labelling(graph: Option<&str>, output: CanonOutput) -> Self {
+        Self::Labelling {
+            version: crate::canonical_labelling::VERSION,
+            selection: graph.map_or(CanonSelection::Dataset, |iri| {
+                CanonSelection::NamedGraph(iri.to_owned())
+            }),
+            output,
+        }
+    }
+
     pub(super) fn rdfc(
         hash: CanonHash,
         presentation: CanonPresentation,
@@ -110,6 +136,9 @@ pub enum SearchEvent {
     StateCandidate,
     /// Dataset-state explicit automorphism test.
     StateAutomorphism,
+    /// One limited unit of the nested-refinement labelling (8.1 of its
+    /// definition), as the engine counted them.
+    LabellingUnit,
 }
 
 impl SearchEvent {
@@ -120,6 +149,7 @@ impl SearchEvent {
             Self::StateNode => 2,
             Self::StateCandidate => 3,
             Self::StateAutomorphism => 4,
+            Self::LabellingUnit => 5,
         }
     }
 }
@@ -128,7 +158,7 @@ impl SearchEvent {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchWork {
     total: u64,
-    events: [u64; 5],
+    events: [u64; 6],
 }
 
 impl purrdf_hash::error::StructuredError for SearchWork {
@@ -221,6 +251,12 @@ impl<'a> CanonicalizationControl<'a> {
             receipts: Vec::new(),
             last_rdfc_refusal: None,
         }
+    }
+
+    /// The caller-owned stop signal this control carries, for a sibling engine
+    /// that honours the same request.
+    pub(crate) const fn stop_signal(&self) -> Option<&'a dyn crate::StopSignal> {
+        self.stop
     }
 
     /// Borrow all finalized receipts from this control.
@@ -329,7 +365,7 @@ impl<'a> SearchRun<'a> {
             },
             work: Cell::new(SearchWork {
                 total: 0,
-                events: [0; 5],
+                events: [0; 6],
             }),
             phase: Cell::new(CanonPhase::Preparation),
             refusal: Cell::new(None),
@@ -375,6 +411,22 @@ impl<'a> SearchRun<'a> {
         } else {
             Ok(())
         }
+    }
+
+    /// Record the limited units the labelling spent, as its own count. The
+    /// engine refuses by its own limit; this is the evidence of what it spent,
+    /// not a ceiling checked here.
+    pub(super) fn record_units(&self, units: u64) {
+        let mut work = self.work.get();
+        work.total = work.total.saturating_add(units);
+        let slot = &mut work.events[SearchEvent::LabellingUnit.index()];
+        *slot = slot.saturating_add(units);
+        self.work.set(work);
+    }
+
+    /// Record a refusal the engine reached by its own limit.
+    pub(super) fn observe_limit(&self) {
+        self.refusal.set(Some(SearchRefusal::Limit));
     }
 
     pub(super) fn charge(&self, event: SearchEvent) -> Result<(), SearchRefusal> {

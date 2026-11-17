@@ -74,7 +74,7 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   `nquads`, `trig`, `rdfxml` (or their media types); `serialize` additionally
   accepts `jsonld`.
 - **Graph identity** — `Dataset.canonicalize("unlimited")` returns a
-  `CanonicalResult` whose `.value` is the RDFC-1.0 canonical flat N-Quads.
+  `CanonicalResult` whose `.value` is the canonical line-sequence N-Quads.
   `Dataset.isomorphic(other, "unlimited")` returns the same envelope around its
   exact RDF graph-equality verdict. Both require an explicit search policy:
   `"unlimited"` or canonical unsigned decimal `u64` text. The result's

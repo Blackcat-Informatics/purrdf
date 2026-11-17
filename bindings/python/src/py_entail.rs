@@ -321,8 +321,9 @@ fn materialize(
 /// second engine path, which is what makes byte-identity across the three hosts a
 /// meaningful claim.
 ///
-/// The closure is serialized through the RDFC-1.0 canonical flat serializer, so
-/// repeated calls on equal input produce byte-identical output.
+/// The closure is serialized as the canonical line sequence of the nested-refinement
+/// labelling (N-Quads 1.2, decimal blank-node labels), so repeated calls on equal
+/// input produce byte-identical output.
 ///
 /// `program` is the regime's own rule document, exactly as on [`materialize`].
 ///
@@ -655,7 +656,7 @@ fn profile(py: Python<'_>, data: &str) -> PyResult<(String, String)> {
 /// `"bot"`, `"top"` or `"star"`.
 ///
 /// Returns `(answer, certificate)`. The answer is the extracted module as canonical
-/// (RDFC-1.0) N-Quads — the same serializer `materialize_nt` uses. The certificate's
+/// line-sequence N-Quads — the same serializer `materialize_nt` uses. The certificate's
 /// `conservative` line says whether the module is the minimal one or a sound
 /// SUPERSET, which is what a caller sizing a module needs to know.
 ///

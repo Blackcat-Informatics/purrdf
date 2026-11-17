@@ -166,7 +166,7 @@ fn rdf_12_dataset() -> Arc<RdfDataset> {
 fn probe(label: &str, dataset: &Arc<RdfDataset>) {
     let bytes = PackBuilder::build_bytes(
         dataset.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the fixture packs");
     println!(

@@ -219,7 +219,7 @@ impl ModuleExtraction {
 /// it. Quads outside the default graph are neither read nor emitted.
 ///
 /// [`ModuleExtraction::proof`] is `None`. The proof term this service can issue binds TWO
-/// RDFC-1.0 canonicalizations — the source ontology's identity and the extracted module's —
+/// canonicalizations — the source ontology's identity and the extracted module's —
 /// and neither is computed here. A caller who wants one asks
 /// [`extract_module_with_proofs`]; the extracted module itself is identical either way.
 ///
@@ -267,7 +267,7 @@ pub fn extract_module(
 /// and the extracted module's own canonical identity, so a proof presented against a different
 /// signature, a different notion or a different extraction is rejected.
 ///
-/// It costs two RDFC-1.0 canonicalizations that [`extract_module`] does not pay for, which is
+/// It costs two canonicalizations that [`extract_module`] does not pay for, which is
 /// why it is a separate entry point rather than the default.
 ///
 /// # Errors
@@ -409,7 +409,7 @@ fn extract(
     // this proof term against, and the reason a proof of one extraction cannot stand for
     // another over the same signature.
     //
-    // Both identity calls are RDFC-1.0 canonicalizations, and they happen only when
+    // Both identity calls are canonicalizations, and they happen only when
     // `proofs` is set: the non-recording entry point does not compute a digest it would
     // then drop. `ds` and `module` are both wholly caller-supplied (`module` is a subgraph
     // of `ds`), so `try_ontology_identity` retains the original refusal.

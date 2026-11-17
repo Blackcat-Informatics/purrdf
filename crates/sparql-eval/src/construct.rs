@@ -16,7 +16,7 @@
 //!
 //! Each position is instantiated to a [`TermValue`](purrdf_core::TermValue) first so its term *kind* can be
 //! validated before interning into the output builder. Byte-identical output is
-//! decided downstream at the RDFC-1.0 canonicalization
+//! decided downstream at the canonicalization
 //! layer, so blank-node labels and quad ordering here need not be stable —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
@@ -1606,7 +1606,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1634,7 +1634,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1662,7 +1662,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1693,7 +1693,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1725,7 +1725,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1826,7 +1826,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1869,7 +1869,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &alone,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1878,7 +1878,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &beside,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2059,7 +2059,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out1,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2068,7 +2068,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out2,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2768,7 +2768,7 @@ mod tests {
             try_canonicalize(
                 &construct_out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2777,7 +2777,7 @@ mod tests {
             try_canonicalize(
                 &direct_out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2821,7 +2821,7 @@ mod tests {
             try_canonicalize(
                 &out1,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -2830,7 +2830,7 @@ mod tests {
             try_canonicalize(
                 &out2,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

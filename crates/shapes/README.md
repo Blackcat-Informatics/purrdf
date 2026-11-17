@@ -777,7 +777,7 @@ Every catalogued property appears exactly once in `SchemaCoverageReport`, with
 sorted class decisions, inclusion/exclusion reasons, precision, and source
 axiom provenance. `SchemaCompileRequest::coverage_report` computes that audit
 surface without serializing language artifacts. `compilation_key` hashes the
-RDFC-1.0 identities of both input graphs together with declared namespaces,
+canonical identities of both input graphs together with declared namespaces,
 mode, value-vocabulary marker, compiler/policy salts, and fixed limits, so the
 key can be computed before expensive emission and used directly for caching.
 

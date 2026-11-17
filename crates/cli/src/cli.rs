@@ -202,7 +202,7 @@ pub(crate) struct Cli {
     /// The subcommand to run.
     #[command(subcommand)]
     pub(crate) cmd: Command,
-    /// Exact RDFC search policy: unlimited or canonical unsigned decimal u64, with no default.
+    /// Exact canonical search policy (a bound on the labelling engine's work): unlimited or canonical unsigned decimal u64, with no default.
     #[arg(long, global = true, requires = "canonicalization_receipts")]
     pub(crate) canonical_search: Option<String>,
     /// Required canonical-search evidence destination; '-' writes stderr.
@@ -916,7 +916,7 @@ pub(crate) struct ConvertArgs {
     /// other is a premise triple. The IRI half must be ABSOLUTE.
     #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
     pub imports: Vec<String>,
-    /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
+    /// Emit the canonical line-sequence N-Quads instead of `--to`. Canonical output is
     /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
     /// ignored) when named beside `--canonical`, since it would otherwise be
     /// accepted and never read. Combine with `--entailment` to canonicalize the
@@ -2380,10 +2380,11 @@ pub(crate) enum CliShexFormat {
 #[derive(Subcommand, Debug)]
 pub(crate) enum PackCommand {
     /// Verify a pack container's full integrity — every section digest AND the
-    /// canonical-identity digest, which is computed under the `purrdf-rdfc12` profile
-    /// and is NOT an RDFC-1.0 digest (the two agree byte for byte only on the RDF 1.1
-    /// subset). Prints the verified 64-hex digest and exits 0; a corrupt or non-pack
-    /// input exits non-zero with a message.
+    /// canonical-identity digest, recomputed with the function that recorded it
+    /// (format 1: the `purrdf-rdfc12` profile; format 2: the canonical line
+    /// sequence), neither of which is an RDFC-1.0 digest. Prints the verified
+    /// 64-hex digest and exits 0; a corrupt or non-pack input exits non-zero with
+    /// a message.
     ///
     /// The ordinary read/reason paths already verify a pack on every open (nothing
     /// enters the pipeline unverified); this is the explicit surface for confirming a

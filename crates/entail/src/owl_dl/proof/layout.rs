@@ -1112,7 +1112,7 @@ mod tests {
     use purrdf_iri::vocab::{rdf, rdfs};
 
     fn control() -> CanonicalizationControl<'static> {
-        CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
+        CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
     }
 
     /// A producer-supplied preparation program cannot change source membership,

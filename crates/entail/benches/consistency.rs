@@ -614,7 +614,7 @@ fn bench_proof_recording(c: &mut Bench) {
                     Reasoner::with_proofs(
                         dataset,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )

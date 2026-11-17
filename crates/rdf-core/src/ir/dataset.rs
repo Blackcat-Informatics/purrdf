@@ -2677,7 +2677,8 @@ impl RdfDataset {
     /// a *cache discriminator*, not a content digest: a fingerprint collision can only
     /// make a cache reuse a join order computed for a same-size dataset, which — the
     /// reorder being a permutation of a commutative join — is at worst suboptimal,
-    /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
+    /// never incorrect. For a content-exact identity use the canonical digest
+    /// ([`crate::try_canonical_digest_view`]).
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
         crate::hash::stats_fingerprint(
@@ -3899,13 +3900,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &ab,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ba,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
@@ -4031,13 +4032,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &u,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),

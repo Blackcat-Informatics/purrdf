@@ -2641,10 +2641,7 @@ mod tests {
     fn canon(ds: &RdfDataset) -> purrdf_core::Canonicalized {
         ::purrdf_rdf::try_canonicalize(
             ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     }
@@ -4476,7 +4473,7 @@ mod tests {
         let second = entail(data, shapes);
         assert_eq!(canon(&first).nquads(), canon(&second).nquads());
 
-        // RDFC canonical labels: the blank in the base ex:has triple and in the
+        // Canonical labels: the blank in the base ex:has triple and in the
         // derived ex:copied triple must canonicalize to the SAME label.
         let nq_owner = canon(&first);
         let nq = nq_owner.nquads();

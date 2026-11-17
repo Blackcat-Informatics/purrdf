@@ -12,7 +12,7 @@
 //! This test builds the SAME logical dataset two ways — plain
 //! ([`RdfDatasetBuilder::new`]) and content-addressing active
 //! ([`RdfDatasetBuilder::with_content_addressing`]) — serializes both through the
-//! canonical RDFC-1.0 N-Quads surface ([`canonical_flat_nquads`]), and asserts the
+//! canonical N-Quads surface ([`canonical_flat_nquads`]), and asserts the
 //! bytes are identical. To prove determinism DESPITE recognition being live (not
 //! because it silently no-op'd), it also asserts the content-addressing dataset
 //! actually recognized its `blake3:<64hex>` terms.
@@ -21,12 +21,14 @@ use std::sync::Arc;
 
 use purrdf_core::ContentIdScheme;
 use purrdf_rdf::gts_compose::SnapshotBuilder;
-use purrdf_rdf::{
-    BlankScope, CanonError, CanonHash, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfTextDirection, TermId, TermPosition, ViewCanonError, blank_count_view,
-    canonical_flat_nquads, check_admissible_flat_view, flat_dataset_from_quads,
-    flat_rdf_quads_from_dataset, parse_dataset, try_canonicalize_flat_graph_view,
+use purrdf_rdf::rdfc12::{
+    CanonHash, RESERVED_NAMESPACE, check_admissible_flat_view, try_canonicalize_flat_graph_view,
     try_canonicalize_flat_view, try_canonicalize_view, try_canonicalize_with,
+};
+use purrdf_rdf::{
+    BlankScope, CanonError, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermId,
+    TermPosition, ViewCanonError, blank_count_view, canonical_flat_nquads, flat_dataset_from_quads,
+    flat_rdf_quads_from_dataset, parse_dataset,
 };
 
 #[path = "support/blank_identity.rs"]
@@ -133,13 +135,13 @@ fn content_addressing_does_not_perturb_serialized_bytes() {
     // regardless of the (non-serialized) content-addressing side tables.
     let bytes_a_owner = canonical_flat_nquads(
         &dataset_a,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("try_canonicalize plain");
     let bytes_a = bytes_a_owner.nquads();
     let bytes_b_owner = canonical_flat_nquads(
         &dataset_b,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("try_canonicalize addressed");
     let bytes_b = bytes_b_owner.nquads();
@@ -235,7 +237,10 @@ fn reference_flat_canon(dataset: &RdfDataset, hash: CanonHash) -> purrdf_core::C
     try_canonicalize_with(
         &flat,
         hash,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .unwrap()
 }
@@ -248,7 +253,7 @@ fn assert_flat_differential(dataset: &RdfDataset, case: &str) {
             dataset,
             hash,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
@@ -419,7 +424,10 @@ fn differential_reifier_and_annotation_case_under_both_hash_algorithms() {
     let sha256_actual_owner = try_canonicalize_flat_view(
         &*ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
 
@@ -433,7 +441,10 @@ fn differential_reifier_and_annotation_case_under_both_hash_algorithms() {
     let sha384_actual_owner = try_canonicalize_flat_view(
         &*ds,
         CanonHash::Sha384,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
 
@@ -556,14 +567,20 @@ fn flat_and_overlay_agree_without_a_statement_layer_and_diverge_with_one() {
     let flat_bytes_owner = try_canonicalize_flat_view(
         &*plain,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let flat_bytes = flat_bytes_owner.nquads();
     let overlay_bytes_owner = try_canonicalize_view(
         &*plain,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let overlay_bytes = overlay_bytes_owner.nquads();
@@ -577,14 +594,20 @@ fn flat_and_overlay_agree_without_a_statement_layer_and_diverge_with_one() {
     let flat_bytes_owner = try_canonicalize_flat_view(
         &*statement_bearing,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let flat_bytes = flat_bytes_owner.nquads();
     let overlay_bytes_owner = try_canonicalize_view(
         &*statement_bearing,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let overlay_bytes = overlay_bytes_owner.nquads();
@@ -620,7 +643,7 @@ fn flat_canon_is_idempotent_under_both_reachable_reingestion_loaders() {
             &*ds,
             hash,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
@@ -638,7 +661,7 @@ fn flat_canon_is_idempotent_under_both_reachable_reingestion_loaders() {
             &*reparsed_text,
             hash,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
@@ -658,7 +681,7 @@ fn flat_canon_is_idempotent_under_both_reachable_reingestion_loaders() {
             &*reingested_quads,
             hash,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
@@ -685,7 +708,10 @@ fn flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs() 
         &*ds,
         &g,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("g is admissible");
 
@@ -696,7 +722,10 @@ fn flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs() 
     let via_projection_owner = try_canonicalize_flat_view(
         &projected,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("g's projection is admissible");
     let via_projection = via_projection_owner.nquads();
@@ -728,7 +757,10 @@ fn blank_count_is_invariant_between_flat_and_overlay_presentations() {
     let flat_bytes_owner = try_canonicalize_flat_view(
         &*ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let flat_bytes = flat_bytes_owner.nquads();
@@ -819,7 +851,10 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
     let bytes_owner = try_canonicalize_flat_view(
         &*ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let bytes = bytes_owner.nquads();
@@ -844,7 +879,10 @@ fn flat_canon_never_mints_the_reserved_namespace_and_the_row_count_is_exact() {
     let spelled_bytes_owner = try_canonicalize_flat_view(
         &*spelled_ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("admissible");
     let spelled_bytes = spelled_bytes_owner.nquads();
@@ -894,7 +932,10 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     let bytes_owner = try_canonicalize_flat_view(
         &*admitted_ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("an IRI adjacent to, but outside, the reserved namespace must be admitted");
     let bytes = bytes_owner.nquads();
@@ -916,7 +957,10 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     match try_canonicalize_flat_view(
         &*inadmissible_ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     ) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(violation))) => {
             assert_eq!(violation.iri(), reserved.as_str());
@@ -942,7 +986,10 @@ fn a_neighbouring_iri_is_admitted_while_the_reserved_namespace_is_typed_refused(
     let bytes_owner = try_canonicalize_flat_view(
         &*admitted_triple_term_ds,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect(
         "the reserved predicate over a TRIPLE-TERM object is the fold's own \

@@ -18,11 +18,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
 use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
-    CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
-    SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
-    datasets_isomorphic, empty_named_graphs_dropped, serialize_dataset_to_format,
+    JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
+    SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify, datasets_isomorphic,
+    empty_named_graphs_dropped, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
-    serialize_dataset_with, try_canonicalize_flat_view,
+    serialize_dataset_with, try_canonicalize_checked_view,
 };
 use purrdf_core::DatasetHandle;
 use purrdf_lex::json::{self, Value};
@@ -749,16 +749,16 @@ impl Dataset {
         self.serialize_with_options(format, &options, base.as_deref())
     }
 
-    /// `canonicalize()` → the dataset as canonical, flat N-Quads under RDFC-1.0
-    /// (SHA-256).
+    /// `canonicalize()` → the dataset as canonical, line-sequence N-Quads of the
+    /// nested-refinement labelling.
     ///
     /// The deterministic identity string for the graph: two datasets denote the same
     /// RDF graph (under blank-node relabeling) iff their canonical forms are
-    /// byte-identical. This is the same RDFC-1.0 output the conformance gate pins.
+    /// byte-identical. Blank nodes carry decimal labels.
     ///
     /// This surface reads caller-supplied (untrusted) documents, so a refusal —
-    /// reserved vocabulary, or n-degree search budget exhaustion — comes back as a
-    /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
+    /// the labelling's typed refusal, including its `limit` under the caller's bound — comes back as a
+    /// thrown `JsError` via the typed [`try_canonicalize_checked_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
     #[expect(
@@ -776,7 +776,7 @@ impl Dataset {
                     .inner
                     .freeze()
                     .map_err(purrdf_core::CanonError::Invalid)?;
-                match try_canonicalize_flat_view(&frozen, CanonHash::Sha256, control) {
+                match try_canonicalize_checked_view(&frozen, control) {
                     Ok(canonicalized) => Ok(canonicalized),
                     Err(ViewCanonError::Refused(cause)) => Err(cause),
                     Err(ViewCanonError::NotReady { error, .. }) => match error {},
@@ -791,7 +791,7 @@ impl Dataset {
     /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
     /// under blank-node relabeling.
     ///
-    /// The formal RDF graph-identity check, backed by full RDFC-1.0 canonicalization:
+    /// The formal RDF graph-identity check, backed by the default canonicalization:
     /// an exact oracle with no false positives or false negatives. Equivalent to
     /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
     /// materializing them for obviously-different inputs.

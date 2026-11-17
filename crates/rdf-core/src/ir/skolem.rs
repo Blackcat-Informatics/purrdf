@@ -12,8 +12,8 @@
 //! escape's mechanical rewrite of, say, a JSON-LD `_:has space` — rewrites the
 //! dataset first, with one of two explicit, deterministic operations:
 //!
-//! - [`super::canon::canonical_relabel`]: relabel every blank to its canonical
-//!   `c14n{n}` label (ASCII alphanumerics — legal in every alphabet).
+//! - [`crate::canonical_relabel`]: relabel every blank to its canonical
+//!   decimal label (its position: a legal `BLANK_NODE_LABEL`).
 //! - [`skolemize`]: replace every blank node with an IRI under the
 //!   caller-supplied authority's `/.well-known/genid/` space, per the RDF 1.2
 //!   *Replacing Blank Nodes with IRIs* section (the `genid` well-known URI
@@ -889,13 +889,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &back,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
@@ -916,13 +916,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &a,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &b,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1257,7 +1257,7 @@ mod tests {
         let ds = hostile_dataset();
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         let round = deskolemize(&skolemize(&ds, AUTHORITY).expect("skolemize"), AUTHORITY)
@@ -1265,13 +1265,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &relabeled,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1279,13 +1279,13 @@ mod tests {
         assert_eq!(
             try_canonicalize(
                 &round,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads(),
             try_canonicalize(
                 &ds,
-                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+                &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None)
             )
             .unwrap()
             .nquads()
@@ -1347,7 +1347,7 @@ mod tests {
         let desk = deskolemize(&sk, AUTHORITY).expect("deskolemize");
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         for (name, out) in [
@@ -1391,7 +1391,7 @@ mod tests {
         let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
         let relabeled = canonical_relabel(
             &ds,
-            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            &mut crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None),
         )
         .expect("relabel");
         for (name, out) in [("skolemize", &sk), ("canonical_relabel", &relabeled)] {

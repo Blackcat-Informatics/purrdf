@@ -137,10 +137,7 @@ fn a_relative_shapes_graph_with_no_base_is_refused() {
             None,
             Some("shapes"),
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         ) {
             Err(refusal) => refusal.to_string(),
             Ok(_) => panic!("pack must refuse a relative shapes graph with no base"),
@@ -223,10 +220,7 @@ fn shapes_graph_001_through_parsed_prepared_and_packed_shapes() {
             Some(&base),
             graph,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("packs");
         let (conforms, focus) = verdict(

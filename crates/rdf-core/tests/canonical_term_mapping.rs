@@ -22,7 +22,7 @@ fn mapped(result: &CanonicalRelabeling, source: TermId) -> TermId {
 fn assert_original_api_output(source: &RdfDataset, result: &CanonicalRelabeling) {
     let original = canonical_relabel(
         source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible original API");
     let output = result.dataset();
@@ -102,7 +102,10 @@ fn assert_mapped_term(source: &RdfDataset, result: &CanonicalRelabeling, id: Ter
             let TermRef::Blank { label, scope } = output else {
                 panic!("blank lost its kind")
             };
-            assert!(label.starts_with("c14n"));
+            assert!(
+                label.parse::<u64>().is_ok(),
+                "a canonical label is a position"
+            );
             assert_eq!(scope, BlankScope::DEFAULT);
         }
         TermRef::Literal {
@@ -173,7 +176,7 @@ fn mapped_records_preserve_native_identity_and_source_locations() {
     let source = builder.freeze().expect("valid RDF 1.2 fixture");
     let result = canonical_relabel_with_mapping(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
 
@@ -219,7 +222,7 @@ fn composite_only_blanks_and_interned_iris_are_mapped() {
         .expect("embedded blank");
     let result = canonical_relabel_with_mapping(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
     let output = result.dataset();
@@ -266,7 +269,7 @@ fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
     let source = builder.freeze().expect("valid declaration-only fixture");
     let result = canonical_relabel_with_mapping(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
     for id in [
@@ -289,7 +292,7 @@ fn unused_dictionary_terms_are_not_fabricated_by_mapping() {
     assert_eq!(
         result.dataset().resolve(mapped(&result, declared)),
         TermRef::Blank {
-            label: "c14n0",
+            label: "0",
             scope: BlankScope::DEFAULT
         }
     );
@@ -323,7 +326,7 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
     let source = builder.freeze().expect("valid configured fixture");
     let result = canonical_relabel_with_mapping(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("admissible");
     assert_eq!(result.dataset().content_id_scheme(), Some(&scheme));
@@ -342,26 +345,46 @@ fn mapped_content_ids_and_predecessors_keep_the_configured_scheme() {
     assert_original_api_output(&source, &result);
 }
 
-/// Asking for mappings cannot admit a dataset rejected by canonical relabeling.
+/// A latched stop signal.
+#[derive(Debug)]
+struct Latched;
+
+impl purrdf_core::StopSignal for Latched {
+    fn stopped(&self) -> bool {
+        true
+    }
+}
+
+/// Asking for mappings cannot admit a dataset rejected by canonical relabeling,
+/// and the same dataset relabels with and without a mapping when not stopped.
 #[test]
 fn mapping_does_not_change_admission_refusals() {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri("https://example.org/s").unwrap();
-    let p = builder.intern_iri("urn:purrdf:rdfc:reifies").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
     builder.push_quad(s, p, s, None).unwrap();
-    let source = builder
-        .freeze()
-        .expect("valid RDF with reserved vocabulary");
+    let source = builder.freeze().expect("valid RDF");
+    let stop = Latched;
     let original = canonical_relabel(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::CANON_CORPUS_POLICY,
+            Some(&stop),
+        ),
     )
-    .expect_err("reserved vocabulary");
+    .expect_err("stopped");
     let mapped = canonical_relabel_with_mapping(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::CANON_CORPUS_POLICY,
+            Some(&stop),
+        ),
     )
     .expect_err("same refusal");
-    assert!(matches!(mapped, CanonError::ReservedVocabulary(_)));
+    assert!(matches!(mapped, CanonError::Stopped));
     assert_eq!(original.to_string(), mapped.to_string());
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+    canonical_relabel(&source, &mut control).expect("the neighbouring run succeeds");
+    canonical_relabel_with_mapping(&source, &mut control).expect("the neighbouring run succeeds");
 }

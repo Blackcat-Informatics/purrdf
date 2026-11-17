@@ -190,7 +190,7 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
 #[test]
 fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     use purrdf_sparql_conformance::manifest::{self, ExpectedResult, TestKind};
     use std::path::PathBuf;
@@ -393,7 +393,7 @@ fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
 #[test]
 fn the_extended_sort_case_is_graded_against_the_sparql12_order() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     use purrdf_core::{SparqlResult, TermValue};
     use purrdf_sparql_conformance::{compare, manifest, rs_resultset, run};

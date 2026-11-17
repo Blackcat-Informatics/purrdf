@@ -209,10 +209,7 @@ fn a_prepared_product_keeps_the_annotations() {
     let bytes = fresh
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the shapes are representable as a product");
     let restored = ShapesProduct::open(&bytes)

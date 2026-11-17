@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The label search is frozen against its earlier behaviour.
+//! The 4.x label search (`purrdf_core::rdfc12`) is frozen against its earlier
+//! behaviour: it is the read-side recompute that PACK format version 1 and
+//! PURREMB format version 1 verify with.
 //!
 //! Each case is a blank-heavy shape: chains, rings, stars, cliques whose members
 //! collide at first degree (so the n-degree search runs), reifier-shaped data with
@@ -15,10 +17,12 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use purrdf_core::rdfc12::{
+    CanonHash, RDFC_V2_CORPUS_POLICY, try_canonicalize_flat_view, try_canonicalize_view,
+};
 use purrdf_core::{
-    BlankScope, CanonHash, CanonicalizationControl, ContentDigest, RDFC_V2_CORPUS_POLICY,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize_flat_view,
-    try_canonicalize_view,
+    BlankScope, CanonicalizationControl, ContentDigest, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    TermId, TermValue,
 };
 
 fn iri(b: &mut RdfDatasetBuilder, name: &str) -> TermId {

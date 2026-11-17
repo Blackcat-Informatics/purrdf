@@ -406,35 +406,27 @@ test("entailMaterialize rejects a malformed document (never a silent empty closu
   assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs", "", [], [], [], undefined, undefined, undefined, "unlimited"));
 });
 
-// ── A reserved-vocabulary closure is refused as a value, never a process abort ──
+// ── A closure the labelling refuses is refused as a value, never a process abort ──
 //
 // The materialized closure is wholly caller-supplied (the document parsed above), so
 // `entailMaterialize` routes it through the typed, non-panicking canonicalization
-// entry point — a reserved-vocabulary IRI (`urn:purrdf:rdfc:`, the canonicalization
-// overlay's OWN namespace; see crates/rdf-core/src/ir/canon.rs) comes back as a
-// thrown `JsError` rather than aborting the wasm process. Only the exact sentinel
-// shape the overlay itself lowers — `<urn:purrdf:rdfc:reifies>` as a predicate whose
-// object is a TRIPLE TERM — is admitted; a plain-IRI object in the same predicate
-// position is not that shape and is refused.
-const RESERVED_PREDICATE_PLAIN_OBJECT =
-  "<http://example.org/r> <urn:purrdf:rdfc:reifies> <http://example.org/o> .\n";
+// entry point: the labelling's `limit` refusal comes back as a thrown `JsError` rather
+// than aborting the wasm process. The 13-node circulant of quadratic residues cannot
+// be labelled without a search, so the bound "0" trips it and "unlimited" completes it.
+const CIRCULANT = Array.from({ length: 13 }, (_, u) => Array.from({ length: 13 - u - 1 }, (_, k) => u + k + 1)
+  .filter((v) => [1, 3, 4, 9, 10, 12].includes((v - u) % 13))
+  .map((v) => `_:v${u} <http://example.org/p> _:v${v} .\n_:v${v} <http://example.org/p> _:v${u} .\n`).join("")).join("");
 
-// The valid neighbour: an ORDINARY predicate adjacent to the reserved namespace (a
-// DIFFERENT `urn:purrdf:` sub-namespace) in the exact same shape still materializes —
-// the refusal above is not an over-refusal of ordinary documents.
-const NEIGHBOURING_ORDINARY_PREDICATE =
-  "<http://example.org/r> <urn:purrdf:other:annotation> <http://example.org/o> .\n";
-
-test("entailMaterialize throws on a reserved-vocabulary closure, naming it", () => {
+test("entailMaterialize throws when the labelling refuses the closure", () => {
   assert.throws(
-    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited"),
-    /urn:purrdf:rdfc:reifies/,
+    () => entailMaterialize(CIRCULANT, "simple", "", [], [], [], undefined, undefined, undefined, "0"),
+    /labelling refused/,
   );
 });
 
-test("entailMaterialize still closes an ordinary document neighbouring the reserved one", () => {
-  const closed = entailMaterialize(NEIGHBOURING_ORDINARY_PREDICATE, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited");
-  assert.ok(closed.nquads.includes("urn:purrdf:other:annotation"), closed.nquads);
+test("entailMaterialize still closes the same document under another bound", () => {
+  const closed = entailMaterialize(CIRCULANT, "simple", "", [], [], [], undefined, undefined, undefined, "unlimited");
+  assert.ok(closed.nquads.startsWith("_:0 "), closed.nquads);
 });
 
 test("the rule inventories are the specification tables, and the gap is measurable", () => {

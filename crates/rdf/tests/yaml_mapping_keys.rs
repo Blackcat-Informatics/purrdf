@@ -857,7 +857,7 @@ fn document_compaction_preserves_structure_and_native_terms() {
                 &dataset,
                 &reopened,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1295,7 +1295,7 @@ fn mixed_context_registry_reuses_yaml_admission_and_shared_resolution() {
                     &actual.expect("relative YAML context, JSON import and YAML scoped context"),
                     &expected,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -1347,7 +1347,7 @@ fn configured_yamlld_context_reaches_shared_expansion() {
                 &actual,
                 &expected,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1420,7 +1420,7 @@ fn configured_yamlld_context_reaches_shared_expansion() {
                     &actual,
                     &expected,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -1505,10 +1505,7 @@ fn configured_yamlld_context_reaches_shared_expansion() {
         purrdf_rdf::datasets_isomorphic(
             &graph_dataset,
             &graph_oracle,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -1531,7 +1528,7 @@ fn configured_yamlld_context_reaches_shared_expansion() {
                 &actual,
                 &expected,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1998,7 +1995,7 @@ fn pinned_w3c_normative_rdf_construction() {
                 &actual,
                 &expected,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

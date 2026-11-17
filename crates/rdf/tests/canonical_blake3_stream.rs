@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The streamed BLAKE3 digest of a flat canonical document is the identity a
-//! GTS content label spells for that document's bytes.
+//! The streamed BLAKE3 digest of a 4.x flat canonical document
+//! (`purrdf_rdf::rdfc12`) is the identity a GTS content label spells for that
+//! document's bytes.
 
-use purrdf_rdf::{
-    BlankScope, CanonHash, CanonicalizationControl, RDFC_V2_CORPUS_POLICY, RdfDatasetBuilder,
-    RdfLiteral, try_canonicalize_flat_view, try_flat_blake3_view,
+use purrdf_rdf::rdfc12::{
+    CanonHash, RDFC_V2_CORPUS_POLICY, try_canonicalize_flat_view, try_flat_blake3_view,
 };
+use purrdf_rdf::{BlankScope, CanonicalizationControl, RdfDatasetBuilder, RdfLiteral};
 
 /// A caller that stores `blake3:<hex>` of the canonical bytes gets the same label
 /// from the streamed digest as from the document it no longer has to build. The

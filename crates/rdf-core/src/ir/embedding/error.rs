@@ -62,7 +62,7 @@ pub enum DigestKind {
     ArtifactRoot,
     /// Exact source artifact SHA-256.
     SourceExact,
-    /// Independently certified RDFC digest.
+    /// Independently certified RDF digest.
     CertifiedRdf,
     /// Canonical contract or typed identity.
     Contract,

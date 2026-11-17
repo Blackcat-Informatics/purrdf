@@ -1209,18 +1209,12 @@ mod tests {
     fn digest_of(shapes: &Shapes) -> PackDigest {
         let bytes = encode_dataset(
             shapes.dataset(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("encode the dataset section");
         certify_dataset(
             &bytes,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("certify the dataset section")
     }

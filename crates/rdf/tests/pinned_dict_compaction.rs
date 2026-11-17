@@ -85,7 +85,7 @@ fn a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies() {
     let pack = certify(
         &source,
         pinned_plan(shipped.clone()),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
 
     assert_eq!(
@@ -104,18 +104,12 @@ fn a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies() {
     assert_eq!(
         refold_digest(
             &before,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("source content-refold digest"),
         refold_digest(
             &after,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("pack content-refold digest"),
         "the pack must fold to the SAME RDFC-1.0 canonical graph as its source"
@@ -125,7 +119,7 @@ fn a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies() {
         &source,
         &pack,
         &keyring(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("verify_compaction runs");
     assert!(
@@ -147,7 +141,7 @@ fn a_blobless_pinned_pack_round_trips_and_verifies() {
     let pack = certify(
         &source,
         pinned_plan(shipped.clone()),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_eq!(
         header_dicts(&pack)[PINNED_NAME],
@@ -159,7 +153,7 @@ fn a_blobless_pinned_pack_round_trips_and_verifies() {
         &source,
         &pack,
         &keyring(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("verify_compaction runs");
     assert!(
@@ -178,17 +172,17 @@ fn pinning_a_dictionary_does_not_perturb_a_derived_compaction_of_the_same_source
     let a = certify(
         &source,
         derived_plan(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let _pinned = certify(
         &source,
         pinned_plan(shipped_dictionary()),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let b = certify(
         &source,
         derived_plan(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_eq!(
         a, b,

@@ -54,7 +54,7 @@ fn pack_view_serializes_identically_to_source_dataset() {
     let ds = build_fixture();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build");
     let view = PackView::from_bytes(&bytes).expect("pack opens");
@@ -140,7 +140,7 @@ fn configured_jsonld_surfaces_accept_any_dataset_view_and_reuse_contexts() {
     let dataset = build_fixture();
     let pack = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build");
     let view = PackView::from_bytes(&pack).expect("pack opens");

@@ -419,7 +419,7 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
     ///
     /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
-    /// [`Reasoner::with_proofs`] pays for the ontology's RDFC-1.0 identity and the run traces
+    /// [`Reasoner::with_proofs`] pays for the ontology's canonical identity and the run traces
     /// bound to it. [`Reasoner::proof_context`] needs that identity — a checking context
     /// without it would reject every honest proof with an input mismatch nothing accounts for
     /// — so it refuses here instead, naming the constructor that would have worked.
@@ -602,9 +602,9 @@ pub enum EntailError<E = std::convert::Infallible> {
     /// Reachable only from the `*_until` entry points ([`materialize_until`]); an ungoverned
     /// call names no signal and so can never see it.
     Stopped,
-    /// The ontology's RDFC-1.0 canonicalization — computing the producer-independent
-    /// identity a recording reasoner binds every proof to — was refused: a
-    /// reserved-vocabulary term, or an n-degree search that exhausted its budget.
+    /// The ontology's canonicalization — computing the producer-independent
+    /// identity a recording reasoner binds every proof to — was refused: the
+    /// labelling's limit tripped on an input it cannot guarantee, or the caller stopped it.
     ///
     /// Reachable only from [`Reasoner::with_proofs`](reasoner::Reasoner::with_proofs) and
     /// the OWL-DL proof producers, which canonicalize the caller's dataset to bind every
@@ -1341,7 +1341,7 @@ mod tests {
                     Reasoner::with_proofs(
                         &source,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -1424,20 +1424,14 @@ mod tests {
         let complete = FailingSource::new(Arc::clone(&data), false, usize::MAX);
         try_ontology_identity(
             &complete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("complete identity");
         let identity_passes = complete.passes.get();
         assert!(identity_passes > 0);
         DlProofContext::of_ontology(
             &complete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("complete checking context");
 
@@ -1448,7 +1442,7 @@ mod tests {
                 let error = DlProofContext::of_ontology(
                     &source,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

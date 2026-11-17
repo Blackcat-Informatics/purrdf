@@ -40,10 +40,7 @@ fn main() {
     stack
         .seal_head(
             page_rows,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("seal only the head batch");
     assert!(stack.remove(&edge).expect("remove older edge"));
@@ -96,17 +93,14 @@ fn main() {
     let canonical = canonical_paged_seal(
         oracle.as_ref(),
         page_rows,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("independent eager canonical input");
     let folded = current
         .compact(
             PagedQueryLimits::UNBOUNDED,
             page_rows,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("guarded fold");
     assert_eq!(

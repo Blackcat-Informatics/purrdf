@@ -8,6 +8,37 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: canonical output is the nested-refinement labelling.** The
+  default canonicalization family in Rust, Python, WebAssembly, C and the CLI
+  routes to `(nested-refinement-labelling, 1)`. The canonical document is the
+  canonical line sequence spelled as N-Quads 1.2 with decimal blank-node labels
+  (`_:0`, `_:1`), in the order of the sequence, and the canonical digest is the
+  32-byte BLAKE3 digest of that sequence. Every canonical document and digest
+  for a dataset with blank nodes, reifiers, annotations or a declared empty
+  graph changes, and digests change for every dataset. RDFC-1.0 stays a named
+  entry point under `purrdf_core::rdfc12`, and the W3C suite is unchanged; the
+  4.x algorithm stays callable there as the read-side recompute of stored
+  digests. The default entry points no longer refuse the reserved `urn:purrdf:rdfc:`
+  vocabulary. A finite search bound maps onto the engine's limit and a refusal
+  is the typed `limit` outcome (`CanonError::Refused`). PACK writes format
+  version 2 with the line-sequence digest and still reads version 1;
+  `verify_pack` recomputes each version with the function that recorded it.
+  PURREMB writes format version 2, whose certified RDF digest and blank-node
+  target labels come from the labelling, and still reads version 1, which is
+  recomputed with the 4.x function; a 4.x reader refuses a version-2 file as an
+  unsupported version. The 4.x PURREMB reference file stays as `purremb_v1.bin`
+  beside a new `purremb_v2.bin`, and the entail goldens and the proof, product
+  and regime vectors move with the digest. Columnar files record no canonical
+  digest. GTS compaction certificates carry a `refold_canon` field
+  (`rdfc10-sha256` or `nrl1-lines-sha256`, absent meaning `rdfc10-sha256`);
+  `compact_and_certify_versioned` writes `nrl1-lines-sha256`, verifiers
+  recompute with the named function, an unknown value is a typed refusal, and
+  `compose_versioned` refuses certificates that differ. The pack's embedded
+  `stream:contentRefoldDigest` stays RDFC-1.0. A composite literal whose text
+  holds blank-node labels takes part in the labelling as a graph node, so those
+  blank nodes keep their identity in the canonical document. See the
+  [5.0 migration guide](docs/MIGRATION-5.0.md).
+
 - **An unreadable stack floor refuses instead of switching the guard off
   (breaking):** when the operating system would not report a native thread's
   stack bounds (`pthread_getattr_np` and its siblings can fail under memory
@@ -83,6 +114,29 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   closed class-targeted shapes over 18,100 and 181,000 conforming subjects,
   validation retires about 32 percent fewer instructions (0.680 and 0.675 of
   the previous count).
+
+- **Canonical labelling by nested colour refinement:**
+  `purrdf_core::canonical_labelling` labels the blank nodes of a set of typed
+  lines (`quad`, `reifier-binding`, `annotation`, `empty-graph` and the
+  caller's `record`) under the identifier `(nested-refinement-labelling, 1)`.
+  Where the present canonical form searches factorially on a symmetric input,
+  the labelling refines colours, nests on the components that remain, and
+  searches only a cell it cannot split; an input whose every tied cell is one
+  class of interchangeable nodes is labelled with no search at all. The result
+  is typed: each node's position and stable identity, the canonical line
+  sequence with its digest, and a structural record that states whether the
+  input was guaranteed. Every refusal (ill-formed input, a quantity past 64
+  bits, the engine's own limit) is a typed value. `lines_of_view` lowers a
+  dataset view with its records into lines, and `write_label` spells a
+  position as a decimal blank-node label. `compare_view` runs the present
+  form and the labelling over one view under a caller's control, returning the
+  view's own read error, a refusal, or a stop as distinct typed outcomes, and
+  `compare_view_with_memory` does the same with the labelling's working state
+  admitted once, before the engine starts, through the caller's allocation
+  admission. The engine stops a child of a branching call as soon as its
+  certificate is known to be greater than the best so far, and skips a child
+  that a checked automorphism of the call maps onto an explored child. The
+  earlier hidden evaluation module and its example are removed.
 
 - **Cheaper GROUP BY grouping on an unbounded workspace:** a query run with no
   live-memory reservation now hashes each group key once and keeps only the

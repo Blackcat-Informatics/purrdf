@@ -517,10 +517,7 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
             &[],
             pin.step_cap,
             pin.work_cap,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
@@ -584,7 +581,7 @@ fn the_cardinality_only_control_is_a_distinct_ontology_from_the_both_moved_varia
         &[],
         cardinality_only.step_cap,
         cardinality_only.work_cap,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap_or_else(|error| {
         panic!(
@@ -608,7 +605,7 @@ fn the_cardinality_only_control_is_a_distinct_ontology_from_the_both_moved_varia
         &[],
         both_moved.step_cap,
         both_moved.work_cap,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", both_moved.name));
     let both_moved_budget = measurement(both_moved_answer.certificate(), "budget");
@@ -635,10 +632,7 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
             &[],
             pin.step_cap,
             pin.work_cap,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
@@ -673,10 +667,7 @@ fn every_ledgered_search_renders_identically_twice() {
             &[],
             pin.step_cap,
             pin.work_cap,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let again = purrdf_validate::regime::consistency_to_string(
@@ -685,10 +676,7 @@ fn every_ledgered_search_renders_identically_twice() {
             &[],
             pin.step_cap,
             pin.work_cap,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         assert_eq!(

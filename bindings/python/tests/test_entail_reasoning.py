@@ -788,31 +788,29 @@ def test_a_session_records_only_when_asked() -> None:
     entail.check_proof(TAXONOMY, "classify", "", answer, certificate, proof, canonical_search="1000000").value
 
 
-# `<urn:purrdf:rdfc:Animal>` in place of `Animal`: the RDFC-1.0 overlay's own
-# reserved namespace (see `crates/rdf-core/src/ir/canon.rs`). `Cat ⊑ Animal` still
-# holds, so the `Cat`-seeded ⊥-module carries the reserved IRI through.
-_RESERVED_TAXONOMY = (
-    f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <urn:purrdf:rdfc:Animal> .\n"
+# A taxonomy with the 13-node circulant of quadratic residues beside it: the canonical
+# labelling cannot finish the circulant without a search, so the bound "0" trips its
+# typed `limit` refusal. `Cat ⊑ Animal` still holds for the `Cat`-seeded ⊥-module.
+_CIRCULANT_TAXONOMY = (
+    f"<https://example.org/Cat> <{RDFS_SUB_CLASS_OF}> <https://example.org/Animal> .\n"
     f"<https://example.org/tom> <{RDF_TYPE}> <https://example.org/Cat> .\n"
+) + "".join(
+    f"_:v{u} <https://example.org/p> _:v{v} .\n_:v{v} <https://example.org/p> _:v{u} .\n"
+    for u in range(13)
+    for v in range(u + 1, 13)
+    if (v - u) % 13 in {1, 3, 4, 9, 10, 12}
 )
 
 
-def test_extract_module_with_proofs_raises_value_error_naming_the_reserved_iri() -> None:
-    """`Reasoner(data, proofs=True).extract_module(...)` used to ABORT THE PROCESS
-    on a reserved-vocabulary document instead of raising.
-
-    `extract_module_with_proofs` (`purrdf_entail::reasoner::module`) binds the
-    ontology's and the extracted module's own producer-independent identity into the
-    recorded proof term, and both of those canonicalizations used to go through the
-    panicking `purrdf_entail::ontology_identity` ahead of the guarded, typed
-    `extract_module` (`proofs=False`) path. It now goes through the fallible
-    `try_ontology_identity` and raises `ValueError` instead, exactly like the
-    `proofs=False` refusal `test_a_malformed_document_is_an_error_not_an_empty_answer`
-    covers for a different input shape.
-    """
-    session = entail.Reasoner(_RESERVED_TAXONOMY, proofs=True)
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:Animal"):
-        session.extract_module("<https://example.org/Cat>", "bot", canonical_search="1000000").value
+def test_extract_module_with_proofs_raises_value_error_on_the_labelling_limit() -> None:
+    """`Reasoner(data, proofs=True).extract_module(...)` raises `ValueError` for a
+    document the labelling refuses, through the fallible `try_ontology_identity`,
+    where it once aborted the process. The same document completes under another
+    bound; the ordinary taxonomy is covered below."""
+    session = entail.Reasoner(_CIRCULANT_TAXONOMY, proofs=True)
+    with pytest.raises(ValueError, match="labelling refused"):
+        session.extract_module("<https://example.org/Cat>", "bot", canonical_search="0").value
+    session.extract_module("<https://example.org/Cat>", "bot", canonical_search="unlimited").value
 
 
 def test_extract_module_with_proofs_still_admits_the_ordinary_taxonomy() -> None:

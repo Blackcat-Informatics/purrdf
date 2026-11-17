@@ -157,7 +157,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 ed_pack(
                     &input,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 ),
@@ -167,7 +167,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 composite_pack(
                     &input,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 ),
@@ -181,7 +181,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 refold_digest(
                     &original,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -189,7 +189,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 refold_digest(
                     &folded,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -201,7 +201,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                     &pack,
                     &keys(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -229,7 +229,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
             let repack = composite_pack(
                 &pack,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             );
@@ -243,7 +243,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                     &repack,
                     &keys(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -272,7 +272,7 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 &direct,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -286,25 +286,19 @@ fn both_components_and_resolved_typed_keys_are_required() {
     let input = source();
     let pack = composite_pack(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     for byte in [0, 3309] {
         let bad_source = mutate_signature(&input, 1, byte);
         let carried = composite_pack(
             &bad_source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let report = verify_compaction(
             &bad_source,
             &carried,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert!(report.packaging_sig_ok);
@@ -315,10 +309,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &bad_package,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert!(report.signatures_verify);
@@ -331,10 +322,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &wrong,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .signatures_verify
@@ -348,10 +336,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &wrong,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .signatures_verify
@@ -366,10 +351,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &unresolved,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .signatures_verify
@@ -381,10 +363,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &wrong_pack,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -398,10 +377,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &wrong_pack,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -411,10 +387,7 @@ fn both_components_and_resolved_typed_keys_are_required() {
             &input,
             &pack,
             &Keyring::default(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -425,7 +398,7 @@ fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
     let input = source();
     let mut combined = ed_pack(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let mut tail = Writer::with_options(
         "purrdf.gts",
@@ -460,7 +433,7 @@ fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
     }
     let packed = composite_pack(
         &combined,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let final_graph = read(&packed, true, None);
     let selected_roots =
@@ -480,10 +453,7 @@ fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
             &combined,
             &packed,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .all_ok()
@@ -494,7 +464,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
     let input = source();
     let pack = ed_pack(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let mut items = wire::iter_items(&pack).0;
     let first = items[1].1.as_map_mut().unwrap();
@@ -515,10 +485,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             &input,
             &unsigned_index,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -538,10 +505,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             &input,
             &signed,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -587,10 +551,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             &input,
             &wrong_order,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -602,10 +563,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             &input,
             &invalid,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -617,10 +575,7 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             &input,
             &torn,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .packaging_sig_ok
@@ -642,10 +597,7 @@ fn entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds() {
             TIME,
             false,
             CompositePackaging::new(fixed_composite_key(74), "composite-pack".into(), provider),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         assert!(
             result
@@ -660,15 +612,12 @@ fn entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds() {
             &composite_pack(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .all_ok()
@@ -742,13 +691,13 @@ fn malformed_and_ambiguous_carried_nodes_are_never_silently_dropped() {
                     &ed_pack(
                         &input,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None
                         )
                     ),
                     &keys(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -820,15 +769,12 @@ fn literal_class_names_remain_content_and_do_not_fabricate_provenance() {
             &ed_pack(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             ),
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .all_ok()
@@ -891,10 +837,7 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
         assert_eq!(observations.0, folded.signatures);
         let packed = composite_pack(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         assert_eq!(
             compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
@@ -906,7 +849,7 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
                 &packed,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -915,10 +858,7 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
         );
         let repacked = ed_pack(
             &packed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         assert_eq!(
             compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
@@ -930,7 +870,7 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
                 &repacked,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -944,7 +884,7 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
     let input = source();
     let pack = ed_pack(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let packed_graph = read(&pack, true, None);
     let mut writer = Writer::with_layout("purrdf.gts", None);
@@ -983,10 +923,7 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
         assert_eq!(observations.0, folded.signatures);
         let packed = composite_pack(
             &combined,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         assert_eq!(
             compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
@@ -998,7 +935,7 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
                 &packed,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1007,10 +944,7 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
         );
         let repacked = ed_pack(
             &packed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         assert_eq!(
             compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
@@ -1022,7 +956,7 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
                 &repacked,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1071,10 +1005,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
         }
         let packed = composite_pack(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let folded = read(&packed, true, None);
         assert_eq!(folded.diagnostics, [], "{timestamp}");
@@ -1084,7 +1015,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
             refold_digest(
                 &folded,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1092,7 +1023,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
             refold_digest(
                 &original,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1104,7 +1035,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
                 &packed,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1114,10 +1045,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
         );
         let repacked = ed_pack(
             &packed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let refolded = read(&repacked, true, None);
         assert!(refolded.signatures.last().unwrap().packaging);
@@ -1126,7 +1054,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
             refold_digest(
                 &refolded,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1134,7 +1062,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
             refold_digest(
                 &original,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1146,7 +1074,7 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
                 &repacked,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1188,10 +1116,7 @@ fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes(
             timestamp,
             false,
             (fixed_key(73), "ed-pack".into()),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap_err();
         assert!(
@@ -1224,7 +1149,7 @@ fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes(
                 &packed,
                 &keys(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1239,7 +1164,7 @@ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
     let input = source();
     let packed = ed_pack(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let original = read(&packed, true, None);
     let root_quad = original
@@ -1310,10 +1235,7 @@ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
             &input,
             &rebuilt,
             &keys(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         if variant == 0 || variant == 7 {
@@ -1330,7 +1252,7 @@ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
                 false,
                 (fixed_key(73), "ed-pack".into()),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

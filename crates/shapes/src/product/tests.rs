@@ -203,10 +203,7 @@ fn product_of(body: &str) -> Vec<u8> {
     prepare(body)
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable")
 }
@@ -433,10 +430,7 @@ fn admit_installs_host_aggregates() {
         .to_product_with_implementation_identity(
             &ShapesProfile::CORE,
             IMPLEMENTATION_ID,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("representable");
 
@@ -549,10 +543,7 @@ fn a_product_written_for_a_host_restores_under_that_host_s_relations() {
         .to_product_for_host(
             &ShapesProfile::CORE,
             &host,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a product bound to this host is representable");
 
@@ -603,10 +594,7 @@ fn a_product_written_under_a_declared_namespace_restores_only_under_it() {
         .to_product_for_host(
             &ShapesProfile::CORE,
             &host,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a product bound to this host is representable");
 
@@ -674,10 +662,7 @@ fn admit_refuses_a_different_aggregate_registry() {
         .to_product_with_implementation_identity(
             &ShapesProfile::CORE,
             IMPLEMENTATION_ID,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("representable");
 
@@ -770,10 +755,7 @@ fn admit_restores_box_role_vocab() {
     let bytes = PreparedShapes::new(Arc::new(parsed))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("representable");
     let view = ShapesProduct::open(&bytes).expect("opens");
@@ -819,10 +801,7 @@ fn admit_under_none_vocab_restores_none() {
     let bytes = PreparedShapes::new(Arc::new(parsed))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("representable");
     let view = ShapesProduct::open(&bytes).expect("opens");
@@ -975,10 +954,7 @@ fn a_declared_sparql_function_survives_the_round_trip() {
     let bytes = prepare(SPARQL_FN_SHAPES)
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a sh:SPARQLFunction declaration is representable");
     let admitted = ShapesProduct::open(&bytes)
@@ -1029,10 +1005,7 @@ fn a_declaration_the_model_does_not_reach_is_carried() {
     let bytes = document
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a declaration called only from SPARQL text is representable");
     let admitted = ShapesProduct::open(&bytes)
@@ -1102,7 +1075,7 @@ fn certify_is_not_reachable_from_admit() {
     ShapesProduct::open(&bytes)
         .expect("opens")
         .certify(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("a freshly written product certifies");
@@ -1137,7 +1110,7 @@ fn certify_is_not_reachable_from_admit() {
     let error = ShapesProduct::open(&tampered)
         .expect("opens")
         .certify(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect_err("certification recomputes, so it sees what admission cannot");
@@ -1336,10 +1309,7 @@ fn disagreeing_carriers_refuse() {
     let bytes = PreparedShapes::new(Arc::new(shapes))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("representable");
 
@@ -1400,7 +1370,7 @@ fn included_graphs_are_bound_by_the_identity() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

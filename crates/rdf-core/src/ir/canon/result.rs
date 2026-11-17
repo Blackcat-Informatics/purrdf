@@ -13,7 +13,7 @@ use crate::{DatasetView, TermId, ViewTermId};
 struct Fields<Id> {
     nquads: String,
     labels: Vec<(Id, String)>,
-    presentation: CanonPresentation,
+    presentation: Option<CanonPresentation>,
 }
 
 /// The result of canonicalizing a dataset or a view of one.
@@ -29,11 +29,17 @@ pub struct Canonicalized<Id = TermId> {
 }
 
 impl<Id: ViewTermId> Canonicalized<Id> {
-    /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
-    /// lines sorted bytewise ascending and deduplicated. Blanks render as their
-    /// canonical `_:c14nN` label.
+    /// The canonical N-Quads document: every line `'\n'`-terminated.
     ///
-    /// What a reifier or annotation row renders AS depends on
+    /// For the default family ([`Self::presentation`] is `None`) it is the
+    /// canonical line sequence of the nested-refinement labelling spelled as
+    /// N-Quads 1.2, one text line per statement line in the order of the
+    /// sequence (not the bytewise order of the text), each blank node `_:` and
+    /// its position in decimal. For the RDFC-1.0 family (`rdfc12`) it is the
+    /// set of lines sorted bytewise ascending and deduplicated, each blank node
+    /// its `_:c14nN` label.
+    ///
+    /// What an RDFC-1.0 reifier or annotation row renders AS depends on
     /// [`Self::presentation`], reported alongside this document rather than left
     /// implicit: under [`CanonPresentation::Overlay`] such a row renders through
     /// the profile's reserved `urn:purrdf:rdfc:` sentinels; under
@@ -51,22 +57,25 @@ impl<Id: ViewTermId> Canonicalized<Id> {
         &self.payload.nquads
     }
 
-    /// Which [`CanonPresentation`] produced [`Self::nquads`] — the fourth of the
-    /// consumer pin's four coordinates `(profile, version, presentation, hash)`
-    /// (`docs/RDF12-CANON-PROFILE.md` §9), now readable off the result itself
-    /// rather than only inferable from which entry point the caller happened to
-    /// call. [`try_canonicalize`](super::try_canonicalize), [`try_canonicalize_view`](super::try_canonicalize_view),
+    /// Which RDFC-1.0 [`CanonPresentation`] produced [`Self::nquads`], or `None`
+    /// when the document is the canonical line sequence of the
+    /// nested-refinement labelling, which has one presentation
+    /// ([`CANON_PRESENTATION_LINES_ID`](crate::ir::CANON_PRESENTATION_LINES_ID)).
+    /// Only the functions of [`crate::rdfc12`] report a presentation. Where
+    /// present, it is the fourth of the legacy consumer pin's four coordinates
+    /// `(profile, version, presentation, hash)`. [`try_canonicalize`](super::try_canonicalize), [`try_canonicalize_view`](super::try_canonicalize_view),
     /// [`try_canonicalize_graph_view`](super::try_canonicalize_graph_view) and their kin always report
     /// [`CanonPresentation::Overlay`]; [`try_canonicalize_flat_view`](super::try_canonicalize_flat_view),
     /// [`try_canonicalize_flat_graph_view`](super::try_canonicalize_flat_graph_view) and the empty-selection cases of both
     /// families always report the presentation of the family that produced them.
     #[must_use]
-    pub fn presentation(&self) -> CanonPresentation {
+    pub fn presentation(&self) -> Option<CanonPresentation> {
         self.payload.presentation
     }
 
-    /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
-    /// the leading `_:`. The ids are those of the view that was canonicalized and
+    /// Each blank id mapped to its canonical label WITHOUT the leading `_:`:
+    /// its position in decimal (`"0"`, …) for the default family, `"c14n0"`, …
+    /// for the RDFC-1.0 family. The ids are those of the view that was canonicalized and
     /// are meaningful only within it.
     ///
     /// This assignment is the PRINCIPLED blank-label assignment: the labels are issued
@@ -123,6 +132,21 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> ResultBuilder<Id, E> {
     pub(super) fn new<D: DatasetView<Id = Id, ReadError = E>>(
         view: &D,
         presentation: CanonPresentation,
+    ) -> Result<Self, CanonError<E>> {
+        Self::with_presentation(view, Some(presentation))
+    }
+
+    /// A builder for the document of the nested-refinement labelling, which
+    /// has no RDFC-1.0 presentation.
+    pub(super) fn lines<D: DatasetView<Id = Id, ReadError = E>>(
+        view: &D,
+    ) -> Result<Self, CanonError<E>> {
+        Self::with_presentation(view, None)
+    }
+
+    fn with_presentation<D: DatasetView<Id = Id, ReadError = E>>(
+        view: &D,
+        presentation: Option<CanonPresentation>,
     ) -> Result<Self, CanonError<E>> {
         Ok(Self {
             fields: Fields {

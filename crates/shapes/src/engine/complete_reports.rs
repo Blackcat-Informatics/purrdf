@@ -39,10 +39,7 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let restored = ShapesProduct::open(&bytes)
@@ -57,7 +54,7 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -98,7 +95,7 @@ fn restored_occurrence_cache_reuses_authenticated_source_and_warm_clone_identity
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

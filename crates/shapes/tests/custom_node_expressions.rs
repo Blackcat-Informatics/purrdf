@@ -1702,10 +1702,7 @@ fn prepared_and_restored_callback_requests_agree_in_complete_reports() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let options = ValidationOptions::default()
@@ -1763,10 +1760,7 @@ fn selected_list_function_arity_survives_preparation_and_restore() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let options = ValidationOptions::default().with_profile(ShaclProfile::ED_20261106);

@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, CanonHash, DatasetView, GlobalTermId, QuadIds, RdfTextDirection,
-    SegmentedBuildLimits, SegmentedBuilder, SegmentedReadLimits, SegmentedSession, TermValue,
-    try_canonicalize_flat_view,
+    BlankScope, DatasetView, GlobalTermId, QuadIds, RdfTextDirection, SegmentedBuildLimits,
+    SegmentedBuilder, SegmentedReadLimits, SegmentedSession, TermValue,
+    try_canonicalize_checked_view,
 };
 use purrdf_rdf::{NativeRdfFormat, parse_dataset, serialize_dataset_to_format};
 
@@ -106,10 +106,9 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
         .export_trig_lines(&mut purrdf_core::sink::WriterDrain(&mut bytes))
         .unwrap();
     assert!(streamed.evidence().evictions() > 0);
-    let canonical_owner = try_canonicalize_flat_view(
+    let canonical_owner = try_canonicalize_checked_view(
         &streamed,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let canonical = canonical_owner.nquads();
@@ -124,13 +123,9 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
         .unwrap();
     assert!(parsed.quads().all(|quad| quad.g != Some(empty)));
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             parsed.as_ref(),
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
@@ -140,13 +135,9 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
     let reparsed = parse_dataset(&native.bytes, "application/trig", None).unwrap();
     assert_eq!(reparsed.named_graphs().count(), 2);
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             reparsed.as_ref(),
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
@@ -157,13 +148,9 @@ fn persistent_trig_roundtrip_preserves_rdf12_streams_and_empty_graphs() {
     let final_read = parse_dataset(&reexport.bytes, "application/trig", None).unwrap();
     assert_eq!(final_read.named_graphs().count(), 2);
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             final_read.as_ref(),
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),

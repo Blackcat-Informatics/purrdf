@@ -1343,7 +1343,7 @@ fn statement_scan_defaults_remain_visible_in_explain() {
     let dataset = statement_claims(64);
     let bytes = PackBuilder::build_view_bytes(
         dataset.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let pack = PackView::from_bytes(&bytes).unwrap();

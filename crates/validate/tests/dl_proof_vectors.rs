@@ -8,7 +8,7 @@ fn all_shared_dl_proof_vectors_match_the_current_native_boundary() {
     let cases = purrdf_validate::regime::dl_proof_golden_vectors().unwrap();
     assert_eq!(cases.len(), 17, "the complete service and schema inventory");
     purrdf_validate::regime::check_dl_proof_golden_vectors(
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
 }
@@ -62,7 +62,7 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     "consistency",
                     "",
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -81,7 +81,7 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                 produced.certificate(),
                 produced.proof_document(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -97,7 +97,7 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     produced.certificate(),
                     produced.proof_document(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     ),
                 )
@@ -114,7 +114,7 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     produced.certificate(),
                     &forged,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     ),
                 )
@@ -133,7 +133,7 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     produced.certificate(),
                     produced.proof_document(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     ),
                 )
@@ -189,7 +189,7 @@ fn positive_limits_preserve_strict_fields_and_original_integer_failure() {
 }
 
 fn positive_transport_checks_complete_operands_and_retains_revision_caps() {
-    use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
+    use purrdf_core::{CANON_CORPUS_POLICY, CanonicalizationControl};
     use purrdf_lex::json::{self, Limits};
     use purrdf_validate::regime::{
         PositiveReasonerSession, decode_dl_proof, positive_limits_from_json,
@@ -201,7 +201,7 @@ fn positive_transport_checks_complete_operands_and_retains_revision_caps() {
     )
     .unwrap();
     let field = |name| vector.get(name).unwrap().as_str().unwrap();
-    let control = || CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let control = || CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
     let open = |source, steps, work| {
         PositiveReasonerSession::open_with_proofs(
             source,

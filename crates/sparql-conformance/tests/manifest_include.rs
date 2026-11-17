@@ -206,7 +206,7 @@ fn an_aggregator_over_an_empty_group_is_refused_and_names_the_child() {
 #[test]
 fn an_index_named_like_a_discovered_manifest_is_run_only_through_its_members() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     {
         let index = fixture("index/manifest.ttl");

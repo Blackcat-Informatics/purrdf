@@ -28,7 +28,7 @@ fn derived() -> (DlProof, DlProofContext<'static>) {
     let dataset = fixture.freeze();
     let reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = reasoner.consistency();
@@ -144,7 +144,7 @@ fn schema_layout_without_its_evidence_is_not_a_second_encoding_of_a_legacy_proof
     let dataset = shared_schema(1, 0, false);
     let reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = reasoner.consistency();
@@ -211,7 +211,7 @@ fn refusing_native_support_keeps_search_parity_and_a_typed_incomplete_proof() {
     let plain = Reasoner::new(&dataset).unwrap().consistency();
     let mut refused = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     refused.set_schema_recording_budget(crate::reasoner::SchemaPreparationBudget {
@@ -341,10 +341,7 @@ fn retained_schema_proof_clones_release_their_original_allocations_after_the_con
     {
         let reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = reasoner.consistency();
@@ -358,7 +355,7 @@ fn retained_schema_proof_clones_release_their_original_allocations_after_the_con
                 Some(answer.certificate()),
                 &context,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

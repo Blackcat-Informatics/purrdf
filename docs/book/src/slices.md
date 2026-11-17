@@ -44,14 +44,14 @@ every public entry point.
 ```rust,no_run
 use std::path::Path;
 use purrdf::slice::{SliceCatalog, SliceVocab};
-use purrdf::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
+use purrdf::{CanonicalizationControl, CANON_CORPUS_POLICY};
 
 // Your vocabulary namespace — PurRDF fabricates none.
 let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
 assert_eq!(vocab.slice_class(), "https://example.org/vocab/Slice");
 
 // Discover each manifest.ttl below the caller's slices directory.
-let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
 let catalog = SliceCatalog::discover(Path::new("slices"), vocab, &mut control)
     .expect("slices discovered");
 for slice in catalog.records() {

@@ -64,7 +64,7 @@
 //! into the document table and into both fingerprints. Two isomorphic datasets
 //! parsed from differently labelled sources produce **different** document ids
 //! and **different** fingerprints. This crate does not canonicalize blank nodes
-//! (that is `purrdf-core`'s RDFC-1.0 canonicalizer, a much more expensive
+//! (that is `purrdf-core`'s canonicalizer, a much more expensive
 //! operation with its own contract), so the honest statement is: ids and digests
 //! are a pure function of the dataset's *terms*, which for blank nodes includes
 //! their labels. The crate's test suite pins this with an adversarial test

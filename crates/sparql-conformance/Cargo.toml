@@ -22,7 +22,7 @@ path = "src/lib.rs"
 # The engine under test + its algebra front-end.
 purrdf-sparql-eval = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
-# Native Turtle/TriG/N-Quads loader (parse_dataset) + RDFC-1.0 canonicalization,
+# Native Turtle/TriG/N-Quads loader (parse_dataset) + canonicalization,
 # both native.
 purrdf = { workspace = true }
 purrdf-core = { workspace = true }

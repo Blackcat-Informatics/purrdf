@@ -357,10 +357,7 @@ fn okf_structured_numbers_read_and_write_back_correctly_rounded() {
         datasets_isomorphic(
             &dataset,
             &reread,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );

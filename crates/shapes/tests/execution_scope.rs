@@ -376,19 +376,13 @@ ex:PersonRule a sh:NodeShape ;
     assert_eq!(
         purrdf_rdf::canonical_flat_nquads(
             entailed.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical")
         .nquads(),
         purrdf_rdf::canonical_flat_nquads(
             baseline.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("canonical")
         .nquads(),

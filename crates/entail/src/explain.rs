@@ -938,11 +938,8 @@ impl Justification {
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<[u8; 32], purrdf_core::CanonError> {
-        purrdf_core::try_canonical_blake3_view(
-            &*self.ontology,
-            purrdf_core::CanonHash::Sha256,
-            control,
-        )
+        purrdf_core::try_canonical_digest_view(&*self.ontology, control)
+            .map(purrdf_hash::hex::Digest32::into_bytes)
     }
 
     /// The justification identity as lowercase hexadecimal, retaining execution evidence.
@@ -1269,6 +1266,16 @@ impl Axioms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
     use purrdf_core::RdfDatasetBuilder;
 
     /// `rdf:type`.
@@ -1335,10 +1342,7 @@ mod tests {
         // Named, not merely counted: the chain, and not the sibling or the instance.
         let lines: BTreeSet<String> = purrdf_core::try_canonicalize(
             justification.ontology(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         .nquads()
@@ -1506,13 +1510,13 @@ mod tests {
         assert_eq!(
             first
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             second
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -1520,7 +1524,7 @@ mod tests {
         assert_eq!(
             first
                 .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -1531,14 +1535,14 @@ mod tests {
             purrdf_hash::hex::encode(
                 &first
                     .digest(&mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     ))
                     .unwrap()
             ),
             first
                 .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -1556,13 +1560,13 @@ mod tests {
         assert_eq!(
             other
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             first
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -1580,13 +1584,13 @@ mod tests {
         assert_ne!(
             assertion
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap(),
             first
                 .digest(&mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ))
                 .unwrap()
@@ -1595,34 +1599,31 @@ mod tests {
 
     #[test]
     fn justification_identity_preserves_the_original_canonicalization_refusal() {
-        let ontology = dataset(&[(CAT, SUB, purrdf_core::RESERVED_NAMESPACE)]);
+        let ontology = dataset(&[(CAT, SUB, purrdf_core::rdfc12::RESERVED_NAMESPACE)]);
         let axiom = DlAxiom::SubClassOf {
             sub: TermValue::iri(CAT),
-            sup: TermValue::iri(purrdf_core::RESERVED_NAMESPACE),
+            sup: TermValue::iri(purrdf_core::rdfc12::RESERVED_NAMESPACE),
         };
         let justification = justify(&ontology, &axiom).expect("the stated axiom is entailed");
         let original = purrdf_core::try_canonicalize(
             justification.ontology(),
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
+                purrdf_core::CANON_CORPUS_POLICY,
+                Some(&Latched),
             ),
         )
         .unwrap_err();
-        assert!(matches!(
-            &original,
-            purrdf_core::CanonError::ReservedVocabulary(_)
-        ));
+        assert!(matches!(&original, purrdf_core::CanonError::Stopped));
         let digest_refusal = justification
             .digest(&mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
+                purrdf_core::CANON_CORPUS_POLICY,
+                Some(&Latched),
             ))
             .unwrap_err();
         let text_refusal = justification
             .digest_hex(&mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
+                purrdf_core::CANON_CORPUS_POLICY,
+                Some(&Latched),
             ))
             .unwrap_err();
         drop(justification);

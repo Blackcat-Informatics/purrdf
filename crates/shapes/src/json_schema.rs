@@ -8577,10 +8577,7 @@ mod tests {
         .expect("ontology Turtle");
         compile_schema(
             &SchemaCompileRequest::new(&shapes, &fixture_ns(), ontology.as_ref(), mode),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("ontology schema compilation")
     }
@@ -8749,7 +8746,7 @@ mod tests {
             let error = compile_schema(
                 &SchemaCompileRequest::new(&shapes, &fixture_ns(), ontology.as_ref(), mode),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -8987,7 +8984,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("shaped key");
@@ -8998,7 +8995,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("shuffled key");
@@ -9013,7 +9010,7 @@ mod tests {
             SchemaSurfaceMode::OntologyComplete,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("complete key");
@@ -9026,7 +9023,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("changed ontology key");
@@ -9042,7 +9039,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("changed shapes key");
@@ -9063,7 +9060,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("changed namespace key");
@@ -9084,7 +9081,7 @@ mod tests {
             SchemaSurfaceMode::ShapedOnly,
         )
         .compilation_key(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            purrdf_core::CANON_CORPUS_POLICY,
             None,
         ))
         .expect("value-vocabulary key");
@@ -9250,10 +9247,7 @@ mod tests {
                 ontology.as_ref(),
                 SchemaSurfaceMode::ShapedOnly,
             ),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("shaped-only request");
         assert_eq!(legacy.schema_json, requested.compiled.schema_json);
@@ -9457,10 +9451,7 @@ mod tests {
                 ontology.as_ref(),
                 SchemaSurfaceMode::OntologyComplete,
             ),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("a class named after a reserved key is disambiguated, not a collision");
         let schema = schema_of(&compilation.compiled);
@@ -11790,7 +11781,7 @@ mod tests {
                     mode,
                 ),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -11837,7 +11828,7 @@ mod tests {
                     mode,
                 ),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

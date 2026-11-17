@@ -148,7 +148,7 @@ fn canonical_ntriples(text: &str) -> purrdf_core::Canonicalized {
     .expect("parse expected graph");
     try_canonicalize(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
 }
@@ -180,7 +180,7 @@ fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), Str
             let native_owner = try_canonicalize(
                 &native_graph,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

@@ -8,8 +8,14 @@ English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
 **Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
+**Standing in 5.0.** The default canonical output of PurRDF is no longer this
+profile: it is the canonical line sequence of the nested-refinement labelling
+(see the [5.0 migration guide](MIGRATION-5.0.md)). This profile stays callable,
+under `purrdf_core::rdfc12`, as the read-side recompute of every digest recorded
+before 5.0, and its identifier, version and vectors below are unchanged.
+
 Both values are readable from the library rather than only from this document —
-`purrdf_core::CANON_PROFILE_ID` and `purrdf_core::CANON_PROFILE_VERSION` — so a
+`purrdf_core::rdfc12::CANON_PROFILE_ID` and `purrdf_core::rdfc12::CANON_PROFILE_VERSION` — so a
 consumer can assert that the build it linked is the profile it pinned.
 
 ## Abstract
@@ -163,13 +169,13 @@ blank wiring genuinely differs canonicalize differently.
 
 Every admitted RDF 1.2 statement layer has, in addition to the §3 rendering above, a
 second SPELLING: the **flat assertion presentation**, exported as
-`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` /
-`purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` and reached through
+`purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` /
+`purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` and reached through
 `purrdf_core::try_canonicalize_flat_view` and its `_flat_` siblings
 (`try_canonicalize_flat_graph_view`, `check_admissible_flat_view`,
 `try_flat_digest_view`, `try_flat_blake3_view`). The rendering of §3 is itself a named presentation too,
-exported as `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` /
-`purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
+exported as `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` /
+`purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION`, and every entry point named
 WITHOUT a `flat` infix (`try_canonicalize`, `try_canonicalize_view`,
 `try_canonicalize_graph_view`, …) pins it.
 
@@ -410,7 +416,7 @@ Every search-performing entry point requires a caller-owned
 `CanonicalizationControl`. Its `SearchPolicy` is either `Finite(u64)` or
 `Unlimited`; there is no implicit finite ceiling or default policy. The historical
 `RDFC_V2_CORPUS_POLICY` value is available only as an explicitly selected finite value,
-including when checking the unchanged version 2 frozen corpus.
+including when checking the frozen corpus.
 
 RDFC charging law version 1 charges one event on entering an n-degree frame and
 one for every permutation attempt, including a subsequently pruned permutation.
@@ -487,19 +493,6 @@ diagnostic message — does not increment it. That restraint is what makes the
 number worth pinning: a version that changed on every release would tell a
 consumer nothing.
 
-### 7.1 History
-
-| Version | Change |
-|---|---|
-| 1 | initial profile |
-| 3 | §6 requires explicit caller-selected finite or unlimited search policy and measured execution evidence; successful bytes are unchanged |
-| 2 | §5 narrowed: the two quad shapes §3 lowers into are **folded** back into the statement layer rather than refused, making canonicalization idempotent over its own output (§3.1) |
-
-Version 2 moved **no** bytes: every input version 1 admitted canonicalizes to
-exactly the bytes version 1 produced. What changed is the refusal rule, and a
-refusal is part of the contract a consumer pinned — two inputs version 1 refused
-now canonicalize — so §7's third bullet obliges the increment on its own.
-
 ## 8. Normative vector corpus
 
 The corpus lives at `vectors/rdf12-canon/` and is **frozen**: every payload byte is
@@ -507,7 +500,7 @@ covered by a SHA-256 manifest checked on every build
 (`scripts/check-corpus-frozen.py`), so a silently edited expectation fails rather
 than passes.
 
-Under explicitly selected `RDFC_V2_CORPUS_POLICY`, it carries both halves of the version 2 contract — goldens that must canonicalize to exact
+Under explicitly selected `RDFC_V2_CORPUS_POLICY`, it carries both halves of this profile's contract — goldens that must canonicalize to exact
 bytes, and poison cases that must be refused with an exact error discriminant,
 including §5.3's named position. Two of its cases sit on the §3.1 boundary from the
 admitted side: each writes out one of the two folded shapes as an ordinary quad and
@@ -516,7 +509,7 @@ than asserted, and it cannot silently widen or close. See
 `vectors/rdf12-canon/README.md` for the case inventory and the file format.
 
 The corpus has its own content-addressed identity, exported as
-`purrdf_core::CANON_CORPUS_DIGEST` and asserted by the harness, so a consumer can
+`purrdf_core::rdfc12::CANON_CORPUS_DIGEST` and asserted by the harness, so a consumer can
 pin **(profile id, profile version, corpus digest)** and verify all three against
 the artifact it actually linked.
 
@@ -528,11 +521,11 @@ artifact it actually linked:
 
 | Field | Source |
 |---|---|
-| profile id | `purrdf_core::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile version | `purrdf_core::CANON_PROFILE_VERSION` → `2` |
-| presentation | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
+| profile id | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
+| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
+| presentation | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
 | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
-| corpus digest | `purrdf_core::CANON_CORPUS_DIGEST` (§8) |
+| corpus digest | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST` (§8) |
 | release | the tagged release the above were read from |
 
 Running the corpus of §8 against a linked build turns that pin into a receipt: it

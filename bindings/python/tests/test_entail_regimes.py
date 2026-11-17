@@ -477,44 +477,34 @@ def test_malformed_input_raises_value_error() -> None:
         RdfDataset("this is not n-quads\n", RdfFormat.N_QUADS)
 
 
-# `<urn:purrdf:rdfc:reifies>` as a predicate whose OBJECT is a plain IRI (not a
-# quoted triple term) is not one of the two exact shapes the canonicalization
-# overlay itself lowers (see `crates/rdf-core/src/ir/canon.rs`), so a closure
-# carrying it is refused rather than silently canonicalized — accepting it would let
-# a structurally different graph canonicalize to the exact bytes a genuine reifier
-# binding would.
-_RESERVED_PREDICATE_PLAIN_OBJECT = (
-    "<https://example.org/r> <urn:purrdf:rdfc:reifies> <https://example.org/o> .\n"
-)
-
-# The valid neighbour: an ORDINARY predicate adjacent to the reserved namespace (a
-# DIFFERENT `urn:purrdf:` sub-namespace, not `urn:purrdf:rdfc:`) in the exact same
-# shape. Over-refusal is the mirror bug of silent acceptance, so this must still
-# materialize, with the IRI surviving byte-for-byte into the closure.
-_NEIGHBOURING_ORDINARY_PREDICATE = (
-    "<https://example.org/r> <urn:purrdf:other:annotation> <https://example.org/o> .\n"
+# The 13-node circulant of quadratic residues, in both directions: the canonical
+# labelling cannot finish it without a search, so the bound "0" trips its typed
+# `limit` refusal and "unlimited" completes it.
+_CIRCULANT = "".join(
+    f"_:v{u} <https://example.org/p> _:v{v} .\n_:v{v} <https://example.org/p> _:v{u} .\n"
+    for u in range(13)
+    for v in range(u + 1, 13)
+    if (v - u) % 13 in {1, 3, 4, 9, 10, 12}
 )
 
 
-def test_a_reserved_vocabulary_closure_raises_value_error_naming_it() -> None:
+def test_a_closure_the_labelling_refuses_raises_value_error_as_a_value() -> None:
     """The materialized closure is caller-supplied content too: refuse as a value.
 
     `materialize_nt` routes the closure through `purrdf_validate::regime`'s typed,
     non-panicking canonicalization entry point rather than the panicking wrapper —
     before that migration this surface aborted the process instead of raising.
     """
-    with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
-        entail.materialize_nt(
-            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
-        ).value
+    with pytest.raises(ValueError, match="labelling refused"):
+        entail.materialize_nt(_CIRCULANT, entail.Regime.SIMPLE, "", [], [], canonical_search="0").value
 
 
-def test_an_ordinary_closure_neighbouring_the_reserved_iri_still_materializes() -> None:
-    """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
+def test_the_same_closure_materializes_under_another_bound() -> None:
+    """The refusal above is the input's under that bound, not an over-refusal."""
     closed_nquads, _report = entail.materialize_nt(
-        _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
+        _CIRCULANT, entail.Regime.SIMPLE, "", [], [], canonical_search="unlimited"
     ).value
-    assert "urn:purrdf:other:annotation" in closed_nquads, closed_nquads
+    assert closed_nquads.startswith("_:0 "), closed_nquads
 
 
 def test_unknown_regime_spelling_names_the_accepted_set() -> None:

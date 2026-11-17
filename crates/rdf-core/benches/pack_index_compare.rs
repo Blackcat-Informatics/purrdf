@@ -126,7 +126,7 @@ fn bench_pack_index_hypothesis(c: &mut Bench) {
     let dataset = build_dataset(&triples);
     let pack_bytes = PackBuilder::build_bytes(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("reference dataset packs");
     let pack = PackView::from_bytes(&pack_bytes).expect("reference pack opens");
@@ -265,7 +265,7 @@ fn bench_pack_index_hypothesis(c: &mut Bench) {
                     PackBuilder::build_bytes(
                         &dataset,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )

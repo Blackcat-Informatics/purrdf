@@ -1649,7 +1649,7 @@ fn keystone_delta_carrier(
 #[test]
 fn a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface() {
     let mut canonical =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
     let base = base_dataset();
     let contribution = contribution_dataset();
     let delta = keystone_delta(&base);

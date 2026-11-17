@@ -24,10 +24,7 @@ fn assert_expansion(xml: &str, expected: &str) {
         datasets_isomorphic(
             &actual,
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("graph comparison"),
         "membership expansion differs for {xml}"
