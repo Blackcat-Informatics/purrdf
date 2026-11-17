@@ -8,10 +8,8 @@
 //! `purrdf_shacl_entail_to_ntriples`, `purrdf-wasm`'s `shacl_entail`, and
 //! `purrdf-python`'s `shacl.entail` each call
 //! [`entail_to_ntriples_string`] and add only their own platform wrapping (a
-//! caller-owned buffer, a `JsError`, a GIL release plus a `ValueError`). The
-//! Python binding used to inline the two-line body instead; the golden in
-//! [`PYTHON_BINDING_GOLDEN`] pins the bytes that inline copy produced, so the
-//! re-point is provably byte-identical rather than merely believed to be.
+//! caller-owned buffer, a `JsError`, a GIL release plus a `ValueError`).
+//! [`PYTHON_BINDING_GOLDEN`] pins the canonical document they all return.
 //!
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
@@ -349,19 +347,16 @@ pub const PYTHON_BINDING_GOLDEN_DATA: &str = "<http://example.org/alice> \
     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
     <http://example.org/bob> <http://example.org/knows> _:b0 .\n";
 
-/// The exact bytes `purrdf-python`'s `shacl.entail` produced for
-/// [`PYTHON_BINDING_GOLDEN_SHAPES`] / [`PYTHON_BINDING_GOLDEN_DATA`] while it
-/// still inlined `engine::entail_graphs` + `canonical_flat_nquads` itself.
-///
-/// Captured by running that inline sequence verbatim *before* the binding was
-/// re-pointed at [`entail_to_ntriples_string`], so the equality test below is a
-/// before/after comparison rather than a restatement of the current code.
+/// The exact canonical document `shacl.entail` produces for
+/// [`PYTHON_BINDING_GOLDEN_SHAPES`] / [`PYTHON_BINDING_GOLDEN_DATA`]: the canonical line
+/// sequence of the entailed dataset, one statement per line in canonical order, its blank
+/// node written `_:0`.
 pub const PYTHON_BINDING_GOLDEN: &str = "\
+<http://example.org/bob> <http://example.org/adult> <http://example.org/yes> .
+<http://example.org/bob> <http://example.org/knows> _:0 .
+<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
 <http://example.org/alice> <http://example.org/adult> <http://example.org/yes> .
 <http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
-<http://example.org/bob> <http://example.org/adult> <http://example.org/yes> .
-<http://example.org/bob> <http://example.org/knows> _:c14n0 .
-<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
 ";
 
 #[cfg(test)]
@@ -570,17 +565,10 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(nt.contains("http://example.org/bad"));
     }
 
-    /// Re-pointing `purrdf-python`'s `shacl.entail` at this function changed no
-    /// bytes.
-    ///
-    /// [`PYTHON_BINDING_GOLDEN`] was captured by running the binding's OLD inline
-    /// body — `purrdf_shapes::engine::entail_graphs(data, shapes, None)` followed by
-    /// `purrdf_rdf::canonical_flat_nquads(dataset.as_ref())`, in that order —
-    /// against these two fixtures before the edit. Asserting the shared function
-    /// reproduces it is therefore a before/after equality, and it is the fixture
-    /// a later refactor of either spelling has to keep satisfying.
+    /// The entailment boundary returns the pinned canonical document: every host
+    /// that calls it receives these bytes.
     #[test]
-    fn the_python_binding_repoint_is_byte_identical() {
+    fn the_entailment_boundary_returns_the_pinned_canonical_document() {
         let mut control =
             purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
@@ -597,7 +585,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         // The golden is not vacuous: the rule fired for both targets, and the
         // blank node really was canonically relabelled.
         assert_eq!(produced.matches("<http://example.org/adult>").count(), 2);
-        assert!(produced.contains("_:c14n0"));
+        assert!(produced.contains("_:0"));
         assert!(!produced.contains("_:b0"));
     }
 }

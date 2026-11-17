@@ -1577,7 +1577,8 @@ fn render_term(value: &TermValue, out: &mut String) {
 
 /// A total, deterministic rendering of the whole egress model.
 ///
-/// Graphs go through the RDFC-1.0 canonicalizer, which is what makes a `CONSTRUCT` case
+/// Graphs go through the RDFC-1.0 canonicalizer (`rdfc12`), the form this frozen corpus
+/// pins, which is what makes a `CONSTRUCT` case
 /// comparable at all: two runs may legitimately label a fresh blank differently, and
 /// canonical N-Quads is the byte form in which they must nevertheless agree. It also
 /// lowers the RDF 1.2 statement layer, so a reifier in a constructed graph appears in the
@@ -1590,7 +1591,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
         SparqlResult::Graph(graph) => {
             out.push_str("graph\n");
             out.push_str(
-                purrdf_core::try_canonicalize(
+                purrdf_core::rdfc12::try_canonicalize(
                     graph,
                     &mut purrdf_core::CanonicalizationControl::new(
                         purrdf_core::CANON_CORPUS_POLICY,
@@ -1628,7 +1629,7 @@ fn render_result(result: &SparqlResult, out: &mut String) {
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
                 out.push_str(
-                    purrdf_core::try_canonicalize(
+                    purrdf_core::rdfc12::try_canonicalize(
                         aux,
                         &mut purrdf_core::CanonicalizationControl::new(
                             purrdf_core::CANON_CORPUS_POLICY,
