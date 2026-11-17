@@ -1342,8 +1342,8 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       # The test lane's `lib` shard dependency build, restored and never re-saved: the
-      # module build and the emitter oracle's cargo run share most dependency units
-      # with it, and no new cache entry competes for the repository's quota.
+      # module build shares most dependency units with it, and no new cache entry
+      # competes for the repository's quota.
       - name: Restore the workspace test lane's dependency build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
