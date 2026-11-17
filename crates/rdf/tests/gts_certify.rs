@@ -1563,11 +1563,7 @@ fn an_nrl1_certificate_is_verified_with_the_canonicalization_it_names() {
     );
 
     let bytes = versioned.to_canonical_cbor();
-    let hex = bytes.iter().fold(String::new(), |mut hex, b| {
-        use std::fmt::Write as _;
-        write!(hex, "{b:02x}").expect("a string accepts a write");
-        hex
-    });
+    let hex = purrdf_hash::hex::encode(&bytes);
     purrdf_testkit::assert_golden!(
         "certificate_nrl1_lines_sha256.cbor.hex",
         &format!("{hex}\n")
