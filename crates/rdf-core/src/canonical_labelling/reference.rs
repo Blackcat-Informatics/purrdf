@@ -544,7 +544,7 @@ impl<'a> Engine<'a> {
                 .iter()
                 .zip(y.encoding())
                 .position(|(p, q)| p != q)
-                .map_or(x.encoding().len(), |i| i + 1);
+                .map_or_else(|| x.encoding().len(), |i| i + 1);
             self.comparison_units += (read as u64).div_ceil(8);
             let order = x.encoding().cmp(y.encoding());
             if order != Ordering::Equal {
@@ -1661,7 +1661,7 @@ pub(crate) fn assemble(
     let mut groups: Vec<Factor> = Vec::new();
     let mut traces = Vec::new();
     let mut totals: BTreeMap<[u8; 32], u64> = BTreeMap::new();
-    for l in labellings.iter() {
+    for l in labellings {
         *totals.entry(l.identity).or_default() += 1;
     }
     let mut seen: BTreeMap<[u8; 32], u64> = BTreeMap::new();
