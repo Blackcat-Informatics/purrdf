@@ -47,6 +47,7 @@ mod view;
 mod view_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
+pub(crate) use document::write_line_with;
 pub use document::{DocumentError, write_document, write_line};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
 pub use view::{

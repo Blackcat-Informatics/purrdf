@@ -12,8 +12,8 @@
 //! escape's mechanical rewrite of, say, a JSON-LD `_:has space` — rewrites the
 //! dataset first, with one of two explicit, deterministic operations:
 //!
-//! - [`super::canon::canonical_relabel`]: relabel every blank to its canonical
-//!   `c14n{n}` label (ASCII alphanumerics — legal in every alphabet).
+//! - [`crate::canonical_relabel`]: relabel every blank to its canonical
+//!   decimal label (its position: a legal `BLANK_NODE_LABEL`).
 //! - [`skolemize`]: replace every blank node with an IRI under the
 //!   caller-supplied authority's `/.well-known/genid/` space, per the RDF 1.2
 //!   *Replacing Blank Nodes with IRIs* section (the `genid` well-known URI
@@ -368,13 +368,6 @@ pub(crate) trait TermMapper {
     /// ID in the source dictionary; only an interested recorder looks it up.
     fn record_embedded_iri(&mut self, _iri: &str, _target: TermId) {}
 
-    /// Whether a composite literal's lexical form is kept as written. A mapper
-    /// that answers `true` treats the text as a literal: a blank label spelled
-    /// inside it is text, not a blank node of the graph, so nothing is rewritten.
-    fn composite_text_is_verbatim(&self) -> bool {
-        false
-    }
-
     /// Observe the implicit predicate after all reifier records have been
     /// inserted. Callers without mappings need no builder lookup.
     fn record_reifier_predicate(&mut self, _builder: &RdfDatasetBuilder) {}
@@ -416,14 +409,7 @@ fn reintern<M: TermMapper>(
                     // `intern_literal` re-derives from the string below.
                     let mapped_datatype = mapper.map_iri(builder, dt, true)?;
                     mapper.record_term(datatype, mapped_datatype);
-                    // A verbatim mapper still sees every term the text embeds, so its
-                    // recorder maps them, but keeps the text as written.
-                    let rewritten = remap_composite_lexical(ds, builder, lexical, dt, *mapper)?;
-                    let lexical_form = if mapper.composite_text_is_verbatim() {
-                        lexical.to_owned()
-                    } else {
-                        rewritten
-                    };
+                    let lexical_form = remap_composite_lexical(ds, builder, lexical, dt, *mapper)?;
                     Ok(builder.intern_literal(RdfLiteral {
                         lexical_form,
                         datatype: Some(dt.to_owned()),

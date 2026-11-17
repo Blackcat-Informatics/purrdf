@@ -1217,21 +1217,16 @@ fn relabel_recording(
     .issue_labels()?
     .canonical
     .issued;
-    rebuild_with_labels(ds, &labels, false, record, run)
+    rebuild_with_labels(ds, &labels, record, run)
 }
 
 /// Rewrite `ds` with each blank node of `labels` at its label and every other
-/// term unchanged. The one rewrite both canonical families share.
-///
-/// With `verbatim` set (the nested-refinement family) a composite literal is a
-/// literal: its text is copied as written, a blank label spelled inside it is
-/// not a blank node of the graph, and a blank that no line holds keeps its
-/// label. Without it (RDFC-1.0) the rewrite reaches inside composite literals
-/// and every blank node holds a `c14n` label.
+/// term unchanged, reaching inside composite literals so an embedded blank
+/// node takes the same label as the node elsewhere. The one rewrite both
+/// canonical families share.
 fn rebuild_with_labels(
     ds: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
-    verbatim: bool,
     record: impl FnMut(RelabelSource<'_>, TermId),
     run: &SearchRun<'_>,
 ) -> Result<RdfDataset, CanonError> {
@@ -1240,7 +1235,7 @@ fn rebuild_with_labels(
     // value-deterministic order.
     let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
         .named_graphs()
-        .filter(|g| !verbatim && !labels.contains_key(g))
+        .filter(|g| !labels.contains_key(g))
         .filter_map(|g| match ds.resolve(g) {
             TermRef::Blank { label, scope } => Some((label, scope, g)),
             _ => None,
@@ -1261,7 +1256,6 @@ fn rebuild_with_labels(
         &mut CanonicalRelabeler {
             labels,
             extra,
-            verbatim,
             record,
             stop: run.stop(),
         },
@@ -1278,9 +1272,6 @@ struct CanonicalRelabeler<'a, R> {
     labels: &'a BTreeMap<TermId, Box<str>>,
     /// Continuation labels for declaration-only blank graphs.
     extra: BTreeMap<TermId, Box<str>>,
-    /// Composite literals are copied as written and an unlabelled blank keeps
-    /// its label.
-    verbatim: bool,
     /// Receives actual term pairs during the same rebuild traversal.
     record: R,
 }
@@ -1292,15 +1283,15 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         &mut self,
         builder: &mut super::builder::RdfDatasetBuilder,
         id: TermId,
-        source_label: &str,
-        source_scope: BlankScope,
+        _label: &str,
+        _scope: BlankScope,
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
-        let held = self.labels.get(&id).or_else(|| self.extra.get(&id));
-        if self.verbatim && held.is_none() {
-            return Ok(builder.intern_blank(source_label, source_scope)?);
-        }
-        let label = held.expect("every blank node holds a canonical or continuation label");
+        let label = self
+            .labels
+            .get(&id)
+            .or_else(|| self.extra.get(&id))
+            .expect("every blank node holds a canonical or continuation label");
         Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
     }
 
@@ -1312,10 +1303,6 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
         Ok(builder.intern_iri(iri)?)
-    }
-
-    fn composite_text_is_verbatim(&self) -> bool {
-        self.verbatim
     }
 
     fn record_term(&mut self, source: TermId, target: TermId) {

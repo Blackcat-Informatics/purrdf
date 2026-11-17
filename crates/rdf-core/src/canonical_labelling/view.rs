@@ -22,22 +22,40 @@
 //!   becomes an `empty-graph` line.
 //! * Each caller [`Record`] becomes a `record` line. A record denotes nothing:
 //!   it adds no graph and no `empty-graph` line.
+//! * A composite literal (`cdt:List` or `cdt:Map`) whose lexical form names a
+//!   blank node is not a constant leaf. Its leaf is the blank leaf of a
+//!   composite node, one node per literal value, and the first time a line
+//!   holds it, one `record` line ties the node to its text and to the blank
+//!   nodes the text names: the payload is
+//!   [`composite_payload`](super::document::composite_payload) of the
+//!   datatype and the text around the embedded tokens, and the terms are the
+//!   composite node, then the blank node of each token in order, repeats
+//!   kept. An embedded label denotes the blank node of the view with the same
+//!   `(label, scope)` ([`crate::cdt_blank`]), so it takes part in the
+//!   labelling like a label in any other position. A composite literal that
+//!   names no blank node is a constant leaf like any other literal.
 //!
 //! A blank node's source identifier is its scope ordinal, four bytes
 //! big-endian, followed by its label bytes, so two blank nodes are one node
 //! exactly when their `(label, scope)` are equal; a blank node of a record is
-//! the view's blank node of the same `(label, scope)`. Terms are lowered
-//! straight into tokens over a heap work list: no nested term is built and
-//! none is walked on the machine stack.
+//! the view's blank node of the same `(label, scope)`. A composite node's
+//! source identifier is four zero bytes, `0xFF` and its literal's encoding,
+//! which no `(label, scope)` spells. Terms are lowered straight into tokens
+//! over a heap work list: no nested term is built and none is walked on the
+//! machine stack.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use super::document::{
+    Composites, DocumentError, composite_payload, composite_source, is_composite_source,
+};
 use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
     Tok, iri_encoding, literal_encoding,
 };
 use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
+use crate::cdt_blank::cdt_blank_segments;
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
 
@@ -144,6 +162,14 @@ const fn variant_of(value: &TermValue) -> GraphTerm {
     }
 }
 
+/// The source identifier of the blank node `(label, scope)`.
+fn blank_source(label: &str, scope: BlankScope) -> Vec<u8> {
+    let mut source = Vec::with_capacity(4 + label.len());
+    source.extend_from_slice(&scope.ordinal().to_be_bytes());
+    source.extend_from_slice(label.as_bytes());
+    source
+}
+
 /// Which statements of a view become lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope<'a> {
@@ -181,6 +207,11 @@ struct Lowering<'a, 's, D: DatasetView> {
     admitter: Admitter,
     /// The graphs carried by a statement line, by view identifier.
     carried: BTreeSet<D::Id>,
+    /// The composite nodes whose `record` line is already lowered.
+    composites: BTreeSet<usize>,
+    /// The `record` lines of composite nodes a line just reached, pushed after
+    /// that line.
+    pending: Vec<Vec<Tok>>,
 }
 
 impl<D: DatasetView> Lowering<'_, '_, D> {
@@ -192,8 +223,13 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         }
     }
 
-    /// The tokens of `value` in walk order, and its variant.
-    fn value(&mut self, value: &TermValue, out: &mut Vec<Tok>) -> GraphTerm {
+    /// The tokens of `value` in walk order, and its variant. A composite node
+    /// reached for the first time queues its `record` line in `pending`.
+    fn value(
+        &mut self,
+        value: &TermValue,
+        out: &mut Vec<Tok>,
+    ) -> Result<GraphTerm, ViewError<D::ReadError>> {
         let interner = &mut self.admitter.interner;
         let mut pending = vec![value];
         while let Some(value) = pending.pop() {
@@ -218,13 +254,30 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                         language.as_deref().map(str::as_bytes),
                         direction,
                     );
-                    out.push(Tok::Const(interner.constant(&encoding)));
+                    let cut =
+                        cdt_blank_segments(lexical_form, datatype).map_err(ViewError::Storage)?;
+                    if cut.blanks.is_empty() {
+                        out.push(Tok::Const(interner.constant(&encoding)));
+                        continue;
+                    }
+                    let node = interner.node(&composite_source(&encoding));
+                    out.push(Tok::Blank(node));
+                    if self.composites.insert(node) {
+                        let mut record = Vec::new();
+                        interner.record_head(
+                            &composite_payload(datatype, &cut.segments),
+                            cut.blanks.len() + 1,
+                            &mut record,
+                        );
+                        record.push(Tok::Blank(node));
+                        for (label, scope) in &cut.blanks {
+                            record.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
+                        }
+                        self.pending.push(record);
+                    }
                 }
                 TermValue::Blank { label, scope } => {
-                    let mut source = Vec::with_capacity(4 + label.len());
-                    source.extend_from_slice(&scope.ordinal().to_be_bytes());
-                    source.extend_from_slice(label.as_bytes());
-                    out.push(Tok::Blank(interner.node(&source)));
+                    out.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
                 }
                 TermValue::Triple { s, p, o } => {
                     out.push(Tok::Tag(TAG_TRIPLE));
@@ -232,7 +285,22 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 }
             }
         }
-        variant_of(value)
+        Ok(variant_of(value))
+    }
+
+    /// Push the `record` lines of the composite nodes the last line reached.
+    fn flush_composites(&mut self) {
+        for tokens in std::mem::take(&mut self.pending) {
+            self.admitter.push(
+                tokens,
+                Facts {
+                    slots_ok: true,
+                    zero_count: false,
+                    carried: None,
+                    held: None,
+                },
+            );
+        }
     }
 
     /// The tokens of the term `id`, and its variant.
@@ -245,7 +313,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
             TermLookupError::ForeignId => ViewError::ForeignId,
             TermLookupError::Read(error) => ViewError::Read(error),
         })?;
-        Ok(self.value(&value, out))
+        self.value(&value, out)
     }
 
     /// The graph slot of a line: its tokens, and the graph term it carries.
@@ -295,6 +363,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 held: None,
             },
         );
+        self.flush_composites();
         Ok(())
     }
 
@@ -364,6 +433,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                     held,
                 },
             );
+            self.flush_composites();
         }
         for record in records {
             self.poll()?;
@@ -372,7 +442,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 .interner
                 .record_head(record.payload, record.terms.len(), &mut tokens);
             for term in record.terms {
-                self.value(term, &mut tokens);
+                self.value(term, &mut tokens)?;
             }
             self.admitter.push(
                 tokens,
@@ -383,6 +453,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                     held: None,
                 },
             );
+            self.flush_composites();
         }
         Ok(())
     }
@@ -408,6 +479,8 @@ fn lowered<D: DatasetView>(
         stop,
         admitter: Admitter::default(),
         carried: BTreeSet::new(),
+        composites: BTreeSet::new(),
+        pending: Vec::new(),
     };
     match view.checked_read(|_| lowering.lower(records)) {
         Err(error) => Err(ViewError::Read(error)),
@@ -601,7 +674,8 @@ impl<Id: Copy> Labelling<Id> {
 
     /// The view's identifier of the blank node with index `node` in
     /// [`Self::lines`] (index `i` of [`Labelled::placements`]). `None` for a
-    /// blank node that only a [`Record`] mentions: the view does not hold it.
+    /// blank node that only a [`Record`] mentions, and for a composite node:
+    /// the view does not hold it.
     #[must_use]
     pub fn blank_id(&self, node: usize) -> Option<Id> {
         self.blanks.get(node).copied().flatten()
@@ -614,6 +688,17 @@ impl<Id: Copy> Labelling<Id> {
             .iter()
             .zip(&self.labelled.placements)
             .filter_map(|(id, placement)| id.map(|id| (id, placement.position)))
+    }
+
+    /// The literal each composite node of the canonical line sequence spells.
+    pub(crate) fn composites(&self) -> Result<Composites, DocumentError> {
+        let positions: BTreeSet<u64> = (0..self.lines.blank_nodes())
+            .filter(|&node| is_composite_source(self.lines.source(node)))
+            .map(|node| self.labelled.placements[node].position)
+            .collect();
+        Composites::of(&self.labelled.lines, |position| {
+            positions.contains(&position)
+        })
     }
 }
 

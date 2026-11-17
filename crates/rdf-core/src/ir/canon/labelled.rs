@@ -35,7 +35,7 @@ use super::{
 };
 use crate::canonical_labelling::{
     InputReason, Labelling, Limit, Refusal, Scope, ViewError, label_view_with_memory,
-    lines_of_view, write_line,
+    lines_of_view, write_line_with,
 };
 use crate::{
     DatasetView, FallibleDatasetView, RdfDataset, TermId, ViewCanonError, checkpointed_drain,
@@ -141,19 +141,22 @@ fn document<D: DatasetView>(
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     let mut builder = ResultBuilder::lines(view)?;
     let lines = &labelling.labelled().lines;
+    // INVARIANT: the engine encodes every line it returns by 3.7 and the
+    // lowering writes every composite record it reads, so a spelling failure
+    // is unreachable; a refusal names the line kind it cannot read.
+    let unreadable = |_| {
+        CanonError::Refused(Box::new(Refusal::Input {
+            reason: InputReason::Kind,
+        }))
+    };
+    let composites = labelling.composites().map_err(unreadable)?;
     // One pass measures, one writes, so the document is reserved once.
     let mut text = String::new();
     let mut total = 0usize;
     for line in lines {
         run.check_stop().map_err(|_| CanonError::Stopped)?;
         text.clear();
-        write_line(line, &mut text).map_err(|_| {
-            // INVARIANT: the engine encodes every line it returns by 3.7, so
-            // this is unreachable; a refusal names the line kind it cannot read.
-            CanonError::Refused(Box::new(Refusal::Input {
-                reason: InputReason::Kind,
-            }))
-        })?;
+        write_line_with(line, &composites, &mut text).map_err(unreadable)?;
         total = total
             .checked_add(text.len())
             .ok_or(CanonError::CounterCapacity)?;
@@ -162,11 +165,7 @@ fn document<D: DatasetView>(
     for line in lines {
         run.check_stop().map_err(|_| CanonError::Stopped)?;
         text.clear();
-        write_line(line, &mut text).map_err(|_| {
-            CanonError::Refused(Box::new(Refusal::Input {
-                reason: InputReason::Kind,
-            }))
-        })?;
+        write_line_with(line, &composites, &mut text).map_err(unreadable)?;
         if !text.is_empty() {
             builder.append(&text)?;
         }
@@ -445,10 +444,11 @@ fn labels_of(labelling: &Labelling<TermId>) -> BTreeMap<TermId, Box<str>> {
 /// declaration and source location preserved.
 ///
 /// The label of a blank node is its position in decimal, as the canonical
-/// document spells it (`_:0`, `_:1`, ...). A label is output only: the
-/// position order differs from the byte order of labels (`10` precedes `2`),
-/// so a dataset read back from its labels as names is not promised the
-/// identity map of the definition.
+/// document spells it (`_:0`, `_:1`, ...), and a blank node named inside a
+/// composite literal is rewritten there to the same label, so no embedded
+/// label dangles. A label is output only: the position order differs from the
+/// byte order of labels (`10` precedes `2`), so a dataset read back from its
+/// labels as names is not promised the identity map of the definition.
 ///
 /// # Errors
 /// As [`try_canonicalize`].
@@ -460,7 +460,7 @@ pub fn canonical_relabel(
         SearchConfiguration::labelling(None, CanonOutput::RelabeledDataset),
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
-                rebuild_with_labels(ds, &labels_of(labelling), true, |_, _| {}, run)
+                rebuild_with_labels(ds, &labels_of(labelling), |_, _| {}, run)
             })
         },
     )
@@ -483,7 +483,6 @@ pub fn canonical_relabel_with_mapping(
                 let dataset = rebuild_with_labels(
                     ds,
                     &labels_of(labelling),
-                    true,
                     |source, target| {
                         let source = match source {
                             RelabelSource::Term(id) => Some(id),

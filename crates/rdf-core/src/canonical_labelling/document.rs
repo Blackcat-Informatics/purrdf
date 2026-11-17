@@ -23,16 +23,26 @@
 //! may spell one statement, and both are written. The digest, not the text,
 //! carries the identity.
 //!
+//! A composite literal (`cdt:List` or `cdt:Map`) that names blank nodes is
+//! lowered as the blank leaf of a composite node and a `record` line that
+//! holds its text and the blank nodes it names ([`composite_payload`]). The
+//! canonical document spells a composite node as its literal, each embedded
+//! blank node `_:` and its position ([`Composites`]); no label spells the
+//! composite node itself.
+//!
 //! The encoding is read by the rules of 3.7 and Lemma E; nothing here parses a
 //! label.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use purrdf_iri::vocab::rdf::REIFIES;
 use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri, write_literal};
 use purrdf_lex::text_out::TextOut;
 
+use super::lines::push_bytes;
 use super::write_label;
+use crate::RdfTextDirection;
 
 const TAG_IRI: u8 = 0x01;
 const TAG_LITERAL: u8 = 0x02;
@@ -73,12 +83,104 @@ impl fmt::Display for DocumentError {
 
 impl std::error::Error for DocumentError {}
 
-/// A cursor over one line encoding.
-struct Reader<'a> {
-    bytes: &'a [u8],
+/// The marker byte after the four scope bytes of a composite node's source
+/// identifier. A blank node of a view has its label there, which is UTF-8, and
+/// `0xFF` never begins UTF-8, so no blank node of a view has such a source.
+const COMPOSITE_MARK: u8 = 0xFF;
+
+/// The source identifier of the composite node of the literal leaf whose
+/// encoding is `literal`: four zero bytes, [`COMPOSITE_MARK`], then the
+/// encoding. One literal value is one node.
+pub(crate) fn composite_source(literal: &[u8]) -> Vec<u8> {
+    let mut source = Vec::with_capacity(5 + literal.len());
+    source.extend_from_slice(&[0, 0, 0, 0, COMPOSITE_MARK]);
+    source.extend_from_slice(literal);
+    source
 }
 
-impl<'a> Reader<'a> {
+/// Whether `source` is the source identifier of a composite node.
+pub(crate) fn is_composite_source(source: &[u8]) -> bool {
+    source.get(4) == Some(&COMPOSITE_MARK)
+}
+
+/// The payload of a composite node's `record` line: `bytes(datatype)`, then
+/// `bytes(segment)` for each segment of the lexical form around its embedded
+/// blank-node tokens, in order. The record's terms are the composite node and
+/// then the blank node of each token, so the segments are one more than the
+/// embedded tokens and one fewer than the terms.
+pub(crate) fn composite_payload(datatype: &str, segments: &[&str]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    push_bytes(&mut payload, datatype.as_bytes());
+    for segment in segments {
+        push_bytes(&mut payload, segment.as_bytes());
+    }
+    payload
+}
+
+/// The literal each composite node of a canonical line sequence spells, by the
+/// node's position: its lexical form with each embedded blank node written
+/// `_:` and its position, and its datatype.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Composites(BTreeMap<u64, (String, String)>);
+
+impl Composites {
+    /// Read the composite spellings of `lines`, a canonical line sequence, in
+    /// which `is_composite` names the positions of the composite nodes.
+    ///
+    /// # Errors
+    /// [`DocumentError`] when a composite node's record is not one this
+    /// lowering writes.
+    pub(crate) fn of(
+        lines: &[Box<[u8]>],
+        is_composite: impl Fn(u64) -> bool,
+    ) -> Result<Self, DocumentError> {
+        let mut spelled = BTreeMap::new();
+        for line in lines {
+            let Some((&TAG_RECORD, rest)) = line.split_first() else {
+                continue;
+            };
+            let mut reader = Reader::new(rest, None);
+            let payload = reader.field()?;
+            let terms = reader.u64()?;
+            if terms == 0 || reader.tag()? != TAG_FIXED {
+                continue;
+            }
+            let node = reader.u64()?;
+            if !is_composite(node) {
+                continue;
+            }
+            let mut fields = Reader::new(payload, None);
+            let datatype = fields.text()?;
+            let mut lexical = String::from(fields.text()?);
+            for _ in 1..terms {
+                let tag = reader.tag()?;
+                if tag != TAG_FIXED {
+                    return Err(DocumentError::Tag(tag));
+                }
+                write_label(reader.u64()?, &mut lexical);
+                lexical.push_str(fields.text()?);
+            }
+            if !fields.bytes.is_empty() || !reader.bytes.is_empty() {
+                return Err(DocumentError::Truncated);
+            }
+            spelled.insert(node, (lexical, datatype.to_owned()));
+        }
+        Ok(Self(spelled))
+    }
+}
+
+/// A cursor over one line encoding.
+struct Reader<'a, 'c> {
+    bytes: &'a [u8],
+    /// How composite nodes are spelled; none spells every leaf as a label.
+    composites: Option<&'c Composites>,
+}
+
+impl<'a, 'c> Reader<'a, 'c> {
+    const fn new(bytes: &'a [u8], composites: Option<&'c Composites>) -> Self {
+        Self { bytes, composites }
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8], DocumentError> {
         let (head, rest) = self
             .bytes
@@ -100,9 +202,14 @@ impl<'a> Reader<'a> {
         Ok(u64::from_be_bytes(word))
     }
 
-    fn text(&mut self) -> Result<&'a str, DocumentError> {
+    /// A `bytes(b)` field.
+    fn field(&mut self) -> Result<&'a [u8], DocumentError> {
         let length = usize::try_from(self.u64()?).map_err(|_| DocumentError::Truncated)?;
-        std::str::from_utf8(self.take(length)?).map_err(|_| DocumentError::NotText)
+        self.take(length)
+    }
+
+    fn text(&mut self) -> Result<&'a str, DocumentError> {
+        std::str::from_utf8(self.field()?).map_err(|_| DocumentError::NotText)
     }
 
     /// The direction option: `absent`, or `present` with `ltr` or `rtl`.
@@ -110,8 +217,8 @@ impl<'a> Reader<'a> {
         match self.tag()? {
             TAG_ABSENT => Ok(None),
             TAG_PRESENT => match self.tag()? {
-                TAG_LTR => Ok(Some("ltr")),
-                TAG_RTL => Ok(Some("rtl")),
+                TAG_LTR => Ok(Some(RdfTextDirection::Ltr.as_str())),
+                TAG_RTL => Ok(Some(RdfTextDirection::Rtl.as_str())),
                 other => Err(DocumentError::Tag(other)),
             },
             other => Err(DocumentError::Tag(other)),
@@ -144,7 +251,15 @@ impl<'a> Reader<'a> {
                         let direction = self.direction()?;
                         write_literal(lexical, datatype, language, direction, out);
                     }
-                    TAG_FIXED => write_label(self.u64()?, out),
+                    TAG_FIXED => {
+                        let position = self.u64()?;
+                        match self.composites.and_then(|c| c.0.get(&position)) {
+                            Some((lexical, datatype)) => {
+                                write_literal(lexical, datatype, None, None, out);
+                            }
+                            None => write_label(position, out),
+                        }
+                    }
                     TAG_TRIPLE => {
                         out.push_str(TRIPLE_TERM_OPEN);
                         out.push(' ');
@@ -183,12 +298,33 @@ impl<'a> Reader<'a> {
 }
 
 /// Spell one line encoding as an N-Quads statement, or write nothing for a
-/// kind with no N-Quads spelling.
+/// kind with no N-Quads spelling. Every `fixed` leaf is spelled as its label;
+/// the canonical document of a dataset view, which spells a composite node as
+/// its literal, is [`try_canonicalize_view`](crate::try_canonicalize_view).
 ///
 /// # Errors
 /// [`DocumentError`] when `encoding` is not one line encoding of 3.7.
 pub fn write_line<W: TextOut + ?Sized>(encoding: &[u8], out: &mut W) -> Result<(), DocumentError> {
-    let mut reader = Reader { bytes: encoding };
+    spell_line(Reader::new(encoding, None), out)
+}
+
+/// [`write_line`] with each composite node of `composites` spelled as its
+/// literal.
+///
+/// # Errors
+/// As [`write_line`].
+pub(crate) fn write_line_with<W: TextOut + ?Sized>(
+    encoding: &[u8],
+    composites: &Composites,
+    out: &mut W,
+) -> Result<(), DocumentError> {
+    spell_line(Reader::new(encoding, Some(composites)), out)
+}
+
+fn spell_line<W: TextOut + ?Sized>(
+    mut reader: Reader<'_, '_>,
+    out: &mut W,
+) -> Result<(), DocumentError> {
     match reader.tag()? {
         TAG_QUAD => {
             reader.term(out)?;
@@ -225,8 +361,9 @@ pub fn write_line<W: TextOut + ?Sized>(encoding: &[u8], out: &mut W) -> Result<(
     }
 }
 
-/// Write the canonical document of `lines`, the canonical line sequence of a
-/// labelling ([`Labelled::lines`](super::Labelled::lines)), into `out`.
+/// Write the document of `lines`, the canonical line sequence of a labelling
+/// ([`Labelled::lines`](super::Labelled::lines)), into `out`, every `fixed`
+/// leaf spelled as its label as [`write_line`] does.
 ///
 /// Statements are written in the order of `lines`; see the module
 /// documentation for what each kind becomes.

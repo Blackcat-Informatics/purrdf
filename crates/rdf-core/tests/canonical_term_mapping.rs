@@ -231,22 +231,18 @@ fn composite_only_blanks_and_interned_iris_are_mapped() {
         TermRef::Iri("https://example.org/embedded")
     );
     assert_eq!(result.map_term(unused), None);
-    // The label spelled in the text is text: the literal keeps it as written,
-    // and the embedded node maps to itself.
-    assert_eq!(
-        output.resolve(mapped(&result, hidden)),
-        TermRef::Blank {
-            label: "hidden",
-            scope: BlankScope::DEFAULT
-        }
-    );
+    let TermRef::Blank { label, scope } = output.resolve(mapped(&result, hidden)) else {
+        panic!("embedded blank lost its kind")
+    };
+    assert_eq!(scope, BlankScope::DEFAULT);
     let TermRef::Literal {
         lexical, datatype, ..
     } = output.resolve(mapped(&result, literal))
     else {
         panic!("composite lost its kind")
     };
-    assert_eq!(lexical.matches("_:hidden").count(), 2);
+    assert_eq!(lexical.matches(&format!("_:{label}")).count(), 2);
+    assert!(!lexical.contains("_:hidden"));
     assert_eq!(
         Some(datatype),
         result.map_term(source.term_id_by_iri(LIST).expect("source datatype"))
