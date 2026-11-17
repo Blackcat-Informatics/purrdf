@@ -17,7 +17,7 @@
 //!
 //! All committed byte output here is keyed on IRI subjects/predicates/objects and
 //! literal values (blank-insensitive), and the one blank-bearing consumer
-//! (`compute_semantic_digest`) canonicalizes via RDFC-1.0, so the blank label
+//! (`compute_semantic_digest`) canonicalizes via the canonical labelling, so the blank label
 //! *spelling* never reaches a committed artifact.
 
 use std::path::Path;

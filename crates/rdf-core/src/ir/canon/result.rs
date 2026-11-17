@@ -29,11 +29,17 @@ pub struct Canonicalized<Id = TermId> {
 }
 
 impl<Id: ViewTermId> Canonicalized<Id> {
-    /// The canonical N-Quads document: every line `'\n'`-terminated, the set of
-    /// lines sorted bytewise ascending and deduplicated. Blanks render as their
-    /// canonical `_:c14nN` label.
+    /// The canonical N-Quads document: every line `'\n'`-terminated.
     ///
-    /// What a reifier or annotation row renders AS depends on
+    /// For the default family ([`Self::presentation`] is `None`) it is the
+    /// canonical line sequence of the nested-refinement labelling spelled as
+    /// N-Quads 1.2, one text line per statement line in the order of the
+    /// sequence (not the bytewise order of the text), each blank node `_:` and
+    /// its position in decimal. For the RDFC-1.0 family (`rdfc12`) it is the
+    /// set of lines sorted bytewise ascending and deduplicated, each blank node
+    /// its `_:c14nN` label.
+    ///
+    /// What an RDFC-1.0 reifier or annotation row renders AS depends on
     /// [`Self::presentation`], reported alongside this document rather than left
     /// implicit: under [`CanonPresentation::Overlay`] such a row renders through
     /// the profile's reserved `urn:purrdf:rdfc:` sentinels; under
@@ -67,8 +73,9 @@ impl<Id: ViewTermId> Canonicalized<Id> {
         self.payload.presentation
     }
 
-    /// Each blank id mapped to its canonical label (`"c14n0"`, …) WITHOUT
-    /// the leading `_:`. The ids are those of the view that was canonicalized and
+    /// Each blank id mapped to its canonical label WITHOUT the leading `_:`:
+    /// its position in decimal (`"0"`, …) for the default family, `"c14n0"`, …
+    /// for the RDFC-1.0 family. The ids are those of the view that was canonicalized and
     /// are meaningful only within it.
     ///
     /// This assignment is the PRINCIPLED blank-label assignment: the labels are issued

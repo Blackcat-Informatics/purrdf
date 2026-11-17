@@ -3091,7 +3091,7 @@ mod tests {
     /// gets from it is EXACTLY the graph they would have got by serializing to
     /// N-Triples and parsing that text back, minus the round-trip.
     ///
-    /// The comparison is RDFC-1.0 canonical, not naive triple-set equality:
+    /// The comparison is canonical, not naive triple-set equality:
     /// blank-node labelling is precisely where a "direct" construction can
     /// silently diverge from a parse (the direct path keeps the report's own
     /// `_:r0` / `_:path0-1` labels; the parser mints its own), so only an

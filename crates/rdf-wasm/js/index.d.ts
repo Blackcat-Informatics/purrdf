@@ -1150,7 +1150,7 @@ export class ReasoningAnswer {
   /**
    * The service's answer, in the service's own line-oriented rendering. A
    * dataset-valued answer (`entailExtractModule`, `entailJustify`) is canonical
-   * (RDFC-1.0) N-Quads instead.
+   * line-sequence N-Quads instead.
    */
   readonly answer: string;
   /**

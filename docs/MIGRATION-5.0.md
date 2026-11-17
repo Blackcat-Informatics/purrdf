@@ -24,8 +24,8 @@ digests before opening a 4.x artifact.
 - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
   read-side recompute of stored 4.x digests. No writer records a 4.x digest in a
-  new artifact, with the one exception in "Containers" (the GTS compaction
-  certificate, an open item).
+  new artifact. A GTS compaction certificate names the function that recorded its
+  refold digests (see "Containers").
 - The search bound is a limit on the engine's own work. Refusal is the labelling's
   typed `limit` outcome.
 - `DatasetStateDigest` is a separate algorithm and is unchanged.
@@ -48,13 +48,38 @@ view becomes a set of typed lines:
 | `reifier-binding` | `0x41` | each distinct reifier row: the reifier, its triple term, optional graph |
 | `annotation` | `0x42` | each distinct annotation row: count, reifier, predicate, object, optional graph. The count is the number of identical rows the view yields (one for a resident dataset) |
 | `empty-graph` | `0x43` | each named graph the view addresses that no statement line carries |
-| `record` | `0x44` | each caller record: an opaque payload and an ordered list of terms. A record denotes nothing in RDF and adds no graph |
+| `record` | `0x44` | each caller record: an opaque payload and an ordered list of terms. A record denotes nothing in RDF and adds no graph. Each composite node also has one (below) |
 
 A blank node's source identifier is its scope ordinal, four bytes big-endian,
 followed by its label bytes, so two blank nodes are one node exactly when their
 label and scope are equal. A term is an IRI, a literal (lexical form, datatype,
 optional language, optional direction), a blank node or a triple term. The
 default graph is the absent graph option.
+
+### Composite literals
+
+A blank-node label written inside a `cdt:List` or `cdt:Map` literal names a
+blank node of the dataset, the one with the same label and scope as a blank
+node written in any other position. Such a literal is lowered so that the
+blank nodes it names take part in the labelling:
+
+- Its tokens are the `BLANK_NODE_LABEL` tokens of its lexical form at every
+  nesting depth, in order of their first byte, skipping a token that starts
+  inside one already taken. The form is then `t0 k1 t1 ... kn tn`, with `n` at
+  least one, each `ki` a token and each `ti` the text around them, possibly
+  empty.
+- Wherever the literal occurs, its leaf is the blank leaf of a composite node,
+  one node per distinct literal (lexical form, datatype, language, direction).
+  The composite node's source identifier is four zero bytes, the byte `0xFF`,
+  then the literal's leaf encoding (tag `0x02` and its fields, below). No
+  blank node of a view has such a source identifier, because `0xFF` never
+  begins a UTF-8 label.
+- Each composite node that a line holds has one `record` line. Its payload is
+  `bytes(datatype)`, then `bytes(t0)` through `bytes(tn)`. Its terms are the
+  composite node, then the blank node each of `k1` through `kn` names, in
+  order, repeats kept.
+- A composite literal that holds no blank-node token is a literal leaf like
+  any other literal.
 
 ### Encoding and order
 
@@ -100,6 +125,10 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
 - `annotation`: `reifier p o [g] .`, once, whatever its count
 - `empty-graph` and `record`: nothing
 
+A composite node is spelled as its literal, with each token `ki` replaced by
+`_:` and the position of the blank node it names. No label spells a composite
+node, so the labels of one document can skip a number.
+
 Because `empty-graph` and `record` lines have no spelling, and two lines of
 different kinds may spell one statement, the text is not injective on the
 sequence. The digest, not the text, carries the identity. Labels are output only
@@ -133,11 +162,26 @@ them.
   that recorded it. Because the line sequence holds a line for each declared empty
   graph, a pack that declares an empty graph now has a different digest from the
   same pack without the declaration; under version `1` they were equal.
-- **GTS compaction certificates.** The refold digests of a certificate are bare
-  hex strings with no algorithm field, and the GTS wire format is governed in
-  `gmeow-gts`. They stay on the RDFC-1.0 flat form, so certificates written by 4.x
-  and 5.0 agree. This is the one place 5.0 writes a 4.x-style digest; moving it
-  needs a versioned certificate in `gmeow-gts` (see the open item below).
+- **GTS compaction certificates.** A certificate's canonical CBOR map carries a
+  `refold_canon` text field naming the function that computed its refold digests:
+  `rdfc10-sha256` (the 4.x RDFC-1.0 flat form) or `nrl1-lines-sha256` (SHA-256 of
+  the default-family canonical document). An absent field means `rdfc10-sha256`,
+  so every certificate written by 4.x reads unchanged, and an `rdfc10-sha256`
+  certificate is written without the field, byte for byte as 4.x wrote it.
+  `compact_and_certify_versioned` writes `nrl1-lines-sha256` and returns a
+  `VersionedCertificate { canon, certificate }`; `compact_and_certify` keeps its
+  signature and the `rdfc10-sha256` certificate. `verify_compaction_with`,
+  `refold_digest_with` and `effective_digest_with` recompute with the function
+  named, and the same value governs `effective_digest`. An unknown `refold_canon`
+  value is the typed refusal `rdf-certificate-cbor-unknown-canon`, never a
+  fallback. `compose_versioned` refuses certificates that name different
+  functions (`rdf-certificate-canon-mismatch`) and composes those that agree.
+  `CompactionCertificate::from_canonical_cbor` refuses a certificate that is not
+  `rdfc10-sha256` (`rdf-certificate-cbor-unexpected-canon`); read a certificate of
+  either kind with `VersionedCertificate::from_canonical_cbor`. The digest the
+  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest, because
+  the GTS wire format is governed in `gmeow-gts`; both writers author the same
+  pack bytes.
 - **Columnar.** The five-table Parquet files record no canonical digest, only
   content digests of blobs and of the manifest. They are unchanged.
 - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
@@ -161,17 +205,6 @@ them.
   (`purremb-unsupported-version`, "unsupported PURREMB version 2"); it does not
   misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
   a 5.0 file is not readable by 4.x.
-
-### Open item: GTS compaction certificates
-
-Status: open, with the scope decision undecided. The refold digest of a GTS
-compaction certificate is still recorded under the 4.x labelling (the RDFC-1.0
-flat form). The digest is a bare hex string with no algorithm field and the wire
-form is governed in `gmeow-gts`, so moving it onto the canonical line sequence
-needs a versioned certificate there. Until that is decided, whether to carry the
-change or to cut it from this release, the acceptance line that every recorded
-canonical digest moves to the new output is not met for compaction certificates.
-No code in this repository changes for it.
 
 ## Hosts
 

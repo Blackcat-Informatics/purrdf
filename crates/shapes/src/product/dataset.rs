@@ -275,8 +275,9 @@ pub(crate) fn open_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, ShapesProduc
 /// identity sits outside every section's SHA-256 coverage, so a tampered identity
 /// is caught HERE and nowhere else.
 ///
-/// The returned [`PackDigest`] is a verified `purrdf-rdfc12` SHA-256 digest, not
-/// an RDFC-1.0 one; it is a distinct type from a bare `[u8; 32]` precisely so an
+/// The returned [`PackDigest`] is a verified canonical digest (the digest of the
+/// canonical line sequence for a format version 2 pack, the `purrdf-rdfc12`
+/// SHA-256 for version 1); it is a distinct type from a bare `[u8; 32]` precisely so an
 /// uncorroborated digest read straight off the section header cannot be confused
 /// with one this function has certified.
 ///

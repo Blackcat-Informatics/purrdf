@@ -40,7 +40,7 @@
 //! [`container`] lands the on-disk pack container: [`PackBuilder`]
 //! frames the dict/triples/side sections' bytes into ONE fixed-layout,
 //! mmap-friendly file with a section-directory integrity check (each section's
-//! SHA-256, plus the dataset's RDFC-1.0 canonical digest), and [`PackView`] is
+//! SHA-256, plus the dataset's canonical digest), and [`PackView`] is
 //! the borrowed, zero-copy, fail-closed reader over that file — the module's
 //! public face for everything this tree assembles. See [`container`]'s doc
 //! comment for the exact byte layout.
@@ -52,8 +52,8 @@
 //!
 //! [`certify`] lands the certified-projection verifier:
 //! [`certify::verify_pack`] independently reconstructs the dataset a pack claims
-//! to encode (via the `DatasetView` seam) and recomputes its RDFC-1.0
-//! digest, failing closed if it disagrees with the pack's stored `rdfc_digest`
+//! to encode (via the `DatasetView` seam) and recomputes its canonical digest
+//! with the function the pack's format version names, failing closed if it disagrees with the pack's stored `rdfc_digest`
 //! header field — turning a pack into a certified read-only projection of its
 //! source dataset, on top of the per-section SHA-256 integrity `PackView::from_bytes`
 //! already enforces.

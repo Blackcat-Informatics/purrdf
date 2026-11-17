@@ -8,12 +8,12 @@
 //!   equality), as a multiset when there is no top-level `ORDER BY` and as an
 //!   ordered sequence when there is (see the private `compare_solutions`).
 //! * `ASK` → boolean equality.
-//! * `CONSTRUCT`/`DESCRIBE` → canonical (RDFC-1.0) N-Quads equality.
+//! * `CONSTRUCT`/`DESCRIBE` → canonical N-Quads equality.
 //! * syntax tests → parse success/failure matches the kind.
 //!
 //! Ground solutions use admitted structural row keys after both complete inputs
 //! pass native RDF validation. Results containing blanks retain the runner's
-//! compact RDFC-1.0 carrier and share the kit's global identity map for bare,
+//! compact canonical carrier and share the kit's global identity map for bare,
 //! triple and CDT blank references. Numeric literals compare by canonical lexical
 //! identity under their original datatype; other lexical forms remain exact.
 //! The separate [`canonical_solutions`] trace encoder retains its frozen bytes.
@@ -208,7 +208,7 @@ pub fn compare_failure(case: &SparqlTestCase, message: &str) -> Result<(), Strin
 ///
 /// `SELECT` solutions are compared as a multiset when `ordered` is `false` and as an
 /// ordered sequence when `ordered` is `true`. `ASK` booleans are compared directly.
-/// `CONSTRUCT`/`DESCRIBE` graphs are compared by RDFC-1.0 canonical N-Quads.
+/// `CONSTRUCT`/`DESCRIBE` graphs are compared by canonical N-Quads.
 ///
 /// # Errors
 ///
@@ -272,7 +272,7 @@ pub fn compare_results(
 /// Compare an UPDATE post-state dataset against the expected [`ExpectedResult::DatasetState`].
 ///
 /// The mutated dataset and the expected dataset are compared graph-preservingly
-/// by RDFC-1.0 canonical N-Quads — the same equality CONSTRUCT graphs use — so a
+/// by canonical N-Quads — the same equality CONSTRUCT graphs use — so a
 /// differing default graph OR any named graph surfaces as a mismatch.
 fn compare_update(
     case: &SparqlTestCase,
@@ -685,19 +685,19 @@ const SOLUTION_SCOPE: BlankScope = BlankScope(2);
 /// the ordered-comparison encoding.
 use purrdf_core::datatype::XSD_INTEGER;
 
-/// Encode a whole solution set as canonical RDFC-1.0 N-Quads.
+/// Encode a whole solution set as canonical N-Quads.
 ///
 /// Every row becomes a distinct **solution blank node** (in [`SOLUTION_SCOPE`]);
 /// each bound cell `(var, value)` becomes one quad
 /// `(solution, urn:purrdf:conformance:var:<var>, value)`. Because the entire
-/// set is one dataset canonicalized once, RDFC-1.0 must find a SINGLE bijection
+/// set is one dataset canonicalized once, the labelling must find a SINGLE bijection
 /// mapping every blank node across every row simultaneously — so a result whose
 /// blanks only line up row-by-row (but not globally) is correctly UNEQUAL.
 /// Value blank nodes are interned in [`VALUE_SCOPE`] under an injective encoding
 /// of their original `(scope, label)`,
 /// so a blank shared across rows keeps one [`TermId`] and its coreference is
 /// preserved; two structurally-identical rows produce two automorphic solution
-/// blanks that RDFC-1.0 still emits as two lines, preserving multiplicity.
+/// blanks that the labelling still emits as two lines, preserving multiplicity.
 ///
 /// When `ordered`, each solution blank additionally gets
 /// `(solution, urn:purrdf:conformance:index, "<i>"^^xsd:integer)`: the ordinal
@@ -739,7 +739,7 @@ fn encode_solution_set_using(
     let index_predicate = builder.intern_iri(&format!("{CONFORMANCE_NS}index"))?;
     for (i, row) in rows.iter().enumerate() {
         // A distinct solution blank per row (its label is the row ordinal, but
-        // its identity is bijection-normalized away by RDFC-1.0 — only its
+        // its identity is bijection-normalized away by the labelling — only its
         // structure, i.e. the cells hanging off it, is observable).
         let solution = builder.intern_blank(&format!("row{i}"), SOLUTION_SCOPE)?;
         for (var, cell) in variables.iter().zip(row) {
@@ -769,7 +769,7 @@ fn encode_solution_set_using(
     purrdf_core::try_canonicalize(&dataset, control).map_err(CompareError::from)
 }
 
-/// The canonical form a solution sequence is compared in: the RDFC-1.0 canonical
+/// The canonical form a solution sequence is compared in: the canonical
 /// N-Quads of its `encode_solution_set` encoding: one fresh blank node per row, one
 /// quad per bound cell, plus a row-ordinal quad when `ordered`.
 ///

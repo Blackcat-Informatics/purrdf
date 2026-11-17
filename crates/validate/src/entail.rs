@@ -22,7 +22,7 @@
 //! platform-specific wrapping (buffer, `JsValue`, `str`).
 //!
 //! Wasm-clean: pure in-memory string work over the wasm-clean SHACL engine and
-//! the native RDFC-1.0 serializer — no new dependencies and no ambient I/O.
+//! the native canonical serializer — no new dependencies and no ambient I/O.
 //!
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
@@ -197,8 +197,8 @@ fn entail_with<E: From<ShapesError>>(
 /// two graphs, runs the shapes graph's rules layer by layer as SHACL 1.2 Inference
 /// Rules executes them (run-once rules once, iterating rules until an iteration
 /// infers nothing new, in `sh:order` groups), and renders the
-/// resulting dataset via the native RDFC-1.0 flat serializer (deterministic,
-/// blank-node-canonical), returning a `String` error (the engine's own
+/// resulting dataset as its canonical document (the canonical line sequence
+/// spelled as N-Quads 1.2: deterministic, blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
 ///
 /// The writer is [`purrdf_core::try_canonicalize_checked_view`], which is
@@ -214,8 +214,8 @@ fn entail_with<E: From<ShapesError>>(
 ///
 /// Both inputs are wholly caller-supplied, so this function calls the typed,
 /// non-panicking [`purrdf_core::try_canonicalize_checked_view`] rather than the
-/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a reserved-vocabulary
-/// or search-budget refusal comes back as an `Err` value across the
+/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a labelling refusal
+/// (such as its limit) comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
 ///
 /// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]): an
@@ -228,8 +228,8 @@ fn entail_with<E: From<ShapesError>>(
 /// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
 /// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
 /// term-generating round limit or another evaluation limit); or a diagnostic naming the
-/// refusal if the materialized dataset carries a reserved-vocabulary IRI or
-/// exhausts the RDFC-1.0 n-degree search budget.
+/// refusal if the canonical labelling refuses the materialized dataset, such as
+/// when it exhausts its limit.
 ///
 /// # Examples
 ///
@@ -313,7 +313,7 @@ fn canonical_ntriples(
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting document must come back as an `Err`
+    // labelling refusal (such as its limit) must come back as an `Err`
     // value, not abort the process.
     match purrdf_core::try_canonicalize_checked_view(dataset, control) {
         Ok(canonicalized) => Ok(canonicalized),
@@ -339,7 +339,7 @@ pub const PYTHON_BINDING_GOLDEN_SHAPES: &str = "@prefix sh: <http://www.w3.org/n
 /// The data graph of the Python-binding byte-identity golden.
 ///
 /// Two targets (so the rule fires more than once) and a blank node (so the
-/// RDFC-1.0 canonical relabelling is exercised, which is the part of the output
+/// canonical labelling is exercised, which is the part of the output
 /// most likely to move if the two spellings ever stopped agreeing).
 pub const PYTHON_BINDING_GOLDEN_DATA: &str = "<http://example.org/alice> \
     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\

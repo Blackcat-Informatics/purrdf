@@ -235,7 +235,7 @@ pub fn parse_regime(name: &str) -> Result<Regime, ReasoningError> {
 /// The canonical result retains its original storage reservation.
 #[derive(Debug, Clone)]
 pub struct RegimeClosure {
-    /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
+    /// The materialized dataset as canonical N-Quads.
     nquads: purrdf_core::Canonicalized,
     /// The run's [`ReasoningReport`], rendered by [`render_reasoning_report`].
     report: String,
@@ -250,7 +250,7 @@ impl Eq for RegimeClosure {}
 
 impl RegimeClosure {
     /// The materialized dataset — every input quad plus every inferred triple —
-    /// as canonical (RDFC-1.0) N-Quads.
+    /// as canonical N-Quads.
     #[must_use]
     pub fn nquads(&self) -> &str {
         self.nquads.nquads()
@@ -274,8 +274,8 @@ impl RegimeClosure {
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged. The closure is the input dataset plus every triple the regime's
-/// implemented rules infer, serialized through the native RDFC-1.0 flat
-/// serializer (deterministic, blank-node-canonical).
+/// implemented rules infer, serialized as its canonical document (the canonical
+/// line sequence spelled as N-Quads 1.2: deterministic, blank-node-canonical).
 ///
 /// # `program` — the regime's own input, not an option
 ///
@@ -313,8 +313,8 @@ impl RegimeClosure {
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
 ///   `purrdf-entail` error).
-/// * A materialized closure carrying a reserved-vocabulary IRI, or one that
-///   exhausts the RDFC-1.0 n-degree search budget — the document is wholly
+/// * A materialized closure the canonical labelling refuses, such as one that
+///   exhausts its limit — the document is wholly
 ///   caller-supplied, so this refusal comes back as an `Err` (via
 ///   [`purrdf_core::try_canonicalize_checked_view`]) rather than panicking.
 ///
@@ -627,7 +627,7 @@ pub fn materialize_to_nquads_string_with(
     // The materialized closure is wholly caller-supplied (the document parsed above),
     // so it goes through the typed, non-panicking canonicalization entry point rather
     // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting closure must come back as an `Err`
+    // labelling refusal (such as its limit) must come back as an `Err`
     // value across the wasm/Python/C-ABI boundary, not abort the process.
     let nquads = caller_flat_nquads(
         closure.as_ref(),
@@ -641,8 +641,8 @@ pub fn materialize_to_nquads_string_with(
 }
 
 /// Canonicalize `dataset` — content the CALLER supplied or that was derived from
-/// content the caller supplied — as flat N-Quads, refusing a reserved-vocabulary
-/// or search-budget-exhausting result as a value rather than the panic
+/// content the caller supplied — as canonical N-Quads, refusing a result the
+/// canonical labelling refuses (such as one past its limit) as a value rather than the panic
 /// [`purrdf_rdf::canonical_flat_nquads`] raises for the same refusal.
 ///
 /// `context` opens the diagnostic (e.g. `"extract-module"`, or
@@ -1689,7 +1689,7 @@ impl<A: AsRef<str>> ReasoningAnswer<A> {
     ///
     /// Line-oriented and byte-stable, in the grammar the service's entry point
     /// documents. A dataset-valued answer ([`extract_module_to_string`],
-    /// [`justify_to_string`]) is canonical (RDFC-1.0) N-Quads instead.
+    /// [`justify_to_string`]) is canonical N-Quads instead.
     #[must_use]
     pub fn answer(&self) -> &str {
         self.answer.as_ref()
@@ -2223,7 +2223,7 @@ fn proof_body_bytes(text: &str, line: usize) -> Result<Vec<u8>, ProofDocumentErr
 /// purrdf-dl-proof 1
 /// service <name>                  (one of PROOF_SERVICE_NAMES)
 /// availability recorded
-/// input <64 lowercase hex>        (the ontology's RDFC-1.0 identity)
+/// input <64 lowercase hex>        (the ontology's canonical line-sequence digest)
 /// digest <64 lowercase hex>       (BLAKE3 over the canonical bytes below)
 /// trust-base <a,b,c>              (what a verification of this proof RESTS ON)
 /// runs <n>                        (tableau runs the service made)
@@ -2587,7 +2587,7 @@ impl ReasonerSession {
     }
 
     /// The ontology this session reasons over — the premise merged with its imports closure
-    /// when [`Self::open_premise`] resolved one — as canonical (RDFC-1.0) N-Quads.
+    /// when [`Self::open_premise`] resolved one — as canonical N-Quads.
     ///
     /// This is a data export, not a copy of the native checking context: canonical
     /// ordering can change first-seen DL term identifiers. Check a proof against
@@ -2595,8 +2595,8 @@ impl ReasonerSession {
     ///
     /// # Errors
     ///
-    /// A dataset refused canonicalization (a reserved-vocabulary IRI, or one that exhausts
-    /// the RDFC-1.0 search budget).
+    /// A dataset refused canonicalization (the canonical labelling's typed refusal,
+    /// such as its limit).
     pub fn premise_nquads(
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
@@ -3268,7 +3268,7 @@ fn render_profile_certificate(certificate: &ProfileCertificate) -> String {
 /// `signature` is one N-Triples term per non-blank line. `method` is `bot`, `top`
 /// or `star` — see [`MODULE_METHOD_NAMES`].
 ///
-/// The answer is the extracted module as canonical (RDFC-1.0) N-Quads, exactly as
+/// The answer is the extracted module as canonical N-Quads, exactly as
 /// [`materialize_to_nquads_string`]'s closure is, so the two dataset-valued
 /// services serialize through one path.
 ///
@@ -3326,7 +3326,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, ReasoningError> {
 /// chase lane's genuinely derivational explanation and for why the two are
 /// different kinds of thing rather than two spellings of one.
 ///
-/// The answer is the justification's axioms as canonical (RDFC-1.0) N-Quads: a
+/// The answer is the justification's axioms as canonical N-Quads: a
 /// justification introduces no term at all, so it is emitted as an ordinary RDF 1.2
 /// dataset holding exactly the axioms already present in the input.
 ///

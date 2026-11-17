@@ -29,8 +29,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   unsupported version. The 4.x PURREMB reference file stays as `purremb_v1.bin`
   beside a new `purremb_v2.bin`, and the entail goldens and the proof, product
   and regime vectors move with the digest. Columnar files record no canonical
-  digest. GTS compaction certificates still record the 4.x refold digest; that
-  is an open item in the migration guide and not part of this change. See the
+  digest. GTS compaction certificates carry a `refold_canon` field
+  (`rdfc10-sha256` or `nrl1-lines-sha256`, absent meaning `rdfc10-sha256`);
+  `compact_and_certify_versioned` writes `nrl1-lines-sha256`, verifiers
+  recompute with the named function, an unknown value is a typed refusal, and
+  `compose_versioned` refuses certificates that differ. The pack's embedded
+  `stream:contentRefoldDigest` stays RDFC-1.0. A composite literal whose text
+  holds blank-node labels takes part in the labelling as a graph node, so those
+  blank nodes keep their identity in the canonical document. See the
   [5.0 migration guide](docs/MIGRATION-5.0.md).
 
 - **An unreadable stack floor refuses instead of switching the guard off

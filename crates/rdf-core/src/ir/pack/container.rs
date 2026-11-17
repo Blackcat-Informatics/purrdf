@@ -323,7 +323,7 @@ pub enum PackError<E = core::convert::Infallible> {
     CanonRefused(CanonError<E>),
     /// Importing or freezing the decoded RDF surface failed with its native cause.
     Materialization(super::certify::DatasetMaterializationError<E>),
-    /// [`super::certify::verify_pack`]'s independent RDFC-1.0 recompute over the
+    /// [`super::certify::verify_pack`]'s independent canonical recompute over the
     /// pack's own decoded contents disagreed with the header's stored
     /// `rdfc_digest` field. Unlike [`Self::SectionDigestMismatch`], this is NOT a
     /// byte-corruption signal `from_bytes` can see on its own: the `rdfc_digest`
@@ -463,7 +463,8 @@ pub struct PackBuilder;
 impl PackBuilder {
     /// Build the complete pack file for `dataset`: encode the dictionary,
     /// bitmap-triples, and RDF 1.2 side-tables (in that fixed order), compute
-    /// the dataset's RDFC-1.0 digest, and frame everything into the on-disk
+    /// the digest of the dataset's canonical line sequence (format version 2),
+    /// and frame everything into the on-disk
     /// container format (see the [module docs](self)).
     ///
     /// Deterministic: byte-identical output for the same dataset across calls

@@ -26,9 +26,9 @@ pub mod bundle;
 // The pipeline carrier (C1): the frozen hot graph + lookaside + blob store +
 // provenance + a typed-handle lane, generic over the kernel-opaque handle payload.
 pub mod pipeline_bundle;
-// Native full W3C RDFC-1.0 dataset canonicalization: stable canonical blank
-// labels + canonical N-Quads, extended for the RDF-1.2 reifier/annotation overlay.
-// The canonicalization authority for the purrdf family.
+// Dataset canonicalization: the nested-refinement labelling (the default family,
+// `canon::labelled`) and the W3C RDFC-1.0 algorithm with its RDF-1.2 overlay
+// (`rdfc12`). The canonicalization authority for the purrdf family.
 pub mod canon;
 // The `RdfDataset`-direct, blank-aware structural comparator (C1/C2): the
 // equality oracle for importer equivalence.
