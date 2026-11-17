@@ -406,8 +406,8 @@ pub enum ClaimSubject {
         /// The axiom.
         axiom: Box<DlAxiom>,
     },
-    /// The extracted module has this canonical identity — BLAKE3 over its RDFC-1.0 canonical
-    /// N-Quads, the same producer-independent identity [`DlProof::input`] uses.
+    /// The extracted module has this canonical identity — BLAKE3 over its canonical
+    /// line sequence, the same producer-independent identity [`DlProof::input`] uses.
     Module {
         /// The module's canonical identity.
         digest: [u8; 32],
@@ -773,7 +773,7 @@ pub(crate) struct StopPoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceProof {
     positive_layout: Option<crate::owl_dl::proof::layout::PreparationLayout>,
-    /// BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology — the PRODUCER-INDEPENDENT
+    /// BLAKE3 over the canonical line sequence of the ontology — the PRODUCER-INDEPENDENT
     /// input identity, recomputable by the consumer.
     input: [u8; 32],
     /// The producer-shared components this proof's checks rest on.
@@ -3303,12 +3303,10 @@ mod tests {
     /// `ServiceProof::verify`'s FIRST step, [`ServiceProof::binds`], recomputes the
     /// checker's own ontology identity — and the checker's ontology is wholly
     /// caller-supplied at the `check_dl_proof` boundary (a document parsed at a
-    /// wasm/Python/C-ABI boundary). A reserved-vocabulary checking ontology must refuse
-    /// that identity as a [`DlProofError::Canonicalization`] VALUE, rather than aborting
-    /// the process through the panicking `purrdf_core::canonicalize`
-    /// `crate::owl_dl::proof::ontology_identity` `binds` used to call — before this fix,
-    /// this fired ahead of even an `InputMismatch`, on every service, and every DL
-    /// certificate along with it.
+    /// wasm/Python/C-ABI boundary). A canonicalization the caller stops must refuse that
+    /// identity as a [`DlProofError::Canonicalization`] VALUE, never abort the process; it
+    /// fires ahead of even an `InputMismatch`, on every service, and every DL certificate
+    /// along with it.
     #[test]
     fn a_service_proof_refuses_a_stopped_checking_ontology_as_a_value() {
         let ontology = taxonomy();
@@ -3318,13 +3316,12 @@ mod tests {
         )
         .expect("reverse-maps");
         let answer = reasoner.consistency();
-        let reserved = reserved_taxonomy();
         let ctx = context(&ontology, &Question::Consistency);
         let error = answer
             .proof()
             .expect(RECORDED)
             .verify(
-                &reserved,
+                &ontology,
                 &Question::Consistency,
                 Some(answer.certificate()),
                 &ctx,
@@ -3333,10 +3330,7 @@ mod tests {
                     Some(&Latched),
                 ),
             )
-            .expect_err(
-                "a reserved-vocabulary checking ontology must refuse canonicalization, not \
-                 panic",
-            );
+            .expect_err("a stopped checking canonicalization must refuse, not panic");
         assert!(
             matches!(error, DlProofError::Canonicalization(_)),
             "{error}"
@@ -4039,36 +4033,14 @@ mod tests {
 
     // ── Module extraction: syntactic, and it says so ────────────────────────────
 
-    /// [`taxonomy`], with `Animal` replaced by a reserved-vocabulary IRI
-    /// ([`purrdf_core::rdfc12::RESERVED_NAMESPACE`]). `Cat ⊑ Animal` still holds, so the
-    /// `Cat`-seeded ⊥-module carries the reserved IRI through to its own content.
-    fn reserved_taxonomy() -> Arc<RdfDataset> {
-        let mut b = RdfDatasetBuilder::new();
-        let cat = b.intern_iri(EX_CAT).unwrap();
-        let animal = b
-            .intern_iri(&format!(
-                "{}Animal",
-                purrdf_core::rdfc12::RESERVED_NAMESPACE
-            ))
-            .unwrap();
-        let tom = b.intern_iri(EX_TOM).unwrap();
-        let sub = b.intern_iri(RDFS_SUBCLASS_OF).unwrap();
-        let ty = b.intern_iri(RDF_TYPE).unwrap();
-        b.push_quad(cat, sub, animal, None).unwrap();
-        b.push_quad(tom, ty, cat, None).unwrap();
-        b.freeze().expect("the fixture freezes")
-    }
-
     /// The ontology `extract_module_with_proofs` reasons over is wholly caller-supplied — a
-    /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI must
+    /// document parsed at a wasm/Python/C-ABI boundary — so a stopped canonicalization must
     /// refuse the proof term's producer-independent identity as an
-    /// [`EntailError::Canonicalization`] VALUE, rather than aborting the process through the
-    /// panicking `purrdf_core::canonicalize` `ontology_identity` used to reach. This is
-    /// exactly the `Reasoner(data, proofs=True).extract_module(...)` panic reachable from
-    /// Python/wasm/the C ABI before this fix.
+    /// [`EntailError::Canonicalization`] VALUE, never abort the process. This is the
+    /// `Reasoner(data, proofs=True).extract_module(...)` path of Python/wasm/the C ABI.
     #[test]
     fn extract_module_with_proofs_refuses_a_stopped_ontology_as_a_value() {
-        let ontology = reserved_taxonomy();
+        let ontology = taxonomy();
         let seed = [TermValue::iri(EX_CAT)];
         let error = extract_module_with_proofs(
             &ontology,
@@ -4079,14 +4051,12 @@ mod tests {
                 Some(&Latched),
             ),
         )
-        .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
     }
 
     /// The valid neighbour of the refusal above: the same seed and method over the
-    /// ORDINARY [`taxonomy`] (no reserved IRI) still extracts and still records a proof —
-    /// the migration off the panicking `ontology_identity` changed no admitted-input
-    /// behavior.
+    /// same [`taxonomy`] with no stop latched still extracts and still records a proof.
     #[test]
     fn extract_module_with_proofs_still_admits_the_ordinary_taxonomy() {
         let ontology = taxonomy();
@@ -4827,35 +4797,35 @@ mod tests {
         let expected: Vec<(&str, String)> = [
             (
                 "consistency",
-                "829f99dde741e68af378c1e216190ccf0153999d6994a8975b6db2c39dd6093b",
+                "9060e3e15eb54871979153ec275edb124adc25a377f5b04b69542f602a9c7554",
             ),
             (
                 "class-satisfiability",
-                "ab043898d5ecbf9f7208a8ff1309e4d959f7496c660e14eabcb878489d1b2bc8",
+                "f1dbfec13c195255cf9c86d5b2e25aa1d62dbd72b85bb7a15e3e2430d776c472",
             ),
             (
                 "instance-retrieval",
-                "a832aa53d7e7489326a9e33566c69523bbb8246aac0dbcfa7af6819f6f513fbe",
+                "9615c9819ede7b3a393ab3d224fbe483a428f33b2342cd945ed7eef1fca4fc11",
             ),
             (
                 "axiom-entailment",
-                "bada3584baaee90a558f429add646d9d6dfc59eaffbf2dc889ecb71ffcbeff1a",
+                "26a00189b6ce5ea4bdab8d51abd89eca8deefaa0eff993bdb6f9b064fa6c2210",
             ),
             (
                 "classification",
-                "dc44d5f862b98a2a33dd20bf19eb15885f26107b8f7ef01dfda193bf0753a812",
+                "1836bc554916453665ea97988297395e03a7efbe92d80a74164440b2fbde921d",
             ),
             (
                 "realization",
-                "edb8a0a810077d651de1ad60afcca2f6ed3e14f65471733e72fe0a3ad1d9b25e",
+                "fc1dad2d12aa313042e90c29e35ddf7af0da3d2306b5d57b7d30051b9075960a",
             ),
             (
                 "module-extraction",
-                "dc76114a7d7b6a80d869d35e1103b3e60519d863dbd029c9c020d09b1e963cfa",
+                "d8a8f8e618abc18c113efb2b39acbb3c1c0598114e136b65c02d75184badbcb2",
             ),
             (
                 "undecided",
-                "d76dcdbdef9640671777de1c592a3f2f542b2c7460f517abc00fbe19d68d6251",
+                "d2ee44cc8ee9186da628aad54657c845b665a403711549e63216d67ee7bb0952",
             ),
         ]
         .into_iter()

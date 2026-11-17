@@ -2052,7 +2052,7 @@ mod tests {
     /// own conclusions would land in a graph the input does not have.
     ///
     /// Asserted over the CANONICAL form, because that is what a caller sees and because
-    /// RDFC-1.0 assigns one label per distinct node: three labels here would be the defect,
+    /// the canonical form assigns one label per distinct node: three labels here would be the defect,
     /// two is the answer.
     #[test]
     fn a_blank_node_graph_name_survives_the_closure() {

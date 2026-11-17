@@ -44,7 +44,7 @@
 //!
 //! # Recording is OPT-IN, and its absence is a value
 //!
-//! [`Reasoner::new`] records NOTHING: no RDFC-1.0 canonicalization of the dataset, no
+//! [`Reasoner::new`] records NOTHING: no canonicalization of the dataset, no
 //! clausification contract, no instrumented search, no run traces, no answer binding. A caller
 //! who never reads a proof pays for none of it, which is why the default is the cheap one.
 //! [`Reasoner::with_proofs`] is the same reasoner with recording on, and
@@ -210,9 +210,9 @@ pub struct Reasoner {
     /// The refutation symbol generator, seeded to avoid every blank label in the data.
     fresh: FreshSymbols,
     /// The PRODUCER-INDEPENDENT identity of the dataset this reasoner was built from: BLAKE3
-    /// over its RDFC-1.0 canonical N-Quads — and `None` when this reasoner records no proofs.
+    /// over its canonical line sequence — and `None` when this reasoner records no proofs.
     ///
-    /// Computed ONCE, in [`Reasoner::with_proofs`] and nowhere else. It is a full RDFC-1.0
+    /// Computed ONCE, in [`Reasoner::with_proofs`] and nowhere else. It is a full
     /// canonicalization of the whole dataset, which is the single most expensive thing proof
     /// recording costs — so [`Reasoner::new`] does not compute it and then discard it, it does
     /// not compute it at all. Every [`ServiceProof`] a recording reasoner issues binds it, so
@@ -261,7 +261,7 @@ impl Reasoner {
     ///
     /// # This is the cheap constructor, and it is the default
     ///
-    /// It performs no RDFC-1.0 canonicalization of `ds`, derives no clausification contract,
+    /// It performs no canonicalization of `ds`, derives no clausification contract,
     /// runs no instrumented search, keeps no run traces and builds no answer binding. Every
     /// [`Certified::proof`] it hands back is `None`. A caller who wants evidence asks for it
     /// with [`Reasoner::with_proofs`]; a caller who does not pays for none of it.
@@ -288,7 +288,7 @@ impl Reasoner {
     ///
     /// # What it costs, said out loud
     ///
-    /// One RDFC-1.0 canonicalization of `ds` here, one clausification contract per service
+    /// One canonicalization of `ds` here, one clausification contract per service
     /// call, an instrumented search per tableau run, and a run trace per run up to
     /// [`MAX_RECORDED_RUNS`](proof::MAX_RECORDED_RUNS). None of it is charged to the search's
     /// work meter, and none of it moves an answer.
@@ -296,8 +296,8 @@ impl Reasoner {
     /// # Errors
     ///
     /// The failures [`Reasoner::new`] returns, plus [`EntailError::Canonicalization`] if
-    /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
-    /// term, or an exhausted n-degree search budget). `ds` is caller-supplied,
+    /// computing `ds`'s producer-independent identity is refused (the labelling's
+    /// limit, or a caller stop). `ds` is caller-supplied,
     /// and the original canonicalization refusal is retained.
     pub fn with_proofs<D: DatasetView>(
         ds: &D,
@@ -584,7 +584,7 @@ impl Reasoner {
     ///
     /// # It must be built with [`Reasoner::with_proofs`]
     ///
-    /// A checking context is bound to the ontology's RDFC-1.0 identity, which is exactly the
+    /// A checking context is bound to the ontology's canonical identity, which is exactly the
     /// canonicalization [`Reasoner::new`] declines to pay for. Rather than hand back a context
     /// bound to a placeholder — which would reject every honest proof with an input mismatch a
     /// reader could not account for — this refuses, and names the constructor to use.
@@ -1419,20 +1419,18 @@ mod tests {
     }
 
     /// The dataset [`Reasoner::with_proofs`] is built from is wholly caller-supplied — a
-    /// document parsed at a wasm/Python/C-ABI boundary — so a reserved-vocabulary IRI
-    /// ([`purrdf_core::rdfc12::RESERVED_NAMESPACE`]) must refuse computing its producer-independent
-    /// identity as the original [`EntailError::Canonicalization`] value.
+    /// document parsed at a wasm/Python/C-ABI boundary — so a stopped canonicalization must
+    /// refuse computing its producer-independent identity as the original
+    /// [`EntailError::Canonicalization`] value.
     #[test]
     fn with_proofs_refuses_a_stopped_dataset_as_a_value() {
         let mut b = RdfDatasetBuilder::new();
         let cat = b.intern_iri("https://example.org/Cat").unwrap();
-        let reserved = b
-            .intern_iri(&format!("{}bad", purrdf_core::rdfc12::RESERVED_NAMESPACE))
-            .unwrap();
+        let animal = b.intern_iri("https://example.org/Animal").unwrap();
         let sub = b
             .intern_iri("http://www.w3.org/2000/01/rdf-schema#subClassOf")
             .unwrap();
-        b.push_quad(cat, sub, reserved, None).unwrap();
+        b.push_quad(cat, sub, animal, None).unwrap();
         let ds = b.freeze().expect("freeze");
         let error = Reasoner::with_proofs(
             &ds,
@@ -1441,12 +1439,12 @@ mod tests {
                 Some(&Latched),
             ),
         )
-        .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
+        .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
     }
 
-    /// The valid neighbour of the refusal above: the same shape with an ORDINARY object
-    /// IRI (no reserved prefix) still builds a recording reasoner.
+    /// The valid neighbour of the refusal above: the same shape with no stop latched still
+    /// builds a recording reasoner.
     #[test]
     fn with_proofs_still_admits_an_ordinary_dataset() {
         let mut b = RdfDatasetBuilder::new();

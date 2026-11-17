@@ -113,7 +113,7 @@
 //! stores the producer chose — which is worth nothing. So a [`DlProof`] carries no ontology
 //! and no clause set. It carries two digests:
 //!
-//! * [`DlProof::input`] — BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology
+//! * [`DlProof::input`] — BLAKE3 over the canonical line sequence of the ontology
 //!   ([`purrdf_core::try_canonicalize`]). This is the PRODUCER-INDEPENDENT identity: two engines
 //!   that read the same graph compute the same 32 bytes, because canonical N-Quads is a
 //!   statement about a quad set rather than about an emission order.
@@ -2068,9 +2068,9 @@ pub enum DlProofError<E = std::convert::Infallible> {
         /// Which half of the signature disagrees.
         detail: String,
     },
-    /// The caller's ontology was refused RDFC-1.0 canonicalization while the checker was
-    /// computing its producer-independent identity — a reserved-vocabulary term, or an
-    /// n-degree search that exhausted its budget.
+    /// The caller's ontology was refused canonicalization while the checker was
+    /// computing its producer-independent identity — the labelling's limit tripped on an input
+    /// it cannot guarantee, or the caller stopped it.
     ///
     /// This retains the original [`purrdf_core::try_canonicalize`] refusal:
     /// a checking context is built from the CALLER's own dataset (a document parsed
@@ -3068,7 +3068,7 @@ impl DlProofContext<'static> {
     /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
     /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
-    /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
+    /// is refused (the labelling's limit, or a caller stop) —
     /// `ontology` is wholly caller-supplied here, so its original refusal is retained.
     pub fn of_ontology<D: purrdf_core::DatasetView>(
         ontology: &D,
@@ -3198,7 +3198,7 @@ pub struct DlProof {
     schema_recording_obstruction: Option<super::bounds::SchemaObstruction>,
     /// Applications shared by all recorded clash prefixes and tableau branches.
     support: Vec<super::support::Link>,
-    /// BLAKE3 over the RDFC-1.0 canonical N-Quads of the ontology — the PRODUCER-INDEPENDENT
+    /// BLAKE3 over the canonical line sequence of the ontology — the PRODUCER-INDEPENDENT
     /// input identity.
     input: [u8; 32],
     /// BLAKE3 over [`CALCULUS_VERSION`] and the clause set — honestly PRODUCER-DERIVED.
@@ -4814,7 +4814,7 @@ impl DlProof {
 /// [`EntailError::Parse`] if the dataset is not a well-formed OWL graph;
 /// [`EntailError::SourceRead`] if the view refuses a preparation read;
 /// [`EntailError::Canonicalization`] if computing its producer-independent identity is
-/// refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
+/// refused (the labelling's limit, or a caller stop) —
 /// `ontology` is wholly caller-supplied here, so its original refusal is retained.
 pub fn prove_consistency<D: purrdf_core::DatasetView>(
     ontology: &D,
@@ -5983,10 +5983,10 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 
 // ── Digests ─────────────────────────────────────────────────────────────────────
 
-/// The PRODUCER-INDEPENDENT identity of an ontology: BLAKE3 over its RDFC-1.0 canonical
-/// N-Quads.
+/// The PRODUCER-INDEPENDENT identity of an ontology: BLAKE3 over its canonical
+/// line sequence.
 ///
-/// Producer-independent because canonical N-Quads is a statement about a quad SET: two engines
+/// Producer-independent because the canonical line sequence is a statement about a quad SET: two engines
 /// that read the same graph, in any order, with any blank-node labelling, compute the same 32
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
@@ -6000,9 +6000,8 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// and with any blank-node labelling, compute the same identity.
 ///
 /// # Errors
-/// [`purrdf_core::CanonError::ReservedVocabulary`] if any term of `ontology` is an IRI in
-/// PurRDF's RDFC-1.0 reserved namespace; [`purrdf_core::CanonError::BudgetExceeded`] if the
-/// n-degree search's call/permutation budget is exhausted first.
+/// [`purrdf_core::CanonError::Refused`] if the labelling's limit trips on an input it cannot
+/// guarantee; [`purrdf_core::CanonError::Stopped`] if the caller stops the run.
 /// [`purrdf_core::CanonError::Read`] if the view refuses a source read.
 pub fn try_ontology_identity<D: purrdf_core::DatasetView>(
     ontology: &D,
@@ -6785,7 +6784,7 @@ mod tests {
     }
 
     /// The ontology `DlProofContext::of_ontology` builds a checking context from is wholly
-    /// caller-supplied, so a reserved-vocabulary IRI ([`purrdf_core::rdfc12::RESERVED_NAMESPACE`])
+    /// caller-supplied, so a stopped canonicalization
     /// must refuse computing its producer-independent identity as a
     /// [`DlProofError::Canonicalization`] VALUE, rather than aborting the process through the
     /// panicking `purrdf_core::canonicalize` `input_digest` used to call. [`refutation`]'s own
@@ -6796,9 +6795,9 @@ mod tests {
     fn of_ontology_refuses_a_stopped_ontology_as_a_value() {
         let mut f = Fixture::new();
         let a = f.iri(EX_A);
-        let reserved = f.iri(&format!("{}bad", purrdf_core::rdfc12::RESERVED_NAMESPACE));
+        let b = f.iri("https://example.org/b");
         let p = f.iri(EX_P);
-        f.quad(a, p, reserved);
+        f.quad(a, p, b);
         let ontology = f.freeze();
         let error = DlProofContext::of_ontology(
             &ontology,
@@ -6807,7 +6806,7 @@ mod tests {
                 Some(&Latched),
             ),
         )
-        .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(
             matches!(error, DlProofError::Canonicalization(_)),
             "{error}"
@@ -6815,16 +6814,16 @@ mod tests {
     }
 
     /// [`prove_consistency`] binds the SAME producer-independent identity [`of_ontology`]
-    /// does, computed before the tableau ever runs — so a reserved-vocabulary ontology must
+    /// does, computed before the tableau ever runs — so a stopped canonicalization must
     /// refuse there too, as an [`EntailError::Canonicalization`] VALUE. [`refutation`]'s own
     /// `prove_consistency(&disjoint_classes())` call is this refusal's valid neighbour.
     #[test]
     fn prove_consistency_refuses_a_stopped_ontology_as_a_value() {
         let mut f = Fixture::new();
         let a = f.iri(EX_A);
-        let reserved = f.iri(&format!("{}bad", purrdf_core::rdfc12::RESERVED_NAMESPACE));
+        let b = f.iri("https://example.org/b");
         let p = f.iri(EX_P);
-        f.quad(a, p, reserved);
+        f.quad(a, p, b);
         let ontology = f.freeze();
         let error = prove_consistency(
             &ontology,
@@ -6833,7 +6832,7 @@ mod tests {
                 Some(&Latched),
             ),
         )
-        .expect_err("a reserved-vocabulary ontology must refuse canonicalization, not panic");
+        .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
     }
 
@@ -7080,7 +7079,7 @@ mod tests {
         legacy.support.clear();
         assert_eq!(
             legacy.digest_hex(),
-            "a0d268999d7768251ed3b0244cb8f7aee0af0a2d24d8470a2a6a19b5fede85dc",
+            "0b0c07ff3a08ba9f086a76a914a248de7fbff0e124a84fcc5cac1add743c2933",
             "the legacy v3 proof digest moved"
         );
         assert_ne!(
@@ -7114,20 +7113,17 @@ mod tests {
     #[test]
     fn the_input_identity_is_the_canonical_ontology_and_not_the_clause_set() {
         let (ontology, proof, ctx) = refutation();
-        let canonical = *purrdf_hash::blake3::hash(
-            purrdf_core::try_canonicalize(
-                &ontology,
-                &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::CANON_CORPUS_POLICY,
-                    None,
-                ),
-            )
-            .unwrap()
-            .nquads()
-            .as_bytes(),
+        let canonical = purrdf_core::try_canonical_digest_view(
+            &ontology,
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
-        .as_bytes();
-        assert_eq!(proof.input(), canonical, "the input digest is RDFC-1.0's");
+        .unwrap()
+        .into_bytes();
+        assert_eq!(
+            proof.input(),
+            canonical,
+            "the input digest is the canonical line-sequence digest"
+        );
         assert_eq!(ctx.input(), canonical, "and the consumer recomputes it");
         assert_ne!(
             proof.input(),
