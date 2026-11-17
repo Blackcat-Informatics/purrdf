@@ -1,0 +1,766 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index f4eb0971a..d591d69a4 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- **An unreadable stack floor refuses instead of switching the guard off
++  (breaking):** when the operating system would not report a native thread's
++  stack bounds (`pthread_getattr_np` and its siblings can fail under memory
++  pressure, and some targets have no such call), `purrdf-stack` used to take a
++  floor of address 0, which made every later stack check on that thread report
++  "enough stack" for the life of the thread. The floor is now a typed
++  `purrdf_stack::FloorError` (`Unsupported`, or `Read` naming the failed call
++  and its code), returned by the new `try_remaining`; while it is unknown
++  `remaining` is `0`, `is_low` is `true`, `reserve` keeps nothing and `widen`
++  returns `false`, so every guard refuses with its own typed stack error. A
++  failed read is not cached, so a thread measures normally once a read
++  succeeds. A thread started by `on_stack` no longer asks the operating system
++  at all: its floor is the requested size below where it starts, so it is
++  measured even when the system call fails.
++
+ - **Breaking: no query computes a content identity.** A dataset's content
+   identity (a digest of every row) is now computed only when a caller asks for
+   it, through the new `purrdf_core::ContentIdentified` trait. No freeze
+diff --git crates/rdf-wasm/src/interleaving.rs crates/rdf-wasm/src/interleaving.rs
+index 6a0c02442..442496513 100644
+--- crates/rdf-wasm/src/interleaving.rs
++++ crates/rdf-wasm/src/interleaving.rs
+@@ -157,6 +157,12 @@ pub const LEDGER: &[ThreadLocal] = &[
+         safety: Safety::Swapped,
+         reason: STACK_CONTEXT,
+     },
++    ThreadLocal {
++        file: "crates/stack/src/lib.rs",
++        name: "READ_FAILS",
++        safety: Safety::NotCompiledIn,
++        reason: TEST_ONLY,
++    },
+     // ── purrdf-shapes: the SHACL engine's ambient scopes and caches ─────────────────
+     ThreadLocal {
+         file: "crates/shapes/src/sparql.rs",
+diff --git crates/stack/README.md crates/stack/README.md
+index ff0aba579..93de4dd41 100644
+--- crates/stack/README.md
++++ crates/stack/README.md
+@@ -16,7 +16,9 @@ SPARQL parser, `purrdf-sparql-algebra`, does not recurse on a request's nesting
+ and needs no such check.) This crate is that measurement, in one place:
+ 
+ * `remaining` — the bytes left below the calling frame before the thread's
+-  stack floor.
++  stack floor, or `0` while the floor is unknown.
++* `try_remaining` — the same measurement, returning the typed `FloorError`
++  when the floor cannot be read.
+ * `is_low` — whether fewer than `MARGIN_BYTES` are left: one thread-local load,
+   one subtraction and one comparison on the hot path.
+ * `replace_floor` — install the floor of a stack a host has switched onto, and
+@@ -33,17 +35,26 @@ and needs no such check.) This crate is that measurement, in one place:
+   they are derived from in their documentation.
+ 
+ Natively the floor is the thread's stack limit as the operating system reports
+-it, read once per thread through a small platform module in this crate: on
+-Linux, Android and NetBSD, `pthread_getattr_np`; on FreeBSD and DragonFly BSD,
++it, read through a small platform module in this crate: on Linux, Android and
++NetBSD, `pthread_getattr_np`; on FreeBSD and DragonFly BSD,
+ `pthread_attr_get_np`; on OpenBSD, `pthread_stackseg_np`; on macOS and iOS,
+ `pthread_get_stackaddr_np` and `pthread_get_stacksize_np`; on Windows,
+ `GetCurrentThreadStackLimits`. Each is a raw `libc` (or, on Windows,
+ `windows-sys`) declaration resolved against the target's own C library at link
+ time — no bundled C source and no build-time C toolchain, so this crate stays a
+-cross-compilable leaf. On any other target — a `libc` this module has no call
+-for, or a target this crate has not been ported to — the bound cannot be read,
+-and the guard this crate backs stays inactive there, exactly as it does before
+-the first successful read on a supported target.
++cross-compilable leaf. A successful read is cached per thread. A failed read is
++not cached and is retried by the next check. A thread started by `on_stack`
++never reads the operating system: its floor comes from the request.
++
++While the floor is unknown the guards refuse: `remaining` is `0` and `is_low`
++is `true`. `try_remaining` returns the typed `FloorError` instead, either
++`Unsupported` or `Read`. On a target with no stack-bounds call — a `libc` this
++module has no call for, or a target this crate has not been ported to — the
++bound can never be read, so on every thread not started by `on_stack` each
++guarded call refuses and returns its stack-exhaustion error (the evaluator's
++`StackExhausted`, for one), rather than the guard switching off. A thread
++started by `on_stack` is still served there, because it takes its floor from the
++request.
+ 
+ On `wasm32` the floor is the low end of the shadow stack. That path never links
+ `libc` or `windows-sys` at all, and builds for `wasm32-unknown-unknown` like
+diff --git crates/stack/src/lib.rs crates/stack/src/lib.rs
+index afde12bec..83c0a2ae0 100644
+--- crates/stack/src/lib.rs
++++ crates/stack/src/lib.rs
+@@ -45,17 +45,23 @@
+ //!   reports it — `platform::stack_floor` reads `pthread_getattr_np`,
+ //!   `pthread_attr_get_np`, `pthread_stackseg_np`, `pthread_get_stackaddr_np` /
+ //!   `pthread_get_stacksize_np`, or `GetCurrentThreadStackLimits`, per platform; see that
+-//!   module for which targets read which call, and which read nothing. It is read once per
+-//!   thread and cached in the same thread-local, so a check costs one thread-local load
++//!   module for which targets read which call, and which read nothing. A successful read is
++//!   cached per thread in the same thread-local, so a check costs one thread-local load
+ //!   and one comparison. A pointer found *below* the cached floor means the thread is
+ //!   running on a different stack than the one the floor was read for (a host that switched
+ //!   onto a stack of its own, say), so the floor is read again rather than refusing: a
+ //!   stack switch never turns into a refusal. (A stack a host switched to *above* the
+ //!   cached floor is measured against the old floor, which overstates what is left: such a
+ //!   host installs its own floor with [`replace_floor`], as the wasm asynchronous lane
+-//!   does.) On a platform whose limit cannot be read at all the measurement is inactive —
+-//!   there is nothing to measure against — and [`remaining`] reports the whole address
+-//!   range below the frame, so nothing refuses.
++//!   does.) A thread started by [`on_stack`] never reads the operating system at all: the
++//!   request gives its floor.
++//! * **A floor that cannot be read** is a failure, never a floor of `0`: on a thread whose
++//!   limit the operating system will not report (a failed call, or a target with no call
++//!   to make) [`try_remaining`] returns the typed [`FloorError`], and every other
++//!   measurement is conservative — [`remaining`] is `0`, [`is_low`] is `true`, [`reserve`]
++//!   keeps nothing and [`widen`] keeps nothing — so a guard refuses instead of going
++//!   unguarded. Nothing is cached from a failed read: the next check asks again, so a
++//!   thread that failed under memory pressure measures normally once a read succeeds.
+ //!
+ //! # The margin
+ //!
+@@ -208,6 +214,9 @@ thread_local! {
+     /// The bytes [`widen`] added to the open scopes, given back when the outermost of
+     /// them closes.
+     static WIDENED: Cell<usize> = const { Cell::new(0) };
++    /// Makes this thread's floor reads fail, as a refused operating-system call does.
++    #[cfg(all(test, not(target_arch = "wasm32")))]
++    static READ_FAILS: Cell<bool> = const { Cell::new(false) };
+ }
+ 
+ /// The current stack pointer, as the address of a local of the calling frame.
+@@ -224,14 +233,74 @@ pub fn stack_pointer() -> usize {
+     core::hint::black_box(&raw const marker) as usize
+ }
+ 
++/// Why the floor of the running thread's stack is not known.
++///
++/// A floor that cannot be read is not a floor of `0`: a guard that treated it as one would
++/// stop refusing for the life of the thread without any signal. Every measurement of this
++/// crate is conservative while the floor is unknown (see [`remaining`] and [`is_low`]), and
++/// [`try_remaining`] reports this value so a caller that must tell "too deep" from "cannot
++/// measure" can.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum FloorError {
++    /// This target exposes no call that reports a thread's stack bounds.
++    Unsupported,
++    /// The operating system call that reports the bounds failed.
++    Read {
++        /// The call that failed.
++        call: &'static str,
++        /// What it returned: the `errno` value the `pthread` calls return directly.
++        code: i32,
++    },
++}
++
++impl purrdf_hash::error::StructuredError for FloorError {
++    purrdf_hash::error_visit! {
++        Unsupported => "stack-floor-unsupported" {},
++        Read { call, code } => "stack-floor-read" {
++            "call" => Code(call),
++            "code" => Signed(i128::from(*code))
++        },
++    }
++}
++
++impl core::fmt::Display for FloorError {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Unsupported => f.write_str(
++                "this target has no call that reports a thread's stack bounds, so the stack \
++                 left cannot be measured and every stack check refuses",
++            ),
++            Self::Read { call, code } => write!(
++                f,
++                "{call} failed with code {code}, so the stack left on this thread cannot be \
++                 measured and its stack checks refuse until a read succeeds"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for FloorError {}
++
+ /// The bytes of stack left below the calling frame before the floor, or `0` when the
+-/// frame is already below it or [`EXHAUSTED`] is installed.
++/// frame is already below it, [`EXHAUSTED`] is installed, or the floor cannot be read
++/// (see [`try_remaining`] for the cause).
+ #[must_use]
+ pub fn remaining() -> usize {
++    try_remaining().unwrap_or(0)
++}
++
++/// [`remaining`], or the [`FloorError`] when the stack's floor is unknown.
++///
++/// # Errors
++///
++/// [`FloorError`] when the operating system does not report this thread's stack bounds.
++/// Nothing is cached from the failure, so the next call reads again.
++pub fn try_remaining() -> Result<usize, FloorError> {
+     let sp = stack_pointer();
+     match FLOOR.with(Cell::get) {
+-        EXHAUSTED => 0,
+-        floor => sp.checked_sub(floor).unwrap_or_else(|| refresh(sp)),
++        EXHAUSTED => Ok(0),
++        floor => sp.checked_sub(floor).map_or_else(|| refresh(sp), Ok),
+     }
+ }
+ 
+@@ -316,8 +385,8 @@ pub fn replace_context(context: Context) -> Context {
+ /// Reserves nest, and add up. A floor read again while one is open (a native thread
+ /// that finds its frame below the cached floor) is raised by what is reserved, and a
+ /// host's [`replace_context`] carries the reserve with the computation that made it. On
+-/// a platform whose stack bound cannot be read, where every guard of this crate is
+-/// inactive, nothing is reserved either.
++/// a thread whose stack bound cannot be read ([`FloorError`]) nothing is reserved: every
++/// check there already refuses.
+ ///
+ /// A reserve is also a *scope* — even one of zero bytes — that [`widen`] can add to while
+ /// the computation runs: whatever it adds is given back when the outermost open scope
+@@ -325,10 +394,10 @@ pub fn replace_context(context: Context) -> Context {
+ /// frame up to where the computation started.
+ pub fn reserve(bytes: usize) -> Reserve {
+     // Read the floor first, so what is raised is a real floor rather than the "not yet
+-    // read" marker.
+-    let _ = remaining();
++    // read" marker. Where it cannot be read there is nothing to raise.
++    let measured = try_remaining().is_ok();
+     let floor = FLOOR.with(Cell::get);
+-    if floor == EXHAUSTED || inactive(floor) {
++    if floor == EXHAUSTED || !measured {
+         return Reserve {
+             bytes: 0,
+             scoped: false,
+@@ -345,12 +414,6 @@ pub fn reserve(bytes: usize) -> Reserve {
+     }
+ }
+ 
+-/// Whether `floor` is the "no readable bound" floor of a native platform, where every
+-/// guard of this crate is inactive.
+-const fn inactive(floor: usize) -> bool {
+-    cfg!(not(target_arch = "wasm32")) && floor == 0
+-}
+-
+ /// Keep `bytes` more stack out of reach of every check in the running computation, for
+ /// as long as its outermost open [`reserve`] scope lives — when the computation finds, as
+ /// it runs, that it needs more than it reserved when it started (the SPARQL evaluator
+@@ -359,8 +422,9 @@ const fn inactive(floor: usize) -> bool {
+ /// Returns whether the bytes are kept. They are not, and nothing changes, when no scope
+ /// is open (nothing would give them back), when a refusal is latched ([`EXHAUSTED`] is
+ /// installed), or when the calling frame would be left with less than [`MARGIN_BYTES`]
+-/// above the raised floor — the caller refuses then, typed. On a platform whose stack
+-/// bound cannot be read nothing is measured, so nothing is kept and `true` is returned.
++/// above the raised floor — the caller refuses then, typed. They are not kept either,
++/// and `false` is returned, when the stack bound cannot be read ([`FloorError`]): there
++/// is nothing to raise, and every check there refuses.
+ ///
+ /// The bytes are given back when the outermost scope closes rather than the innermost,
+ /// because what the computation built with them may be walked in any frame up to the
+@@ -368,12 +432,12 @@ const fn inactive(floor: usize) -> bool {
+ /// has at least the margin and every widened byte above the real floor.
+ #[must_use]
+ pub fn widen(bytes: usize) -> bool {
+-    let _ = remaining();
+-    let floor = FLOOR.with(Cell::get);
+-    if inactive(floor) || bytes == 0 {
++    if bytes == 0 {
+         return true;
+     }
+-    if floor == EXHAUSTED || SCOPES.with(Cell::get) == 0 {
++    let measured = try_remaining().is_ok();
++    let floor = FLOOR.with(Cell::get);
++    if !measured || floor == EXHAUSTED || SCOPES.with(Cell::get) == 0 {
+         return false;
+     }
+     let raised = floor.saturating_add(bytes);
+@@ -574,25 +638,33 @@ pub fn is_low() -> bool {
+ fn is_low_cold(sp: usize) -> bool {
+     let left = match FLOOR.with(Cell::get) {
+         EXHAUSTED => return true,
+-        floor => sp.checked_sub(floor).unwrap_or_else(|| refresh(sp)),
++        // An unreadable floor leaves nothing to measure against: nothing is left.
++        floor => sp
++            .checked_sub(floor)
++            .unwrap_or_else(|| refresh(sp).unwrap_or(0)),
+     };
+     left < MARGIN_BYTES
+ }
+ 
+-/// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it.
++/// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it;
++/// the [`FloorError`] when it cannot be read, caching nothing.
+ #[cfg(not(target_arch = "wasm32"))]
+-fn refresh(sp: usize) -> usize {
++fn refresh(sp: usize) -> Result<usize, FloorError> {
+     // `platform::stack_floor` reads the thread's bounds directly from the operating
+     // system rather than from any particular frame, so — unlike a floor derived from a
+     // "bytes left" figure measured a few frames down — this is the thread's exact floor,
+     // not an approximation of it.
+-    let floor = match platform::stack_floor() {
+-        // What the open reserves keep is above the real floor.
+-        Some(floor) => floor.saturating_add(RESERVED.with(Cell::get)),
+-        None => 0,
+-    };
++    #[cfg(test)]
++    if READ_FAILS.with(Cell::get) {
++        return Err(FloorError::Read {
++            call: "injected",
++            code: 12,
++        });
++    }
++    // What the open reserves keep is above the real floor.
++    let floor = platform::stack_floor()?.saturating_add(RESERVED.with(Cell::get));
+     FLOOR.with(|cell| cell.set(floor));
+-    sp.saturating_sub(floor)
++    Ok(sp.saturating_sub(floor))
+ }
+ 
+ /// The floor of the synchronous shadow stack when no host has installed one: address 0.
+@@ -617,13 +689,13 @@ const DEFAULT_FLOOR: usize = 0;
+ /// re-reads (a host that switched stacks under it) cannot arise here, where every stack
+ /// switch installs its floor.
+ #[cfg(target_arch = "wasm32")]
+-fn refresh(sp: usize) -> usize {
++fn refresh(sp: usize) -> Result<usize, FloorError> {
+     if FLOOR.with(Cell::get) == UNKNOWN {
+         let floor = DEFAULT_FLOOR + RESERVED.with(Cell::get);
+         FLOOR.with(|cell| cell.set(floor));
+-        return sp.saturating_sub(floor);
++        return Ok(sp.saturating_sub(floor));
+     }
+-    0
++    Ok(0)
+ }
+ 
+ /// Why [`on_stack`] did not run its computation.
+@@ -750,7 +822,15 @@ fn on_thread<'env, R: Send + 'env>(
+     std::thread::scope(|scope| {
+         let handle = std::thread::Builder::new()
+             .stack_size(bytes)
+-            .spawn_scoped(scope, f)
++            .spawn_scoped(scope, move || {
++                // The request is the thread's stack: its floor is `bytes` below where the
++                // thread starts, so nothing here asks the operating system and nothing
++                // can fail. The mapping is never smaller than the request (the system
++                // rounds up, never down), and the few kilobytes the C library keeps at
++                // its top are far inside the margin.
++                replace_context(Context::on_floor(stack_pointer().saturating_sub(bytes)));
++                f()
++            })
+             .map_err(|cause| StackError::Spawn(cause.into()))?;
+         match handle.join() {
+             Ok(value) => Ok(value),
+@@ -817,8 +897,8 @@ mod tests {
+         const BYTES: usize = 4 * 1024 * 1024;
+         let (top, below) =
+             on_stack(BYTES, || (remaining(), deeper(16, &remaining))).expect("spawn");
+-        // At least what was asked for, less the frames already live. (The C library may
+-        // hand a thread more than it asked for, never less.)
++        // At most what was asked for (the request gives the floor), less the frames
++        // already live.
+         assert!(
+             top > BYTES - 64 * 1024,
+             "{top} bytes left of at least {BYTES}"
+@@ -885,6 +965,18 @@ mod tests {
+ 
+     /// A floor installed above the running frame (a host that switched away without
+     /// putting the previous floor back) is read again rather than reporting nothing left.
++    /// Only on a target whose operating system reports the bound to read again.
++    #[cfg(any(
++        target_os = "linux",
++        target_os = "android",
++        target_os = "netbsd",
++        target_os = "freebsd",
++        target_os = "dragonfly",
++        target_os = "openbsd",
++        target_os = "macos",
++        target_os = "ios",
++        windows,
++    ))]
+     #[test]
+     fn a_floor_above_the_frame_is_read_again() {
+         let (low, left) = on_stack(1024 * 1024, || {
+@@ -1081,26 +1173,39 @@ mod tests {
+ 
+     /// A floor read again inside a reserve — a native thread whose frame is found below
+     /// the cached floor — is raised by what is reserved, so the reserve survives it.
++    #[cfg(any(
++        target_os = "linux",
++        target_os = "android",
++        target_os = "netbsd",
++        target_os = "freebsd",
++        target_os = "dragonfly",
++        target_os = "openbsd",
++        target_os = "macos",
++        target_os = "ios",
++        windows,
++    ))]
+     #[test]
+     fn a_floor_read_again_keeps_the_reserve() {
+         on_stack(4 * 1024 * 1024, || {
+-            let before = remaining();
++            // The system's own report of this thread's floor: what a floor read again lands on.
++            let system_floor = platform::stack_floor().expect("a supported platform reads a floor");
+             let kept = reserve(1024 * 1024);
+-            let raised = FLOOR.with(Cell::get);
+             // As if the thread had switched stacks: the cached floor is above the frame.
+             replace_floor(stack_pointer() + 4096);
+             let within = remaining();
+             assert_eq!(
+                 FLOOR.with(Cell::get),
+-                raised,
++                system_floor + 1024 * 1024,
+                 "the floor read again is raised"
+             );
+             assert!(
+-                within + 1024 * 1024 <= before + 1024,
+-                "{within} bytes left inside a 1 MiB reserve of {before}"
++                (stack_pointer() - system_floor - 1024 * 1024 - 1024
++                    ..stack_pointer() - system_floor - 1024 * 1024 + 1024)
++                    .contains(&within),
++                "{within} bytes left inside a 1 MiB reserve"
+             );
+             drop(kept);
+-            assert!(remaining() + 1024 > before);
++            assert_eq!(FLOOR.with(Cell::get), system_floor);
+         })
+         .expect("spawn");
+     }
+@@ -1247,9 +1352,8 @@ mod tests {
+         let caller_floor = caller_sp - remaining();
+         let (sp, left) =
+             on_stack(BYTES, || (stack_pointer(), remaining())).expect("a 512 KiB thread starts");
+-        // The operating system may round a thread's stack up to a page or its minimum, and
+-        // the C library may hand a thread a cached stack several times the request, never
+-        // less; 64 KiB covers the frames already live.
++        // The floor is the request, so what is left is the request less the frames already
++        // live (64 KiB covers them), however large a stack the C library actually mapped.
+         assert!(
+             left >= BYTES - 64 * 1024,
+             "{left} bytes left on a {BYTES}-byte stack"
+@@ -1345,6 +1449,79 @@ mod tests {
+         .expect("spawn");
+     }
+ 
++    /// A thread whose floor the operating system will not report is never unguarded: every
++    /// measurement refuses (nothing left, low, nothing reserved or widened) and
++    /// [`try_remaining`] names the failed call. Nothing is cached from the failure, so the
++    /// neighbouring case — the same thread once a read succeeds — measures its real stack.
++    #[cfg(any(
++        target_os = "linux",
++        target_os = "android",
++        target_os = "netbsd",
++        target_os = "freebsd",
++        target_os = "dragonfly",
++        target_os = "openbsd",
++        target_os = "macos",
++        target_os = "ios",
++        windows,
++    ))]
++    #[test]
++    fn an_unreadable_floor_refuses_every_check_and_recovers_when_a_read_succeeds() {
++        let outcome = std::thread::Builder::new()
++            .stack_size(2 * 1024 * 1024)
++            .spawn(|| {
++                READ_FAILS.with(|fails| fails.set(true));
++                let refused = (
++                    remaining(),
++                    is_low(),
++                    try_remaining(),
++                    reserve(4096).bytes(),
++                    widen(4096),
++                    scoped(),
++                );
++                READ_FAILS.with(|fails| fails.set(false));
++                let recovered = (is_low(), try_remaining());
++                (refused, recovered)
++            })
++            .expect("spawn")
++            .join()
++            .expect("the thread runs");
++        let (refused, recovered) = outcome;
++        assert_eq!(
++            refused,
++            (
++                0,
++                true,
++                Err(FloorError::Read {
++                    call: "injected",
++                    code: 12
++                }),
++                0,
++                false,
++                false
++            )
++        );
++        assert!(!recovered.0, "a thread whose floor reads is not low");
++        assert!(recovered.1.is_ok_and(|left| left > MARGIN_BYTES));
++    }
++
++    /// A thread `on_stack` starts has its floor from the request, so a failing system read
++    /// does not touch it: a shallow computation is measured and runs, and a deep one is
++    /// refused at the margin, exactly as when reads succeed.
++    #[cfg(not(target_arch = "wasm32"))]
++    #[test]
++    fn an_on_stack_thread_is_measured_while_system_reads_fail() {
++        let (shallow, deep) = on_stack(512 * 1024, || {
++            READ_FAILS.with(|fails| fails.set(true));
++            (deeper(10, &is_low), deeper(100, &is_low))
++        })
++        .expect("spawn");
++        assert!(
++            !shallow,
++            "40 KiB of frames on a 512 KiB stack leaves the margin"
++        );
++        assert!(deep, "400 KiB of frames on a 512 KiB stack eats the margin");
++    }
++
+     /// The typed refusal says what was asked for and what was left.
+     #[test]
+     fn the_refusal_names_the_request_and_what_was_left() {
+diff --git crates/stack/src/platform.rs crates/stack/src/platform.rs
+index f41f9b5db..065cb0462 100644
+--- crates/stack/src/platform.rs
++++ crates/stack/src/platform.rs
+@@ -1,13 +1,14 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! The calling thread's stack bounds, read from the operating system once per thread.
++//! The calling thread's stack bounds, read from the operating system. The caller caches a
++//! successful read per thread and asks again after a failed one.
+ //!
+ //! [`stack_floor`] returns the lowest address the calling thread's stack may reach — the
+-//! value [`super::refresh`] caches as the thread-local floor — or `None` where this target
+-//! exposes no way to ask, in which case the measurement stays inactive exactly as it does
+-//! before the first successful read on a supported target: see the [crate
+-//! documentation](super).
++//! value [`super::refresh`] caches as the thread-local floor — or the [`FloorError`] that
++//! says why it cannot: the target exposes no way to ask ([`FloorError::Unsupported`]), or
++//! the call failed ([`FloorError::Read`], naming the call and the code it returned). A
++//! failure is never turned into a floor: see the [crate documentation](super).
+ //!
+ //! * **Linux, Android, NetBSD**: `pthread_getattr_np` fills a `pthread_attr_t` for the
+ //!   calling thread, and `pthread_attr_getstack` reads the low end of the stack it
+@@ -21,7 +22,7 @@
+ //! * **Windows**: `GetCurrentThreadStackLimits` reports the low and high bounds directly.
+ //! * Every other target — every other Unix `libc` does not bind one of the calls above for
+ //!   (illumos, Solaris, Haiku, the GNU/Hurd, ...), and any target this crate has not been
+-//!   ported to — reads nothing: [`stack_floor`] returns `None`.
++//!   ported to — reads nothing: [`stack_floor`] returns [`FloorError::Unsupported`].
+ //!
+ //! Every call here reads the *calling* thread's own bounds through its own `pthread_t` (or,
+ //! on Windows, no handle at all), so none of it reaches across threads; none of it is safe
+@@ -37,10 +38,12 @@
+ ))]
+ use core::mem::MaybeUninit;
+ 
+-/// The lowest address the calling thread's stack may reach, or `None` where this target's
+-/// `libc` (or, on Windows, the platform SDK) exposes no way to ask.
++use crate::FloorError;
++
++/// The lowest address the calling thread's stack may reach, or the [`FloorError`] naming the call
++/// that failed.
+ #[cfg(any(target_os = "linux", target_os = "android", target_os = "netbsd"))]
+-pub(crate) fn stack_floor() -> Option<usize> {
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
+     // SAFETY: `attr` is a plain-old-data struct with no destructor of its own, so holding
+     // it uninitialized until `pthread_attr_init` fills it in is sound; every path below
+     // runs `pthread_attr_destroy` on it exactly once, after `pthread_attr_init` succeeded,
+@@ -49,71 +52,111 @@ pub(crate) fn stack_floor() -> Option<usize> {
+     // which all name locals it owns.
+     unsafe {
+         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
+-        if libc::pthread_attr_init(attr.as_mut_ptr()) != 0 {
+-            return None;
++        let status = libc::pthread_attr_init(attr.as_mut_ptr());
++        if status != 0 {
++            return Err(FloorError::Read {
++                call: "pthread_attr_init",
++                code: status,
++            });
+         }
+         let mut attr = attr.assume_init();
+         let mut stack_addr: *mut core::ffi::c_void = core::ptr::null_mut();
+         let mut stack_size: usize = 0;
+-        let floor = (libc::pthread_getattr_np(libc::pthread_self(), &raw mut attr) == 0
+-            && libc::pthread_attr_getstack(
++        let status = libc::pthread_getattr_np(libc::pthread_self(), &raw mut attr);
++        let floor = if status != 0 {
++            Err(FloorError::Read {
++                call: "pthread_getattr_np",
++                code: status,
++            })
++        } else {
++            let status = libc::pthread_attr_getstack(
+                 &raw const attr,
+                 &raw mut stack_addr,
+                 &raw mut stack_size,
+-            ) == 0)
+-            .then_some(stack_addr as usize);
++            );
++            if status == 0 {
++                Ok(stack_addr as usize)
++            } else {
++                Err(FloorError::Read {
++                    call: "pthread_attr_getstack",
++                    code: status,
++                })
++            }
++        };
+         libc::pthread_attr_destroy(&raw mut attr);
+         floor
+     }
+ }
+ 
+-/// The lowest address the calling thread's stack may reach, or `None` where this target's
+-/// `libc` exposes no way to ask.
++/// The lowest address the calling thread's stack may reach, or the [`FloorError`] naming the call
++/// that failed.
+ #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+-pub(crate) fn stack_floor() -> Option<usize> {
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
+     // SAFETY: as the Linux/Android/NetBSD case above; `pthread_attr_get_np` is this
+     // family's name for the same "attributes of an already-running thread" call
+     // `pthread_getattr_np` is elsewhere, with the same output contract.
+     unsafe {
+         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
+-        if libc::pthread_attr_init(attr.as_mut_ptr()) != 0 {
+-            return None;
++        let status = libc::pthread_attr_init(attr.as_mut_ptr());
++        if status != 0 {
++            return Err(FloorError::Read {
++                call: "pthread_attr_init",
++                code: status,
++            });
+         }
+         let mut attr = attr.assume_init();
+         let mut stack_addr: *mut core::ffi::c_void = core::ptr::null_mut();
+         let mut stack_size: usize = 0;
+-        let floor = (libc::pthread_attr_get_np(libc::pthread_self(), &raw mut attr) == 0
+-            && libc::pthread_attr_getstack(
++        let status = libc::pthread_attr_get_np(libc::pthread_self(), &raw mut attr);
++        let floor = if status != 0 {
++            Err(FloorError::Read {
++                call: "pthread_attr_get_np",
++                code: status,
++            })
++        } else {
++            let status = libc::pthread_attr_getstack(
+                 &raw const attr,
+                 &raw mut stack_addr,
+                 &raw mut stack_size,
+-            ) == 0)
+-            .then_some(stack_addr as usize);
++            );
++            if status == 0 {
++                Ok(stack_addr as usize)
++            } else {
++                Err(FloorError::Read {
++                    call: "pthread_attr_getstack",
++                    code: status,
++                })
++            }
++        };
+         libc::pthread_attr_destroy(&raw mut attr);
+         floor
+     }
+ }
+ 
+-/// The lowest address the calling thread's stack may reach, or `None` where this target's
+-/// `libc` exposes no way to ask.
++/// The lowest address the calling thread's stack may reach, or the [`FloorError`] naming the call
++/// that failed.
+ #[cfg(target_os = "openbsd")]
+-pub(crate) fn stack_floor() -> Option<usize> {
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
+     // SAFETY: `info` is a plain-old-data struct `pthread_stackseg_np` writes wholesale
+     // before this function reads any field of it, guarded by that call's own return value;
+     // nothing else touches `info`.
+     unsafe {
+         let mut info = MaybeUninit::<libc::stack_t>::uninit();
+-        if libc::pthread_stackseg_np(libc::pthread_self(), info.as_mut_ptr()) != 0 {
+-            return None;
++        let status = libc::pthread_stackseg_np(libc::pthread_self(), info.as_mut_ptr());
++        if status != 0 {
++            return Err(FloorError::Read {
++                call: "pthread_stackseg_np",
++                code: status,
++            });
+         }
+         let info = info.assume_init();
+-        Some((info.ss_sp as usize).saturating_sub(info.ss_size))
++        Ok((info.ss_sp as usize).saturating_sub(info.ss_size))
+     }
+ }
+ 
+ /// The lowest address the calling thread's stack may reach.
+ #[cfg(any(target_os = "macos", target_os = "ios"))]
+-pub(crate) fn stack_floor() -> Option<usize> {
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
+     // SAFETY: both calls take the calling thread's own `pthread_t`, which `pthread_self`
+     // always returns successfully, and return their result by value rather than writing
+     // through a pointer, so there is nothing here for either call to leave uninitialized.
+@@ -121,13 +164,13 @@ pub(crate) fn stack_floor() -> Option<usize> {
+         let thread = libc::pthread_self();
+         let top = libc::pthread_get_stackaddr_np(thread) as usize;
+         let size = libc::pthread_get_stacksize_np(thread);
+-        Some(top.saturating_sub(size))
++        Ok(top.saturating_sub(size))
+     }
+ }
+ 
+ /// The lowest address the calling thread's stack may reach.
+ #[cfg(windows)]
+-pub(crate) fn stack_floor() -> Option<usize> {
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
+     let mut low: usize = 0;
+     let mut high: usize = 0;
+     // SAFETY: both out-parameters are plain `usize` locals this function owns and holds
+@@ -140,12 +183,12 @@ pub(crate) fn stack_floor() -> Option<usize> {
+         );
+     }
+     let _ = high;
+-    Some(low)
++    Ok(low)
+ }
+ 
+-/// `None`: this target's `libc` (Illumos, Solaris, Haiku, the GNU/Hurd, ...), or any
++/// [`FloorError::Unsupported`]: this target's `libc` (Illumos, Solaris, Haiku, the GNU/Hurd, ...), or any
+ /// target this crate has not been ported to, exposes no call this module knows to read the
+-/// thread's stack bounds with, so the measurement this crate makes stays inactive.
++/// thread's stack bounds with, so there is no floor to measure against.
+ #[cfg(not(any(
+     target_os = "linux",
+     target_os = "android",
+@@ -157,8 +200,8 @@ pub(crate) fn stack_floor() -> Option<usize> {
+     target_os = "ios",
+     windows,
+ )))]
+-pub(crate) fn stack_floor() -> Option<usize> {
+-    None
++pub(crate) fn stack_floor() -> Result<usize, FloorError> {
++    Err(FloorError::Unsupported)
+ }
+ 
+ /// Tests exercised only where [`stack_floor`] is expected to read a real bound — the same
+@@ -193,13 +236,13 @@ mod tests {
+         value
+     }
+ 
+-    /// A supported platform reads a floor: `Some`, strictly below the stack pointer near
++    /// A supported platform reads a floor: `Ok`, strictly below the stack pointer near
+     /// the thread's entry point (so the headroom above it is positive), and nowhere near
+     /// the enormous figure a floor of `0` (or another wrong, tiny value) would produce —
+     /// the libc may hand a thread more than the size it asked for, but never orders of
+     /// magnitude more.
+     #[test]
+-    fn stack_floor_is_some_and_bounds_positive_headroom() {
++    fn stack_floor_is_ok_and_bounds_positive_headroom() {
+         const BYTES: usize = 2 * 1024 * 1024;
+         let (sp, floor) =
+             crate::on_stack(BYTES, || (stack_pointer(), stack_floor())).expect("spawn");

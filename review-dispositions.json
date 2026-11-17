@@ -1,0 +1,44 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABEnVS1w": {
+    "resolution": "addressed",
+    "reason": "The structured form is now the query keyword (SELECT, CONSTRUCT, DESCRIBE, ASK) from the parsed query; the message keeps the result kind. A test drives all four forms through evaluate_query with a fuel ceiling and checks the unbounded neighbour answers.",
+    "commit": "c85f5bb6bf22cf26e161afa5e7564ce411593de9",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-17T19:27:19Z",
+      "state": null,
+      "commit": "ac6d3b0334d6ef335855d391f20fcc61d46d578b",
+      "path": "crates/sparql-eval/src/eval.rs",
+      "line": 11192,
+      "body_sha256": "330fea0a381a1c90faef22089e219c80870333a2bcc7d782a0cbe282d2a4dc85"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABYlvKOg": {
+    "resolution": "addressed",
+    "reason": "The review's one finding, the query form in the structured cause, is fixed in c85f5bb6b.",
+    "commit": "c85f5bb6bf22cf26e161afa5e7564ce411593de9",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-17T19:27:19Z",
+      "state": "COMMENTED",
+      "commit": "ac6d3b0334d6ef335855d391f20fcc61d46d578b",
+      "path": null,
+      "line": null,
+      "body_sha256": "2c73b32c61eed26f77116081202a208c04a30dc25a856ec59fcf49ece41b5119"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABnMSmxg": {
+    "resolution": "acknowledged",
+    "reason": "Summary comment with no finding of its own.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-17T19:27:24Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "f8480bc18c04fd048c038f91ef79ade63575a2200f17b16db44c15ad398eec03"
+    }
+  }
+}

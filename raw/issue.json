@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## What this adds\n\nThe completion refusal of the fallible SPARQL query boundary gets a typed cause. Its refusals are carried as a structured value that can be inspected, rather than as a rendered message.\n\nThe change adds the `CompletionRefusal` type to the SPARQL evaluator's governor, and the types it carries (`Certificate`, `ChildEdge`, `ChildRole`, `PrefixFidelity`), with their structured error, display and error implementations. Existing constructors and string-carrying variants stay in place for current callers.\n\n## Provenance\n\nPorted from the earlier structured-error branch for this work. The port is additive: the old behaviour stays, and the typed family is added alongside it.\n\n## Acceptance\n\n- The evaluator's tests pass, and clippy is clean under the workspace lints.\n- Existing callers in dependent crates still compile.\n- A focused test protects the completion refusal's structured fields.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-16T17:20:09Z",
+  "labels": [],
+  "milestone": null,
+  "number": 1356,
+  "state": "OPEN",
+  "title": "Typed cause for the completion refusal of the SPARQL query boundary",
+  "updatedAt": "2026-11-16T17:20:09Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1356"
+}

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal",
+  "branch": "paudley/1356-typed-cause-for-the-completion-refusal",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "4ba8e0b0eab1ac191dd95bd34bf086b528dd0dff",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal/.stage/typed-cause-for-the-completion-refusal/sync/20261117T171648-573ab1cb24954418b4cf884aa6ee1f13",
+  "conflicts": [],
+  "status": "completed",
+  "base": "db162d07205856d027001b094abbb4768c8de6b6",
+  "merge_bases": [
+    "d16eb62baa1042fb76b11b0d1925c9260fff32e7"
+  ],
+  "merge_index": "08ce846631e6d1fed932e617d0250c30383ea5a159b50390895a9bf9f1e7f848",
+  "candidate_tree": "9536979698afc1be68b5284f05d743f9540fd637",
+  "candidate_patch": "candidate-74b11a9364b44829b8d0a1ac7fe57131.patch",
+  "validation_records": [],
+  "commit": "b625e3be4a73c0e342512fd60ca610ba58e02ce7",
+  "tree": "9536979698afc1be68b5284f05d743f9540fd637"
+}

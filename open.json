@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1356,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal",
+  "branch": "paudley/1356-typed-cause-for-the-completion-refusal",
+  "slug": "typed-cause-for-the-completion-refusal",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal/.stage/typed-cause-for-the-completion-refusal",
+  "stage_tracked": true,
+  "base": "main",
+  "base_oid": "363ace6198fd10ef3d4f6c17b27e1a7c2c492b81",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal",
+    "branch:paudley/1356-typed-cause-for-the-completion-refusal",
+    "ignored:30314 files (30312 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/05/042e6225658b07: /opt/.cargo/05/042e6225658b07/debug/.cargo-build-lock; skipping busy source /opt/.cargo/05/042e6225658b07: /opt/.cargo/05/042e6225658b07/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrdf/.worktrees/1348-failed-stack-bounds-read-silently caches into /home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal plus 180 dependency units from 1 other checkouts in 50.9s; 20818 unchanged files keep their built mtimes; 4 other files take the seed time and rebuild; 27 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal/.stage/typed-cause-for-the-completion-refusal",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1356-typed-cause-for-the-completion-refusal/.stage/typed-cause-for-the-completion-refusal/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-16T11:23:18-0600",
+  "seed_error": ""
+}
