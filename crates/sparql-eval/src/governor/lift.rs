@@ -324,12 +324,21 @@ impl core::fmt::Display for CertificateDescription<'_> {
     }
 }
 
+/// The query form of a complete-only entry point that refused.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CompletionForm {
+    /// The query's form keyword: `SELECT`, `CONSTRUCT`, `DESCRIBE` or `ASK`.
+    pub(crate) query: &'static str,
+    /// The kind of result that form returns, as the message names it.
+    pub(crate) result: &'static str,
+}
+
 /// The refusal of a governor trip at an entry point that can only return a complete
 /// result: which query form refused, how many rows were held, and the certificate that
 /// says what those rows bound. The rows themselves are released.
 #[derive(Debug)]
 struct CompletionRefusal {
-    form: Option<&'static str>,
+    form: Option<CompletionForm>,
     rows: usize,
     certificate: Certificate,
     // The certificate's path allocation survives the evaluation context. Keep its
@@ -340,7 +349,7 @@ struct CompletionRefusal {
 impl purrdf_hash::error::StructuredError for CompletionRefusal {
     purrdf_hash::error_visit! {
         @record self { form, rows, certificate, _allocation } => "eval-invariant-completion-required" {
-            "form" => Value(self.form.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Code)),
+            "form" => Value(self.form.map_or(purrdf_hash::error::ErrorValue::Absent, |form| purrdf_hash::error::ErrorValue::Code(form.query))),
             "rows" => Unsigned(self.rows as u128),
             "certificate" => Record(&self.certificate),
         }
@@ -355,7 +364,8 @@ impl core::fmt::Display for CompletionRefusal {
             ),
             Some(form) => write!(
                 formatter,
-                "a governor tripped on a query entry point that can only return a complete {form} result"
+                "a governor tripped on a query entry point that can only return a complete {} result",
+                form.result
             ),
         }?;
         write!(
@@ -489,7 +499,7 @@ impl<I: ViewTermId> Truncation<I> {
     /// stating what they bound. The rows are released.
     pub(crate) fn completion_error(
         self,
-        form: Option<&'static str>,
+        form: Option<CompletionForm>,
         workspace: &crate::WorkspaceCapability,
     ) -> crate::EvalError {
         let rows = self.rows.len();
@@ -992,9 +1002,13 @@ mod tests {
         let lifted = ascend(&plan, 1, Truncation::origin(one_row(), FUEL));
         let workspace = crate::WorkspaceCapability::resident();
 
-        let crate::EvalError::RetainedNativeFailure(failure) =
-            lifted.clone().completion_error(Some("SELECT"), &workspace)
-        else {
+        let crate::EvalError::RetainedNativeFailure(failure) = lifted.clone().completion_error(
+            Some(CompletionForm {
+                query: "SELECT",
+                result: "solution",
+            }),
+            &workspace,
+        ) else {
             panic!("a complete-only refusal must retain its typed cause");
         };
         assert_eq!(failure.kind(), crate::NativeDiagnosticKind::Internal);
@@ -1008,7 +1022,7 @@ mod tests {
         assert_eq!(path[0].child("role").code, "spine-antitone");
         assert_eq!(path[0].child("fidelity").code, "prefix-bag-only");
         assert_eq!(certificate.child("tripped").code, Capture::read(&FUEL).code);
-        assert!(failure.to_string().contains("complete SELECT result"));
+        assert!(failure.to_string().contains("complete solution result"));
         assert!(failure.to_string().contains("an upper bound of 1 row(s)"));
 
         // The entry point with no query form reports the form as absent.
@@ -1021,6 +1035,78 @@ mod tests {
             Capture::read(bag.cause()).field("form"),
             ErrorValue::Absent
         ));
+    }
+
+    #[test]
+    fn a_complete_only_query_records_its_query_form_and_its_unbounded_neighbour_answers() {
+        // The structured form is the query's keyword, so CONSTRUCT and DESCRIBE, which
+        // return the same result kind, stay distinguishable; the message keeps the
+        // result kind. The same query without a ceiling answers.
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_sparql_algebra::SparqlParser;
+        use purrdf_testkit::error_capture::Capture;
+
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("https://example.org/p").expect("iri");
+        for index in 0..32 {
+            let subject = builder
+                .intern_iri(&format!("https://example.org/s{index}"))
+                .expect("iri");
+            builder
+                .push_quad(subject, predicate, subject, None)
+                .expect("quad");
+        }
+        let dataset = builder.freeze().expect("freeze");
+        let cases = [
+            (
+                "SELECT * WHERE { ?s <https://example.org/p> ?o }",
+                "SELECT",
+                "solution",
+            ),
+            (
+                "CONSTRUCT { ?o <https://example.org/p> ?s } WHERE { ?s <https://example.org/p> ?o }",
+                "CONSTRUCT",
+                "graph",
+            ),
+            (
+                "DESCRIBE ?s WHERE { ?s <https://example.org/p> ?o }",
+                "DESCRIBE",
+                "graph",
+            ),
+            ("ASK { ?s <https://example.org/p> ?o }", "ASK", "boolean"),
+        ];
+        for (text, keyword, result) in cases {
+            let query = SparqlParser::new().parse_query(text).expect("parse");
+            let state = std::sync::Arc::new(crate::GovernorState::new(
+                &crate::QueryGovernors::UNBOUNDED.with_fuel(1),
+            ));
+            let mut ctx = crate::EvalCtx::new(&dataset).with_governors(state);
+            let Err(crate::EvalError::RetainedNativeFailure(failure)) =
+                crate::evaluate_query(&query, &mut ctx)
+            else {
+                panic!("{keyword}: a fuel trip at a complete-only entry point must refuse");
+            };
+            let cause = Capture::read(failure.cause());
+            assert_eq!(
+                cause.code, "eval-invariant-completion-required",
+                "{keyword}"
+            );
+            assert!(
+                matches!(cause.field("form"), ErrorValue::Code(form) if form == keyword),
+                "{keyword}: the structured form is the query keyword"
+            );
+            assert!(
+                failure
+                    .to_string()
+                    .contains(&format!("complete {result} result")),
+                "{keyword}: the message names the result kind"
+            );
+
+            let mut ctx = crate::EvalCtx::new(&dataset);
+            crate::evaluate_query(&query, &mut ctx).unwrap_or_else(|error| {
+                panic!("{keyword}: the ungoverned neighbour answers: {error}")
+            });
+        }
     }
 
     #[test]

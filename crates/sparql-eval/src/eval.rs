@@ -46,7 +46,7 @@ use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
 use crate::governor::GovernorState;
 use crate::governor::ledger::ChargeLedger;
-use crate::governor::lift::{Evaluated, ExpressionBarrier, Truncation};
+use crate::governor::lift::{CompletionForm, Evaluated, ExpressionBarrier, Truncation};
 use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
@@ -11189,7 +11189,23 @@ pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
         EvaluatedOutcome::Truncated {
             outcome,
             certificate,
-        } => Err(certificate.completion_error(Some(outcome.form_label()), &ctx.growth)),
+        } => Err(certificate.completion_error(
+            Some(CompletionForm {
+                query: query_form_keyword(query),
+                result: outcome.form_label(),
+            }),
+            &ctx.growth,
+        )),
+    }
+}
+
+/// The keyword of `query`'s form, as the query spells it.
+const fn query_form_keyword(query: &Query) -> &'static str {
+    match query {
+        Query::Select { .. } => "SELECT",
+        Query::Construct { .. } => "CONSTRUCT",
+        Query::Describe { .. } => "DESCRIBE",
+        Query::Ask { .. } => "ASK",
     }
 }
 
