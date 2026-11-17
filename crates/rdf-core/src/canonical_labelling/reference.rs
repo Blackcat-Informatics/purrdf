@@ -1170,16 +1170,20 @@ pub(crate) fn merge_factors(mut factors: Vec<Factor>) -> Vec<Factor> {
     out
 }
 
-/// Final positions of the nodes of a result path, by local node.
+/// Final positions of the nodes of a result path, by local node, over a heap
+/// work list: the depth of the path costs no machine stack.
 pub(crate) fn positions(tree: &Tree, o: u64, out: &mut [u64]) {
-    for &(v, q) in &tree.fixed {
-        out[v] = o + (q - tree.p);
-    }
-    let s = tree.fixed.len() as u64;
-    let mut t = 0;
-    for nested in &tree.nested {
-        positions(nested, o + s + t, out);
-        t += nested.n_k;
+    let mut work = vec![(tree, o)];
+    while let Some((tree, o)) = work.pop() {
+        for &(v, q) in &tree.fixed {
+            out[v] = o + (q - tree.p);
+        }
+        let s = tree.fixed.len() as u64;
+        let mut t = 0;
+        for nested in &tree.nested {
+            work.push((nested, o + s + t));
+            t += nested.n_k;
+        }
     }
 }
 

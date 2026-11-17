@@ -44,12 +44,14 @@
 //! over a heap work list: no nested term is built and none is walked on the
 //! machine stack.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use super::document::{
     Composites, DocumentError, composite_payload, composite_source, is_composite_source,
 };
+use super::lines::Interner;
 use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
     Tok, iri_encoding, literal_encoding,
@@ -210,7 +212,7 @@ enum Slot<Id> {
     Left,
 }
 
-struct Lowering<'a, 's, D: DatasetView> {
+struct Lowering<'a, 's, 'm, D: DatasetView> {
     view: &'a D,
     selection: Selection<D::Id>,
     stop: Option<&'s dyn StopSignal>,
@@ -222,9 +224,51 @@ struct Lowering<'a, 's, D: DatasetView> {
     /// The `record` lines of composite nodes a line just reached, pushed after
     /// that line.
     pending: Vec<Vec<Tok>>,
+    /// The caller's admission of the bytes a new constant or node adds.
+    meter: Option<&'m mut Meter<'m>>,
 }
 
-impl<D: DatasetView> Lowering<'_, '_, D> {
+/// Admits `bytes` of the lowered set through the caller's account.
+type Meter<'m> = dyn FnMut(usize) -> Result<(), StorageError> + 'm;
+
+/// The bytes the set holds for one interned byte string.
+const fn interned_bytes(len: usize) -> usize {
+    len.saturating_add(size_of::<Box<[u8]>>())
+}
+
+/// Admit `bytes` through `meter`, when the lowering is metered.
+fn admit<E>(meter: &mut Option<&mut Meter<'_>>, bytes: usize) -> Result<(), ViewError<E>> {
+    match meter {
+        Some(meter) => meter(bytes).map_err(ViewError::Storage),
+        None => Ok(()),
+    }
+}
+
+/// Admit a constant of `encoding` that the set does not yet hold.
+fn admit_constant<E>(
+    meter: &mut Option<&mut Meter<'_>>,
+    interner: &Interner,
+    encoding: &[u8],
+) -> Result<(), ViewError<E>> {
+    if interner.has_constant(encoding) {
+        return Ok(());
+    }
+    admit(meter, interned_bytes(encoding.len()))
+}
+
+/// Admit a blank node of `source` that the set does not yet hold.
+fn admit_node<E>(
+    meter: &mut Option<&mut Meter<'_>>,
+    interner: &Interner,
+    source: &[u8],
+) -> Result<(), ViewError<E>> {
+    if interner.has_node(source) {
+        return Ok(());
+    }
+    admit(meter, interned_bytes(source.len()))
+}
+
+impl<D: DatasetView> Lowering<'_, '_, '_, D> {
     fn poll(&self) -> Result<(), ViewError<D::ReadError>> {
         if is_stopped(self.stop) {
             Err(ViewError::Stopped)
@@ -241,11 +285,14 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         out: &mut Vec<Tok>,
     ) -> Result<GraphTerm, ViewError<D::ReadError>> {
         let interner = &mut self.admitter.interner;
+        let meter = &mut self.meter;
         let mut pending = vec![value];
         while let Some(value) = pending.pop() {
             match value {
                 TermValue::Iri(iri) => {
-                    let c = interner.constant(&iri_encoding(iri.as_bytes()));
+                    let encoding = iri_encoding(iri.as_bytes());
+                    admit_constant(meter, interner, &encoding)?;
+                    let c = interner.constant(&encoding);
                     out.push(Tok::Const(c));
                 }
                 TermValue::Literal {
@@ -267,27 +314,32 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                     let cut =
                         cdt_blank_segments(lexical_form, datatype).map_err(ViewError::Storage)?;
                     if cut.blanks.is_empty() {
+                        admit_constant(meter, interner, &encoding)?;
                         out.push(Tok::Const(interner.constant(&encoding)));
                         continue;
                     }
-                    let node = interner.node(&composite_source(&encoding));
+                    let source = composite_source(&encoding);
+                    admit_node(meter, interner, &source)?;
+                    let node = interner.node(&source);
                     out.push(Tok::Blank(node));
                     if self.composites.insert(node) {
+                        let payload = composite_payload(datatype, &cut.segments);
+                        admit(meter, interned_bytes(payload.len().saturating_add(8)))?;
                         let mut record = Vec::new();
-                        interner.record_head(
-                            &composite_payload(datatype, &cut.segments),
-                            cut.blanks.len() + 1,
-                            &mut record,
-                        );
+                        interner.record_head(&payload, cut.blanks.len() + 1, &mut record);
                         record.push(Tok::Blank(node));
                         for (label, scope) in &cut.blanks {
-                            record.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
+                            let source = blank_source(label, *scope);
+                            admit_node(meter, interner, &source)?;
+                            record.push(Tok::Blank(interner.node(&source)));
                         }
                         self.pending.push(record);
                     }
                 }
                 TermValue::Blank { label, scope } => {
-                    out.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
+                    let source = blank_source(label, *scope);
+                    admit_node(meter, interner, &source)?;
+                    out.push(Tok::Blank(interner.node(&source)));
                 }
                 TermValue::Triple { s, p, o } => {
                     out.push(Tok::Tag(TAG_TRIPLE));
@@ -449,6 +501,10 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         for record in records {
             self.poll()?;
             let mut tokens = Vec::new();
+            admit(
+                &mut self.meter,
+                interned_bytes(record.payload.len().saturating_add(8)),
+            )?;
             self.admitter
                 .interner
                 .record_head(record.payload, record.terms.len(), &mut tokens);
@@ -471,11 +527,12 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
 }
 
 /// The lowered lines of `view` and `records`, before admission.
-fn lowered<D: DatasetView>(
+fn lowered<'m, D: DatasetView>(
     view: &D,
     scope: Scope<'_>,
     records: &[Record<'_>],
     stop: Option<&dyn StopSignal>,
+    meter: Option<&'m mut Meter<'m>>,
 ) -> Result<Admission, ViewError<D::ReadError>> {
     let selection = match scope {
         Scope::Dataset => Selection::Dataset,
@@ -492,6 +549,7 @@ fn lowered<D: DatasetView>(
         carried: BTreeSet::new(),
         composites: BTreeSet::new(),
         pending: Vec::new(),
+        meter,
     };
     match view.checked_read(|_| lowering.lower(records)) {
         Err(error) => Err(ViewError::Read(error)),
@@ -516,7 +574,7 @@ pub fn lines_of_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
 ) -> Result<LineSet, ViewError<D::ReadError>> {
-    lowered(view, Scope::Dataset, records, None)?
+    lowered(view, Scope::Dataset, records, None, None)?
         .into_result()
         .map_err(ViewError::Refused)
 }
@@ -573,7 +631,7 @@ pub fn compare_view<D: DatasetView>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, Scope::Dataset, records, stop)?
+    let lines = lowered(view, Scope::Dataset, records, stop, None)?
         .into_result()
         .map_err(ViewError::Refused)?;
     let labelled = label_lines(&lines, limit, stop)?;
@@ -604,20 +662,83 @@ fn label_lines<E>(
     })
 }
 
-/// [`compare_view`] with the working state of the labelling admitted once,
-/// before the engine starts, through the caller's `memory`.
+/// The admitted lines of `view` and `records`, each constant and blank node
+/// admitted through `memory` before it is copied into the set, and the bytes
+/// so admitted. A refusal returns what was admitted before it is reported.
+fn lowered_in<D: DatasetView, S: StorageAdmission + ?Sized>(
+    view: &D,
+    scope: Scope<'_>,
+    records: &[Record<'_>],
+    stop: Option<&dyn StopSignal>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(LineSet, usize), ViewError<D::ReadError>> {
+    // The account is polled before any row is read or lowered.
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
+    let charged = Cell::new(0usize);
+    let result = {
+        let mut meter = |bytes: usize| {
+            memory.add_bytes(bytes)?;
+            charged.set(charged.get().saturating_add(bytes));
+            Ok(())
+        };
+        lowered(view, scope, records, stop, Some(&mut meter))
+    };
+    match result.and_then(|admission| admission.into_result().map_err(ViewError::Refused)) {
+        Ok(lines) => Ok((lines, charged.get())),
+        Err(error) => {
+            // A refusal of the refund cannot replace the error that ended the
+            // run: the grant stays outstanding with the caller's account.
+            let _ = memory.release_bytes(charged.get());
+            Err(error)
+        }
+    }
+}
+
+/// Admit the working state of `lines` beyond the `charged` bytes already
+/// admitted while lowering, and return the whole grant.
+fn grant<E, S: StorageAdmission + ?Sized>(
+    lines: &LineSet,
+    charged: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<usize, ViewError<E>> {
+    let fail = |memory: &mut Memory<'_, S>, error| {
+        let _ = memory.release_bytes(charged);
+        Err(ViewError::Storage(error))
+    };
+    let Some(bytes) = lines
+        .footprint_bytes()
+        .zip(optimised::working_bytes(lines))
+        .and_then(|(held, working)| held.checked_add(working))
+    else {
+        return fail(memory, StorageError::SizeOverflow);
+    };
+    let rest = bytes.saturating_sub(charged);
+    match memory.add_bytes(rest) {
+        Ok(()) => Ok(charged.saturating_add(rest)),
+        Err(error) => fail(memory, error),
+    }
+}
+
+/// [`compare_view`] with the working state of the labelling admitted through
+/// the caller's `memory`.
 ///
-/// The grant covers the lowered lines and an upper bound of the arrays the
-/// engine builds for the components and their first calls, proportional to the
-/// incidences, the constant leaf occurrences and the vertices (7.12 of the
-/// definition). A refusal of the admission is [`ViewError::Storage`] and
+/// Each constant and blank node is admitted as lowering interns it, before it
+/// is copied into the set. After lowering, the grant covers the rest of the
+/// lowered lines and an upper bound of the arrays the engine builds for the
+/// components and their first calls, proportional to the incidences, the
+/// constant leaf occurrences, the vertices and the structs each top component
+/// holds (7.12 of the definition). A refusal of the admission is [`ViewError::Storage`] and
 /// nothing is labelled. On success the grant stays with the returned
 /// [`Comparison`], whose `admitted_bytes` states it: release that many bytes
 /// when the comparison is dropped. On any other error the grant is returned
-/// before the error is. Lowering the rows, the present canonical form and the
-/// certificates and nested instances held while a search runs are not metered:
-/// the admission is the bound of the up-front working state, and the engine
-/// holds nothing else of that order before it starts.
+/// before the error is. The present canonical form, the temporary encoding
+/// of one literal while it is interned, and the certificates and nested
+/// instances held while a search runs are not metered: the admission is the
+/// bound of the up-front working state, and the engine holds nothing else of
+/// that order before it starts.
 ///
 /// # Errors
 /// As [`compare_view`], and [`ViewError::Storage`] when the admission refuses
@@ -629,22 +750,14 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     limit: Limit,
     memory: &mut Memory<'_, S>,
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
-    // The account is polled before any row is read or lowered.
     memory
         .admission_mut()
         .checkpoint(0)
         .map_err(ViewError::Storage)?;
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, Scope::Dataset, records, stop)?
-        .into_result()
-        .map_err(ViewError::Refused)?;
-    let bytes = lines
-        .footprint_bytes()
-        .zip(optimised::working_bytes(&lines))
-        .and_then(|(held, working)| held.checked_add(working))
-        .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
-    memory.add_bytes(bytes).map_err(ViewError::Storage)?;
+    let (lines, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
+    let bytes = grant(&lines, charged, memory)?;
     match label_lines(&lines, limit, stop) {
         Ok(labelled) => Ok(Comparison {
             present: outcome,
@@ -769,7 +882,7 @@ pub fn label_view<D: DatasetView>(
     limit: Limit,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
-    let lines = lowered(view, scope, records, stop)?
+    let lines = lowered(view, scope, records, stop, None)?
         .into_result()
         .map_err(ViewError::Refused)?;
     labelling_of(view, lines, limit, stop)
@@ -778,8 +891,8 @@ pub fn label_view<D: DatasetView>(
 /// A labelling and the bytes of working state still granted for it.
 type LabellingWithBytes<Id> = (Labelling<Id>, usize);
 
-/// [`label_view`] with the working state of the labelling admitted once, before
-/// the engine starts, through the caller's `memory`, as
+/// [`label_view`] with the working state of the labelling admitted through the
+/// caller's `memory`, each constant and node as it is interned, as
 /// [`compare_view_with_memory`] does. On success the grant stays outstanding and
 /// its size is returned: release that many bytes when the labelling is dropped.
 /// On any error the grant is returned before the error is.
@@ -795,20 +908,8 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     stop: Option<&dyn StopSignal>,
     memory: &mut Memory<'_, S>,
 ) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
-    // The account is polled before any row is read or lowered.
-    memory
-        .admission_mut()
-        .checkpoint(0)
-        .map_err(ViewError::Storage)?;
-    let lines = lowered(view, scope, records, stop)?
-        .into_result()
-        .map_err(ViewError::Refused)?;
-    let bytes = lines
-        .footprint_bytes()
-        .zip(optimised::working_bytes(&lines))
-        .and_then(|(held, working)| held.checked_add(working))
-        .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
-    memory.add_bytes(bytes).map_err(ViewError::Storage)?;
+    let (lines, charged) = lowered_in(view, scope, records, stop, memory)?;
+    let bytes = grant(&lines, charged, memory)?;
     match labelling_of(view, lines, limit, stop) {
         Ok(labelling) => Ok((labelling, bytes)),
         Err(error) => {

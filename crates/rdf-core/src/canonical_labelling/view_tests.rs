@@ -568,6 +568,65 @@ fn a_refusing_account_ends_the_call_before_any_row_is_read() {
     assert!(view.quad_reads.load(Ordering::Relaxed) > 0);
 }
 
+/// An account that refuses past a ceiling and records the largest total it
+/// was asked to admit.
+struct Recorder {
+    ceiling: usize,
+    asked: usize,
+}
+
+impl Admission for Recorder {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        self.asked = self.asked.max(live);
+        if live > self.ceiling {
+            return Err(StorageError::AdmissionFailed);
+        }
+        Ok(())
+    }
+}
+
+/// Each constant is admitted through the caller's account as lowering interns
+/// it: a view with a large constant over an account too small for it is
+/// refused with the storage outcome before the rest of the working state is
+/// asked for, and the same view over an account that holds it is admitted.
+#[test]
+fn a_large_constant_is_admitted_while_the_view_is_lowered() {
+    let big = format!("<{}>", "x".repeat(50_000));
+    let view = dataset(&[("a", "<p>", big.as_str()), ("a", "<p>", "b")]);
+    let mut roomy = Recorder {
+        ceiling: usize::MAX,
+        asked: 0,
+    };
+    let done = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut roomy),
+    )
+    .expect("admitted");
+    assert!(done.admitted_bytes > 50_000);
+    let mut small = Recorder {
+        ceiling: 10_000,
+        asked: 0,
+    };
+    let mut memory = Memory::new(&mut small);
+    let refused = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut memory,
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+    assert_eq!(memory.admitted_bytes(), 0);
+    // The refusal came at the constant, not at the whole grant.
+    assert!(small.asked > 50_000 && small.asked < done.admitted_bytes);
+}
+
 /// The stop signal is polled while the annotation rows are collected: a view
 /// that repeats one annotation row many times is stopped, and the same view
 /// with the row once completes under the same signal.

@@ -40,7 +40,7 @@ use super::lines::{Leaf, LineSet, Tok};
 use super::reference::{
     CallOutcome, Child, Classes, Comp, ComponentRun, Labelling, LabellingParts, Meter, Prepared,
     Static, Stop, Tree, TwinTest, component_count, drive, failure_diagnostics, finish_labelling,
-    fragments_to_queue, prepare,
+    fragments_to_queue, positions, prepare,
 };
 use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
 #[cfg(test)]
@@ -1377,22 +1377,10 @@ impl<'a> Engine<'a> {
             self.lambda[v] = q - b.p;
         }
         let s = child.fixed.len() as u64;
-        let mut work = Vec::new();
         let mut t = 0;
         for nested in &child.nested {
-            work.push((nested, s + t));
+            positions(nested, s + t, &mut self.lambda);
             t += nested.n_k;
-        }
-        while let Some((tree, o)) = work.pop() {
-            for &(v, q) in &tree.fixed {
-                self.lambda[v] = o + (q - tree.p);
-            }
-            let s = tree.fixed.len() as u64;
-            let mut t = 0;
-            for nested in &tree.nested {
-                work.push((nested, o + s + t));
-                t += nested.n_k;
-            }
         }
         b.node_g
             .iter()
@@ -1878,9 +1866,8 @@ pub(crate) fn label_set(
 /// labels, the partitions, the line index of the twin test and the encodings
 /// of the lines with every leaf free, proportional to the blank occurrences
 /// (each one counted, so a record that repeats a node is charged for every
-/// repetition), the line tokens and the vertices (7.12), and the structs each top
-/// component holds. It is the admission
-/// of [`compare_view_with_memory`](super::compare_view_with_memory); the
+/// repetition), the line tokens, the vertices (7.12) and the structs each top
+/// component holds. It is the admission of [`compare_view_with_memory`](super::compare_view_with_memory); the
 /// certificates and nested instances held while a search runs are not metered
 /// beyond it. `None` when the bound passes the word.
 pub(crate) fn working_bytes(set: &LineSet) -> Option<usize> {
