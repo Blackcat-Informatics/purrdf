@@ -137,4 +137,14 @@ fn the_document_escapes_noncharacters_and_the_digest_input_does_not() {
     let holds = |needle: &[u8]| encoding.windows(needle.len()).any(|w| w == needle);
     assert!(holds("\u{fffe}".as_bytes()) && holds("\u{ffff}".as_bytes()));
     assert!(!holds(b"\\uFFFE"));
+    // The digest is the key-derived hash of the line count and the binary
+    // lines, so the escapes of the document are not in it.
+    let mut message = (labelled.lines.len() as u64).to_be_bytes().to_vec();
+    for line in &labelled.lines {
+        message.extend_from_slice(line);
+    }
+    assert_eq!(
+        labelled.digest,
+        super::digest_of(super::LINES_CONTEXT, &message)
+    );
 }

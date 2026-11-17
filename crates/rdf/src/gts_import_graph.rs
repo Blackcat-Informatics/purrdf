@@ -532,7 +532,8 @@ mod tests {
             import_gts_graph(graph)
         };
         for inner in ["\u{7f}", "\u{80}", "\u{9f}"] {
-            assert!(import(inner).is_err(), "imported {inner:?}");
+            let err = import(inner).expect_err(&format!("imported {inner:?}"));
+            assert_eq!(err.code, "iri-disallowed-char", "{inner:?}: {err}");
         }
         assert!(import("\u{a0}").is_ok());
     }

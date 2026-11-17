@@ -7,14 +7,11 @@
 //!
 //! # The contract
 //!
-//! This is the canonical term form of RDF 1.2 N-Quads (section 3, "A Canonical
-//! form of N-Quads") and RDF 1.2 N-Triples (section 3), which Turtle, TriG
-//! and SPARQL all accept for a term:
+//! This is the canonical term form of RDF 1.2 N-Triples (N-Triples 1.2 §4
+//! "Canonical N-Triples"), which Turtle, TriG, N-Quads and SPARQL all accept
+//! for a term:
 //!
-//! * an IRI is `<` + its body through the
-//!   [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier of
-//!   [`crate::iri_escape`] + `>`: escaped exactly where the `IRIREF`
-//!   production forbids a scalar;
+//! * an IRI is `<` + its body through [`crate::iri_escape`] + `>`;
 //! * a literal is `"` + its lexical form through the
 //!   [`Canonical`](Carrier::Canonical) carrier of [`crate::literal_escape`] +
 //!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`. A literal whose
@@ -25,6 +22,15 @@
 //! * a triple term is [`TRIPLE_TERM_OPEN`], its subject, predicate and
 //!   object separated by single spaces, and [`TRIPLE_TERM_CLOSE`], with one
 //!   space inside each delimiter: `<<( s p o )>>`.
+//!
+//! The canonical document of the nested-refinement labelling spells the same
+//! terms with [`write_iri_canonical_lines`] and [`write_literal_canonical_lines`],
+//! the canonical form of RDF 1.2 N-Quads (section 3): an IRI is escaped exactly
+//! where `IRIREF` forbids a scalar ([`crate::iri_escape`], canonical-lines set),
+//! and U+FFFE and U+FFFF in a literal are `UCHAR` ([`crate::literal_escape`],
+//! canonical-lines spelling). Only that document writer calls them; every other
+//! caller, including the retained 4.x `purrdf-rdfc12` output, keeps
+//! [`write_iri`] and [`write_literal`] unchanged.
 //!
 //! There are no knobs. A writer that needs a different spelling is writing a
 //! different syntax (a CURIE-compacting Turtle writer, an XML carrier), and
@@ -47,8 +53,7 @@ pub const TRIPLE_TERM_CLOSE: &str = ")>>";
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Append `iri` as an `IRIREF`: `<`, the body escaped by
-/// [`crate::iri_escape::push_escaped_for`] with the
-/// [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier, `>`.
+/// [`crate::iri_escape::push_escaped`], `>`.
 ///
 /// ```
 /// use purrdf_lex::term_syntax::write_iri;
@@ -59,7 +64,23 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// ```
 pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
     out.push('<');
-    crate::iri_escape::push_escaped_for(iri, crate::iri_escape::Carrier::Canonical, out);
+    crate::iri_escape::push_escaped(iri, out);
+    out.push('>');
+}
+
+/// Append `iri` as an `IRIREF` for the canonical document: `<`, the body escaped
+/// by [`crate::iri_escape::push_escaped_canonical_lines`], `>`.
+///
+/// ```
+/// use purrdf_lex::term_syntax::write_iri_canonical_lines;
+///
+/// let mut out = String::new();
+/// write_iri_canonical_lines("urn:ex:a b\u{7f}\u{85}", &mut out);
+/// assert_eq!(out, "<urn:ex:a\\u0020b\u{7f}\u{85}>");
+/// ```
+pub fn write_iri_canonical_lines<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+    out.push('<');
+    crate::iri_escape::push_escaped_canonical_lines(iri, out);
     out.push('>');
 }
 
@@ -95,12 +116,50 @@ pub fn write_literal<W: TextOut + ?Sized>(
     dir: Option<&str>,
     out: &mut W,
 ) {
+    write_literal_with(lexical_form, datatype, lang, dir, false, out);
+}
+
+/// Append a literal for the canonical document: [`write_literal`] with the
+/// lexical form and the datatype `IRIREF` spelled as the canonical form of RDF 1.2
+/// N-Quads (section 3) requires, so U+FFFE and U+FFFF are `UCHAR`.
+///
+/// ```
+/// use purrdf_lex::term_syntax::write_literal_canonical_lines;
+///
+/// let mut out = String::new();
+/// write_literal_canonical_lines("a\u{fffe}\u{85}", "http://www.w3.org/2001/XMLSchema#string", None, None, &mut out);
+/// assert_eq!(out, "\"a\\uFFFE\u{85}\"");
+/// ```
+pub fn write_literal_canonical_lines<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    out: &mut W,
+) {
+    write_literal_with(lexical_form, datatype, lang, dir, true, out);
+}
+
+/// The one body of both literal writers; `lines` selects the canonical-lines
+/// spelling of the lexical form and of the datatype `IRIREF`.
+fn write_literal_with<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    lines: bool,
+    out: &mut W,
+) {
     debug_assert!(
         dir.is_none() || lang.is_some(),
         "a base direction exists only on a language-tagged literal"
     );
     out.push('"');
-    literal_escape::write(lexical_form, Carrier::Canonical, out);
+    if lines {
+        literal_escape::write_canonical_lines(lexical_form, out);
+    } else {
+        literal_escape::write(lexical_form, Carrier::Canonical, out);
+    }
     out.push('"');
     if let Some(lang) = lang {
         out.push('@');
@@ -111,7 +170,11 @@ pub fn write_literal<W: TextOut + ?Sized>(
         }
     } else if datatype != XSD_STRING {
         out.push_str("^^");
-        write_iri(datatype, out);
+        if lines {
+            write_iri_canonical_lines(datatype, out);
+        } else {
+            write_iri(datatype, out);
+        }
     }
 }
 
@@ -186,18 +249,6 @@ mod tests {
             literal("a\"b\\\u{8}\u{85}", &format!("{XSD}string"), None, None),
             "\"a\\\"b\\\\\\b\u{85}\""
         );
-        // A scalar outside XML 1.1 `Char` is a UCHAR.
-        assert_eq!(
-            literal("a\u{fffe}\u{ffff}b", &format!("{XSD}string"), None, None),
-            "\"a\\uFFFE\\uFFFFb\""
-        );
-    }
-
-    #[test]
-    fn an_iri_escapes_what_the_production_forbids_and_keeps_del_and_c1_raw() {
-        let mut out = String::new();
-        write_iri("urn:ex:a\u{7f}\u{85}\u{a0}b c", &mut out);
-        assert_eq!(out, "<urn:ex:a\u{7f}\u{85}\u{a0}b\\u0020c>");
     }
 
     #[test]

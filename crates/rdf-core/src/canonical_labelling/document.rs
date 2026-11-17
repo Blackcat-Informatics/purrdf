@@ -30,6 +30,12 @@
 //! blank node `_:` and its position ([`Composites`]); no label spells the
 //! composite node itself.
 //!
+//! Terms are spelled as the canonical form of RDF 1.2 N-Quads (section 3): an
+//! IRI escapes exactly what `IRIREF` forbids, and U+FFFE and U+FFFF in a
+//! literal are `\uFFFE` and `\uFFFF`, since neither matches the XML 1.1 `Char`
+//! production. DEL and the C1 controls ride raw. The digest is over the binary
+//! line encodings, so these spellings do not move it.
+//!
 //! The encoding is read by the rules of 3.7 and Lemma E; nothing here parses a
 //! label.
 
@@ -37,7 +43,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use purrdf_iri::vocab::rdf::REIFIES;
-use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri, write_literal};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri_canonical_lines as write_iri,
+    write_literal_canonical_lines as write_literal,
+};
 use purrdf_lex::text_out::TextOut;
 
 use super::lines::push_bytes;

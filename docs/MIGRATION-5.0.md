@@ -125,6 +125,14 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
 - `annotation`: `reifier p o [g] .`, once, whatever its count
 - `empty-graph` and `record`: nothing
 
+The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
+U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
+XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
+where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
+raw. The digest is over the binary line encodings and does not depend on these
+spellings. The 4.x `purrdf-rdfc12` output keeps its own escapes, so stored 4.x
+digests recompute unchanged.
+
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
 node, so the labels of one document can skip a number.

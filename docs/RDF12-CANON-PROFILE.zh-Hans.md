@@ -5,7 +5,7 @@
 
 [English](RDF12-CANON-PROFILE.md) | 简体中文
 
-**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 4 &nbsp;·&nbsp;
+**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 3 &nbsp;·&nbsp;
 **编辑：** Patrick Audley，Blackcat Informatics® Inc.
 
 **5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文的标识符、版本和向量均未改变。
@@ -228,10 +228,6 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 
 **不会**改变输出的变更，例如重构、加快搜索或使诊断消息更清晰，不递增版本。这样版本号才值得固定；如果每次发布都改变版本，它就不能向使用方传达任何信息。
 
-| 版本 | 变更 | 输出会改变的输入 |
-|---|---|---|
-| 4 | 字面量中的 U+FFFE 和 U+FFFF 写为 `\uFFFE` 和 `\uFFFF`（N-Quads 1.2 §3：不属于 XML 1.1 `Char` 的字符写为 `UCHAR`） | 字面量中含有这两个字符之一的数据集；其他数据集不变 |
-
 ## 8. 规范性测试向量语料
 
 语料位于 `vectors/rdf12-canon/`，并且已经**冻结**：每个载荷字节都由每次构建检查的 SHA-256 清单覆盖（`scripts/check-corpus-frozen.py`），所以静默修改期望结果会导致失败，而不是让检查通过。
@@ -247,7 +243,7 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 | 字段 | 来源 |
 |---|---|
 | profile 标识符 | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
 | 表示 | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
 | 散列算法 | `CanonHash::Sha256` 或 `CanonHash::Sha384`（§2） |
 | 语料摘要 | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST`（§8） |

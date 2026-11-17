@@ -24,26 +24,21 @@
 //!
 //! | [`Carrier`] | `"` `\` | LF | CR TAB BS FF | other C0, DEL | C1 (U+0080-U+009F) | U+FFFE, U+FFFF |
 //! |---|---|---|---|---|---|---|
-//! | [`Canonical`](Carrier::Canonical) | ECHAR | `\n` | ECHAR | `\u00XX` | raw | `\uFFFE` `\uFFFF` |
+//! | [`Canonical`](Carrier::Canonical) | ECHAR | `\n` | ECHAR | `\u00XX` | raw | raw |
 //! | [`Xml`](Carrier::Xml) | ECHAR | `\n` | ECHAR | `\u00XX` | `\u00XX` | `\uFFFE` `\uFFFF` |
 //! | [`TurtleLong`](Carrier::TurtleLong) | see below | raw | ECHAR | `\u00XX` | `\u00XX` | `\uFFFE` `\uFFFF` |
 //!
-//! * **`Canonical`** is the canonical form of RDF 1.2 N-Quads (section 3, "A
-//!   Canonical form of N-Quads") and of RDF 1.2 N-Triples (section 3): `"`,
-//!   `\`, LF, CR, TAB, BACKSPACE and FORM FEED as their `ECHAR`, every other
-//!   scalar below U+0020 and U+007F as `UCHAR` with upper-case hex, and U+FFFE
-//!   and U+FFFF as `UCHAR` too, because both sections require that a character
-//!   not matching the XML 1.1 `Char` production (which ends at U+FFFD in the
-//!   basic plane) is written as `UCHAR`. Every other scalar is raw. That
-//!   keeps the C1 block raw: XML 1.1 `Char` admits U+0080 to U+009F, and the
-//!   W3C RDFC-1.0 suite pins it (test060).
+//! * **`Canonical`** is the RDF 1.2 N-Triples canonical form (N-Triples 1.2
+//!   §4 "Canonical N-Triples"): `"`, `\`, LF, CR, TAB, BACKSPACE and FORM FEED
+//!   as their `ECHAR`, every other scalar below U+0020 and U+007F as `UCHAR`
+//!   with upper-case hex, and every other scalar raw. That last clause keeps
+//!   the C1 block raw, as the W3C RDFC-1.0 suite pins (test060).
 //! * **`Xml`** is the canonical form for a literal whose serialized text is
 //!   embedded in an XML text node or attribute (RDF/XML and TriX text, the
-//!   CL-dialect payload). XML 1.0 §2.2 `Char` discourages the C1 controls
-//!   and XML 1.1 §2.11 rewrites NEL (U+0085) on read, so the C1 scalars ride
-//!   as `UCHAR` in addition to what `Canonical` already escapes, and the
-//!   literal survives the round trip through the carrier. Everything else is
-//!   `Canonical`.
+//!   CL-dialect payload). XML 1.0 §2.2 `Char` excludes U+FFFE and U+FFFF and
+//!   discourages the C1 controls, and XML 1.1 §2.11 rewrites NEL (U+0085) on
+//!   read, so those scalars ride as `UCHAR` and the literal survives the round
+//!   trip through the carrier. Everything else is `Canonical`.
 //! * **`TurtleLong`** is the body of a Turtle long string, `"""…"""`
 //!   (Turtle 1.2 `STRING_LITERAL_LONG_QUOTE` `[25]`), whose grammar admits a
 //!   raw LINE FEED, so a multi-line value stays readable. Every other scalar
@@ -52,15 +47,31 @@
 //!   value, is written `\"`, so no run of three raw quotes and no quote next
 //!   to the closing `"""` is ever produced.
 //!
+//! # The canonical-lines spelling
+//!
+//! The canonical document of the nested-refinement labelling is spelled with
+//! [`write_canonical_lines`] and [`escape_canonical_lines`], which are not a
+//! [`Carrier`]: they are the canonical form of RDF 1.2 N-Quads (section 3, "A
+//! Canonical form of N-Quads"), which writes a character that does not match the
+//! XML 1.1 `Char` production as `UCHAR`. That adds exactly U+FFFE and U+FFFF to
+//! the [`Canonical`](Carrier::Canonical) escapes (the basic plane ends its `Char`
+//! at U+FFFD); the C1 block matches `Char` and stays raw. Only that document
+//! writer calls them. Every other writer, including the retained 4.x
+//! `purrdf-rdfc12` output and the term-syntax writers, keeps the carrier it had,
+//! so bytes recorded before are recomputed unchanged.
+//!
+//! | spelling | `"` `\` | LF | CR TAB BS FF | other C0, DEL | C1 | U+FFFE, U+FFFF |
+//! |---|---|---|---|---|---|---|
+//! | [`write_canonical_lines`] | ECHAR | `\n` | ECHAR | `\u00XX` | raw | `\uFFFE` `\uFFFF` |
+//!
 //! # The scan
 //!
 //! Each carrier has one chunked [`ByteClass`] kernel over the bytes that can
-//! begin an escaped scalar; the runs between two stops are copied whole. Every
-//! kernel stops at the lead byte `0xEF` (U+FFFE, U+FFFF), and the
-//! [`Xml`](Carrier::Xml) and [`TurtleLong`](Carrier::TurtleLong) kernels also
-//! at `0xC2` (the C1 block). [`TurtleLong`](Carrier::TurtleLong) stops at `"`
-//! too. A lead byte is a candidate, not a verdict: the scalar there is decided
-//! before anything is emitted.
+//! begin an escaped scalar; the runs between two stops are copied whole. The
+//! [`Canonical`](Carrier::Canonical) kernel, [`find_first_literal_escape`], is
+//! all-ASCII, so every stop is an escape. The other two also stop at the lead
+//! bytes `0xC2` (the C1 block) and `0xEF` (U+FFFE, U+FFFF) and at `"`, which are
+//! candidates: the scalar there is decided before anything is emitted.
 
 use std::borrow::Cow;
 
@@ -71,15 +82,35 @@ use crate::text_out::TextOut;
 /// constraint, not a style; see the [module docs](self) for the table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Carrier {
-    /// The canonical form of RDF 1.2 N-Quads and N-Triples (section 3 of
-    /// each): U+FFFE and U+FFFF as `UCHAR`, C1 raw.
+    /// The RDF 1.2 N-Triples canonical form: C1 raw.
     Canonical,
-    /// The canonical form for text embedded in an XML 1.0 document: the
-    /// `Canonical` escapes and the C1 controls as `UCHAR`.
+    /// The canonical form for text embedded in an XML 1.0 document: C1, U+FFFE
+    /// and U+FFFF as `UCHAR`.
     Xml,
     /// The body of a Turtle `"""…"""` long string: the `Xml` rules with LINE
     /// FEED raw and `"` escaped only where it would close the string.
     TurtleLong,
+}
+
+/// What the internal scan and escape code distinguishes: the public
+/// [`Carrier`]s and the canonical-lines spelling, which is not a carrier so the
+/// public enum keeps its shape.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Canonical,
+    CanonicalLines,
+    Xml,
+    TurtleLong,
+}
+
+impl From<Carrier> for Kind {
+    fn from(carrier: Carrier) -> Self {
+        match carrier {
+            Carrier::Canonical => Self::Canonical,
+            Carrier::Xml => Self::Xml,
+            Carrier::TurtleLong => Self::TurtleLong,
+        }
+    }
 }
 
 /// The UTF-8 lead byte of U+0080-U+00BF, the block holding the C1 controls.
@@ -87,9 +118,8 @@ const C1_LEAD: u8 = 0xC2;
 /// The UTF-8 lead byte of U+F000-U+FFFF, the block holding U+FFFE and U+FFFF.
 const NONCHAR_LEAD: u8 = 0xEF;
 
-/// The bytes the canonical form escapes or can escape: `"`, `\`, the C0
-/// controls and DEL (every one an escape), and the lead byte of the block
-/// holding U+FFFE and U+FFFF (a candidate).
+/// The bytes the canonical form escapes: `"`, `\`, the C0 controls and DEL.
+/// Every member is ASCII and every member is escaped.
 const CANONICAL_TABLE: [u8; 256] = {
     let mut table = [0_u8; 256];
     let mut b = 0;
@@ -100,15 +130,23 @@ const CANONICAL_TABLE: [u8; 256] = {
     table[b'"' as usize] = 1;
     table[b'\\' as usize] = 1;
     table[0x7F] = 1;
+    table
+};
+
+/// The canonical bytes plus the two lead bytes whose blocks hold the scalars
+/// an XML carrier escapes.
+const XML_TABLE: [u8; 256] = {
+    let mut table = CANONICAL_TABLE;
+    table[C1_LEAD as usize] = 1;
     table[NONCHAR_LEAD as usize] = 1;
     table
 };
 
-/// The canonical bytes plus the lead byte of the block holding the C1
-/// controls, which an XML carrier escapes.
-const XML_TABLE: [u8; 256] = {
+/// The canonical bytes plus the lead byte of the block holding U+FFFE and
+/// U+FFFF: the canonical-lines spelling stops there and decides the scalar.
+const CANONICAL_LINES_TABLE: [u8; 256] = {
     let mut table = CANONICAL_TABLE;
-    table[C1_LEAD as usize] = 1;
+    table[NONCHAR_LEAD as usize] = 1;
     table
 };
 
@@ -122,19 +160,19 @@ const TURTLE_LONG_TABLE: [u8; 256] = {
 
 const CANONICAL: ByteClass<{ byte_run_count(&CANONICAL_TABLE) }> =
     ByteClass::from_table(CANONICAL_TABLE);
+const CANONICAL_LINES: ByteClass<{ byte_run_count(&CANONICAL_LINES_TABLE) }> =
+    ByteClass::from_table(CANONICAL_LINES_TABLE);
 const XML: ByteClass<{ byte_run_count(&XML_TABLE) }> = ByteClass::from_table(XML_TABLE);
 const TURTLE_LONG: ByteClass<{ byte_run_count(&TURTLE_LONG_TABLE) }> =
     ByteClass::from_table(TURTLE_LONG_TABLE);
 
-/// The offset of the first byte of `bytes` that can begin a scalar the
-/// [`Canonical`](Carrier::Canonical) form escapes, or `None` when the whole
-/// value rides verbatim.
+/// The offset of the first byte of `bytes` the [`Canonical`](Carrier::Canonical)
+/// form escapes (`"`, `\`, a C0 control or DEL), or `None` when the whole value
+/// rides verbatim.
 ///
-/// A candidate, not a verdict: an ASCII stop (`"`, `\`, a C0 control or DEL)
-/// is always an escape, and at the lead byte `0xEF` only U+FFFE and U+FFFF are.
-/// Every stop is a lead byte or an ASCII byte, so the offset is a char boundary
-/// of a `str`'s bytes. The chunked kernel of [`ByteClass`]: sixteen-byte packed
-/// compares on every target with a vector unit.
+/// Every stop is an escape and every stop is ASCII, so the offset is a char
+/// boundary of a `str`'s bytes. The chunked kernel of [`ByteClass`]: sixteen-byte
+/// packed compares on every target with a vector unit.
 ///
 /// ```
 /// use purrdf_lex::literal_escape::find_first_literal_escape;
@@ -143,8 +181,6 @@ const TURTLE_LONG: ByteClass<{ byte_run_count(&TURTLE_LONG_TABLE) }> =
 /// assert_eq!(find_first_literal_escape(b"say \"hi\""), Some(4));
 /// // The C1 block rides raw in the canonical form.
 /// assert_eq!(find_first_literal_escape("a\u{85}".as_bytes()), None);
-/// // U+FFFF is led by 0xEF, a candidate.
-/// assert_eq!(find_first_literal_escape("a\u{ffff}".as_bytes()), Some(1));
 /// ```
 #[inline(never)]
 #[must_use]
@@ -152,12 +188,29 @@ pub fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
     CANONICAL.find_first(bytes)
 }
 
+/// The offset of the first byte of `bytes` that can begin a scalar
+/// [`write_canonical_lines`] escapes, or `None` when none can.
+///
+/// The [`find_first_literal_escape`] class plus `0xEF`, the lead byte of the
+/// block holding U+FFFE and U+FFFF. A candidate, not a verdict.
+///
+/// ```
+/// use purrdf_lex::literal_escape::find_first_canonical_lines_escape;
+///
+/// assert_eq!(find_first_canonical_lines_escape("a\u{ffff}".as_bytes()), Some(1));
+/// assert_eq!(find_first_canonical_lines_escape("a\u{85}".as_bytes()), None);
+/// ```
+#[inline(never)]
+#[must_use]
+pub fn find_first_canonical_lines_escape(bytes: &[u8]) -> Option<usize> {
+    CANONICAL_LINES.find_first(bytes)
+}
+
 /// The offset of the first byte of `bytes` that can begin a scalar the
 /// [`Xml`](Carrier::Xml) carrier escapes, or `None` when none can.
 ///
-/// The [`find_first_literal_escape`] class plus `0xC2`. A candidate, not a
-/// verdict: at `0xC2` only a C1 control is escaped and at `0xEF` only U+FFFE and
-/// U+FFFF; every ASCII stop is an escape.
+/// A candidate, not a verdict: at `0xC2` only a C1 control is escaped and at
+/// `0xEF` only U+FFFE and U+FFFF; every ASCII stop is an escape.
 ///
 /// ```
 /// use purrdf_lex::literal_escape::find_first_xml_carrier_escape;
@@ -204,12 +257,12 @@ enum Escape {
 /// kernel) and the byte length it replaces, or `None` when the scalar rides
 /// raw and the scan goes on past the one byte.
 #[inline]
-fn escape_at(bytes: &[u8], at: usize, carrier: Carrier) -> Option<(Escape, usize)> {
+fn escape_at(bytes: &[u8], at: usize, kind: Kind) -> Option<(Escape, usize)> {
     let b = bytes[at];
     Some(match b {
         b'\\' => (Escape::Echar("\\\\"), 1),
         b'"' => {
-            if carrier == Carrier::TurtleLong && bytes.get(at + 1).is_some_and(|&n| n != b'"') {
+            if kind == Kind::TurtleLong && bytes.get(at + 1).is_some_and(|&n| n != b'"') {
                 return None;
             }
             (Escape::Echar("\\\""), 1)
@@ -255,11 +308,12 @@ fn push_escape<W: TextOut + ?Sized>(escape: Escape, out: &mut W) {
 
 /// The kernel for `carrier`.
 #[inline]
-fn finder(carrier: Carrier) -> fn(&[u8]) -> Option<usize> {
-    match carrier {
-        Carrier::Canonical => find_first_literal_escape,
-        Carrier::Xml => find_first_xml_carrier_escape,
-        Carrier::TurtleLong => find_first_turtle_long_escape,
+fn finder(kind: Kind) -> fn(&[u8]) -> Option<usize> {
+    match kind {
+        Kind::Canonical => find_first_literal_escape,
+        Kind::CanonicalLines => find_first_canonical_lines_escape,
+        Kind::Xml => find_first_xml_carrier_escape,
+        Kind::TurtleLong => find_first_turtle_long_escape,
     }
 }
 
@@ -269,11 +323,11 @@ fn write_from<W: TextOut + ?Sized>(
     value: &str,
     mut run: usize,
     mut at: usize,
-    carrier: Carrier,
+    kind: Kind,
     out: &mut W,
 ) {
     let bytes = value.as_bytes();
-    let find = finder(carrier);
+    let find = finder(kind);
     while at < bytes.len() {
         let end = at.saturating_add(out.scan_limit().max(1)).min(bytes.len());
         if !out.checkpoint(end - at) {
@@ -284,7 +338,7 @@ fn write_from<W: TextOut + ?Sized>(
             continue;
         };
         let hit = at + offset;
-        match escape_at(bytes, hit, carrier) {
+        match escape_at(bytes, hit, kind) {
             Some((escape, len)) => {
                 out.push_str(&value[run..hit]);
                 push_escape(escape, out);
@@ -310,8 +364,8 @@ fn write_from<W: TextOut + ?Sized>(
 /// use purrdf_lex::literal_escape::{Carrier, write};
 ///
 /// let mut out = String::new();
-/// write("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é\u{fffe}", Carrier::Canonical, &mut out);
-/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é\\uFFFE");
+/// write("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é", Carrier::Canonical, &mut out);
+/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é");
 ///
 /// out.clear();
 /// write("\u{85}\u{ffff}", Carrier::Xml, &mut out);
@@ -322,7 +376,29 @@ fn write_from<W: TextOut + ?Sized>(
 /// assert_eq!(out, "one\ntwo \\\"\\\"\" end\\\"");
 /// ```
 pub fn write<W: TextOut + ?Sized>(value: &str, carrier: Carrier, out: &mut W) {
-    write_from(value, 0, 0, carrier, out);
+    write_from(value, 0, 0, carrier.into(), out);
+}
+
+/// Append `value` in the canonical-lines spelling to `out`, the body only,
+/// without the surrounding quotes. See the module documentation, section "The
+/// canonical-lines spelling".
+///
+/// ```
+/// use purrdf_lex::literal_escape::write_canonical_lines;
+///
+/// let mut out = String::new();
+/// write_canonical_lines("a\"b\u{7f}\u{85}\u{fffd}\u{fffe}\u{ffff}", &mut out);
+/// assert_eq!(out, "a\\\"b\\u007F\u{85}\u{fffd}\\uFFFE\\uFFFF");
+/// ```
+pub fn write_canonical_lines<W: TextOut + ?Sized>(value: &str, out: &mut W) {
+    write_from(value, 0, 0, Kind::CanonicalLines, out);
+}
+
+/// `value` in the canonical-lines spelling, borrowed when no scalar needs an
+/// escape. The same bytes as [`write_canonical_lines`].
+#[must_use]
+pub fn escape_canonical_lines(value: &str) -> Cow<'_, str> {
+    escape_kind(value, Kind::CanonicalLines)
 }
 
 /// `value` escaped for `carrier`, borrowed when no scalar needs an escape.
@@ -339,14 +415,18 @@ pub fn write<W: TextOut + ?Sized>(value: &str, carrier: Carrier, out: &mut W) {
 /// ```
 #[must_use]
 pub fn escape(value: &str, carrier: Carrier) -> Cow<'_, str> {
+    escape_kind(value, carrier.into())
+}
+
+fn escape_kind(value: &str, kind: Kind) -> Cow<'_, str> {
     let bytes = value.as_bytes();
-    let find = finder(carrier);
+    let find = finder(kind);
     let mut at = 0;
     while let Some(offset) = find(&bytes[at..]) {
         let hit = at + offset;
-        if escape_at(bytes, hit, carrier).is_some() {
+        if escape_at(bytes, hit, kind).is_some() {
             let mut out = String::with_capacity(value.len() + 8);
-            write_from(value, 0, hit, carrier, &mut out);
+            write_from(value, 0, hit, kind, &mut out);
             return Cow::Owned(out);
         }
         at = hit + 1;
@@ -371,7 +451,7 @@ mod tests {
         let v = u32::from(c);
         let control = v < 0x20 || v == 0x7F;
         match carrier {
-            Carrier::Canonical => control || v == 0xFFFE || v == 0xFFFF,
+            Carrier::Canonical => control,
             Carrier::Xml | Carrier::TurtleLong => {
                 control || (0x80..=0x9F).contains(&v) || v == 0xFFFE || v == 0xFFFF
             }
@@ -479,7 +559,31 @@ mod tests {
     }
 
     #[test]
-    fn canonical_form_uses_every_echar_escapes_the_noncharacters_and_keeps_c1_raw() {
+    fn canonical_lines_escape_the_two_noncharacters_and_nothing_else_beyond_canonical() {
+        use super::{escape_canonical_lines, write_canonical_lines};
+        // Neighbours of each edge ride raw, so the escape is exactly the two
+        // scalars and not the whole 0xEF block or the C1 block.
+        for raw in [
+            "\u{80}", "\u{85}", "\u{9f}", "\u{fffd}", "\u{f000}", "\u{feff}", "\u{fdd0}",
+        ] {
+            assert!(
+                matches!(escape_canonical_lines(raw), Cow::Borrowed(_)),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(
+            escape_canonical_lines("a\u{fffe}b\u{ffff}"),
+            "a\\uFFFEb\\uFFFF"
+        );
+        // Everything else is the canonical carrier's, byte for byte.
+        let mixed = "\"\\\n\r\t\u{8}\u{c}\u{0}\u{7f}\u{85}\u{1f600}x";
+        let mut lines = String::new();
+        write_canonical_lines(mixed, &mut lines);
+        assert_eq!(lines, escape(mixed, Carrier::Canonical));
+    }
+
+    #[test]
+    fn canonical_form_uses_every_echar_and_keeps_c1_raw() {
         let mut out = String::new();
         write(
             "\"\\\n\r\t\u{8}\u{c}\u{0}\u{1f}\u{7f}",
@@ -487,21 +591,11 @@ mod tests {
             &mut out,
         );
         assert_eq!(out, "\\\"\\\\\\n\\r\\t\\b\\f\\u0000\\u001F\\u007F");
-        // C1 raw, per RDFC-1.0 test060; U+FFFE and U+FFFF are the one escaped
-        // part of the high block, per N-Quads 1.2 section 3.
+        // C1 raw, per RDFC-1.0 test060; U+FFFE and U+FFFF raw too.
         assert_eq!(
             escape("\u{80}\u{85}\u{9f}\u{fffe}\u{ffff}", Carrier::Canonical),
-            "\u{80}\u{85}\u{9f}\\uFFFE\\uFFFF"
+            "\u{80}\u{85}\u{9f}\u{fffe}\u{ffff}"
         );
-        assert_eq!(escape("a\u{fffe}b", Carrier::Canonical), "a\\uFFFEb");
-        // The neighbours on the far side of each edge ride raw, so the escape
-        // is exactly the two noncharacters and not the whole 0xEF block.
-        for raw in ["\u{fffd}", "\u{f000}", "\u{feff}", "\u{ffef}", "\u{fdd0}"] {
-            assert!(
-                matches!(escape(raw, Carrier::Canonical), Cow::Borrowed(_)),
-                "{raw:?}"
-            );
-        }
     }
 
     #[test]
@@ -581,11 +675,12 @@ mod tests {
         for b in 0..=u8::MAX {
             let i = usize::from(b);
             let canonical = CANONICAL_TABLE[i] != 0;
+            assert_eq!(canonical, b < 0x20 || b == b'"' || b == b'\\' || b == 0x7F);
             assert_eq!(
-                canonical,
-                b < 0x20 || b == b'"' || b == b'\\' || b == 0x7F || b == 0xEF
+                XML_TABLE[i] != 0,
+                canonical || b == 0xC2 || b == 0xEF,
+                "{b:#04X}"
             );
-            assert_eq!(XML_TABLE[i] != 0, canonical || b == 0xC2, "{b:#04X}");
             assert_eq!(
                 TURTLE_LONG_TABLE[i] != 0,
                 XML_TABLE[i] != 0 && b != b'\n',

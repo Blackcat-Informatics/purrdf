@@ -5,7 +5,7 @@
 
 English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
 
-**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 4 &nbsp;·&nbsp;
+**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 **Standing in 5.0.** The default canonical output of PurRDF is no longer this
@@ -493,10 +493,6 @@ diagnostic message — does not increment it. That restraint is what makes the
 number worth pinning: a version that changed on every release would tell a
 consumer nothing.
 
-| Version | Change | Inputs whose output moves |
-|---|---|---|
-| 4 | U+FFFE and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF` (N-Quads 1.2 §3: a character outside XML 1.1 `Char` is a `UCHAR`) | datasets holding either character in a literal; no other |
-
 ## 8. Normative vector corpus
 
 The corpus lives at `vectors/rdf12-canon/` and is **frozen**: every payload byte is
@@ -526,7 +522,7 @@ artifact it actually linked:
 | Field | Source |
 |---|---|
 | profile id | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
 | presentation | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
 | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
 | corpus digest | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST` (§8) |

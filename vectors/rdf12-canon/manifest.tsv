@@ -39,4 +39,3 @@ cases/poison-sentinel-nested.ttl	refusal	reserved-vocabulary object urn:purrdf:r
 cases/poison-sentinel-datatype.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
 cases/poison-sentinel-unminted.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:no-such-sentinel
 cases/poison-complexity.ttl	refusal	budget-exceeded
-cases/literal-noncharacters.ttl	golden

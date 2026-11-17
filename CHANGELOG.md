@@ -8,18 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **Canonical lines write U+FFFE and U+FFFF as `UCHAR`.** The canonical form of
-  RDF 1.2 N-Quads (section 3) requires a character outside the XML 1.1 `Char`
-  production to be written as `\uFFFE` or `\uFFFF`. The canonical literal
-  writer does so; the C1 controls stay raw. The canonical IRI writer escapes
-  exactly what `IRIREF` excludes, and DEL and the C1 controls ride raw as
-  U+00A0 does; the XML carrier keeps its wider set. `CANON_PROFILE_VERSION`
-  moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with the added vector.
-  Digests change only for a dataset holding U+FFFE or U+FFFF in a literal, on
-  the retained 4.x recompute path (`purrdf_core::rdfc12`); the 5.0 canonical
-  document spells those characters as escapes, and its BLAKE3 digest is over
-  binary lines and does not move. A consumer that asserts the profile version
-  at build time moves its assertion.
+- **The 5.0 canonical document follows the N-Quads 1.2 canonical form for
+  U+FFFE, U+FFFF and IRIs.** A literal holding U+FFFE or U+FFFF is spelled with
+  `\uFFFE` or `\uFFFF`, since neither matches the XML 1.1 `Char` production, and
+  an IRI is escaped exactly where `IRIREF` forbids a scalar, so DEL and the C1
+  controls ride raw. The canonical digest is over binary lines and does not
+  move; the certificate digest that follows the document does. The retained 4.x
+  `purrdf-rdfc12` output, the Turtle and other serializers and every existing
+  `term_syntax` writer keep their bytes, so stored digests recompute unchanged.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the
