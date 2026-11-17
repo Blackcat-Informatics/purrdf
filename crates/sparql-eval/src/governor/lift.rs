@@ -119,9 +119,11 @@ use std::sync::OnceLock;
 use purrdf_core::{TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::GraphPattern;
 
+#[cfg(test)]
+use crate::governor::soundness::PrefixFidelity;
 use crate::governor::soundness::{
-    ChildEdge, ChildEdges, OrderCertainty, PrefixFidelity, SpineClass, SpineContext,
-    child_edges_admitted, pattern_label,
+    ChildEdge, ChildEdges, OrderCertainty, SpineClass, SpineContext, child_edges_admitted,
+    pattern_label,
 };
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -258,7 +260,123 @@ impl Certificate {
         }
         self
     }
+
+    const fn description(&self, rows: usize) -> CertificateDescription<'_> {
+        CertificateDescription {
+            certificate: self,
+            rows,
+        }
+    }
 }
+
+impl purrdf_hash::error::StructuredError for Certificate {
+    purrdf_hash::error_visit! {
+        @record self { path, tripped, barrier } => "governor-lift-certificate" {
+            "path" => List(self.path.iter().map(|edge| purrdf_hash::error::ErrorValue::Record(edge))),
+            "tripped" => Record(&self.tripped),
+            "barrier" => Value(self.barrier.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |barrier| purrdf_hash::error::ErrorValue::Record(barrier))),
+        }
+    }
+}
+
+/// A certificate and the row count it describes, rendered as one line for a human.
+struct CertificateDescription<'a> {
+    certificate: &'a Certificate,
+    rows: usize,
+}
+
+impl core::fmt::Display for CertificateDescription<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let Self { certificate, rows } = self;
+        let spine = certificate.spine();
+        let bound = match spine.class() {
+            SpineClass::Certain => "a certified lower bound",
+            SpineClass::Possible => "an upper bound",
+            SpineClass::Unknown => "bounded on neither side",
+        };
+        let fidelity = match spine.order() {
+            OrderCertainty::Ordered => "positional",
+            OrderCertainty::Unordered => "bag-only",
+        };
+        // Whether a restricting `Slice` was crossed on the way up is worth saying out
+        // loud: it is the one thing that turns a merely bag-only bound into no bound at
+        // all, so a caller reading "bag-only" and "position-selected" together knows the
+        // shape of the query is what cost them the rows, not the size of the budget.
+        let selected = if spine.under_positional_selection() {
+            ", position-selected"
+        } else {
+            ""
+        };
+        let stable = if spine.admits_cap_pushdown() {
+            "; rows are an ordered prefix of the complete result"
+        } else {
+            ""
+        };
+        write!(
+            formatter,
+            "{} tripped, leaving {bound} of {rows} row(s), {fidelity}{selected}{stable}",
+            certificate.tripped
+        )?;
+        if let Some(barrier) = certificate.barrier {
+            write!(formatter, "; {barrier}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The query form of a complete-only entry point that refused.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CompletionForm {
+    /// The query's form keyword: `SELECT`, `CONSTRUCT`, `DESCRIBE` or `ASK`.
+    pub(crate) query: &'static str,
+    /// The kind of result that form returns, as the message names it.
+    pub(crate) result: &'static str,
+}
+
+/// The refusal of a governor trip at an entry point that can only return a complete
+/// result: which query form refused, how many rows were held, and the certificate that
+/// says what those rows bound. The rows themselves are released.
+#[derive(Debug)]
+struct CompletionRefusal {
+    form: Option<CompletionForm>,
+    rows: usize,
+    certificate: Certificate,
+    // The certificate's path allocation survives the evaluation context. Keep its
+    // exact capacity charged until after the path itself is destroyed.
+    _allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl purrdf_hash::error::StructuredError for CompletionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { form, rows, certificate, _allocation } => "eval-invariant-completion-required" {
+            "form" => Value(self.form.map_or(purrdf_hash::error::ErrorValue::Absent, |form| purrdf_hash::error::ErrorValue::Code(form.query))),
+            "rows" => Unsigned(self.rows as u128),
+            "certificate" => Record(&self.certificate),
+        }
+    }
+}
+
+impl core::fmt::Display for CompletionRefusal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.form {
+            None => formatter.write_str(
+                "a governor tripped on an evaluation entry point that can only return a complete bag",
+            ),
+            Some(form) => write!(
+                formatter,
+                "a governor tripped on a query entry point that can only return a complete {} result",
+                form.result
+            ),
+        }?;
+        write!(
+            formatter,
+            "; run a bounding governor configuration through `NativeSparqlEngine::query_governed`, which returns the certified partial answers: {}",
+            self.certificate.description(self.rows)
+        )
+    }
+}
+
+impl std::error::Error for CompletionRefusal {}
 
 /// A partial result: the rows an operator holds, and what they bound.
 ///
@@ -325,6 +443,7 @@ impl<I: ViewTermId> Truncation<I> {
 
     /// Whether these rows are a positional prefix of this node's true output, or only a
     /// sub-bag (or super-bag) of it.
+    #[cfg(test)]
     pub(crate) fn fidelity(&self) -> PrefixFidelity {
         match self.certificate.spine().order() {
             OrderCertainty::Ordered => PrefixFidelity::Positional,
@@ -370,39 +489,41 @@ impl<I: ViewTermId> Truncation<I> {
     /// which side of the interval the rows bound and whether their *positions* mean
     /// anything. A positional lower bound licenses resumption under a deterministic
     /// ceiling; the diagnostic deliberately makes no promise about wall-clock reruns.
+    #[cfg(test)]
     pub(crate) fn describe(&self) -> String {
-        let bound = match self.bound() {
-            SpineClass::Certain => "a certified lower bound",
-            SpineClass::Possible => "an upper bound",
-            SpineClass::Unknown => "bounded on neither side",
+        self.certificate.description(self.rows.len()).to_string()
+    }
+
+    /// Refuse a partial at a complete-only boundary with a typed cause: the query form
+    /// (when the entry point has one), the number of rows held, and the certificate
+    /// stating what they bound. The rows are released.
+    pub(crate) fn completion_error(
+        self,
+        form: Option<CompletionForm>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> crate::EvalError {
+        let rows = self.rows.len();
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let Some(bytes) = self
+            .certificate
+            .path
+            .capacity()
+            .checked_mul(size_of::<ChildEdge>())
+        else {
+            return crate::EvalError::WorkspaceBoundOverflow;
         };
-        let fidelity = match self.fidelity() {
-            PrefixFidelity::Positional => "positional",
-            PrefixFidelity::BagOnly => "bag-only",
-        };
-        let stable = if self.is_positional_prefix() {
-            "; rows are an ordered prefix of the complete result"
-        } else {
-            ""
-        };
-        let barrier = match self.barrier() {
-            Some(barrier) => format!("; {barrier}"),
-            None => String::new(),
-        };
-        // Whether a restricting `Slice` was crossed on the way up is worth saying out
-        // loud: it is the one thing that turns a merely bag-only bound into no bound at
-        // all, so a caller reading "bag-only" and "position-selected" together knows the
-        // shape of the query is what cost them the rows, not the size of the budget.
-        let selected = if self.certificate.spine().under_positional_selection() {
-            ", position-selected"
-        } else {
-            ""
-        };
-        format!(
-            "{} tripped, leaving {} of {} row(s), {fidelity}{selected}{stable}{barrier}",
-            self.tripped(),
-            bound,
-            self.rows.len()
+        if let Err(error) = frame.resize_live(bytes) {
+            return error;
+        }
+        crate::RetainedNativeFailure::error(
+            crate::NativeDiagnosticKind::Internal,
+            CompletionRefusal {
+                form,
+                rows,
+                certificate: self.certificate,
+                _allocation: frame.into_allocation(),
+            },
+            workspace,
         )
     }
 
@@ -864,6 +985,128 @@ mod tests {
         assert_eq!(lifted.rows().len(), 1, "a lower bound carries its rows");
         assert_eq!(lifted.barrier(), None);
         assert_eq!(lifted.tripped(), FUEL, "the governor propagates unchanged");
+    }
+
+    #[test]
+    fn completion_refusal_keeps_form_row_count_and_the_composed_path_inspectable() {
+        // A caller handling a complete-only refusal must be able to read what the
+        // refused partial bound without parsing the message: the query form, how many
+        // rows were held, the governor, and the edges the truncation crossed.
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let plan = GraphPattern::Minus {
+            left: boxed(bgp()),
+            right: boxed(bgp()),
+        };
+        let lifted = ascend(&plan, 1, Truncation::origin(one_row(), FUEL));
+        let workspace = crate::WorkspaceCapability::resident();
+
+        let crate::EvalError::RetainedNativeFailure(failure) = lifted.clone().completion_error(
+            Some(CompletionForm {
+                query: "SELECT",
+                result: "solution",
+            }),
+            &workspace,
+        ) else {
+            panic!("a complete-only refusal must retain its typed cause");
+        };
+        assert_eq!(failure.kind(), crate::NativeDiagnosticKind::Internal);
+        let cause = Capture::read(failure.cause());
+        assert_eq!(cause.code, "eval-invariant-completion-required");
+        assert!(matches!(cause.field("form"), ErrorValue::Code("SELECT")));
+        assert!(matches!(cause.field("rows"), ErrorValue::Unsigned(1)));
+        let certificate = cause.child("certificate");
+        let path = certificate.records("path");
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].child("role").code, "spine-antitone");
+        assert_eq!(path[0].child("fidelity").code, "prefix-bag-only");
+        assert_eq!(certificate.child("tripped").code, Capture::read(&FUEL).code);
+        assert!(failure.to_string().contains("complete solution result"));
+        assert!(failure.to_string().contains("an upper bound of 1 row(s)"));
+
+        // The entry point with no query form reports the form as absent.
+        let crate::EvalError::RetainedNativeFailure(bag) =
+            lifted.completion_error(None, &workspace)
+        else {
+            panic!("a complete-only refusal must retain its typed cause");
+        };
+        assert!(matches!(
+            Capture::read(bag.cause()).field("form"),
+            ErrorValue::Absent
+        ));
+    }
+
+    #[test]
+    fn a_complete_only_query_records_its_query_form_and_its_unbounded_neighbour_answers() {
+        // The structured form is the query's keyword, so CONSTRUCT and DESCRIBE, which
+        // return the same result kind, stay distinguishable; the message keeps the
+        // result kind. The same query without a ceiling answers.
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_sparql_algebra::SparqlParser;
+        use purrdf_testkit::error_capture::Capture;
+
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("https://example.org/p").expect("iri");
+        for index in 0..32 {
+            let subject = builder
+                .intern_iri(&format!("https://example.org/s{index}"))
+                .expect("iri");
+            builder
+                .push_quad(subject, predicate, subject, None)
+                .expect("quad");
+        }
+        let dataset = builder.freeze().expect("freeze");
+        let cases = [
+            (
+                "SELECT * WHERE { ?s <https://example.org/p> ?o }",
+                "SELECT",
+                "solution",
+            ),
+            (
+                "CONSTRUCT { ?o <https://example.org/p> ?s } WHERE { ?s <https://example.org/p> ?o }",
+                "CONSTRUCT",
+                "graph",
+            ),
+            (
+                "DESCRIBE ?s WHERE { ?s <https://example.org/p> ?o }",
+                "DESCRIBE",
+                "graph",
+            ),
+            ("ASK { ?s <https://example.org/p> ?o }", "ASK", "boolean"),
+        ];
+        for (text, keyword, result) in cases {
+            let query = SparqlParser::new().parse_query(text).expect("parse");
+            let state = std::sync::Arc::new(crate::GovernorState::new(
+                &crate::QueryGovernors::UNBOUNDED.with_fuel(1),
+            ));
+            let mut ctx = crate::EvalCtx::new(&dataset).with_governors(state);
+            let Err(crate::EvalError::RetainedNativeFailure(failure)) =
+                crate::evaluate_query(&query, &mut ctx)
+            else {
+                panic!("{keyword}: a fuel trip at a complete-only entry point must refuse");
+            };
+            let cause = Capture::read(failure.cause());
+            assert_eq!(
+                cause.code, "eval-invariant-completion-required",
+                "{keyword}"
+            );
+            assert!(
+                matches!(cause.field("form"), ErrorValue::Code(form) if form == keyword),
+                "{keyword}: the structured form is the query keyword"
+            );
+            assert!(
+                failure
+                    .to_string()
+                    .contains(&format!("complete {result} result")),
+                "{keyword}: the message names the result kind"
+            );
+
+            let mut ctx = crate::EvalCtx::new(&dataset);
+            crate::evaluate_query(&query, &mut ctx).unwrap_or_else(|error| {
+                panic!("{keyword}: the ungoverned neighbour answers: {error}")
+            });
+        }
     }
 
     #[test]
