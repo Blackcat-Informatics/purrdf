@@ -8,6 +8,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: canonical output is the nested-refinement labelling.** The
+  default canonicalization family in Rust, Python, WebAssembly, C and the CLI
+  routes to `(nested-refinement-labelling, 1)`. The canonical document is the
+  canonical line sequence spelled as N-Quads 1.2 with decimal blank-node labels
+  (`_:0`, `_:1`), in the order of the sequence, and the canonical digest is the
+  32-byte BLAKE3 digest of that sequence. Every canonical document and digest
+  for a dataset with blank nodes, reifiers, annotations or a declared empty
+  graph changes, and digests change for every dataset. RDFC-1.0 stays a named
+  entry point under `purrdf_core::rdfc12`, and the W3C suite is unchanged; the
+  4.x algorithm stays callable there as the read-side recompute of stored
+  digests. The default entry points no longer refuse the reserved `urn:purrdf:rdfc:`
+  vocabulary. A finite search bound maps onto the engine's limit and a refusal
+  is the typed `limit` outcome (`CanonError::Refused`). PACK writes format
+  version 2 with the line-sequence digest and still reads version 1;
+  `verify_pack` recomputes each version with the function that recorded it. The
+  PURREMB reference file, the entail goldens and the proof, product and
+  regime vectors move with the digest; GTS compaction certificates stay on
+  RDFC-1.0 and columnar files record no canonical digest. See the
+  [5.0 migration guide](docs/MIGRATION-5.0.md).
+
 - **Typed JSON Pointers:** `purrdf_lex::json_pointer::JsonPointer` holds a
   pointer as its unescaped reference tokens and writes the RFC 6901 spelling
   only on `Display`, through `escape_token`; `child`, `child_index`, `tokens`
