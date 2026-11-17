@@ -45,8 +45,8 @@
 //!   reports it — `platform::stack_floor` reads `pthread_getattr_np`,
 //!   `pthread_attr_get_np`, `pthread_stackseg_np`, `pthread_get_stackaddr_np` /
 //!   `pthread_get_stacksize_np`, or `GetCurrentThreadStackLimits`, per platform; see that
-//!   module for which targets read which call, and which read nothing. It is read once per
-//!   thread and cached in the same thread-local, so a check costs one thread-local load
+//!   module for which targets read which call, and which read nothing. A successful read is
+//!   cached per thread in the same thread-local, so a check costs one thread-local load
 //!   and one comparison. A pointer found *below* the cached floor means the thread is
 //!   running on a different stack than the one the floor was read for (a host that switched
 //!   onto a stack of its own, say), so the floor is read again rather than refusing: a
@@ -897,8 +897,8 @@ mod tests {
         const BYTES: usize = 4 * 1024 * 1024;
         let (top, below) =
             on_stack(BYTES, || (remaining(), deeper(16, &remaining))).expect("spawn");
-        // At least what was asked for, less the frames already live. (The C library may
-        // hand a thread more than it asked for, never less.)
+        // At most what was asked for (the request gives the floor), less the frames
+        // already live.
         assert!(
             top > BYTES - 64 * 1024,
             "{top} bytes left of at least {BYTES}"
@@ -965,6 +965,18 @@ mod tests {
 
     /// A floor installed above the running frame (a host that switched away without
     /// putting the previous floor back) is read again rather than reporting nothing left.
+    /// Only on a target whose operating system reports the bound to read again.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "netbsd",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "ios",
+        windows,
+    ))]
     #[test]
     fn a_floor_above_the_frame_is_read_again() {
         let (low, left) = on_stack(1024 * 1024, || {
@@ -1161,7 +1173,17 @@ mod tests {
 
     /// A floor read again inside a reserve — a native thread whose frame is found below
     /// the cached floor — is raised by what is reserved, so the reserve survives it.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "netbsd",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "ios",
+        windows,
+    ))]
     #[test]
     fn a_floor_read_again_keeps_the_reserve() {
         on_stack(4 * 1024 * 1024, || {
@@ -1330,9 +1352,8 @@ mod tests {
         let caller_floor = caller_sp - remaining();
         let (sp, left) =
             on_stack(BYTES, || (stack_pointer(), remaining())).expect("a 512 KiB thread starts");
-        // The operating system may round a thread's stack up to a page or its minimum, and
-        // the C library may hand a thread a cached stack several times the request, never
-        // less; 64 KiB covers the frames already live.
+        // The floor is the request, so what is left is the request less the frames already
+        // live (64 KiB covers them), however large a stack the C library actually mapped.
         assert!(
             left >= BYTES - 64 * 1024,
             "{left} bytes left on a {BYTES}-byte stack"
@@ -1432,7 +1453,17 @@ mod tests {
     /// measurement refuses (nothing left, low, nothing reserved or widened) and
     /// [`try_remaining`] names the failed call. Nothing is cached from the failure, so the
     /// neighbouring case — the same thread once a read succeeds — measures its real stack.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "netbsd",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "ios",
+        windows,
+    ))]
     #[test]
     fn an_unreadable_floor_refuses_every_check_and_recovers_when_a_read_succeeds() {
         let outcome = std::thread::Builder::new()

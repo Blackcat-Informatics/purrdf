@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The calling thread's stack bounds, read from the operating system once per thread.
+//! The calling thread's stack bounds, read from the operating system. The caller caches a
+//! successful read per thread and asks again after a failed one.
 //!
 //! [`stack_floor`] returns the lowest address the calling thread's stack may reach — the
 //! value [`super::refresh`] caches as the thread-local floor — or the [`FloorError`] that
@@ -235,13 +236,13 @@ mod tests {
         value
     }
 
-    /// A supported platform reads a floor: `Some`, strictly below the stack pointer near
+    /// A supported platform reads a floor: `Ok`, strictly below the stack pointer near
     /// the thread's entry point (so the headroom above it is positive), and nowhere near
     /// the enormous figure a floor of `0` (or another wrong, tiny value) would produce —
     /// the libc may hand a thread more than the size it asked for, but never orders of
     /// magnitude more.
     #[test]
-    fn stack_floor_is_some_and_bounds_positive_headroom() {
+    fn stack_floor_is_ok_and_bounds_positive_headroom() {
         const BYTES: usize = 2 * 1024 * 1024;
         let (sp, floor) =
             crate::on_stack(BYTES, || (stack_pointer(), stack_floor())).expect("spawn");
