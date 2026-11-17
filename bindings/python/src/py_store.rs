@@ -134,6 +134,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<store::PyQuadIter>()?;
     m.add_function(wrap_pyfunction!(io::parse, m)?)?;
     m.add_function(wrap_pyfunction!(io::serialize, m)?)?;
+    m.add_function(wrap_pyfunction!(query::bind_execution_receipt, m)?)?;
     m.add_function(wrap_pyfunction!(results::serialize_sparql_solutions, m)?)?;
     m.add_function(wrap_pyfunction!(results::serialize_sparql_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(results::parse_sparql_results, m)?)?;

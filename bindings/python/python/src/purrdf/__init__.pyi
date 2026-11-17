@@ -948,6 +948,9 @@ class _QuadStore:
     # the named-graph count meaningless, and the JSON-LD family loses nothing.
     def dump_with_loss(self, format: RdfFormat) -> SerializeLoss: ...
     def __len__(self) -> int: ...
+    # The 64-hex content identity of the current content, the snapshot every query
+    # reads: a digest of every row, computed on this call and never by a query.
+    def content_identity(self) -> str: ...
     # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
     # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
     # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
@@ -1156,6 +1159,11 @@ def parse(
     input: bytes | str, format: RdfFormat, *, base: str | None = ...,
     input_options: str | None = ...
 ) -> list[Quad]: ...
+# A query's `execution_receipt_json` carries the run identity only. Bind it to the
+# `content_identity()` of the store it read: the receipt with `contentIdentity` and
+# `executionIdentity` added. Raises ValueError for a receipt that is not one, an
+# identity that is not 64 hex digits, or a run that cannot have an execution identity.
+def bind_execution_receipt(receipt_json: str, content_identity: str) -> str: ...
 @overload
 def serialize(
     input: QueryTriples | QueryQuads,

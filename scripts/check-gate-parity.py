@@ -114,15 +114,6 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "renders the book to check the translation, so it needs mdbook and the pinned "
         "mdbook-i18n-helpers; `make check-i18n` is the local entry point and says so"
     ),
-    "crates/shapes/tests/pydantic_oracle.py": (
-        "an emitter oracle run through `uv run --project bindings/python`, so it needs the "
-        "Python environment the pytest job builds; `make pydantic-oracle` is the local "
-        "entry point"
-    ),
-    "crates/shapes/tests/linkml_oracle.py": (
-        "same as the pydantic oracle: a `uv`-driven emitter check needing the built Python "
-        "environment, with `make linkml-oracle` as the local entry point"
-    ),
     "scripts/conformance-matrix.py $(CONFORMANCE_ARGS)": (
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
@@ -140,7 +131,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 7
+ONE_SIDED_COUNT = 5
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:

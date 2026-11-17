@@ -63,7 +63,7 @@ def test_native_receiver_routes_forward_exact_inputs_and_independent_defaults(ki
     assert _row(_answer(store, route, now=NOW))[0] == NOW
     omitted = _row(_answer(store, route, now=None, entropy_seed=0))
     assert omitted[0] != NOW and omitted[1:] == first[1:]
-    retained = _answer(store, route, now=NOW, entropy_seed=0)
+    retained = _answer(store, route, now=NOW, entropy_seed=0); receipt = json.loads(retained.execution_receipt_json); bound = json.loads(purrdf.bind_execution_receipt(retained.execution_receipt_json, store.content_identity())); assert "contentIdentity" not in receipt and bound["runIdentity"] == receipt["runIdentity"] and bound["contentIdentity"] == store.content_identity() and len(bound["executionIdentity"]) == 64; pytest.raises(ValueError, purrdf.bind_execution_receipt, '{"state":"not-started"}', store.content_identity())
     del store
     assert _row(retained) == first
 

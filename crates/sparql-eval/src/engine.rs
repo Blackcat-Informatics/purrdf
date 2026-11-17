@@ -26,7 +26,10 @@ mod select_cursor;
 pub use select_cursor::{FallibleSelectCursor, FallibleSelectSettlement, PreparedSelectCursor};
 pub(crate) mod coordinates;
 pub(crate) use coordinates::now as prepare_coordinate_now;
-pub use coordinates::{ExecutionCoordinateObserver, QueryCoordinates, SuppliedQueryCoordinates};
+pub use coordinates::{
+    ExecutionCoordinateObserver, ExecutionSources, QueryCoordinates, ReceiptError,
+    SuppliedQueryCoordinates,
+};
 mod graph_build;
 pub use graph_build::{FallibleGraphBuildResult, GraphBuildError, GraphBuildStats};
 

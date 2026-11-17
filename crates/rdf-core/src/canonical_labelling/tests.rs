@@ -25,7 +25,7 @@ use super::{
 
 /// A term in the examples' notation: `<x>` is the IRI of the bytes `x`, any
 /// other name is the blank node of that source identifier.
-fn term(name: &str) -> Term {
+pub(super) fn term(name: &str) -> Term {
     match name.strip_prefix('<').and_then(|n| n.strip_suffix('>')) {
         Some(iri) => Term::iri(iri.as_bytes()),
         None => Term::blank(name.as_bytes()),
@@ -133,7 +133,7 @@ fn every_kind() -> Vec<Line> {
 }
 
 /// `record("payload", [terms])` in the examples' notation.
-fn record(payload: &str, terms: &[Term]) -> Line {
+pub(super) fn record(payload: &str, terms: &[Term]) -> Line {
     Line::Record {
         payload: payload.as_bytes().into(),
         terms: terms.to_vec(),
@@ -815,7 +815,7 @@ fn reifier_shape() -> Vec<Line> {
 }
 
 /// The nested instance of 13.2: `G1` and two copies of `G2` hung under `h`.
-fn nested_instance() -> Vec<Line> {
+pub(super) fn nested_instance() -> Vec<Line> {
     let mut lines = g1(["a1", "a2", "b1", "b2"]);
     lines.extend(quads(&[("h", "<q>", "b1"), ("h", "<q>", "b2")]));
     lines.extend(g2(["u", "v1", "v2", "c1", "c2"]));

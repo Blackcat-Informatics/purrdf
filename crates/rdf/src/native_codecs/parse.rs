@@ -2166,8 +2166,8 @@ mod tests {
                 );
                 assert_eq!(view.stats_fingerprint(), plain.stats_fingerprint());
                 assert_eq!(
-                    view.snapshot_identity().unwrap(),
-                    DatasetView::snapshot_identity(plain.as_ref()).unwrap()
+                    purrdf_core::ContentIdentified::content_identity(&view),
+                    purrdf_core::ContentIdentified::content_identity(plain.as_ref())
                 );
                 assert_eq!(
                     view.source_statement_count().unwrap(),

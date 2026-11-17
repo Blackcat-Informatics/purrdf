@@ -12,11 +12,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    BlankScope, CanonicalPagedError, DatasetView, FallibleDatasetView, GlobalTermId, GraphMatch,
-    InMemoryPageProvider, PackBuilder, PageFault, PageGeneration, PageId, PageMaterialization,
-    PageProvider, PagedDataset, PagedQueryError, PagedQueryLimits, PagedStack, PagedStackError,
-    PagedStackEvidence, PagedStackSnapshotError, RdfDataset, RdfDatasetBuilder, RdfTextDirection,
-    StackPageOrigin, TermBox, TermFactory, TermValue, ViewOperationStatus, canonical_paged_seal,
+    BlankScope, CanonicalPagedError, ContentIdentified, DatasetView, FallibleDatasetView,
+    GlobalTermId, GraphMatch, InMemoryPageProvider, PackBuilder, PageFault, PageGeneration, PageId,
+    PageMaterialization, PageProvider, PagedDataset, PagedQueryError, PagedQueryLimits, PagedStack,
+    PagedStackError, PagedStackEvidence, PagedStackSnapshotError, RdfDataset, RdfDatasetBuilder,
+    RdfTextDirection, StackPageOrigin, TermBox, TermFactory, TermValue, ViewOperationStatus,
+    canonical_paged_seal,
 };
 
 fn iri(name: &str) -> TermValue {
@@ -234,11 +235,10 @@ fn historical_prefixes_match_eager_seals_and_exclude_pending_head() {
     for (count, rows) in expected.iter().enumerate() {
         let snapshot = stack.snapshot_at(count).unwrap();
         assert_eq!(snapshot.sealed_depth(), count + 1);
+        // Taking a snapshot computes no identity; the request below does.
+        assert!(format!("{snapshot:?}").contains("snapshot_identity: OnceLock(<uninit>)"));
         let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
-        let identity = view
-            .snapshot_identity()
-            .unwrap()
-            .expect("sealed prefix identity");
+        let identity = view.content_identity().unwrap();
         assert!(identities.insert(identity));
         assert!(
             evidence(&view).pages.requested_pages.is_empty(),
@@ -249,8 +249,7 @@ fn historical_prefixes_match_eager_seals_and_exclude_pending_head() {
             identity,
             retained
                 .query_view(PagedQueryLimits::UNBOUNDED)
-                .snapshot_identity()
-                .unwrap()
+                .content_identity()
                 .unwrap()
         );
         let eager = canonical_paged_seal(

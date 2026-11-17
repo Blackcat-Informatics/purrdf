@@ -5,6 +5,7 @@
 
 use super::cursor::{Cursor, forward_flat_map, optional};
 use super::view_accounting::WorkCounter;
+use crate::ContentIdentified as _;
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
 use crate::hash::FastMap;
@@ -1047,7 +1048,8 @@ impl ViewTermId for CompositeViewId {
 /// identities. Graph projection is explicit. No pointer or work counter affects RDF.
 #[derive(Debug, Clone)]
 pub struct CompositeDatasetView {
-    snapshot_identity: purrdf_hash::hex::Digest32,
+    /// Sealed on the first identity request; clones share the cell.
+    snapshot_identity: Arc<std::sync::OnceLock<purrdf_hash::hex::Digest32>>,
     sources: Arc<[CompositeSource]>,
     mappings: Arc<[Arc<AliasMap>]>,
     reverse: Arc<[Arc<ReverseMap>]>,
@@ -1097,15 +1099,15 @@ impl CompositeDatasetView {
             match &source.carrier {
                 Carrier::Native(dataset) => {
                     hash.update(&[0]);
-                    hash.update(dataset.frozen_snapshot_identity().as_bytes());
+                    hash.update(dataset.frozen_snapshot_identity()?.as_bytes());
                 }
                 Carrier::Delta(view) => {
                     hash.update(&[1]);
-                    hash.update(view.frozen_snapshot_identity().as_bytes());
+                    hash.update(view.content_identity()?.as_bytes());
                 }
                 Carrier::Selected(selection) => {
                     hash.update(&[2]);
-                    hash.update(selection.view.snapshot_identity.as_bytes());
+                    hash.update(selection.view.content_identity()?.as_bytes());
                     hash.update(&(selection.names.len() as u64).to_le_bytes());
                     for name in selection.names.iter() {
                         name.visit_canonical_bytes_with_memory(
@@ -1759,7 +1761,7 @@ impl Prefix {
             unique_terms += alias_last(&sources, &scopes, &mut mappings, &mut reverse, &mut work)?;
         }
         let mut view = CompositeDatasetView {
-            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
+            snapshot_identity: Arc::default(),
             sources: sources.into(),
             mappings: mappings.into(),
             reverse: reverse.into(),
@@ -1792,7 +1794,6 @@ impl Prefix {
             });
         }
         view.placement = placement.into();
-        view.snapshot_identity = view.seal_content_identity()?;
         // One charge, and it already includes the derived dictionary's freeze.
         view.work.add(work);
         Ok(view)
@@ -1880,6 +1881,18 @@ fn alias_last(
     Ok(canonical)
 }
 
+/// The identity binds every source's identity, its scope binding and blank-scope
+/// mapping, and its graph placement; it is sealed on the first request.
+impl crate::ContentIdentified for CompositeDatasetView {
+    type IdentityError = RdfDiagnostic;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, RdfDiagnostic> {
+        crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
+            self.seal_content_identity()
+        })
+    }
+}
+
 impl DatasetView for CompositeDatasetView {
     fn retained_view_stats(&self) -> Option<ViewStats> {
         Some(self.stats())
@@ -1891,10 +1904,6 @@ impl DatasetView for CompositeDatasetView {
     where
         Self: 'a;
     type ProbePlan = QuadProbePlan;
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        Ok(Some(self.snapshot_identity))
-    }
 
     fn reserve_owned_workspace(
         &self,

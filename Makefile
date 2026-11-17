@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest pytest-load conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -473,6 +473,9 @@ pytest: ## Build the native module + run the Python binding test suite (own gate
 	cargo run -q --locked -p helper-census -- --python-binding-tests
 	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
 	cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
+
+pytest-load: ## Build the native module and check it imports and exposes the Rust functions (the CI Python gate).
+	cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests/test_top_level_exports.py
 
 miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised

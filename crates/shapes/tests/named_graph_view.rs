@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_core::ContentIdentified as _;
 use purrdf_iri::vocab::{rdf, rdfs};
 use purrdf_rdf::{
     BlankScope, DatasetView, FastSet, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral,
@@ -91,14 +92,14 @@ fn graph_fixture() -> (Arc<RdfDataset>, [TermId; 5]) {
 fn every_prepared_pattern_reads_only_the_selected_graph() {
     let (source, graphs) = graph_fixture();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
-    let snapshot = view.snapshot_identity().unwrap().expect("native identity");
+    let snapshot = view.content_identity().unwrap();
     for other in [
         ShaclDatasetView::named_graph(Arc::clone(&source), graphs[1]),
         ShaclDatasetView::named_graph(Arc::clone(&source), graphs[2]),
         ShaclDatasetView::project(Arc::clone(&source)),
         ShaclDatasetView::native(Arc::clone(&source)),
     ] {
-        assert_ne!(other.snapshot_identity().unwrap(), Some(snapshot));
+        assert_ne!(other.content_identity().unwrap(), snapshot);
     }
     assert_eq!(view.stats().materializations, 0);
     let all: Vec<_> = source
@@ -190,13 +191,40 @@ fn every_prepared_pattern_reads_only_the_selected_graph() {
     assert_eq!(view.stats().materializations, 0);
 }
 
+/// A view selecting its graph by a term that names no graph (a literal) has no
+/// content identity: the request is refused, while the same source selecting an
+/// IRI graph answers.
+#[test]
+fn a_view_selecting_a_literal_graph_refuses_a_content_identity() {
+    let mut builder = RdfDatasetBuilder::new();
+    let iri = builder.intern_iri("http://example.org/g").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("not a graph"))
+        .unwrap();
+    builder.push_quad(iri, iri, literal, Some(iri)).unwrap();
+    let source = builder.freeze().unwrap();
+    assert!(matches!(
+        ShaclDatasetView::named_graph(Arc::clone(&source), literal).content_identity(),
+        Err(purrdf_shapes::data_view::DataIdentityError::SelectedGraphNotAName)
+    ));
+    // The refusal hashed nothing; the neighbouring IRI graph's request does.
+    let unsealed = "snapshot_identity: OnceLock(<uninit>)";
+    assert!(format!("{source:?}").contains(unsealed));
+    assert!(
+        ShaclDatasetView::named_graph(Arc::clone(&source), iri)
+            .content_identity()
+            .is_ok()
+    );
+    assert!(!format!("{source:?}").contains(unsealed));
+}
+
 #[test]
 fn construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids() {
     let (source, graphs) = graph_fixture();
     let window = CurrentThreadWindow::open();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
-    let snapshot = view.snapshot_identity().unwrap().expect("native identity");
-    assert_eq!(view.snapshot_identity().unwrap(), Some(snapshot));
+    let snapshot = view.content_identity().unwrap();
+    assert_eq!(view.content_identity().unwrap(), snapshot);
     let allocation = window.close();
     assert_eq!(allocation.allocations, 0);
     assert_eq!(allocation.requested_bytes, 0);

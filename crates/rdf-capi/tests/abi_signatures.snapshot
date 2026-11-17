@@ -60,6 +60,7 @@ int32_t purrdf_entail_realize(const char *document, uint32_t step_cap, uint32_t 
 int32_t purrdf_entail_rules(const char *regime, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_entail_verify_entailment(const char *regime, const char *premise, const char *conclusion, const char *const *import_iris, const char *const *import_documents, size_t import_count, const char *const *premise_iris, size_t premise_iri_count, const uint64_t *max_stored_facts, const uint64_t *max_join_steps, const uint64_t *max_term_arena_bytes, PurrdfBuffer **out_answer, PurrdfBuffer **out_certificate, PurrdfError **out_error)
 int32_t purrdf_error_code(const PurrdfError *err)
+int32_t purrdf_execution_receipt_bind(const PurrdfDataset *dataset, const PurrdfBuffer *receipt, PurrdfBuffer **out_receipt, PurrdfError **out_error)
 int32_t purrdf_from_gts(const uint8_t *bytes, size_t len, PurrdfDataset **out_dataset, PurrdfError **out_error)
 int32_t purrdf_geo_point_index_call(const PurrdfGeoPointIndex *index, const char *request, PurrdfBuffer **out_response, PurrdfError **out_error)
 int32_t purrdf_geo_point_index_create(const PurrdfGeoSession *session, const char *request, PurrdfGeoPointIndex **out_index, PurrdfError **out_error)

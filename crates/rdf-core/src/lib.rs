@@ -191,10 +191,11 @@ pub use collections::{
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentHasher, ContentStore, ContentStoreError};
 pub use dataset_view::{
-    AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
-    GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,
-    ProbePattern, ReadResidency, ResolvedQuad, StatementIndexSupport, TermGuard, TermLookupError,
-    ViewOperationStatus, ViewTermId, WorkspaceReservation, checkpointed_drain,
+    AccessCost, ContentIdentified, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure,
+    FallibleDatasetView, GraphMatch, GraphMatchValue, GraphSelector, NoopReservation,
+    OwnedWorkspaceReservation, ProbePattern, ReadResidency, ResolvedQuad, StatementIndexSupport,
+    TermGuard, TermLookupError, ViewOperationStatus, ViewTermId, WorkspaceReservation,
+    checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{
@@ -352,7 +353,7 @@ pub mod prelude {
         DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,
         SerializeGraph, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
     };
-    pub use crate::dataset_view::{DatasetView, GraphMatch, TermLookupError};
+    pub use crate::dataset_view::{ContentIdentified, DatasetView, GraphMatch, TermLookupError};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
     pub use crate::ir::{
         QuadIds, QuadPatternCursor, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef,

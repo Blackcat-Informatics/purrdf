@@ -2062,17 +2062,23 @@ fn summary_matches(summary: &[u8], (s, p, o, graph): Pattern) -> bool {
     true
 }
 
+/// The identity recorded in the session's receipt; a session that is not ready refuses.
+impl crate::ContentIdentified for SegmentedSession {
+    type IdentityError = SegmentedError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        self.ready()?;
+        Ok(purrdf_hash::hex::Digest32::new(
+            *self.receipt.snapshot.as_bytes(),
+        ))
+    }
+}
+
 impl DatasetView for SegmentedSession {
     type Id = GlobalTermId;
     type ReadError = SegmentedError;
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        self.ready()?;
-        Ok(Some(purrdf_hash::hex::Digest32::new(
-            *self.receipt.snapshot.as_bytes(),
-        )))
-    }
 
     fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
         self.ready()?;

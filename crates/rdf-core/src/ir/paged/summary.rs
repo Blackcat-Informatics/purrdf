@@ -529,7 +529,7 @@ impl PageSummary {
             std::borrow::Cow::Owned(source) => source,
         };
         Ok(Self {
-            snapshot_identity: page.frozen_snapshot_identity(),
+            snapshot_identity: page.frozen_snapshot_identity()?,
             intervals: [
                 crate::annotation_range::seal_intervals(page, page.quads())?,
                 crate::annotation_range::seal_intervals(page, page.annotation_quads())?,

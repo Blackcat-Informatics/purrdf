@@ -934,6 +934,8 @@ pub(crate) struct ConvertArgs {
 
 // The arguments of the `Query` subcommand, kept out of the enum so the
 // derive-generated builder functions stay small in an unoptimized build.
+// Each bool is an independent command-line switch, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(clap::Args, Debug)]
 pub(crate) struct QueryArgs {
     /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
@@ -1168,6 +1170,15 @@ pub(crate) struct QueryArgs {
     /// Zero is valid. Omitted, execution samples host entropy.
     #[arg(long, value_name = "U64", allow_hyphen_values = true)]
     pub entropy_seed: Option<String>,
+    /// Bind the `purrdf-execution` receipt on stderr to the data's content: it then
+    /// also carries `contentIdentity`, a digest of every row of the data source, and
+    /// `executionIdentity`, which binds the run identity to it. Omitted, the receipt
+    /// carries the run identity only and the data is never hashed. A run that cannot
+    /// have an execution identity (`--aggregate-namespace` or `--path-relation` call
+    /// code nothing certifies) prints its receipt, writes no result and exits 2.
+    /// Refused beside `--entailment`, whose closure is not the data source.
+    #[arg(long, conflicts_with = "entailment")]
+    pub content_identity: bool,
     /// The SPARQL query text.
     pub query: String,
 }

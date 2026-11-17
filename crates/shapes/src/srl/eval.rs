@@ -317,9 +317,6 @@ pub(crate) fn evaluate_with(
         let base = data.core_arc()?;
         let triples = rules::base_triples(&base);
         Ok(PreparedRuleSource {
-            snapshot: base
-                .snapshot_identity()
-                .unwrap_or_else(|never| match never {}),
             data: Some(data),
             base: Some(Arc::clone(&base)),
             triples,
@@ -375,9 +372,6 @@ pub(crate) fn evaluate_triples(
                 triples.push(triple);
             }
             Ok(PreparedRuleSource {
-                snapshot: base.snapshot_identity().map_err(|error| {
-                    crate::error::ShapesError::from(purrdf_core::RdfDiagnostic::from(error))
-                })?,
                 data: None,
                 base: None,
                 triples,
@@ -393,7 +387,6 @@ pub(crate) fn evaluate_triples(
 
 /// Input and publication owners prepared only after rule/program validation.
 struct PreparedRuleSource<'a, F> {
-    snapshot: Option<purrdf_hash::hex::Digest32>,
     data: Option<&'a ShaclData>,
     base: Option<Arc<RdfDataset>>,
     triples: Vec<[Term; 3]>,
@@ -419,10 +412,6 @@ where
 {
     let _coordinates = options.coordinate_scope();
     let mut coordinates = crate::sparql::coordinates::snapshot();
-    coordinates.shapes = shapes
-        .shapes_dataset
-        .snapshot_identity()
-        .unwrap_or_else(|never| match never {});
     let recording = crate::sparql::coordinates::RecordingScope::enter();
     let outcome = (|| {
         let program_identity = super::identity::program(set, shapes)?;
@@ -481,13 +470,11 @@ where
         ));
 
         let PreparedRuleSource {
-            snapshot,
             data,
             base,
             triples: base_triples,
             finish,
         } = prepare()?;
-        coordinates.snapshot = snapshot;
 
         // Every label this evaluation mints — a head blank node, a blank node an assignment
         // computes, a data block's blank node standardized apart from the base graph ("rdf

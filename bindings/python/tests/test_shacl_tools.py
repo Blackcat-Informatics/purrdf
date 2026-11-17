@@ -89,7 +89,7 @@ _INFERRED = "".join(
 def test_py_apply_rules() -> None:
     out = purrdf.shapes.apply_rules(_DATA, _SHAPES)
     assert out == {"inferred": _INFERRED, "proof": None, "diagnostics": [], "execution_receipt_json": out["execution_receipt_json"]}
-    assert len(json.loads(out["execution_receipt_json"])["executionIdentity"]) == 64
+    assert len(json.loads(out["execution_receipt_json"])["programIdentity"]) == 64
     explained = purrdf.shapes.apply_rules(_DATA, _SHAPES, explain=True)
     assert explained["inferred"] == _INFERRED
     proof = explained["proof"]
@@ -188,7 +188,7 @@ def test_py_entail_limits() -> None:
     for line in _INFERRED.splitlines():
         assert line in closed["ntriples"], closed
     assert closed == {**purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value, "execution_receipt_json": closed["execution_receipt_json"]}
-    assert len(json.loads(closed["execution_receipt_json"])["executionIdentity"]) == 64
+    assert len(json.loads(closed["execution_receipt_json"])["programIdentity"]) == 64
 
 def test_py_eval_node_expr() -> None:
     assert purrdf.shapes.eval_node_expr(

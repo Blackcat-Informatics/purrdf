@@ -171,9 +171,9 @@ def test_stub_signatures_match_the_built_bindings() -> None:
             r"^    def (\w+)\(\s*\n?([^)]*?)\)\s*->", body.group(1), re.MULTILINE
         ):
             fn = getattr(getattr(purrdf, engine), name, None)
-            signature = getattr(fn, "__text_signature__", None)
-            if fn is None or signature is None:
-                continue  # a class or a non-PyO3 callable: nothing to compare
+            assert callable(fn), f"purrdf.{engine}.{name} is declared in the stub but not callable in the built module"
+            if (signature := getattr(fn, "__text_signature__", None)) is None:
+                continue  # a non-PyO3 callable: nothing to compare
             declared = shape(params)
             actual = [
                 token

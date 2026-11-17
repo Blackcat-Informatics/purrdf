@@ -783,6 +783,20 @@ impl<D: DatasetView> ResidueView<'_, D> {
     }
 }
 
+/// The residue's identity, derived from its source's identity.
+impl<D: crate::ContentIdentified> crate::ContentIdentified for ResidueView<'_, D> {
+    type IdentityError = D::IdentityError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        const RESIDUE: Domain = Domain::new(b"purrdf-core/residue-snapshot/v1");
+        let identity = self.0.content_identity()?;
+        let mut hash = purrdf_hash::blake3::Hasher::new();
+        hash.update(RESIDUE.as_bytes());
+        hash.update(identity.as_bytes());
+        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    }
+}
+
 impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     type Id = D::Id;
     type ReadError = D::ReadError;
@@ -791,16 +805,6 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     where
         Self: 'a;
     type ProbePlan = ();
-
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        const RESIDUE: Domain = Domain::new(b"purrdf-core/residue-snapshot/v1");
-        Ok(self.0.snapshot_identity()?.map(|identity| {
-            let mut hash = purrdf_hash::blake3::Hasher::new();
-            hash.update(RESIDUE.as_bytes());
-            hash.update(identity.as_bytes());
-            purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
-        }))
-    }
 
     fn reserve_workspace(
         &self,

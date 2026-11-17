@@ -685,6 +685,16 @@ fn assemble(
 // PackView — the zero-copy reader.
 // ---------------------------------------------------------------------------
 
+/// A pack's complete borrowed bytes, kept for its content identity; `Debug` shows
+/// their length, not their contents.
+pub(super) struct ContainerBytes<'a>(pub(super) &'a [u8]);
+
+impl std::fmt::Debug for ContainerBytes<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ContainerBytes({} bytes)", self.0.len())
+    }
+}
+
 /// The zero-copy, borrowed reader over [`PackBuilder::build_bytes`]'s output.
 /// Owns the decoded [`PackDict`] (an arena the dictionary's PFC sections are
 /// decompressed into once, at open time) and borrows the bitmap-triples and
@@ -693,7 +703,10 @@ fn assemble(
 /// verification [`from_bytes`](Self::from_bytes) performs.
 #[derive(Debug)]
 pub struct PackView<'a> {
-    pub(super) snapshot_identity: purrdf_hash::hex::Digest32,
+    /// The authenticated complete representation the identity is a digest of.
+    pub(super) bytes: ContainerBytes<'a>,
+    /// Sealed on the first identity request; opening computes nothing.
+    pub(super) snapshot_identity: std::sync::OnceLock<purrdf_hash::hex::Digest32>,
     dict: PackDict,
     triples: TriplesRef<'a>,
     side: SideTablesRef<'a>,
@@ -795,11 +808,9 @@ impl<'a> PackView<'a> {
             ));
         }
 
-        // Seal the authenticated complete representation once at ingestion.
-        let snapshot_identity =
-            purrdf_hash::hex::Digest32::new(*purrdf_hash::blake3::hash(bytes).as_bytes());
         Ok(Self {
-            snapshot_identity,
+            bytes: ContainerBytes(bytes),
+            snapshot_identity: std::sync::OnceLock::new(),
             dict,
             triples,
             side,

@@ -577,7 +577,7 @@ impl PagedStack {
             PagedDataset::from_parts(dictionary, provider, PageGeneration::INITIAL, parts)
                 .map_err(PagedStackError::Freeze)?;
         let mut snapshot = PagedStackSnapshot {
-            snapshot_identity: purrdf_hash::hex::Digest32::new([0; 32]),
+            snapshot_identity: OnceLock::new(),
             statistics_revision: 0,
             physical,
             origins,
@@ -607,7 +607,6 @@ impl PagedStack {
             &snapshot.removal_values,
             &snapshot.graph_declarations,
         ));
-        snapshot.snapshot_identity = snapshot.seal_content_identity()?;
         Self::check_sources(layers)?;
         Ok(snapshot)
     }
@@ -734,7 +733,8 @@ impl PageProvider for StackProvider {
 /// Immutable metadata and copied head/removals, retained independently of its writer.
 #[derive(Debug)]
 pub struct PagedStackSnapshot {
-    snapshot_identity: purrdf_hash::hex::Digest32,
+    /// Sealed on the first identity request.
+    snapshot_identity: OnceLock<purrdf_hash::hex::Digest32>,
     statistics_revision: u64,
     physical: PagedDataset,
     origins: Vec<StackPageOrigin>,
@@ -1005,6 +1005,22 @@ impl PagedStackQueryView<'_> {
     }
 }
 
+/// The stack snapshot's identity, sealed on the first request; a view whose reads
+/// already failed refuses.
+impl crate::ContentIdentified for PagedStackQueryView<'_> {
+    type IdentityError = PagedQueryError;
+
+    fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, Self::IdentityError> {
+        if let Some(error) = self.read_error() {
+            return Err(error);
+        }
+        crate::dataset_view::sealed_identity(&self.snapshot.snapshot_identity, || {
+            self.snapshot.seal_content_identity()
+        })
+        .map_err(PagedQueryError::RangeStorage)
+    }
+}
+
 impl DatasetView for PagedStackQueryView<'_> {
     type Id = GlobalTermId;
     type ReadError = PagedQueryError;
@@ -1013,12 +1029,6 @@ impl DatasetView for PagedStackQueryView<'_> {
     where
         Self: 'a;
     type ProbePlan = ();
-    fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
-        if let Some(error) = self.read_error() {
-            return Err(error);
-        }
-        Ok(Some(self.snapshot.snapshot_identity))
-    }
 
     fn statistics(&self) -> Option<&dyn crate::SnapshotStatistics<Self::Id>> {
         self.read_error().is_none().then_some(self as _)

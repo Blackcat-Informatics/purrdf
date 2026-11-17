@@ -25,7 +25,7 @@
 //! certificate encoding, positions follow from the structure of the calls, and
 //! no hash enters the search itself.
 //!
-//! [`reference`] is written for clarity and explores every child of every
+//! [`mod@reference`] is written for clarity and explores every child of every
 //! branching call it searches; it is the oracle the optimised engine is held to.
 //! The entries of this module run the optimised engine: dense arrays, an
 //! explicit stack of calls, the strict stops of 10.4 and checked automorphisms
@@ -438,7 +438,9 @@ pub struct Labelled {
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.
     pub explored: Units,
-    /// Engine figure: twin units of the search-free run (8.1(f)).
+    /// Engine figure: twin units of the search-free run (8.1(f)). The twin
+    /// tests a search makes (route (4) of the optimised engine) spend limited
+    /// units and are not counted here, so every engine reports the same figure.
     /// NOT a property of the dataset and NOT part of the structural record: an
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.

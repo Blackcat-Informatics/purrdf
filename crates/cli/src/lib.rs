@@ -510,6 +510,7 @@ fn dispatch_with_request(
             division,
             now,
             entropy_seed,
+            content_identity,
             query,
         }) => query::run(
             &query::QueryOptions {
@@ -550,6 +551,7 @@ fn dispatch_with_request(
                 division: division.unwrap_or_default(),
                 now: now.as_deref(),
                 entropy_seed: entropy_seed.as_deref(),
+                content_identity: *content_identity,
             },
             &ledger_target,
             &ReportTarget::decode(report.as_ref()),

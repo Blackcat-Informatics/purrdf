@@ -97,6 +97,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: "Effective-directory copied-key counter guarded by cfg(test); absent from the shipped WASM package.",
     },
     ThreadLocal {
+        file: "crates/rdf-core/src/canonical_labelling/optimised.rs",
+        name: "AUDIT",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/text/src/index.rs",
         name: "DIGEST_BYTES",
         safety: Safety::NotCompiledIn,
@@ -156,6 +162,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         name: "WIDENED",
         safety: Safety::Swapped,
         reason: STACK_CONTEXT,
+    },
+    ThreadLocal {
+        file: "crates/stack/src/lib.rs",
+        name: "READ_FAILS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
     },
     // ── purrdf-shapes: the SHACL engine's ambient scopes and caches ─────────────────
     ThreadLocal {
